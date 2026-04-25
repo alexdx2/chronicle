@@ -1,0 +1,34 @@
+{
+  "name": "@alexdx/depbot-oracle",
+  "version": "0.2.0",
+  "description": "Domain Oracle — self-learning knowledge graph for code analysis. MCP server for Claude Code.",
+  "bin": {
+    "oracle": "./bin/run.js"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/install.js"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "code-analysis",
+    "knowledge-graph",
+    "domain-driven-design",
+    "dependency-analysis"
+  ],
+  "author": "Alex",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/Alex_dx3/depbot.git"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

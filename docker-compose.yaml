@@ -1,0 +1,9 @@
+services:
+  admin:
+    build: .
+    command: ["admin", "--port", "4200", "--db", "/data/oracle.db"]
+    ports:
+      - "4200:4200"
+    volumes:
+      - .:/data
+    restart: unless-stopped

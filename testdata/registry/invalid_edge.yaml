@@ -1,0 +1,25 @@
+version: "1"
+
+layers:
+  - code
+
+node_types:
+  code:
+    - controller
+
+edge_types:
+  BAD_EDGE:
+    from_layers: [nonexistent]
+    to_layers: [code]
+
+derivation_kinds:
+  - hard
+
+source_kinds:
+  - file
+
+node_statuses:
+  - active
+
+trigger_kinds:
+  - manual

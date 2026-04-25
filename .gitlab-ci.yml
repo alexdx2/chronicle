@@ -1,0 +1,56 @@
+stages:
+  - test
+  - build
+  - release
+
+variables:
+  GO_VERSION: "1.22"
+
+test:
+  stage: test
+  image: golang:${GO_VERSION}
+  script:
+    - go test ./... -count=1 -v
+  except:
+    - tags
+
+build:
+  stage: build
+  image: golang:${GO_VERSION}
+  script:
+    - mkdir -p dist
+    - GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o dist/oracle-linux-amd64 ./cmd/oracle
+    - GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o dist/oracle-linux-arm64 ./cmd/oracle
+    - GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o dist/oracle-darwin-amd64 ./cmd/oracle
+    - GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o dist/oracle-darwin-arm64 ./cmd/oracle
+    - GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/oracle-windows-amd64.exe ./cmd/oracle
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 30 days
+  only:
+    - main
+    - tags
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo "Creating release for $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    description: "Oracle CLI $CI_COMMIT_TAG"
+    assets:
+      links:
+        - name: oracle-linux-amd64
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/dist/oracle-linux-amd64"
+        - name: oracle-linux-arm64
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/dist/oracle-linux-arm64"
+        - name: oracle-darwin-amd64
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/dist/oracle-darwin-amd64"
+        - name: oracle-darwin-arm64
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/dist/oracle-darwin-arm64"
+        - name: oracle-windows-amd64.exe
+          url: "${CI_PROJECT_URL}/-/jobs/${CI_JOB_ID}/artifacts/file/dist/oracle-windows-amd64.exe"
+  only:
+    - tags

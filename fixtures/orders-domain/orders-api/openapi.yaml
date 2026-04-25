@@ -1,0 +1,40 @@
+openapi: "3.0.3"
+info:
+  title: Orders API
+  version: "1.0.0"
+paths:
+  /orders:
+    get:
+      summary: List all orders
+      responses:
+        "200":
+          description: OK
+    post:
+      summary: Create an order
+      responses:
+        "201":
+          description: Created
+  /orders/{id}:
+    get:
+      summary: Get order by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+  /orders/{id}/capture:
+    post:
+      summary: Capture payment for order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK

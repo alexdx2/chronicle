@@ -1,0 +1,39 @@
+openapi: "3.0.3"
+info:
+  title: Payments API
+  version: "1.0.0"
+paths:
+  /payments/charge:
+    post:
+      summary: Charge a payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                orderId:
+                  type: string
+                amount:
+                  type: number
+      responses:
+        "200":
+          description: OK
+  /payments/refund:
+    post:
+      summary: Refund a payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                orderId:
+                  type: string
+                amount:
+                  type: number
+      responses:
+        "200":
+          description: OK

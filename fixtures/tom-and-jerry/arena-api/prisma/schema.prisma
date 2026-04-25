@@ -1,0 +1,27 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model BattleEvent {
+  id       String       @id @default(uuid())
+  tomId    String
+  jerryId  String
+  weapon   String
+  trap     String?
+  result   BattleResult
+  damage   Int
+  round    Int          @default(1)
+  createdAt DateTime    @default(now())
+}
+
+enum BattleResult {
+  TOM_HITS
+  JERRY_DODGES
+  TRAP_TRIGGERED
+  MUTUAL_DESTRUCTION
+}

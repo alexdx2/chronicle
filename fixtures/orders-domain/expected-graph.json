@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {"node_key": "code:repository:orders:orders-api", "layer": "code", "node_type": "repository", "domain_key": "orders", "name": "orders-api"},
+    {"node_key": "code:repository:orders:payments-api", "layer": "code", "node_type": "repository", "domain_key": "orders", "name": "payments-api"},
+    {"node_key": "code:module:orders:ordersmodule", "layer": "code", "node_type": "module", "domain_key": "orders", "name": "OrdersModule", "repo_name": "orders-api", "file_path": "src/orders/orders.module.ts"},
+    {"node_key": "code:controller:orders:orderscontroller", "layer": "code", "node_type": "controller", "domain_key": "orders", "name": "OrdersController", "repo_name": "orders-api", "file_path": "src/orders/orders.controller.ts"},
+    {"node_key": "code:provider:orders:ordersservice", "layer": "code", "node_type": "provider", "domain_key": "orders", "name": "OrdersService", "repo_name": "orders-api", "file_path": "src/orders/orders.service.ts"},
+    {"node_key": "code:provider:orders:paymentsservice", "layer": "code", "node_type": "provider", "domain_key": "orders", "name": "PaymentsService", "repo_name": "orders-api", "file_path": "src/payments/payments.service.ts"},
+    {"node_key": "code:provider:orders:ordercreatedproducer", "layer": "code", "node_type": "provider", "domain_key": "orders", "name": "OrderCreatedProducer", "repo_name": "orders-api", "file_path": "src/events/order-created.producer.ts"},
+    {"node_key": "code:controller:orders:paymentscontroller", "layer": "code", "node_type": "controller", "domain_key": "orders", "name": "PaymentsController", "repo_name": "payments-api", "file_path": "src/payments/payments.controller.ts"},
+    {"node_key": "code:provider:orders:paymentsapiservice", "layer": "code", "node_type": "provider", "domain_key": "orders", "name": "PaymentsApiService", "repo_name": "payments-api", "file_path": "src/payments/payments.service.ts"},
+    {"node_key": "service:service:orders:orders-api", "layer": "service", "node_type": "service", "domain_key": "orders", "name": "orders-api"},
+    {"node_key": "service:service:orders:payments-api", "layer": "service", "node_type": "service", "domain_key": "orders", "name": "payments-api"},
+    {"node_key": "contract:endpoint:orders:get:/orders", "layer": "contract", "node_type": "endpoint", "domain_key": "orders", "name": "GET /orders", "repo_name": "orders-api"},
+    {"node_key": "contract:endpoint:orders:get:/orders/:id", "layer": "contract", "node_type": "endpoint", "domain_key": "orders", "name": "GET /orders/:id", "repo_name": "orders-api"},
+    {"node_key": "contract:endpoint:orders:post:/orders", "layer": "contract", "node_type": "endpoint", "domain_key": "orders", "name": "POST /orders", "repo_name": "orders-api"},
+    {"node_key": "contract:endpoint:orders:post:/orders/:id/capture", "layer": "contract", "node_type": "endpoint", "domain_key": "orders", "name": "POST /orders/:id/capture", "repo_name": "orders-api"},
+    {"node_key": "contract:endpoint:orders:post:/payments/charge", "layer": "contract", "node_type": "endpoint", "domain_key": "orders", "name": "POST /payments/charge", "repo_name": "payments-api"},
+    {"node_key": "contract:endpoint:orders:post:/payments/refund", "layer": "contract", "node_type": "endpoint", "domain_key": "orders", "name": "POST /payments/refund", "repo_name": "payments-api"},
+    {"node_key": "contract:topic:orders:order-created", "layer": "contract", "node_type": "topic", "domain_key": "orders", "name": "order-created"}
+  ],
+  "edges": [
+    {"from_node_key": "code:repository:orders:orders-api", "to_node_key": "code:module:orders:ordersmodule", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:orders:ordersmodule", "to_node_key": "code:controller:orders:orderscontroller", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:orders:ordersmodule", "to_node_key": "code:provider:orders:ordersservice", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:orders:ordersmodule", "to_node_key": "code:provider:orders:paymentsservice", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:orders:ordersmodule", "to_node_key": "code:provider:orders:ordercreatedproducer", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:repository:orders:payments-api", "to_node_key": "code:controller:orders:paymentscontroller", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:repository:orders:payments-api", "to_node_key": "code:provider:orders:paymentsapiservice", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:controller:orders:orderscontroller", "to_node_key": "code:provider:orders:ordersservice", "edge_type": "INJECTS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:provider:orders:ordersservice", "to_node_key": "code:provider:orders:paymentsservice", "edge_type": "INJECTS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:provider:orders:ordersservice", "to_node_key": "code:provider:orders:ordercreatedproducer", "edge_type": "INJECTS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:controller:orders:orderscontroller", "to_node_key": "contract:endpoint:orders:post:/orders", "edge_type": "EXPOSES_ENDPOINT", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"},
+    {"from_node_key": "code:controller:orders:orderscontroller", "to_node_key": "contract:endpoint:orders:post:/orders/:id/capture", "edge_type": "EXPOSES_ENDPOINT", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"},
+    {"from_node_key": "code:controller:orders:paymentscontroller", "to_node_key": "contract:endpoint:orders:post:/payments/charge", "edge_type": "EXPOSES_ENDPOINT", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"},
+    {"from_node_key": "code:controller:orders:paymentscontroller", "to_node_key": "contract:endpoint:orders:post:/payments/refund", "edge_type": "EXPOSES_ENDPOINT", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"},
+    {"from_node_key": "code:provider:orders:paymentsservice", "to_node_key": "contract:endpoint:orders:post:/payments/charge", "edge_type": "CALLS_ENDPOINT", "derivation_kind": "linked", "from_layer": "code", "to_layer": "contract"},
+    {"from_node_key": "code:provider:orders:paymentsservice", "to_node_key": "service:service:orders:payments-api", "edge_type": "CALLS_SERVICE", "derivation_kind": "linked", "from_layer": "code", "to_layer": "service"},
+    {"from_node_key": "code:provider:orders:ordercreatedproducer", "to_node_key": "contract:topic:orders:order-created", "edge_type": "PUBLISHES_TOPIC", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"}
+  ],
+  "evidence": [
+    {"target_kind": "node", "node_key": "code:controller:orders:orderscontroller", "source_kind": "file", "repo_name": "orders-api", "file_path": "src/orders/orders.controller.ts", "line_start": 5, "line_end": 30, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99},
+    {"target_kind": "node", "node_key": "code:provider:orders:ordersservice", "source_kind": "file", "repo_name": "orders-api", "file_path": "src/orders/orders.service.ts", "line_start": 5, "line_end": 35, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99},
+    {"target_kind": "node", "node_key": "code:provider:orders:paymentsservice", "source_kind": "file", "repo_name": "orders-api", "file_path": "src/payments/payments.service.ts", "line_start": 5, "line_end": 18, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99},
+    {"target_kind": "node", "node_key": "code:provider:orders:ordercreatedproducer", "source_kind": "file", "repo_name": "orders-api", "file_path": "src/events/order-created.producer.ts", "line_start": 3, "line_end": 10, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99},
+    {"target_kind": "node", "node_key": "code:controller:orders:paymentscontroller", "source_kind": "file", "repo_name": "payments-api", "file_path": "src/payments/payments.controller.ts", "line_start": 4, "line_end": 18, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99},
+    {"target_kind": "node", "node_key": "contract:endpoint:orders:post:/orders", "source_kind": "openapi", "repo_name": "orders-api", "file_path": "openapi.yaml", "line_start": 10, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95},
+    {"target_kind": "node", "node_key": "contract:endpoint:orders:post:/payments/charge", "source_kind": "openapi", "repo_name": "payments-api", "file_path": "openapi.yaml", "line_start": 5, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95}
+  ]
+}

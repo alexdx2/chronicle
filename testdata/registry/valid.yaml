@@ -1,0 +1,65 @@
+version: "1"
+
+layers:
+  - code
+  - service
+  - contract
+
+node_types:
+  code:
+    - controller
+    - provider
+    - module
+  service:
+    - service
+    - worker
+  contract:
+    - endpoint
+    - topic
+
+edge_types:
+  INJECTS:
+    from_layers: [code]
+    to_layers: [code]
+  EXPOSES_ENDPOINT:
+    from_layers: [code, service]
+    to_layers: [contract]
+  PUBLISHES_TOPIC:
+    from_layers: [code, service]
+    to_layers: [contract]
+  CONTAINS:
+    from_layers: [code, service]
+    to_layers: [code, service, contract]
+  CALLS_ENDPOINT:
+    from_layers: [code, service]
+    to_layers: [contract]
+  CALLS_SERVICE:
+    from_layers: [code, service]
+    to_layers: [service]
+
+derivation_kinds:
+  - hard
+  - linked
+  - inferred
+  - unknown
+
+source_kinds:
+  - file
+  - openapi
+
+node_statuses:
+  - active
+  - stale
+  - deleted
+  - unknown
+
+trigger_kinds:
+  - full_scan
+  - manual
+
+traversal_policy:
+  structural_edge_types:
+    - CONTAINS
+  no_reverse_impact:
+    - EXPOSES_ENDPOINT
+    - PUBLISHES_TOPIC

@@ -1,0 +1,33 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Mouse {
+  id      String    @id @default(uuid())
+  name    String    @unique
+  health  Int       @default(3)
+  speed   Int       @default(90)
+  clever  Boolean   @default(true)
+  traps   Trap[]
+}
+
+model Trap {
+  id       String   @id @default(uuid())
+  name     String
+  effect   TrapEffect
+  ownerId  String
+  owner    Mouse    @relation(fields: [ownerId], references: [id])
+  isSet    Boolean  @default(false)
+}
+
+enum TrapEffect {
+  STUN
+  REVERSE
+  EXPLODE
+  CHEESE_LURE
+}

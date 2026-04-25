@@ -1,0 +1,13 @@
+oracle.db
+oracle.db-journal
+oracle.db-wal
+/oracle
+*.exe
+dist/
+.oracle/
+.depbot/
+.superpowers/
+oracle.domain.yaml
+oracle.types.yaml
+CLAUDE.md
+e2e/results/

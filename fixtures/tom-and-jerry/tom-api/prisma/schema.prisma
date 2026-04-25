@@ -1,0 +1,40 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Cat {
+  id      String      @id @default(uuid())
+  name    String      @unique
+  health  Int         @default(9)
+  speed   Int         @default(40)
+  mood    CatMood     @default(HUNTING)
+  weapons CatWeapon[]
+}
+
+model CatWeapon {
+  id      String     @id @default(uuid())
+  name    String
+  damage  Int
+  type    WeaponType
+  ownerId String
+  owner   Cat        @relation(fields: [ownerId], references: [id])
+}
+
+enum CatMood {
+  HUNTING
+  SLEEPING
+  ANGRY
+  DEFEATED
+}
+
+enum WeaponType {
+  PISTOL
+  FRYING_PAN
+  DYNAMITE
+  ANVIL
+}

@@ -1,0 +1,1593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oracle Admin Dashboard</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f0f1f3;--card:#fff;--border:#e0e2e6;--text:#1a1a2e;--text-muted:#6b7280;
+  --primary:#4361ee;--primary-light:#e8ecfd;--success:#2ecc71;--warning:#f39c12;
+  --error:#e74c3c;--error-light:#fdecea;--code:#3b82f6;--contract:#10b981;
+  --service:#ef4444;--flow:#8b5cf6;--ownership:#f59e0b;--infra:#6366f1;--ci:#ec4899;
+  --radius:8px;--shadow:0 1px 3px rgba(0,0,0,.08);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+a{color:var(--primary);text-decoration:none}
+
+/* Header */
+.header{background:var(--card);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:20px;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
+.header h1{font-size:18px;font-weight:700;color:var(--primary);white-space:nowrap}
+.header .meta{font-size:12px;color:var(--text-muted);display:flex;gap:16px}
+.header .meta span{display:flex;align-items:center;gap:4px}
+.tab-bar{display:flex;gap:4px;margin-left:auto}
+.tab-btn{padding:6px 16px;border:none;background:transparent;color:var(--text-muted);font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--radius);transition:all .15s}
+.tab-btn.active{background:var(--primary);color:#fff}
+.tab-btn:hover:not(.active){background:var(--primary-light);color:var(--primary)}
+
+/* Layout */
+.container{max-width:1400px;margin:0 auto;padding:20px 24px}
+.container.fullscreen{max-width:none;padding:8px}
+.stat-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
+.content-grid{display:grid;grid-template-columns:1fr 380px;gap:16px}
+.right-col{display:flex;flex-direction:column;gap:16px}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.card-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-header h3{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted)}
+.card-body{padding:16px}
+
+/* Stat cards */
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);text-align:center}
+.stat-card .value{font-size:28px;font-weight:700;color:var(--text)}
+.stat-card .label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-top:4px}
+.stat-card.primary .value{color:var(--primary)}
+.stat-card.success .value{color:var(--success)}
+.stat-card.warning .value{color:var(--warning)}
+.stat-card.error .value{color:var(--error)}
+
+/* Requests panel */
+.request-panel{max-height:600px;display:flex;flex-direction:column}
+.request-panel .card-body{overflow-y:auto;padding:0;flex:1}
+.req-summary{display:flex;gap:16px;padding:8px 16px;background:var(--bg);font-size:12px;color:var(--text-muted);border-bottom:1px solid var(--border)}
+.req-summary strong{color:var(--text)}
+.req-row{display:grid;grid-template-columns:130px 1fr 70px 60px;gap:8px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background .1s}
+.req-row:hover{background:var(--bg)}
+.req-row.error-row{border-left:3px solid var(--error)}
+.req-row .ts{color:var(--text-muted);font-family:monospace;font-size:11px}
+.req-row .tool{font-weight:500}
+.req-row .dur{text-align:right;color:var(--text-muted);font-family:monospace}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase}
+.badge.ok{background:#d1fae5;color:#065f46}
+.badge.err{background:var(--error-light);color:var(--error)}
+.badge.empty{background:#fef3c7;color:#92400e}
+
+/* Breakdown table */
+.breakdown-list{list-style:none}
+.breakdown-list li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px}
+.breakdown-list li:last-child{border:none}
+.breakdown-list .key{display:flex;align-items:center;gap:6px}
+.breakdown-list .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+
+/* Low confidence */
+.low-conf-row{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}
+.low-conf-row:last-child{border:none}
+.conf-bar{width:48px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle}
+.conf-fill{height:100%;border-radius:3px}
+
+/* Validation bar */
+.validation-bar{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);margin-top:16px}
+.validation-bar .status{font-size:13px;font-weight:500;flex:1}
+.validation-bar .status.valid{color:var(--success)}
+.validation-bar .status.invalid{color:var(--error)}
+.btn{padding:6px 14px;border:none;border-radius:var(--radius);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{opacity:.9}
+.btn-sm{padding:4px 10px;font-size:11px}
+
+/* Graph tab */
+.graph-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:auto;display:flex;flex-direction:column}
+#graph-canvas{flex:1;min-height:400px;overflow:auto}
+.graph-toolbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.graph-toolbar .mode-toggle{display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.graph-toolbar .mode-btn{padding:4px 12px;border:none;background:transparent;font-size:12px;cursor:pointer;transition:all .15s}
+.graph-toolbar .mode-btn.active{background:var(--primary);color:#fff}
+.chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--card);transition:all .15s;user-select:none}
+.chip.active{border-color:var(--primary);background:var(--primary-light);color:var(--primary)}
+.chip:hover{border-color:var(--primary)}
+.graph-svg{width:100%;min-height:500px;background:#fafbfc}
+.node-detail{padding:16px;border-top:1px solid var(--border);background:var(--bg);font-size:13px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.node-detail dt{font-weight:600;color:var(--text-muted);font-size:11px;text-transform:uppercase}
+.node-detail dd{margin:0 0 8px}
+
+/* Graph SVG styles */
+.graph-svg text{font-family:inherit;font-size:11px;fill:var(--text)}
+.graph-svg .edge-line{stroke:#94a3b8;stroke-width:1.5;fill:none}
+.graph-svg .edge-line.dashed{stroke-dasharray:5,3}
+.graph-svg .edge-line.low-conf{stroke:var(--warning);stroke-width:2}
+.graph-svg .node-rect{rx:6;ry:6;stroke-width:1.5;cursor:pointer;transition:opacity .2s,stroke-width .2s}
+.graph-svg .node-rect:hover{opacity:.85}
+.graph-svg .node-circle{stroke-width:2;cursor:pointer;transition:opacity .2s,stroke-width .2s}
+.graph-svg .node-circle:hover{opacity:.85}
+.graph-svg .node-rect.selected,.graph-svg .node-circle.selected{stroke:#000;stroke-width:3}
+.graph-svg.has-highlight .node-g.dimmed,.graph-svg.has-highlight .node-rect.dimmed{opacity:.15}
+.graph-svg.has-highlight .edge-line.dimmed{opacity:.06}
+.graph-svg.has-highlight .edge-line.highlighted{stroke:var(--primary);stroke-width:2.5;opacity:1}
+.graph-svg .edge-label{font-size:9px;fill:#4361ee;font-weight:600;display:none}
+.graph-svg.has-highlight .edge-label.highlighted{display:block}
+.graph-svg .layer-band{fill:#f8f9fa;stroke:var(--border);stroke-dasharray:4,2}
+.graph-svg .layer-label{font-size:12px;font-weight:600;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1px}
+.graph-svg .arrow-head{fill:#94a3b8}
+
+/* Scan history */
+.scan-row{display:grid;grid-template-columns:1fr 60px 60px auto;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;align-items:center}
+.scan-row:last-child{border:none}
+
+/* Responsive */
+@media(max-width:1024px){.stat-grid{grid-template-columns:repeat(3,1fr)}.content-grid{grid-template-columns:1fr}}
+@media(max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body x-data="dashboard()" x-init="init()">
+
+<!-- Header -->
+<header class="header">
+  <h1>Oracle Admin</h1>
+  <div class="meta">
+    <span>Domain: <strong x-text="domain"></strong></span>
+    <span x-show="revision">Rev: <strong x-text="revision"></strong></span>
+    <span x-show="lastScan">Last scan: <strong x-text="lastScan"></strong></span>
+    <span :style="{color: wsConnected ? 'var(--success)' : 'var(--error)'}">
+      <template x-if="wsConnected"><span>&#9679; Live</span></template>
+      <template x-if="!wsConnected"><span>&#9675; Offline</span></template>
+    </span>
+  </div>
+  <div class="tab-bar">
+    <button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview'">Overview</button>
+    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph'; $nextTick(()=>renderGraph())">Graph</button>
+    <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language'; fetchGlossary(); fetchLanguageCheck()">Language</button>
+    <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings'; fetchManifest()">Settings</button>
+  </div>
+</header>
+
+<!-- Overview Tab -->
+<div class="container" x-show="tab==='overview'" x-cloak>
+  <!-- Onboarding banner for new projects -->
+  <template x-if="(stats.graph?.node_count ?? 0) === 0">
+    <div style="background:linear-gradient(135deg,#4361ee15,#2ecc7115);border:1px solid #4361ee30;border-radius:12px;padding:24px;margin-bottom:16px">
+      <div style="display:flex;align-items:start;gap:16px">
+        <div style="font-size:32px">🔍</div>
+        <div style="flex:1">
+          <h3 style="margin-bottom:8px;color:var(--primary)">Welcome to Oracle</h3>
+          <p style="color:var(--text);margin-bottom:12px">This project hasn't been scanned yet. Tell Claude to scan it and build a knowledge graph.</p>
+          <div style="background:#fff;border-radius:8px;padding:12px;border:1px solid #e0e0e0;margin-bottom:12px">
+            <div style="font-size:10px;color:#999;margin-bottom:4px">Say this in Claude Code:</div>
+            <code style="font-size:13px;color:var(--primary);font-weight:500">oracle scan</code>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted)">
+            <p style="margin-bottom:6px">Oracle will automatically:</p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px">
+              <span>✓ Discover project structure</span>
+              <span>✓ Extract data models</span>
+              <span>✓ Map code dependencies</span>
+              <span>✓ Find API endpoints</span>
+              <span>✓ Detect cross-service calls</span>
+              <span>✓ Define domain language</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Quick actions for scanned projects -->
+  <template x-if="(stats.graph?.node_count ?? 0) > 0">
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <span style="font-size:11px;color:#999;padding:4px 0">Quick:</span>
+      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle scan')">📋 oracle scan</button>
+      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle data')">📋 oracle data</button>
+      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle language')">📋 oracle language</button>
+      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle impact')">📋 oracle impact</button>
+      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle services')">📋 oracle services</button>
+    </div>
+  </template>
+
+  <!-- Stat cards -->
+  <div class="stat-grid">
+    <div class="stat-card primary">
+      <div class="value" x-text="stats.graph?.node_count ?? 0"></div>
+      <div class="label">Nodes</div>
+    </div>
+    <div class="stat-card primary">
+      <div class="value" x-text="stats.graph?.edge_count ?? 0"></div>
+      <div class="label">Edges</div>
+    </div>
+    <div class="stat-card success">
+      <div class="value" x-text="stats.graph?.active_nodes ?? 0"></div>
+      <div class="label">Active</div>
+    </div>
+    <div class="stat-card warning">
+      <div class="value" x-text="stats.graph?.stale_nodes ?? 0"></div>
+      <div class="label">Stale</div>
+    </div>
+    <div class="stat-card error">
+      <div class="value" x-text="validation.issues?.length ?? 0"></div>
+      <div class="label">Issues</div>
+    </div>
+    <div class="stat-card warning">
+      <div class="value" x-text="lowConf?.length ?? 0"></div>
+      <div class="label">Low Conf</div>
+    </div>
+  </div>
+
+  <!-- Content grid -->
+  <div class="content-grid">
+    <!-- MCP Requests (left) -->
+    <div class="card request-panel">
+      <div class="card-header">
+        <h3>MCP Requests</h3>
+      </div>
+      <div class="req-summary">
+        <span>Total: <strong x-text="stats.requests?.total ?? 0"></strong></span>
+        <span>Errors: <strong x-text="stats.requests?.errors ?? 0" :style="{color: (stats.requests?.errors ?? 0) > 0 ? 'var(--error)' : ''}"></strong></span>
+        <span>Avg: <strong x-text="(stats.requests?.avg_duration_ms ?? 0) + 'ms'"></strong></span>
+      </div>
+      <div class="card-body">
+        <template x-if="requests.length === 0">
+          <div style="padding:32px;text-align:center;color:var(--text-muted)">No requests recorded yet</div>
+        </template>
+        <template x-for="r in requests" :key="r.request_id">
+          <div class="req-row" :class="{'error-row': r.error_message}">
+            <span class="ts" x-text="formatTime(r.timestamp)"></span>
+            <span>
+              <span class="tool" x-text="r.tool_name"></span>
+              <template x-if="r.summary"><span style="color:var(--text-muted);margin-left:6px" x-text="'- '+r.summary"></span></template>
+            </span>
+            <span>
+              <span class="badge ok" x-show="!r.error_message && r.result_json">ok</span>
+              <span class="badge err" x-show="r.error_message">err</span>
+              <span class="badge empty" x-show="!r.error_message && !r.result_json">empty</span>
+            </span>
+            <span class="dur" x-text="r.duration_ms + 'ms'"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Right column -->
+    <div class="right-col">
+      <!-- Graph Breakdown -->
+      <div class="card">
+        <div class="card-header"><h3>Graph Breakdown</h3></div>
+        <div class="card-body">
+          <div style="margin-bottom:12px">
+            <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px;font-weight:600">Nodes by Layer</div>
+            <ul class="breakdown-list">
+              <template x-for="(count, layer) in (stats.graph?.nodes_by_layer ?? {})" :key="layer">
+                <li>
+                  <span class="key"><span class="dot" :style="{background:layerColor(layer)}"></span><span x-text="layer"></span></span>
+                  <span x-text="count"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px;font-weight:600">Edges by Derivation</div>
+            <ul class="breakdown-list">
+              <template x-for="(count, kind) in (stats.graph?.edges_by_derivation ?? {})" :key="kind">
+                <li>
+                  <span class="key"><span x-text="kind"></span></span>
+                  <span x-text="count"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Low Confidence -->
+      <div class="card">
+        <div class="card-header">
+          <h3>Low Confidence Edges</h3>
+          <span class="badge" :class="(lowConf?.length ?? 0) > 0 ? 'err' : 'ok'" x-text="(lowConf?.length ?? 0)"></span>
+        </div>
+        <div class="card-body" style="max-height:200px;overflow-y:auto">
+          <template x-if="!lowConf || lowConf.length === 0">
+            <div style="text-align:center;color:var(--text-muted);padding:12px">All edges above threshold</div>
+          </template>
+          <template x-for="e in (lowConf ?? [])" :key="e.edge_key">
+            <div class="low-conf-row">
+              <span x-text="e.from_name || '?'"></span>
+              <span x-text="e.to_name || '?'"></span>
+              <span>
+                <span class="conf-bar"><span class="conf-fill" :style="{width:(e.confidence*100)+'%',background: e.confidence < 0.5 ? 'var(--error)' : 'var(--warning)'}"></span></span>
+                <span style="font-size:11px;color:var(--text-muted);margin-left:4px" x-text="(e.confidence*100).toFixed(0)+'%'"></span>
+              </span>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Scan History -->
+      <div class="card">
+        <div class="card-header"><h3>Scan History</h3></div>
+        <div class="card-body" style="max-height:180px;overflow-y:auto">
+          <template x-if="!scans || scans.length === 0">
+            <div style="text-align:center;color:var(--text-muted);padding:12px">No scans recorded</div>
+          </template>
+          <template x-for="s in (scans ?? [])" :key="s.snapshot_id">
+            <div class="scan-row">
+              <span x-text="formatTime(s.created_at)"></span>
+              <span x-text="s.node_count + 'N'"></span>
+              <span x-text="s.edge_count + 'E'"></span>
+              <span class="badge ok" x-text="s.snapshot_kind"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Discoveries -->
+  <template x-if="discoveries && discoveries.length > 0">
+    <div class="card" style="margin-top:12px">
+      <div class="card-header">
+        <h3>Discoveries <span style="font-size:11px;color:var(--text-muted);font-weight:400" x-text="'(' + discoveries.length + ')'"></span></h3>
+      </div>
+      <div class="card-body" style="max-height:220px;overflow-y:auto">
+        <template x-for="d in discoveries" :key="d.discovery_id">
+          <div style="padding:6px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid"
+               :style="{borderColor: d.category === 'missing_edge' ? 'var(--warning)' : d.category === 'correction' ? 'var(--error)' : d.category === 'insight' ? 'var(--primary)' : '#94a3b8'}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:500;margin-right:6px"
+                      :style="{background: d.category === 'missing_edge' ? 'var(--warning-light)' : d.category === 'pattern' ? '#f0f1f3' : d.category === 'insight' ? '#eef0ff' : '#fef2f2',
+                               color: d.category === 'missing_edge' ? 'var(--warning)' : d.category === 'pattern' ? '#666' : d.category === 'insight' ? 'var(--primary)' : 'var(--error)'}"
+                      x-text="d.category"></span>
+                <span style="font-size:12px;font-weight:500;color:var(--text)" x-text="d.title"></span>
+              </div>
+              <span style="font-size:10px;color:var(--text-muted)" x-text="d.source"></span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:4px" x-text="d.description"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <!-- Validation bar -->
+  <div class="validation-bar">
+    <div class="status" :class="validation.valid ? 'valid' : (validation.issues?.length > 0 ? 'invalid' : '')">
+      <template x-if="validation.valid">
+        <span>&#10003; Graph valid &mdash; <span x-text="validation.nodes_checked"></span> nodes, <span x-text="validation.edges_checked"></span> edges checked</span>
+      </template>
+      <template x-if="!validation.valid && validation.issues?.length > 0">
+        <span>&#10007; <span x-text="validation.issues.length"></span> issue(s) found</span>
+      </template>
+      <template x-if="!validation.valid && (!validation.issues || validation.issues.length === 0)">
+        <span>Validation not run yet</span>
+      </template>
+    </div>
+    <button class="btn btn-primary btn-sm" @click="fetchValidation()">Re-check</button>
+  </div>
+</div>
+
+<!-- Graph Tab -->
+<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='graph'" x-cloak>
+  <div class="graph-container" :style="graphFullscreen ? 'height:calc(100vh - 100px)' : ''">
+    <div class="graph-toolbar" style="flex-wrap:wrap;gap:6px">
+      <!-- View toggle -->
+      <div class="mode-toggle">
+        <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';renderGraph()">Tree</button>
+        <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';renderGraph()">Explore</button>
+        <button class="mode-btn" :class="{active:graphMode==='force'}" @click="graphMode='force';renderGraph()">Force</button>
+      </div>
+
+      <!-- Filter -->
+      <div class="mode-toggle">
+        <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all')">All</button>
+        <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data')">Data Models</button>
+        <button class="mode-btn" :class="{active: graphPreset==='api'}" @click="setPreset('api')">API Surface</button>
+        <button class="mode-btn" :class="{active: graphPreset==='services'}" @click="setPreset('services')">Services</button>
+      </div>
+
+      <!-- Repo filter -->
+      <template x-if="allRepos.length > 1">
+        <div style="display:flex;gap:4px;align-items:center">
+          <span style="font-size:10px;color:#999">Repo:</span>
+          <select @change="graphRepoFilter=$event.target.value;renderGraph()" style="font-size:10px;padding:2px 6px;border:1px solid #ddd;border-radius:4px">
+            <option value="">All repos</option>
+            <template x-for="r in allRepos" :key="r">
+              <option :value="r" x-text="r"></option>
+            </template>
+          </select>
+        </div>
+      </template>
+
+      <!-- Explore breadcrumbs -->
+      <template x-if="graphMode==='explore' && explorePath.length > 0">
+        <div style="display:flex;align-items:center;gap:4px;font-size:11px">
+          <button class="mode-btn" @click="exploreBack()" style="font-size:10px;padding:2px 6px">← Back</button>
+          <template x-for="(crumb,i) in explorePath" :key="i">
+            <span>
+              <span style="color:#ccc">/</span>
+              <span style="color:#4361ee;cursor:pointer" @click="exploreNavigate(i)" x-text="crumb.name"></span>
+            </span>
+          </template>
+        </div>
+      </template>
+
+      <!-- Right side controls -->
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+        <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
+          <input type="checkbox" x-model="hideStructural" @change="renderGraph()"> Hide structural
+        </label>
+        <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderGraph())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
+      </div>
+    </div>
+
+    <!-- Main area: canvas + side panel -->
+    <div style="display:flex;flex:1;overflow:hidden">
+      <div id="graph-canvas" style="flex:1;overflow:auto"></div>
+      <!-- Side panel for selected node (Tree + Explore mode) -->
+      <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore')" x-cloak
+           style="width:320px;border-left:1px solid var(--border);overflow-y:auto;background:#fafbfc;flex-shrink:0">
+        <template x-if="selectedNode">
+          <div style="padding:12px;font-size:11px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <strong style="font-size:13px;color:var(--text)" x-text="selectedNode.name"></strong>
+              <button @click="selectedNode=null" style="border:none;background:none;cursor:pointer;color:#999;font-size:16px">&times;</button>
+            </div>
+            <div style="margin-bottom:8px">
+              <span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:500"
+                    :style="{background: layerColor(selectedNode.layer)+'15', color: layerColor(selectedNode.layer)}"
+                    x-text="selectedNode.node_type"></span>
+              <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0f0f0;color:#666;margin-left:4px" x-text="selectedNode.layer"></span>
+            </div>
+            <div style="font-family:monospace;font-size:9px;color:#999;word-break:break-all;margin-bottom:8px" x-text="selectedNode.node_key"></div>
+            <template x-if="selectedNode.file_path">
+              <div style="color:#666;margin-bottom:8px;font-size:10px" x-text="(selectedNode.repo_name ? selectedNode.repo_name+'/' : '') + selectedNode.file_path"></div>
+            </template>
+
+            <!-- Outgoing edges -->
+            <div style="margin-bottom:12px">
+              <div style="color:#999;font-weight:600;margin-bottom:4px">Dependencies</div>
+              <template x-if="getNodeEdges(selectedNode, 'out').length === 0">
+                <div style="color:#ccc">none</div>
+              </template>
+              <template x-for="e in getNodeEdges(selectedNode, 'out')" :key="e.edge_key">
+                <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.target_key)">
+                  <span style="color:#4361ee">→</span>
+                  <span x-text="e.target_name"></span>
+                  <span style="font-size:9px;padding:0 4px;border-radius:4px;margin-left:2px"
+                        :style="{color: e.derivation==='hard' ? '#2ecc71' : '#f39c12'}"
+                        x-text="e.edge_type"></span>
+                </div>
+              </template>
+            </div>
+
+            <!-- Incoming edges -->
+            <div>
+              <div style="color:#999;font-weight:600;margin-bottom:4px">Dependents</div>
+              <template x-if="getNodeEdges(selectedNode, 'in').length === 0">
+                <div style="color:#ccc">none</div>
+              </template>
+              <template x-for="e in getNodeEdges(selectedNode, 'in')" :key="e.edge_key">
+                <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.source_key)">
+                  <span style="color:#f39c12">←</span>
+                  <span x-text="e.source_name"></span>
+                  <span style="font-size:9px;padding:0 4px;border-radius:4px;margin-left:2px"
+                        :style="{color: e.derivation==='hard' ? '#2ecc71' : '#f39c12'}"
+                        x-text="e.edge_type"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Tab -->
+<!-- Language Tab -->
+<div class="container" x-show="tab==='language'" x-cloak>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <!-- Glossary -->
+    <div class="card">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+        <h3>Domain Glossary <span style="font-size:11px;color:var(--text-muted);font-weight:400" x-text="glossary.length ? '(' + glossary.length + ' terms)' : ''"></span></h3>
+        <button class="btn btn-primary btn-sm" @click="editingTerm={term:'',description:'',context:'',aliases:'',anti_patterns:'',examples:''}">+ Add Term</button>
+      </div>
+
+      <!-- Edit/Add form -->
+      <template x-if="editingTerm">
+        <div style="padding:12px;border-bottom:1px solid var(--border);background:#fafbfc">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <input x-model="editingTerm.term" placeholder="Term (e.g. Order)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+            <input x-model="editingTerm.context" placeholder="Context (e.g. ordering)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+          </div>
+          <textarea x-model="editingTerm.description" placeholder="What this term means in the domain..." rows="2" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;resize:vertical;margin-bottom:8px"></textarea>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <input x-model="editingTerm.aliases" placeholder="Aliases (comma-separated)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:11px">
+            <input x-model="editingTerm.anti_patterns" placeholder="Don't use (comma-separated)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:11px">
+          </div>
+          <input x-model="editingTerm.examples" placeholder="Usage examples (comma-separated)" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:11px;margin-bottom:8px">
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button @click="editingTerm=null" style="padding:4px 12px;border:1px solid #ddd;background:#fff;border-radius:6px;cursor:pointer;font-size:11px">Cancel</button>
+            <button @click="saveTerm()" class="btn btn-primary btn-sm">Save</button>
+          </div>
+        </div>
+      </template>
+
+      <div class="card-body" style="max-height:500px;overflow-y:auto">
+        <template x-if="!glossary || glossary.length === 0">
+          <div style="text-align:center;color:var(--text-muted);padding:20px">
+            <p>No terms defined yet.</p>
+            <p style="font-size:11px;margin-top:8px">Click "+ Add Term" or ask Claude: "oracle language"</p>
+          </div>
+        </template>
+        <template x-for="t in glossary" :key="t.term_id">
+          <div style="padding:10px;margin-bottom:8px;border:1px solid var(--border);border-radius:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <strong style="font-size:14px;color:var(--primary)" x-text="t.term"></strong>
+              <div style="display:flex;gap:4px;align-items:center">
+                <span x-show="t.context" style="font-size:9px;padding:1px 8px;border-radius:10px;background:#f0f1f3;color:#666" x-text="t.context"></span>
+                <button @click="editTerm(t)" style="border:none;background:none;color:#999;cursor:pointer;font-size:11px" title="Edit">✎</button>
+                <button @click="deleteTerm(t.term)" style="border:none;background:none;color:#ccc;cursor:pointer;font-size:14px" title="Delete">&times;</button>
+              </div>
+            </div>
+            <p style="font-size:12px;color:var(--text);margin-bottom:6px" x-text="t.description"></p>
+            <div x-show="t.aliases && t.aliases.length" style="font-size:10px;margin-bottom:4px">
+              <span style="color:#999">Also known as:</span>
+              <template x-for="a in t.aliases" :key="a">
+                <span style="background:#eef0ff;color:var(--primary);padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="a"></span>
+              </template>
+            </div>
+            <div x-show="t.anti_patterns && t.anti_patterns.length" style="font-size:10px;margin-bottom:4px">
+              <span style="color:#999">Don't use:</span>
+              <template x-for="a in t.anti_patterns" :key="a">
+                <span style="background:var(--error-light);color:var(--error);padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px;text-decoration:line-through" x-text="a"></span>
+              </template>
+            </div>
+            <div x-show="t.examples && t.examples.length" style="font-size:10px">
+              <span style="color:#999">Examples:</span>
+              <template x-for="e in t.examples" :key="e">
+                <span style="font-family:monospace;background:#f0fdf4;color:#2ecc71;padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="e"></span>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Violations -->
+    <div class="card">
+      <div class="card-header">
+        <h3>Language Violations <span style="font-size:11px;font-weight:400"
+            :style="{color: languageViolations.length > 0 ? 'var(--error)' : 'var(--success)'}"
+            x-text="languageViolations.length > 0 ? languageViolations.length + ' issues' : '✓ clean'"></span></h3>
+      </div>
+      <div class="card-body" style="max-height:500px;overflow-y:auto">
+        <template x-if="languageViolations.length === 0 && glossary.length > 0">
+          <div style="text-align:center;color:var(--success);padding:20px">
+            All node names follow the domain language.
+          </div>
+        </template>
+        <template x-if="languageViolations.length === 0 && glossary.length === 0">
+          <div style="text-align:center;color:var(--text-muted);padding:20px">
+            Define terms first to check for violations.
+          </div>
+        </template>
+        <template x-for="v in languageViolations" :key="v.node_key + v.matched_anti_pattern">
+          <div style="padding:8px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid var(--warning);background:#fffbf0">
+            <div style="font-size:12px">
+              <strong x-text="v.node_name"></strong>
+              <span style="font-size:10px;color:var(--text-muted)" x-text="'(' + v.node_type + ')'"></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px">
+              <div style="font-size:11px;color:#666">
+                Uses "<span style="color:var(--error);text-decoration:line-through" x-text="v.matched_anti_pattern"></span>"
+                → should use "<span style="color:var(--primary);font-weight:500" x-text="v.suggested_term"></span>"
+                <span x-show="v.term_context" style="color:#999" x-text="'(context: ' + v.term_context + ')'"></span>
+              </div>
+              <button @click="dismissViolation(v.suggested_term, v.matched_anti_pattern)"
+                      style="border:1px solid #ddd;background:#fff;color:#999;cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;flex-shrink:0"
+                      title="This is not a real violation — remove this anti-pattern">Dismiss</button>
+            </div>
+            <div style="font-size:9px;font-family:monospace;color:#999;margin-top:2px" x-text="v.node_key"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Tab -->
+<div class="container" x-show="tab==='settings'" x-cloak>
+  <div class="card" style="max-width:800px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0;color:#4361ee">Domain Manifest</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span x-show="manifestSaved" x-transition style="color:#2ecc71;font-size:12px">Saved!</span>
+        <button @click="saveManifest()" style="background:#4361ee;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
+      </div>
+    </div>
+    <p style="color:#999;font-size:12px;margin-bottom:12px">
+      Edit <code x-text="manifestPath" style="background:#f0f1f3;padding:2px 6px;border-radius:3px"></code> — defines which repositories belong to this domain.
+    </p>
+    <textarea x-model="manifestContent"
+      style="width:100%;min-height:300px;font-family:monospace;font-size:13px;line-height:1.6;padding:12px;border:1px solid #e0e0e0;border-radius:6px;background:#fafbfc;resize:vertical;color:#333"
+      spellcheck="false"></textarea>
+    <p x-show="manifestError" style="color:#e74c3c;font-size:12px;margin-top:8px" x-text="manifestError"></p>
+  </div>
+</div>
+
+<script>
+function dashboard() {
+  return {
+    tab: 'overview',
+    domain: '',
+    revision: '',
+    lastScan: '',
+    wsConnected: false,
+    stats: {},
+    requests: [],
+    lowConf: [],
+    scans: [],
+    validation: {},
+    discoveries: [],
+    glossary: [],
+    languageViolations: [],
+    editingTerm: null,
+    graphData: { nodes: [], edges: [] },
+    graphMode: 'tree',
+    explorePath: [],
+    exploreCurrentId: null,
+    graphFullscreen: false,
+    graphPreset: 'all',
+    graphRepoFilter: '',
+    allRepos: [],
+    selectedNode: null,
+    manifestContent: '',
+    manifestPath: '',
+    manifestSaved: false,
+    manifestError: '',
+    allLayers: ['code','contract','service','flow','ownership','infra','ci'],
+    layerFilters: ['code','contract','service','flow','ownership','infra','ci'],
+    hideStructural: false,
+    ws: null,
+
+    async init() {
+      await Promise.all([
+        this.fetchStats(),
+        this.fetchRequests(),
+        this.fetchLowConfidence(),
+        this.fetchScans(),
+        this.fetchValidation(),
+        this.fetchDiscoveries(),
+        this.fetchGraphData(),
+      ]);
+      this.connectWS();
+    },
+
+    async fetchManifest() {
+      try {
+        const r = await fetch('/api/manifest');
+        const d = await r.json();
+        this.manifestContent = d.content || '';
+        this.manifestPath = d.path || '';
+        this.manifestError = '';
+      } catch(e) { this.manifestError = e.message; }
+    },
+
+    async saveManifest() {
+      try {
+        const r = await fetch('/api/manifest', {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({content: this.manifestContent})
+        });
+        const d = await r.json();
+        if (d.error) { this.manifestError = d.error; return; }
+        this.manifestSaved = true;
+        this.manifestError = '';
+        setTimeout(() => this.manifestSaved = false, 2000);
+      } catch(e) { this.manifestError = e.message; }
+    },
+
+    async fetchStats() {
+      try {
+        const r = await fetch('/api/stats' + (this.domain ? '?domain=' + this.domain : ''));
+        const data = await r.json();
+        if (data.domain && !this.domain) this.domain = data.domain;
+        this.stats = data;
+      } catch(e) { console.error('stats:', e); }
+    },
+
+    async fetchRequests() {
+      try {
+        const r = await fetch('/api/requests?limit=200');
+        this.requests = await r.json();
+      } catch(e) { console.error('requests:', e); }
+    },
+
+    async fetchLowConfidence() {
+      try {
+        const r = await fetch('/api/low-confidence');
+        this.lowConf = await r.json();
+      } catch(e) { console.error('low-conf:', e); }
+    },
+
+    async fetchScans() {
+      try {
+        const r = await fetch('/api/scans?domain=' + this.domain);
+        const data = await r.json();
+        this.scans = data || [];
+        if (this.scans.length > 0) {
+          const latest = this.scans[0];
+          this.revision = latest.revision_id;
+          this.lastScan = this.formatTime(latest.created_at);
+        }
+      } catch(e) { console.error('scans:', e); }
+    },
+
+    async fetchValidation() {
+      try {
+        const r = await fetch('/api/validate');
+        this.validation = await r.json();
+      } catch(e) { console.error('validate:', e); }
+    },
+
+    async fetchGlossary() {
+      try {
+        const r = await fetch('/api/glossary' + (this.domain ? '?domain=' + this.domain : ''));
+        this.glossary = await r.json();
+      } catch(e) { console.error('glossary:', e); }
+    },
+
+    async fetchLanguageCheck() {
+      try {
+        const r = await fetch('/api/language-check' + (this.domain ? '?domain=' + this.domain : ''));
+        const data = await r.json();
+        this.languageViolations = data.violations || [];
+      } catch(e) { console.error('language-check:', e); }
+    },
+
+    editTerm(t) {
+      this.editingTerm = {
+        term: t.term,
+        description: t.description || '',
+        context: t.context || '',
+        aliases: (t.aliases || []).join(', '),
+        anti_patterns: (t.anti_patterns || []).join(', '),
+        examples: (t.examples || []).join(', '),
+      };
+    },
+
+    async saveTerm() {
+      if (!this.editingTerm || !this.editingTerm.term) return;
+      await fetch('/api/glossary/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(this.editingTerm),
+      });
+      this.editingTerm = null;
+      this.fetchGlossary();
+      this.fetchLanguageCheck();
+    },
+
+    async deleteTerm(term) {
+      if (!confirm('Delete term "' + term + '" from glossary?')) return;
+      await fetch('/api/glossary/delete?term=' + encodeURIComponent(term), {method: 'POST'});
+      this.fetchGlossary();
+      this.fetchLanguageCheck();
+    },
+
+    async dismissViolation(term, anti) {
+      await fetch('/api/glossary/dismiss?term=' + encodeURIComponent(term) + '&anti=' + encodeURIComponent(anti), {method: 'POST'});
+      this.fetchLanguageCheck();
+      this.fetchGlossary();
+    },
+
+    async fetchDiscoveries() {
+      try {
+        const r = await fetch('/api/discoveries' + (this.domain ? '?domain=' + this.domain : ''));
+        this.discoveries = await r.json();
+      } catch(e) { console.error('discoveries:', e); }
+    },
+
+    async fetchGraphData() {
+      try {
+        const r = await fetch('/api/graph' + (this.domain ? '?domain=' + this.domain : ''));
+        this.graphData = await r.json();
+        // Extract unique repos for filter dropdown
+        const repos = new Set();
+        (this.graphData.nodes || []).forEach(n => { if (n.repo_name) repos.add(n.repo_name); });
+        this.allRepos = [...repos].sort();
+        // Update allLayers from actual data
+        const layers = new Set();
+        (this.graphData.nodes || []).forEach(n => layers.add(n.layer));
+        this.allLayers = [...layers].sort();
+        // Init layer filters if empty
+        if (this.layerFilters.length === 0) {
+          this.layerFilters = [...this.allLayers];
+        }
+      } catch(e) { console.error('graph:', e); }
+    },
+
+    connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      this.ws = new WebSocket(proto + '//' + location.host + '/ws');
+      this.ws.onopen = () => { this.wsConnected = true; };
+      this.ws.onclose = () => {
+        this.wsConnected = false;
+        setTimeout(() => this.connectWS(), 3000);
+      };
+      this.ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'mcp_request') {
+            this.requests.unshift(msg.data);
+            if (this.requests.length > 200) this.requests.pop();
+            this.fetchStats();
+            this.fetchDiscoveries();
+          }
+        } catch(e) {}
+      };
+    },
+
+    formatTime(ts) {
+      if (!ts) return '';
+      try {
+        const d = new Date(ts);
+        return d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
+             + ' ' + d.toLocaleDateString('en-US', {month:'short',day:'numeric'});
+      } catch(e) { return ts; }
+    },
+
+    layerColor(layer) {
+      const colors = {code:'#3b82f6',contract:'#10b981',service:'#ef4444',data:'#8b5cf6',flow:'#a855f7',ownership:'#f59e0b',infra:'#6366f1',ci:'#ec4899'};
+      return colors[layer] || '#94a3b8';
+    },
+
+    toggleLayer(l) {
+      this.graphPreset = 'custom';
+      const idx = this.layerFilters.indexOf(l);
+      if (idx >= 0) this.layerFilters.splice(idx, 1);
+      else this.layerFilters.push(l);
+    },
+
+    setPreset(preset) {
+      this.graphPreset = preset;
+      switch (preset) {
+        case 'all':
+          this.layerFilters = [...this.allLayers];
+          this.hideStructural = false;
+          break;
+        case 'data':
+          this.layerFilters = ['data'];
+          this.hideStructural = false;
+          break;
+        case 'api':
+          this.layerFilters = ['contract', 'service'];
+          this.hideStructural = true;
+          break;
+        case 'services':
+          this.layerFilters = ['service', 'code'];
+          this.hideStructural = true;
+          break;
+      }
+      this.renderGraph();
+    },
+
+    getFilteredData() {
+      const structuralTypes = ['CONTAINS','DEPLOYS_AS','SELECTS_PODS','OWNED_BY','MAINTAINED_BY','PART_OF_FLOW','BUILDS_ARTIFACT','DEPLOYS_RESOURCE','HAS_FIELD'];
+      let nodes = (this.graphData.nodes || []).filter(n => this.layerFilters.includes(n.layer));
+      // Repo filter
+      if (this.graphRepoFilter) {
+        nodes = nodes.filter(n => !n.repo_name || n.repo_name === this.graphRepoFilter);
+      }
+      const nodeIds = new Set(nodes.map(n => n.node_id));
+      let edges = (this.graphData.edges || []).filter(e => nodeIds.has(e.from_node_id) || nodeIds.has(e.to_node_id));
+      // For filtered views, only show edges where BOTH ends are visible
+      edges = edges.filter(e => nodeIds.has(e.from_node_id) && nodeIds.has(e.to_node_id));
+      if (this.hideStructural) {
+        edges = edges.filter(e => !structuralTypes.includes(e.edge_type));
+      }
+      return { nodes, edges };
+    },
+
+    // Helper: get edges for selected node (for side panel)
+    getNodeEdges(node, direction) {
+      if (!node || !this.graphData.edges) return [];
+      const nodeById = {};
+      (this.graphData.nodes || []).forEach(n => { nodeById[n.node_id] = n; });
+      const edges = this.graphData.edges || [];
+      if (direction === 'out') {
+        return edges.filter(e => e.from_node_id === node.node_id && e.edge_type !== 'CONTAINS').map(e => ({
+          ...e, target_name: nodeById[e.to_node_id]?.name || '?', target_key: nodeById[e.to_node_id]?.node_key || ''
+        }));
+      }
+      return edges.filter(e => e.to_node_id === node.node_id && e.edge_type !== 'CONTAINS').map(e => ({
+        ...e, source_name: nodeById[e.from_node_id]?.name || '?', source_key: nodeById[e.from_node_id]?.node_key || ''
+      }));
+    },
+
+    selectNodeByKey(key) {
+      const node = (this.graphData.nodes || []).find(n => n.node_key === key);
+      if (node) this.selectedNode = node;
+    },
+
+    highlightNode(nodeId, edges) {
+      const svg = d3.select('.graph-svg');
+      if (!nodeId) {
+        // Clear highlight
+        svg.classed('has-highlight', false);
+        svg.selectAll('.dimmed').classed('dimmed', false);
+        svg.selectAll('.highlighted').classed('highlighted', false);
+        return;
+      }
+
+      // Find connected node IDs (both directions)
+      const connectedNodes = new Set([nodeId]);
+      const connectedEdgeKeys = new Set();
+      (edges || this.graphData.edges || []).forEach(e => {
+        if (e.from_node_id === nodeId) {
+          connectedNodes.add(e.to_node_id);
+          connectedEdgeKeys.add(e.from_node_id + '->' + e.to_node_id);
+        }
+        if (e.to_node_id === nodeId) {
+          connectedNodes.add(e.from_node_id);
+          connectedEdgeKeys.add(e.from_node_id + '->' + e.to_node_id);
+        }
+      });
+
+      svg.classed('has-highlight', true);
+
+      // Dim/highlight nodes
+      svg.selectAll('.node-g, g[transform]').each(function() {
+        const el = d3.select(this);
+        const rect = el.select('.node-rect, .node-circle');
+        const nid = el.datum?.()?.node_id || el.datum?.()?.id;
+        // For layered graph, we stored node in closure — check via position matching
+      });
+
+      // Dim/highlight nodes — works for both force graph (d3 data) and layered (data-node-id attr)
+      svg.selectAll('.node-g').each(function() {
+        const el = d3.select(this);
+        const d = el.datum?.();
+        const nid = d ? (d.id || d.node_id) : parseInt(el.attr('data-node-id'));
+        el.classed('dimmed', !connectedNodes.has(nid));
+        el.select('.node-rect, .node-circle').classed('dimmed', !connectedNodes.has(nid));
+      });
+
+      // Dim/highlight edges
+      svg.selectAll('.edge-line').each(function() {
+        const el = d3.select(this);
+        const d = el.datum?.();
+        const fromId = d ? (d.source?.id || d.source || d.from_node_id) : null;
+        const toId = d ? (d.target?.id || d.target || d.to_node_id) : null;
+        const key = fromId + '->' + toId;
+        el.classed('dimmed', !connectedEdgeKeys.has(key));
+        el.classed('highlighted', connectedEdgeKeys.has(key));
+      });
+    },
+
+    renderGraph() {
+      const container = document.getElementById('graph-canvas');
+      if (!container) return;
+      container.innerHTML = '';
+      const data = this.getFilteredData();
+      if (data.nodes.length === 0) {
+        container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">No nodes to display. Adjust filters or import data.</div>';
+        return;
+      }
+      if (this.graphMode === 'tree') {
+        this.renderLayeredGraph(container, data.nodes, data.edges);
+      } else if (this.graphMode === 'explore') {
+        this.renderExploreGraph(container, data.nodes, data.edges);
+      } else {
+        this.renderForceGraph(container, data.nodes, data.edges);
+      }
+    },
+
+    exploreBack() {
+      this.explorePath.pop();
+      this.exploreCurrentId = this.explorePath.length > 0 ? this.explorePath[this.explorePath.length-1].id : null;
+      this.selectedNode = null;
+      this.renderGraph();
+    },
+
+    exploreNavigate(index) {
+      this.explorePath = this.explorePath.slice(0, index + 1);
+      this.exploreCurrentId = this.explorePath[index].id;
+      this.selectedNode = null;
+      this.renderGraph();
+    },
+
+    exploreDrillDown(nodeId, name) {
+      this.explorePath.push({id: nodeId, name: name});
+      this.exploreCurrentId = nodeId;
+      this.selectedNode = null;
+      this.renderGraph();
+    },
+
+    renderExploreGraph(container, nodes, edges) {
+      const self = this;
+      const width = container.clientWidth || 900;
+      const containsEdges = edges.filter(e => e.edge_type === 'CONTAINS');
+      const depEdges = edges.filter(e => e.edge_type !== 'CONTAINS');
+      const nodeById = {};
+      nodes.forEach(n => { nodeById[n.node_id] = n; });
+      const childrenOf = {};
+      const hasParent = new Set();
+      containsEdges.forEach(e => {
+        if (!childrenOf[e.from_node_id]) childrenOf[e.from_node_id] = [];
+        childrenOf[e.from_node_id].push(e.to_node_id);
+        hasParent.add(e.to_node_id);
+      });
+
+      // Determine which nodes to show
+      let visibleNodes;
+      if (!self.exploreCurrentId) {
+        // Top level: show roots (repos, top-level modules, services)
+        visibleNodes = nodes.filter(n => !hasParent.has(n.node_id));
+      } else {
+        // Show children of current node
+        const childIds = childrenOf[self.exploreCurrentId] || [];
+        visibleNodes = childIds.map(id => nodeById[id]).filter(Boolean);
+      }
+
+      if (visibleNodes.length === 0) {
+        container.innerHTML = '<div style="padding:40px;text-align:center;color:#999">No children to display</div>';
+        return;
+      }
+
+      // Group visible nodes by type
+      const groups = {};
+      visibleNodes.forEach(n => {
+        const key = n.node_type;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(n);
+      });
+
+      // Sort groups by a logical order
+      const typeOrder = ['repository','module','controller','resolver','provider','service','endpoint','topic'];
+      const sortedGroupKeys = Object.keys(groups).sort((a,b) => {
+        const ai = typeOrder.indexOf(a), bi = typeOrder.indexOf(b);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      });
+
+      // Find dependency edges between visible nodes
+      const visibleIds = new Set(visibleNodes.map(n => n.node_id));
+      const visibleDepEdges = depEdges.filter(e => visibleIds.has(e.from_node_id) && visibleIds.has(e.to_node_id));
+
+      // Find edges going OUT to non-visible nodes (cross-references)
+      const externalOutEdges = depEdges.filter(e => visibleIds.has(e.from_node_id) && !visibleIds.has(e.to_node_id));
+      const externalInEdges = depEdges.filter(e => !visibleIds.has(e.from_node_id) && visibleIds.has(e.to_node_id));
+
+      // Render as SVG
+      const nodeW = 150, nodeH = 34, gapX = 16, gapY = 10, groupGap = 24, groupPadX = 16, groupPadY = 30;
+
+      // Calculate positions: groups side by side, nodes stacked within
+      const groupPositions = {};
+      let cursorX = 30;
+      sortedGroupKeys.forEach(gk => {
+        const group = groups[gk];
+        const cols = Math.min(group.length, Math.max(1, Math.floor(group.length <= 4 ? group.length : Math.ceil(Math.sqrt(group.length)))));
+        const rows = Math.ceil(group.length / cols);
+        const gw = cols * (nodeW + gapX) - gapX + groupPadX * 2;
+        const gh = rows * (nodeH + gapY) - gapY + groupPadY + 20;
+        groupPositions[gk] = { x: cursorX, y: 50, w: gw, h: gh, cols, rows };
+        cursorX += gw + groupGap;
+      });
+
+      const totalW = Math.max(cursorX + 30, width);
+      let totalH = 50;
+
+      // Position nodes within groups
+      const nodePos = {};
+      sortedGroupKeys.forEach(gk => {
+        const group = groups[gk];
+        const gp = groupPositions[gk];
+        group.sort((a,b) => a.name.localeCompare(b.name));
+        group.forEach((n, i) => {
+          const col = i % gp.cols;
+          const row = Math.floor(i / gp.cols);
+          const x = gp.x + groupPadX + col * (nodeW + gapX) + nodeW/2;
+          const y = gp.y + groupPadY + row * (nodeH + gapY) + nodeH/2;
+          nodePos[n.node_id] = { x, y, node: n };
+          totalH = Math.max(totalH, y + nodeH/2 + 60);
+        });
+        totalH = Math.max(totalH, gp.y + gp.h + 20);
+      });
+
+      // External references section
+      const externalTargets = {};
+      externalOutEdges.forEach(e => {
+        const target = nodeById[e.to_node_id];
+        if (target) {
+          const key = target.node_id;
+          if (!externalTargets[key]) externalTargets[key] = { node: target, edges: [] };
+          externalTargets[key].edges.push(e);
+        }
+      });
+      const externalSources = {};
+      externalInEdges.forEach(e => {
+        const src = nodeById[e.from_node_id];
+        if (src) {
+          const key = src.node_id;
+          if (!externalSources[key]) externalSources[key] = { node: src, edges: [] };
+          externalSources[key].edges.push(e);
+        }
+      });
+
+      // Position external nodes on the right
+      const extNodes = Object.values(externalTargets);
+      const extInNodes = Object.values(externalSources);
+      if (extNodes.length > 0) {
+        const extX = cursorX + 20;
+        extNodes.forEach((ext, i) => {
+          nodePos[ext.node.node_id] = { x: extX + nodeW/2, y: 80 + i * (nodeH + gapY) + nodeH/2, node: ext.node, external: true };
+        });
+        totalH = Math.max(totalH, 80 + extNodes.length * (nodeH + gapY) + 40);
+      }
+      if (extInNodes.length > 0) {
+        extInNodes.forEach((ext, i) => {
+          if (!nodePos[ext.node.node_id]) {
+            nodePos[ext.node.node_id] = { x: 10 + nodeW/2, y: 80 + i * (nodeH + gapY) + nodeH/2, node: ext.node, external: true };
+          }
+        });
+      }
+
+      container.innerHTML = '';
+      const svg = d3.select(container).append('svg')
+        .attr('class', 'graph-svg')
+        .attr('width', totalW)
+        .attr('height', totalH)
+        .attr('viewBox', `0 0 ${totalW} ${totalH}`);
+
+      const rootG = svg.append('g');
+      svg.call(d3.zoom().scaleExtent([0.2, 3]).on('zoom', (event) => {
+        rootG.attr('transform', event.transform);
+      }));
+
+      svg.append('defs').append('marker')
+        .attr('id', 'explore-arrow')
+        .attr('viewBox', '0 0 10 10').attr('refX', 10).attr('refY', 5)
+        .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto-start-reverse')
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#94a3b8');
+
+      // Draw group backgrounds
+      sortedGroupKeys.forEach(gk => {
+        const gp = groupPositions[gk];
+        rootG.append('rect')
+          .attr('x', gp.x).attr('y', gp.y).attr('width', gp.w).attr('height', gp.h)
+          .attr('rx', 10).attr('fill', '#f8f9fb').attr('stroke', '#e2e5ea').attr('stroke-width', 1);
+        rootG.append('text')
+          .attr('x', gp.x + 12).attr('y', gp.y + 16)
+          .attr('font-size', '10px').attr('fill', '#999').attr('text-transform', 'uppercase').attr('letter-spacing', '1px')
+          .text(gk + 's (' + groups[gk].length + ')');
+      });
+
+      // Draw external reference area
+      if (extNodes.length > 0) {
+        rootG.append('text')
+          .attr('x', cursorX + 20).attr('y', 66)
+          .attr('font-size', '10px').attr('fill', '#f39c12').attr('letter-spacing', '1px')
+          .text('EXTERNAL (' + extNodes.length + ')');
+      }
+
+      // Draw edges (curved paths)
+      const allVisibleEdges = [...visibleDepEdges, ...externalOutEdges, ...externalInEdges];
+      allVisibleEdges.forEach(e => {
+        const from = nodePos[e.from_node_id];
+        const to = nodePos[e.to_node_id];
+        if (!from || !to) return;
+
+        const isExternal = !visibleIds.has(e.from_node_id) || !visibleIds.has(e.to_node_id);
+        const dx = to.x - from.x, dy = to.y - from.y;
+        const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2;
+        const cx = mx + dy * 0.15, cy = my - dx * 0.15;
+
+        rootG.append('path')
+          .datum(e)
+          .attr('class', 'edge-line' + (isExternal ? ' dashed' : ''))
+          .attr('d', `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`)
+          .attr('fill', 'none')
+          .attr('stroke', isExternal ? '#f39c12' : '#94a3b8')
+          .attr('stroke-width', 1.5)
+          .attr('marker-end', 'url(#explore-arrow)');
+
+        // Edge label at midpoint
+        rootG.append('text')
+          .datum(e)
+          .attr('class', 'edge-label')
+          .attr('x', cx).attr('y', cy - 4)
+          .attr('text-anchor', 'middle').attr('font-size', '8px').attr('fill', '#aaa')
+          .text(e.edge_type);
+      });
+
+      // Draw nodes
+      Object.values(nodePos).forEach(({ x, y, node: n, external }) => {
+        const hasChildren = !!(childrenOf[n.node_id] && childrenOf[n.node_id].length > 0);
+        const g = rootG.append('g').attr('class', 'node-g').attr('data-node-id', n.node_id)
+          .attr('transform', `translate(${x - nodeW/2},${y - nodeH/2})`).style('cursor', 'pointer');
+
+        g.append('rect').attr('class', 'node-rect' + (self.selectedNode?.node_id === n.node_id ? ' selected' : ''))
+          .attr('width', nodeW).attr('height', nodeH)
+          .attr('fill', external ? '#fffbf0' : '#fff')
+          .attr('stroke', external ? '#f39c12' : self.layerColor(n.layer))
+          .attr('stroke-width', hasChildren ? 2 : 1.5)
+          .attr('stroke-dasharray', external ? '4,2' : 'none');
+
+        // Name
+        const label = n.name.length > 18 ? n.name.slice(0,17) + '\u2026' : n.name;
+        g.append('text').attr('x', 8).attr('y', nodeH/2 + 4)
+          .attr('font-size', '11px').attr('fill', '#333').text(label);
+
+        // Children count badge (indicates drillable)
+        if (hasChildren) {
+          const count = childrenOf[n.node_id].length;
+          g.append('rect').attr('x', nodeW - 30).attr('y', 7).attr('width', 22).attr('height', 18)
+            .attr('rx', 9).attr('fill', self.layerColor(n.layer)).attr('opacity', 0.15);
+          g.append('text').attr('x', nodeW - 19).attr('y', 20)
+            .attr('text-anchor', 'middle').attr('font-size', '9px').attr('fill', self.layerColor(n.layer)).attr('font-weight', '600')
+            .text(count);
+        }
+
+        // Click: select. Double-click: drill down.
+        g.on('click', (event) => {
+          event.stopPropagation();
+          self.selectedNode = n;
+          self.highlightNode(n.node_id, allVisibleEdges);
+        });
+        g.on('dblclick', (event) => {
+          event.stopPropagation();
+          if (hasChildren) {
+            self.exploreDrillDown(n.node_id, n.name);
+          }
+        });
+      });
+
+      // Click background to reset
+      svg.on('click', () => {
+        self.selectedNode = null;
+        self.highlightNode(null);
+      });
+
+      // Detail panel below SVG
+      if (self.selectedNode) {
+        const n = self.selectedNode;
+        const outgoing = depEdges.filter(e => e.from_node_id === n.node_id).map(e => ({...e, targetName: nodeById[e.to_node_id]?.name || '?'}));
+        const incoming = depEdges.filter(e => e.to_node_id === n.node_id).map(e => ({...e, sourceName: nodeById[e.from_node_id]?.name || '?'}));
+        const hasKids = !!(childrenOf[n.node_id] && childrenOf[n.node_id].length > 0);
+
+        const detail = document.createElement('div');
+        detail.style.cssText = 'padding:12px 16px;background:#fff;border-top:1px solid #e0e0e0;font-size:11px;';
+        detail.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div>
+              <strong style="color:#333;font-size:13px">${n.name}</strong>
+              <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${self.layerColor(n.layer)}15;color:${self.layerColor(n.layer)};margin-left:6px">${n.node_type}</span>
+              ${hasKids ? `<button onclick="document.querySelector('[x-data]').__x.$data.exploreDrillDown(${n.node_id},'${n.name.replace(/'/g,"\\'")}')" style="margin-left:8px;font-size:10px;padding:2px 10px;background:#4361ee;color:#fff;border:none;border-radius:4px;cursor:pointer">Explore ${childrenOf[n.node_id].length} children →</button>` : ''}
+            </div>
+            <span style="font-size:10px;color:#999;font-family:monospace">${n.node_key}</span>
+          </div>
+          ${n.file_path ? `<div style="color:#666;margin-bottom:8px">${n.repo_name ? n.repo_name + '/' : ''}${n.file_path}</div>` : ''}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="color:#999;margin-bottom:4px;font-weight:600">Dependencies (${outgoing.length})</div>
+              ${outgoing.length === 0 ? '<div style="color:#ccc">none</div>' : outgoing.slice(0,10).map(e =>
+                `<div style="padding:2px 0">→ ${e.targetName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
+              ).join('') + (outgoing.length > 10 ? `<div style="color:#999">+${outgoing.length-10} more</div>` : '')}
+            </div>
+            <div>
+              <div style="color:#999;margin-bottom:4px;font-weight:600">Dependents (${incoming.length})</div>
+              ${incoming.length === 0 ? '<div style="color:#ccc">none</div>' : incoming.slice(0,10).map(e =>
+                `<div style="padding:2px 0">← ${e.sourceName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
+              ).join('') + (incoming.length > 10 ? `<div style="color:#999">+${incoming.length-10} more</div>` : '')}
+            </div>
+          </div>
+        `;
+        container.appendChild(detail);
+      }
+    },
+
+    renderLayeredGraph(container, nodes, edges) {
+      const self = this;
+
+      // Build containment tree
+      const containsEdges = edges.filter(e => e.edge_type === 'CONTAINS');
+      const childrenOf = {};
+      const hasParent = new Set();
+      containsEdges.forEach(e => {
+        if (!childrenOf[e.from_node_id]) childrenOf[e.from_node_id] = [];
+        childrenOf[e.from_node_id].push(e.to_node_id);
+        hasParent.add(e.to_node_id);
+      });
+      const nodeById = {};
+      nodes.forEach(n => { nodeById[n.node_id] = n; });
+
+      // Non-CONTAINS edges for showing connections
+      const depEdges = edges.filter(e => e.edge_type !== 'CONTAINS');
+
+      // Build tree data grouped by layer
+      const layerOrder = ['code','service','contract','flow','ownership','infra','ci'];
+      const usedLayers = [...new Set(nodes.map(n => n.layer))].sort((a,b) => layerOrder.indexOf(a) - layerOrder.indexOf(b));
+
+      // Expanded state (persisted across re-renders via Alpine)
+      if (!self._expandedNodes) self._expandedNodes = new Set();
+
+      // Build HTML tree instead of SVG
+      container.innerHTML = '';
+      const wrapper = document.createElement('div');
+      wrapper.className = 'layered-tree';
+      wrapper.style.cssText = 'padding:16px;font-size:13px;';
+
+      usedLayers.forEach(layer => {
+        const layerNodes = nodes.filter(n => n.layer === layer);
+        if (layerNodes.length === 0) return;
+
+        // Layer header
+        const layerDiv = document.createElement('div');
+        layerDiv.style.cssText = 'margin-bottom:16px;';
+        const layerHeader = document.createElement('div');
+        layerHeader.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:2px;color:#999;margin-bottom:8px;padding:4px 8px;background:#f8f9fa;border-radius:4px;';
+        layerHeader.textContent = layer + ' (' + layerNodes.length + ' nodes)';
+        layerDiv.appendChild(layerHeader);
+
+        // Find roots for this layer
+        const roots = layerNodes.filter(n => !hasParent.has(n.node_id));
+
+        // Render tree recursively
+        function renderNode(node, depth) {
+          const children = (childrenOf[node.node_id] || []).map(id => nodeById[id]).filter(Boolean);
+          const hasChildren = children.length > 0;
+          const isExpanded = self._expandedNodes.has(node.node_id);
+
+          // Count dependency edges for this node
+          const outDeps = depEdges.filter(e => e.from_node_id === node.node_id).length;
+          const inDeps = depEdges.filter(e => e.to_node_id === node.node_id).length;
+
+          const row = document.createElement('div');
+          row.style.cssText = `display:flex;align-items:center;gap:6px;padding:4px 8px;margin:2px 0;margin-left:${depth*20}px;border-radius:6px;cursor:pointer;transition:background .15s;border-left:3px solid ${self.layerColor(node.layer)};`;
+          row.className = 'tree-node';
+          row.dataset.nodeId = node.node_id;
+
+          // Highlight selected
+          if (self.selectedNode?.node_id === node.node_id) {
+            row.style.background = '#e8efff';
+            row.style.fontWeight = '600';
+          }
+
+          // Expand/collapse toggle
+          if (hasChildren) {
+            const toggle = document.createElement('span');
+            toggle.textContent = isExpanded ? '▼' : '▶';
+            toggle.style.cssText = 'font-size:9px;color:#999;width:12px;flex-shrink:0;';
+            row.appendChild(toggle);
+          } else {
+            const spacer = document.createElement('span');
+            spacer.style.cssText = 'width:12px;flex-shrink:0;';
+            spacer.textContent = '·';
+            spacer.style.color = '#ddd';
+            row.appendChild(spacer);
+          }
+
+          // Type badge
+          const badge = document.createElement('span');
+          badge.textContent = node.node_type;
+          badge.style.cssText = `font-size:9px;padding:1px 6px;border-radius:8px;background:${self.layerColor(node.layer)}15;color:${self.layerColor(node.layer)};font-weight:500;flex-shrink:0;`;
+          row.appendChild(badge);
+
+          // Name
+          const name = document.createElement('span');
+          name.textContent = node.name;
+          name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#333;';
+          row.appendChild(name);
+
+          // Children count
+          if (hasChildren) {
+            const count = document.createElement('span');
+            count.textContent = children.length;
+            count.style.cssText = 'font-size:10px;color:#aaa;background:#f0f0f0;padding:0 6px;border-radius:8px;flex-shrink:0;';
+            row.appendChild(count);
+          }
+
+          // Dep indicators
+          if (outDeps > 0 || inDeps > 0) {
+            const deps = document.createElement('span');
+            deps.style.cssText = 'font-size:9px;color:#999;flex-shrink:0;';
+            const parts = [];
+            if (outDeps > 0) parts.push('→' + outDeps);
+            if (inDeps > 0) parts.push('←' + inDeps);
+            deps.textContent = parts.join(' ');
+            row.appendChild(deps);
+          }
+
+          // Click handler
+          row.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (hasChildren) {
+              if (self._expandedNodes.has(node.node_id)) {
+                self._expandedNodes.delete(node.node_id);
+              } else {
+                self._expandedNodes.add(node.node_id);
+              }
+            }
+            self.selectedNode = node;
+            // Re-render to update expand state
+            self.renderLayeredGraph(container, nodes, edges);
+          });
+
+          // Hover
+          row.addEventListener('mouseenter', () => { if (self.selectedNode?.node_id !== node.node_id) row.style.background = '#f5f7ff'; });
+          row.addEventListener('mouseleave', () => { if (self.selectedNode?.node_id !== node.node_id) row.style.background = ''; });
+
+          layerDiv.appendChild(row);
+
+          // Render children if expanded
+          if (hasChildren && isExpanded) {
+            children.sort((a,b) => {
+              // Sort by type then name
+              const typeOrder = ['module','controller','resolver','provider','repository','service'];
+              const ai = typeOrder.indexOf(a.node_type), bi = typeOrder.indexOf(b.node_type);
+              if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+              return a.name.localeCompare(b.name);
+            });
+            children.forEach(child => renderNode(child, depth + 1));
+          }
+        }
+
+        // Sort roots
+        roots.sort((a,b) => a.name.localeCompare(b.name));
+        roots.forEach(r => renderNode(r, 0));
+
+        // Orphan nodes (no parent, no children, in this layer)
+        const orphans = layerNodes.filter(n => !hasParent.has(n.node_id) && !childrenOf[n.node_id] && !roots.includes(n));
+        orphans.forEach(n => renderNode(n, 0));
+
+        wrapper.appendChild(layerDiv);
+      });
+
+      // Selected node detail panel
+      if (self.selectedNode) {
+        const detail = document.createElement('div');
+        detail.style.cssText = 'margin-top:16px;padding:12px;background:#f8f9fa;border-radius:8px;border:1px solid #e0e0e0;';
+
+        const n = self.selectedNode;
+        const outgoing = depEdges.filter(e => e.from_node_id === n.node_id).map(e => ({...e, targetName: nodeById[e.to_node_id]?.name || '?'}));
+        const incoming = depEdges.filter(e => e.to_node_id === n.node_id).map(e => ({...e, sourceName: nodeById[e.from_node_id]?.name || '?'}));
+
+        detail.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
+            <div>
+              <strong style="color:#333">${n.name}</strong>
+              <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${self.layerColor(n.layer)}15;color:${self.layerColor(n.layer)};margin-left:6px">${n.node_type}</span>
+            </div>
+            <span style="font-size:10px;color:#999;font-family:monospace">${n.node_key}</span>
+          </div>
+          ${n.file_path ? `<div style="font-size:11px;color:#666;margin-bottom:8px">📁 ${n.repo_name ? n.repo_name + '/' : ''}${n.file_path}</div>` : ''}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px">
+            <div>
+              <div style="color:#999;margin-bottom:4px;font-weight:600">Outgoing (${outgoing.length})</div>
+              ${outgoing.length === 0 ? '<div style="color:#ccc">none</div>' : outgoing.map(e =>
+                `<div style="color:#555;padding:2px 0">→ ${e.targetName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
+              ).join('')}
+            </div>
+            <div>
+              <div style="color:#999;margin-bottom:4px;font-weight:600">Incoming (${incoming.length})</div>
+              ${incoming.length === 0 ? '<div style="color:#ccc">none</div>' : incoming.map(e =>
+                `<div style="color:#555;padding:2px 0">← ${e.sourceName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
+              ).join('')}
+            </div>
+          </div>
+        `;
+        wrapper.appendChild(detail);
+      }
+
+      container.appendChild(wrapper);
+    },
+
+    renderForceGraph(container, nodes, edges) {
+      const self = this;
+      const width = container.clientWidth || 900;
+      const height = 500;
+
+      const svg = d3.select(container).append('svg')
+        .attr('class', 'graph-svg')
+        .attr('width', width)
+        .attr('height', height);
+
+      // Defs for arrowhead
+      svg.append('defs').append('marker')
+        .attr('id', 'force-arrow')
+        .attr('viewBox', '0 0 10 10')
+        .attr('refX', 20).attr('refY', 5)
+        .attr('markerWidth', 6).attr('markerHeight', 6)
+        .attr('orient', 'auto-start-reverse')
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
+
+      const g = svg.append('g');
+
+      // Zoom
+      svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
+        g.attr('transform', event.transform);
+      }));
+
+      const nodeMap = {};
+      const simNodes = nodes.map(n => { const sn = { ...n, id: n.node_id }; nodeMap[n.node_id] = sn; return sn; });
+      const simEdges = edges.filter(e => nodeMap[e.from_node_id] && nodeMap[e.to_node_id])
+        .map(e => ({ source: e.from_node_id, target: e.to_node_id, ...e }));
+
+      const sim = d3.forceSimulation(simNodes)
+        .force('link', d3.forceLink(simEdges).id(d => d.id).distance(100))
+        .force('charge', d3.forceManyBody().strength(-200))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(30));
+
+      // Draw edges
+      const link = g.selectAll('.edge-line')
+        .data(simEdges).join('line')
+        .attr('class', d => {
+          let cls = 'edge-line';
+          if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
+          if (d.confidence < 0.8) cls += ' low-conf';
+          return cls;
+        })
+        .attr('marker-end', 'url(#force-arrow)');
+
+      // Draw nodes
+      const node = g.selectAll('.node-g')
+        .data(simNodes).join('g')
+        .attr('class', 'node-g')
+        .call(d3.drag()
+          .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+          .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+        );
+
+      node.append('circle')
+        .attr('class', d => 'node-circle' + (self.selectedNode?.node_id === d.node_id ? ' selected' : ''))
+        .attr('r', 14)
+        .attr('fill', d => d.confidence < 0.8 ? '#fef3c7' : self.layerColor(d.layer))
+        .attr('stroke', d => d3.color(self.layerColor(d.layer)).darker(0.3));
+
+      node.append('text')
+        .attr('dy', -18).attr('text-anchor', 'middle')
+        .text(d => d.name.length > 14 ? d.name.slice(0,13) + '\u2026' : d.name);
+
+      node.on('click', (event, d) => {
+        event.stopPropagation();
+        self.selectedNode = d;
+        self.highlightNode(d.node_id || d.id, simEdges.map(e => ({
+          from_node_id: e.source.id || e.source,
+          to_node_id: e.target.id || e.target,
+          edge_type: e.edge_type
+        })));
+      });
+
+      // Click background to reset
+      svg.on('click', () => {
+        self.selectedNode = null;
+        self.highlightNode(null);
+      });
+
+      sim.on('tick', () => {
+        link
+          .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+      });
+    }
+  };
+}
+</script>
+</body>
+</html>
