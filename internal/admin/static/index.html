@@ -222,17 +222,6 @@ a{color:var(--primary);text-decoration:none}
     </div>
   </template>
 
-  <!-- Quick actions for scanned projects -->
-  <template x-if="(stats.graph?.node_count ?? 0) > 0">
-    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <span style="font-size:11px;color:#999;padding:4px 0">Quick:</span>
-      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle scan')">📋 oracle scan</button>
-      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle data')">📋 oracle data</button>
-      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle language')">📋 oracle language</button>
-      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle impact')">📋 oracle impact</button>
-      <button class="mode-btn" style="font-size:11px" onclick="navigator.clipboard.writeText('oracle services')">📋 oracle services</button>
-    </div>
-  </template>
 
   <!-- Stat cards — show layer breakdown -->
   <div class="stat-grid">
