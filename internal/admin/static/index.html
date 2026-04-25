@@ -487,13 +487,16 @@ a{color:var(--primary);text-decoration:none}
               <template x-if="getNodeEdges(selectedNode, 'out').length === 0">
                 <div style="color:#ccc">none</div>
               </template>
-              <template x-for="e in getNodeEdges(selectedNode, 'out')" :key="e.edge_key">
+              <template x-for="e in getNodeEdges(selectedNode, 'out')" :key="e.edge_key || (e.from_node_id+'-'+e.to_node_id)">
                 <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.target_key)">
                   <span style="color:#4361ee">→</span>
                   <span x-text="e.target_name"></span>
-                  <span style="font-size:9px;padding:0 4px;border-radius:4px;margin-left:2px"
+                  <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
                         :style="{color: e.derivation==='hard' ? '#2ecc71' : '#f39c12'}"
                         x-text="e.edge_type"></span>
+                  <span x-show="e.target_layer && e.target_layer !== selectedNode?.layer"
+                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0f1f3;color:#999;margin-left:2px"
+                        x-text="e.target_layer"></span>
                 </div>
               </template>
             </div>
@@ -504,13 +507,16 @@ a{color:var(--primary);text-decoration:none}
               <template x-if="getNodeEdges(selectedNode, 'in').length === 0">
                 <div style="color:#ccc">none</div>
               </template>
-              <template x-for="e in getNodeEdges(selectedNode, 'in')" :key="e.edge_key">
+              <template x-for="e in getNodeEdges(selectedNode, 'in')" :key="e.edge_key || (e.from_node_id+'-'+e.to_node_id)">
                 <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.source_key)">
                   <span style="color:#f39c12">←</span>
                   <span x-text="e.source_name"></span>
-                  <span style="font-size:9px;padding:0 4px;border-radius:4px;margin-left:2px"
+                  <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
                         :style="{color: e.derivation==='hard' ? '#2ecc71' : '#f39c12'}"
                         x-text="e.edge_type"></span>
+                  <span x-show="e.source_layer && e.source_layer !== selectedNode?.layer"
+                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0f1f3;color:#999;margin-left:2px"
+                        x-text="e.source_layer"></span>
                 </div>
               </template>
             </div>
@@ -1022,17 +1028,21 @@ function dashboard() {
 
     // Helper: get edges for selected node (for side panel)
     getNodeEdges(node, direction) {
-      if (!node || !this.graphData.edges) return [];
+      if (!node) return [];
+      // Search ALL edges (unfiltered) so we see cross-layer connections
+      const allNodes = this.graphData.nodes || [];
+      const allEdges = this.graphData.edges || [];
       const nodeById = {};
-      (this.graphData.nodes || []).forEach(n => { nodeById[n.node_id] = n; });
-      const edges = this.graphData.edges || [];
+      allNodes.forEach(n => { nodeById[n.node_id] = n; });
       if (direction === 'out') {
-        return edges.filter(e => e.from_node_id === node.node_id && e.edge_type !== 'CONTAINS').map(e => ({
-          ...e, target_name: nodeById[e.to_node_id]?.name || '?', target_key: nodeById[e.to_node_id]?.node_key || ''
+        return allEdges.filter(e => e.from_node_id === node.node_id && e.edge_type !== 'CONTAINS' && e.edge_type !== 'HAS_FIELD').map(e => ({
+          ...e, target_name: nodeById[e.to_node_id]?.name || '?', target_key: nodeById[e.to_node_id]?.node_key || '',
+          target_layer: nodeById[e.to_node_id]?.layer || '?'
         }));
       }
-      return edges.filter(e => e.to_node_id === node.node_id && e.edge_type !== 'CONTAINS').map(e => ({
-        ...e, source_name: nodeById[e.from_node_id]?.name || '?', source_key: nodeById[e.from_node_id]?.node_key || ''
+      return allEdges.filter(e => e.to_node_id === node.node_id && e.edge_type !== 'CONTAINS' && e.edge_type !== 'HAS_FIELD').map(e => ({
+        ...e, source_name: nodeById[e.from_node_id]?.name || '?', source_key: nodeById[e.from_node_id]?.node_key || '',
+        source_layer: nodeById[e.from_node_id]?.layer || '?'
       }));
     },
 

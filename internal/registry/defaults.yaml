@@ -146,6 +146,9 @@ edge_types:
   STORED_IN:
     from_layers: [data]
     to_layers: [data, infra]
+  USES_ENUM:
+    from_layers: [data]
+    to_layers: [data]
   USES_QUEUE:
     from_layers: [service]
     to_layers: [service, contract]

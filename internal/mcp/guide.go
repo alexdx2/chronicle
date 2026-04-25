@@ -132,9 +132,10 @@ func detailedGuide(technology string) string {
 				"key":      "data:model:domain:modelname (lowercase)",
 				"evidence": "schema file + line number of model declaration",
 			},
-			"enums": map[string]string{
+			"enums": map[string]any{
 				"identify": "enum X { ... } blocks",
 				"key":      "data:enum:domain:enumname",
+				"edges":    "Create USES_ENUM edge from each model that has a field of this enum type. E.g. Character has 'mood CatMood' → Character USES_ENUM CatMood",
 			},
 			"relations": map[string]any{
 				"how": "Look for @relation directive and array fields",
