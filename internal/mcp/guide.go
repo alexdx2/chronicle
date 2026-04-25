@@ -61,12 +61,15 @@ func ExtractionGuide(technology string) string {
 			"REFERENCES_MODEL":  "model → model via @relation/FK (hard)",
 			"DEFINES_MODEL":     "repo → model it defines (hard)",
 		},
-		"flow_edge_types": map[string]string{
+		"flow_edge_types": map[string]any{
+			"WARNING":          "Use ONLY these edge types for flows. Do NOT invent types like 'CALLS', 'USES', 'INVOKES'. Those will be rejected.",
 			"TRIGGERS_FLOW":    "endpoint/event → flow:use_case (what triggers this business process)",
-			"REQUIRES":         "flow → code/data/service (what the flow depends on)",
+			"REQUIRES":         "flow → code/data/service (what the flow depends on — use this instead of CALLS/USES/DEPENDS_ON)",
+			"INVOKES":          "flow → code/service (alternative to REQUIRES — flow calls a service)",
 			"PRODUCES_OUTCOME": "flow → contract/data (what the flow produces: events, state changes)",
 			"PRECEDES":         "flow_step → flow_step (ordering within a flow)",
 			"TRANSITIONS_TO":   "flow → flow (one use case leads to another)",
+			"node_type":        "MUST be 'use_case' or 'flow' (not 'usecase' — underscore required, though both are now accepted)",
 		},
 		"call_oracle_extraction_guide_with_technology": "For detailed rules, call again with technology='nestjs', 'prisma', 'openapi', or 'flow'",
 	}

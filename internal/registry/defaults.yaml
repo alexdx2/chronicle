@@ -48,6 +48,7 @@ node_types:
     - flow
     - flow_step
     - use_case
+    - usecase
     - state_transition
     - invariant
     - trigger
@@ -167,10 +168,10 @@ edge_types:
     from_layers: [flow]
     to_layers: [contract]
   REQUIRES:
-    from_layers: [flow]
+    from_layers: [flow, code]
     to_layers: [code, service, contract, data]
   TRIGGERS_FLOW:
-    from_layers: [contract, code]
+    from_layers: [contract, code, service]
     to_layers: [flow]
   PRODUCES_OUTCOME:
     from_layers: [flow]
@@ -178,6 +179,12 @@ edge_types:
   TRANSITIONS_TO:
     from_layers: [flow]
     to_layers: [flow]
+  INVOKES:
+    from_layers: [flow, code]
+    to_layers: [code, service, flow]
+  DEPENDS_ON:
+    from_layers: [flow, code]
+    to_layers: [code, service, data, contract]
   TRIGGERS_ANALYSIS:
     from_layers: [ci]
     to_layers: [service, contract]
