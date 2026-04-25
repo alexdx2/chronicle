@@ -725,6 +725,16 @@ function dashboard() {
     ws: null,
 
     async init() {
+      // Restore last selected project from localStorage
+      const lastProject = localStorage.getItem('oracle_current_project');
+      if (lastProject) {
+        try {
+          const r = await fetch('/api/projects?path=' + encodeURIComponent(lastProject));
+          const data = await r.json();
+          if (data.error) localStorage.removeItem('oracle_current_project');
+        } catch(e) {}
+      }
+
       await Promise.all([
         this.fetchStats(),
         this.fetchRequests(),
@@ -836,7 +846,8 @@ function dashboard() {
           this.switchError = data.error;
           return;
         }
-        // Save to localStorage
+        // Save to localStorage — persist across reloads
+        localStorage.setItem('oracle_current_project', data.path);
         const history = JSON.parse(localStorage.getItem('oracle_projects') || '[]');
         const existing = history.findIndex(p => p.path === data.path);
         if (existing >= 0) history.splice(existing, 1);
