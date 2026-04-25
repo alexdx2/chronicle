@@ -1,12 +1,20 @@
 package mcp
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/anthropics/depbot/internal/store"
+)
+
+// customGuideStore is set by the MCP server to allow reading custom prompts.
+var customGuideStore *store.Store
+
+// SetGuideStore sets the store for reading custom extraction prompts.
+func SetGuideStore(s *store.Store) { customGuideStore = s }
 
 // ExtractionGuide returns the extraction methodology.
-// If technology is empty, returns the compact workflow guide.
-// If technology is set, returns detailed extraction rules for that tech.
+// If a custom prompt is stored in project settings, it's appended.
 func ExtractionGuide(technology string) string {
-	// If specific tech requested, return detailed section
 	if technology != "" {
 		return detailedGuide(technology)
 	}
@@ -61,6 +69,13 @@ func ExtractionGuide(technology string) string {
 			"TRANSITIONS_TO":   "flow → flow (one use case leads to another)",
 		},
 		"call_oracle_extraction_guide_with_technology": "For detailed rules, call again with technology='nestjs', 'prisma', 'openapi', or 'flow'",
+	}
+
+	// Append custom project-level instructions if set
+	if customGuideStore != nil {
+		if custom, err := customGuideStore.GetSetting("extraction_prompt"); err == nil && custom != "" {
+			guide["project_custom_instructions"] = custom
+		}
 	}
 
 	data, _ := json.MarshalIndent(guide, "", "  ")

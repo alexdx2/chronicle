@@ -238,6 +238,11 @@ CREATE TABLE IF NOT EXISTS graph_discoveries (
 CREATE INDEX IF NOT EXISTS idx_graph_discoveries_domain
   ON graph_discoveries(domain_key, category);
 
+CREATE TABLE IF NOT EXISTS project_settings (
+  key    TEXT PRIMARY KEY,
+  value  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS domain_language (
   term_id        INTEGER PRIMARY KEY AUTOINCREMENT,
   domain_key     TEXT NOT NULL,

@@ -154,6 +154,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/validate", s.handleValidate)
 	mux.HandleFunc("/api/graph", s.handleGraph)
 	mux.HandleFunc("/api/manifest", s.handleManifest)
+	mux.HandleFunc("/api/settings/prompt", s.handlePromptSetting)
 	mux.HandleFunc("/api/discoveries", s.handleDiscoveries)
 	mux.HandleFunc("/api/glossary", s.handleGlossary)
 	mux.HandleFunc("/api/language-check", s.handleLanguageCheck)
@@ -503,6 +504,34 @@ func (s *Server) handleSaveTerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpJSON(w, map[string]any{"term_id": id, "term": t.Term})
+}
+
+func (s *Server) handlePromptSetting(w http.ResponseWriter, r *http.Request) {
+	st := s.getStore()
+	if r.Method == "GET" {
+		val, err := st.GetSetting("extraction_prompt")
+		if err != nil {
+			val = "" // no custom prompt set
+		}
+		httpJSON(w, map[string]string{"prompt": val})
+		return
+	}
+	if r.Method == "PUT" || r.Method == "POST" {
+		var req struct {
+			Prompt string `json:"prompt"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpError(w, err, 400)
+			return
+		}
+		if err := st.SetSetting("extraction_prompt", req.Prompt); err != nil {
+			httpError(w, err, 500)
+			return
+		}
+		httpJSON(w, map[string]string{"status": "saved"})
+		return
+	}
+	w.WriteHeader(405)
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {

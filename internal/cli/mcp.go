@@ -47,6 +47,7 @@ func newMCPCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			g := openGraph()
 			mcpserver.SetManifestPath(manifestPath)
+			mcpserver.SetGuideStore(g.Store())
 			s := mcpserver.NewServerWithLogging(g, g.Store())
 
 			adminPort, _ := cmd.Flags().GetInt("admin-port")
@@ -61,7 +62,7 @@ func newMCPCmd() *cobra.Command {
 			mcpserver.SetAdminPort(adminPort)
 
 			if !noAdmin {
-				srv := admin.NewServer(g, g.Store(), adminPort, manifestPath)
+				srv := admin.NewServer(g, g.Store(), adminPort, manifestPath, false)
 				go func() {
 					if err := srv.Start(); err != nil {
 						fmt.Fprintf(os.Stderr, "admin dashboard failed: %v\n", err)

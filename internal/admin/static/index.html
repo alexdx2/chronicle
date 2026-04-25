@@ -188,7 +188,7 @@ a{color:var(--primary);text-decoration:none}
     <button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview'">Overview</button>
     <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph'; $nextTick(()=>renderGraph())">Graph</button>
     <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language'; fetchGlossary(); fetchLanguageCheck()">Language</button>
-    <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings'; fetchManifest()">Settings</button>
+    <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings'; fetchManifest(); fetchPrompt()">Settings</button>
   </div>
 </header>
 
@@ -653,6 +653,28 @@ a{color:var(--primary);text-decoration:none}
       spellcheck="false"></textarea>
     <p x-show="manifestError" style="color:#e74c3c;font-size:12px;margin-top:8px" x-text="manifestError"></p>
   </div>
+
+  <!-- Extraction Prompt -->
+  <div class="card" style="max-width:800px;margin-top:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0;color:#4361ee">Extraction Prompt</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span x-show="promptSaved" x-transition style="color:#2ecc71;font-size:12px">Saved!</span>
+        <button @click="customPrompt='';savePrompt()" style="background:none;border:1px solid #ddd;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;color:#999">Reset to default</button>
+        <button @click="savePrompt()" style="background:#4361ee;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
+      </div>
+    </div>
+    <p style="color:#999;font-size:12px;margin-bottom:8px">
+      Custom instructions appended to the extraction guide. Claude sees these when scanning this project. Leave empty to use defaults.
+    </p>
+    <p style="color:#999;font-size:11px;margin-bottom:12px">
+      Example: "Focus on the payment module. Ignore test files. The main API uses Prisma, CRM is React with Zustand stores."
+    </p>
+    <textarea x-model="customPrompt" @input="promptSaved=false"
+      placeholder="No custom instructions — using default extraction guide"
+      style="width:100%;min-height:150px;font-family:monospace;font-size:12px;line-height:1.6;padding:12px;border:1px solid #e0e0e0;border-radius:6px;background:#fafbfc;resize:vertical;color:#333"
+      spellcheck="false"></textarea>
+  </div>
 </div>
 
 <script>
@@ -672,6 +694,8 @@ function dashboard() {
     glossary: [],
     languageViolations: [],
     editingTerm: null,
+    customPrompt: '',
+    promptSaved: false,
     showProjectSwitcher: false,
     switchPath: '',
     switchError: '',
@@ -773,6 +797,26 @@ function dashboard() {
         const r = await fetch('/api/validate');
         this.validation = await r.json();
       } catch(e) { console.error('validate:', e); }
+    },
+
+    async fetchPrompt() {
+      try {
+        const r = await fetch('/api/settings/prompt');
+        const d = await r.json();
+        this.customPrompt = d.prompt || '';
+      } catch(e) { console.error('prompt:', e); }
+    },
+
+    async savePrompt() {
+      try {
+        await fetch('/api/settings/prompt', {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({prompt: this.customPrompt}),
+        });
+        this.promptSaved = true;
+        setTimeout(() => this.promptSaved = false, 2000);
+      } catch(e) { console.error('save prompt:', e); }
     },
 
     async switchProject() {
