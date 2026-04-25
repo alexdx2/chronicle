@@ -4,10 +4,12 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +18,13 @@ import (
 	"github.com/anthropics/depbot/internal/store"
 	"github.com/anthropics/depbot/internal/validate"
 )
+
+func portFromPath(dir string) int {
+	abs, _ := filepath.Abs(dir)
+	h := fnv.New32a()
+	h.Write([]byte(abs))
+	return 4200 + int(h.Sum32()%800)
+}
 
 //go:embed static/*
 var staticFS embed.FS
@@ -90,6 +99,7 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/info", s.handleInfo)
+	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/requests", s.handleRequests)
@@ -147,6 +157,48 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"domain":        domain,
 		"manifest_path": s.manifestPath,
 		"port":          s.port,
+	})
+}
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	// Check a specific path for .depbot/oracle.db
+	projectPath := r.URL.Query().Get("path")
+	if projectPath == "" {
+		// Return current project info
+		cwd, _ := os.Getwd()
+		httpJSON(w, map[string]any{
+			"current": cwd,
+			"port":    s.port,
+			"hint":    "Pass ?path=/some/project to check another project's Oracle dashboard port",
+		})
+		return
+	}
+
+	dbPath := filepath.Join(projectPath, ".depbot", "oracle.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		httpJSON(w, map[string]any{"error": "No .depbot/oracle.db found at " + projectPath, "path": projectPath})
+		return
+	}
+
+	port := portFromPath(projectPath)
+	name := filepath.Base(projectPath)
+
+	// Try to get node count
+	nodeCount := 0
+	tmpStore, err := store.Open(dbPath)
+	if err == nil {
+		nodes, _ := tmpStore.ListNodes(store.NodeFilter{})
+		nodeCount = len(nodes)
+		tmpStore.Close()
+	}
+
+	httpJSON(w, map[string]any{
+		"name":       name,
+		"path":       projectPath,
+		"db_path":    dbPath,
+		"port":       port,
+		"url":        fmt.Sprintf("http://localhost:%d", port),
+		"node_count": nodeCount,
 	})
 }
 

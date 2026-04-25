@@ -136,14 +136,35 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Header -->
 <header class="header">
-  <h1>Oracle Admin</h1>
+  <h1>Oracle</h1>
   <div class="meta">
-    <span>Domain: <strong x-text="domain"></strong></span>
+    <!-- Project name + switcher -->
+    <span style="position:relative">
+      <button @click="showProjectSwitcher=!showProjectSwitcher"
+              style="background:none;border:1px solid var(--border);border-radius:6px;padding:2px 10px;cursor:pointer;font-size:12px;color:var(--text);display:flex;align-items:center;gap:4px">
+        <strong x-text="domain || 'Project'"></strong> ▾
+      </button>
+      <div x-show="showProjectSwitcher" x-cloak @click.outside="showProjectSwitcher=false"
+           style="position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);width:350px;z-index:200;padding:12px">
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px">Open another project's dashboard:</div>
+        <div style="display:flex;gap:6px">
+          <input x-model="switchPath" placeholder="/home/user/my-project"
+                 @keydown.enter="switchProject()"
+                 style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace">
+          <button @click="switchProject()" class="btn btn-primary btn-sm">Go</button>
+        </div>
+        <div x-show="switchError" style="color:var(--error);font-size:11px;margin-top:6px" x-text="switchError"></div>
+        <div x-show="switchResult" style="margin-top:8px;padding:8px;background:#f0f5ff;border-radius:6px;font-size:11px">
+          <div><strong x-text="switchResult?.name"></strong> — <span x-text="switchResult?.node_count + ' nodes'"></span></div>
+          <a :href="switchResult?.url" style="color:var(--primary)" x-text="switchResult?.url">Open</a>
+        </div>
+      </div>
+    </span>
     <span x-show="revision">Rev: <strong x-text="revision"></strong></span>
     <span x-show="lastScan">Last scan: <strong x-text="lastScan"></strong></span>
     <span :style="{color: wsConnected ? 'var(--success)' : 'var(--error)'}">
-      <template x-if="wsConnected"><span>&#9679; Live</span></template>
-      <template x-if="!wsConnected"><span>&#9675; Offline</span></template>
+      <template x-if="wsConnected"><span>&#9679;</span></template>
+      <template x-if="!wsConnected"><span>&#9675;</span></template>
     </span>
   </div>
   <div class="tab-bar">
@@ -645,6 +666,10 @@ function dashboard() {
     glossary: [],
     languageViolations: [],
     editingTerm: null,
+    showProjectSwitcher: false,
+    switchPath: '',
+    switchError: '',
+    switchResult: null,
     graphData: { nodes: [], edges: [] },
     graphMode: 'tree',
     explorePath: [],
@@ -742,6 +767,21 @@ function dashboard() {
         const r = await fetch('/api/validate');
         this.validation = await r.json();
       } catch(e) { console.error('validate:', e); }
+    },
+
+    async switchProject() {
+      this.switchError = '';
+      this.switchResult = null;
+      if (!this.switchPath) return;
+      try {
+        const r = await fetch('/api/projects?path=' + encodeURIComponent(this.switchPath));
+        const data = await r.json();
+        if (data.error) {
+          this.switchError = data.error;
+        } else {
+          this.switchResult = data;
+        }
+      } catch(e) { this.switchError = e.message; }
     },
 
     async fetchGlossary() {
