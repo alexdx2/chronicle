@@ -1,0 +1,185 @@
+
+══════════════════════════════════════════════════════
+  Tom & Jerry — Claude Agent E2E Test
+══════════════════════════════════════════════════════
+
+[0;36m── Build ──[0m
+[0;32m  ✓ Oracle binary built[0m
+
+[0;36m── Setup ──[0m
+[0;32m  ✓ Oracle initialized in /tmp/tmp.brGnziXpIA[0m
+[0;32m  ✓ MCP config created at /tmp/tmp.brGnziXpIA/mcp.json[0m
+
+[0;36m── Claude Scan ──[0m
+[1;33m→ Running Claude to scan the project...[0m
+[1;33m→ This may take 1-3 minutes depending on model speed.[0m
+[0;32m  ✓ Claude finished (exit: 0)[0m
+[1;33m→ Claude output: 34 lines (saved to e2e/results/claude_output.txt)[0m
+
+[0;36m── Verification ──[0m
+[1;33m→ Graph: 66 nodes, 73 edges[0m
+
+[0;36m── Nodes ──[0m
+[0;32m  ✓ Total nodes: 66 (>= 25)[0m
+[0;32m  ✓ Total edges: 73 (>= 20)[0m
+
+[0;36m── Layers ──[0m
+  Found: code,contract,data,flow,service
+[0;32m  ✓ code layer: 36 nodes[0m
+[0;32m  ✓ data layer: 9 nodes[0m
+[0;32m  ✓ contract layer: 13 nodes[0m
+[0;32m  ✓ service layer: 4 nodes[0m
+
+[0;36m── Services ──[0m
+[0;32m  ✓ Services (4): arena-api, jerry-api, spectators-api, tom-api[0m
+
+[0;36m── Data Models ──[0m
+[0;32m  ✓ Data nodes (9): BattleResult, CatMood, TrapEffect, WeaponType, BattleEvent, Cat, CatWeapon, Mouse, Trap[0m
+[0;32m  ✓ Model 'cat' found[0m
+[0;32m  ✓ Model 'mouse' found[0m
+[0;32m  ✓ Model 'battleevent' found[0m
+
+[0;36m── Endpoints ──[0m
+[0;32m  ✓ Endpoints: 12 (>= 8)[0m
+[0;32m  ✓ Kafka topics: 1[0m
+
+[0;36m── Edge Types ──[0m
+  CALLS_ENDPOINT: 5
+  CALLS_SERVICE: 4
+  CONSUMES_TOPIC: 1
+  CONTAINS: 19
+  EXPOSES_ENDPOINT: 12
+  INJECTS: 14
+  PRODUCES_OUTCOME: 1
+  PUBLISHES_TOPIC: 1
+  REFERENCES_MODEL: 2
+  REQUIRES: 6
+  TRIGGERS_FLOW: 3
+  USES_MODEL: 5
+[0;32m  ✓ INJECTS edges: 14[0m
+[0;32m  ✓ CONTAINS edges: 19[0m
+[0;32m  ✓ EXPOSES_ENDPOINT edges: 12[0m
+[0;32m  ✓ CALLS_SERVICE edges: 4[0m
+[0;32m  ✓ CALLS_ENDPOINT edges: 5[0m
+[0;32m  ✓ PUBLISHES_TOPIC edges: 1[0m
+[0;32m  ✓ CONSUMES_TOPIC edges: 1[0m
+[0;32m  ✓ USES_MODEL edges: 5[0m
+[0;32m  ✓ REFERENCES_MODEL edges: 2[0m
+
+[0;36m── Derivation ──[0m
+  hard: 54
+  linked: 19
+[0;32m  ✓ Hard edges: 54[0m
+[0;32m  ✓ Linked edges: 19 (cross-service deps detected)[0m
+
+[0;36m── Path Queries ──[0m
+[0;32m  ✓ ArenaController → tom-api: 3 path(s)[0m
+    Path: arenacontroller → arenaservice → tomclient → tom-api
+    Hops: 3, Score: 0.9025
+[0;32m  ✓ tom-api ↛ jerry-api: no direct path (correct — only via arena)[0m
+
+[0;36m── Impact Analysis ──[0m
+[0;32m  ✓ Cat model impact: 2 nodes affected[0m
+    → TomService (provider) depth:1 score:100
+    → TomController (controller) depth:2 score:95
+
+[0;36m── Kafka Flow ──[0m
+[0;32m  ✓ Kafka flow: Producer → battle-results → Consumer[0m
+    Path: battleresultproducer → battle-results → battleresultconsumer
+
+[0;36m── Efficiency Metrics ──[0m
+  MCP calls: 33 (imports: 13, errors: 2)
+  Total payload: 62.4KB
+  Avg payload: 1.8KB
+  Largest payload: 5.5KB
+  [1;33m⚠ Largest payload 5.5KB — could be smaller[0m
+  Avg import size: 4.2KB
+
+  Per-tool breakdown:
+    oracle_import_all               13 calls     4.2KB avg    54.8KB total
+    oracle_report_discovery          6 calls     0.7KB avg     3.9KB total
+    oracle_define_term               7 calls     0.4KB avg     2.8KB total
+    oracle_save_manifest             1 calls     0.7KB avg     0.7KB total
+    oracle_snapshot_create           1 calls     0.1KB avg     0.1KB total
+    oracle_revision_create           1 calls     0.1KB avg     0.1KB total
+    oracle_stale_mark                1 calls     0.0KB avg     0.0KB total
+    oracle_query_stats               1 calls     0.0KB avg     0.0KB total
+    oracle_check_language            1 calls     0.0KB avg     0.0KB total
+    oracle_extraction_guide          1 calls     0.0KB avg     0.0KB total
+
+[0;36m── Discoveries (Self-Learning) ──[0m
+[0;32m  ✓ Discoveries: 39 total (system: 33, claude: 6, user: 0)[0m
+[0;32m  ✓ Claude reported 6 discovery(ies)[0m
+    [pattern|system] Scan quality: incomplete — 9 nodes, 2 edges
+    [missing_edge|system] 8 nodes without evidence
+    [unknown_pattern|system] 4 modules without CONTAINS edges
+    [missing_edge|system] 4 controllers but 0 EXPOSES_ENDPOINT edges
+    [pattern|system] Scan quality: incomplete — 21 nodes, 2 edges
+    [missing_edge|system] 11 nodes without evidence
+    [unknown_pattern|system] 4 modules without CONTAINS edges
+    [missing_edge|system] 4 controllers but 0 EXPOSES_ENDPOINT edges
+    [pattern|system] Scan quality: incomplete — 32 nodes, 2 edges
+    [missing_edge|system] 18 nodes without evidence
+    [unknown_pattern|system] 4 modules without CONTAINS edges
+    [missing_edge|system] 4 controllers but 0 EXPOSES_ENDPOINT edges
+    [pattern|system] Scan quality: incomplete — 45 nodes, 2 edges
+    [missing_edge|system] 30 nodes without evidence
+    [unknown_pattern|system] 4 modules without CONTAINS edges
+    [missing_edge|system] 4 controllers but 0 EXPOSES_ENDPOINT edges
+    [missing_edge|system] 4 services but no cross-service edges
+    [pattern|system] Scan quality: good — 59 nodes, 2 edges
+    [missing_edge|system] 32 nodes without evidence
+    [unknown_pattern|system] 1 modules without CONTAINS edges
+    [missing_edge|system] 4 controllers but 0 EXPOSES_ENDPOINT edges
+    [missing_edge|system] 4 services but no cross-service edges
+    [pattern|system] Scan quality: good — 62 nodes, 17 edges
+    [missing_edge|system] 32 nodes without evidence
+    [missing_edge|system] 4 controllers but 0 EXPOSES_ENDPOINT edges
+    [missing_edge|system] 4 services but no cross-service edges
+    [pattern|system] Scan quality: good — 62 nodes, 32 edges
+    [missing_edge|system] 32 nodes without evidence
+    [missing_edge|system] 4 services but no cross-service edges
+    [pattern|system] Scan quality: good — 62 nodes, 47 edges
+    [missing_edge|system] 32 nodes without evidence
+    [missing_edge|system] 36 nodes without evidence
+    [unknown_pattern|claude] BattleQueueProducer/Consumer not registered in ArenaModule
+    [unknown_pattern|claude] NotificationService not registered in SpectatorsModule
+    [missing_edge|claude] SpectatorService calls TOM_API and JERRY_API endpoints
+    [missing_edge|claude] CacheService not connected to any consumer
+    [unknown_pattern|claude] TomEventHandler uses EventEmitter2 but not registered in module
+    [pattern|claude] Overall scan quality assessment
+    [missing_edge|system] 36 nodes without evidence
+
+[0;36m── Shared Library ──[0m
+[0;32m  ✓ Shared library detected (1 nodes)[0m
+
+[0;36m── Business Flows ──[0m
+[0;32m  ✓ Flow use cases: 4 (>= 2)[0m
+    use_case     JerrySetsTrap
+    use_case     TomAttacksJerry
+    use_case     ViewLeaderboard
+    use_case     WatchBattle
+[0;32m  ✓ TRIGGERS_FLOW edges: 3[0m
+[0;32m  ✓ REQUIRES edges (flow→service/model): 6[0m
+
+[0;36m── Domain Language ──[0m
+[0;32m  ✓ Domain glossary: 7 terms defined[0m
+    Arena (arena): The battleground where Tom and Jerry fight. The arena-api service orchestrates attacks, manages battle history, and coordinates between Tom and Jerry services.
+    Battle (arena): A combat encounter between Tom and Jerry. Produces a BattleEvent record with result (TOM_HITS, JERRY_DODGES, TRAP_TRIGGERED, MUTUAL_DESTRUCTION). Published to Kafka topic battle-results.
+    Mouse (jerry): The prey character (Jerry). Has health, speed, cleverness, and traps. Represented by the Mouse Prisma model in jerry-api.
+    Trap (jerry): A defensive device set by Jerry to counter Tom's attacks. Has effects (STUN, REVERSE, EXPLODE, CHEESE_LURE). Represented by Trap Prisma model in jerry-api.
+    Spectator (spectators): An observer who watches battles and views stats. The spectators-api provides leaderboard and recent battle data, consumes battle-results from Kafka.
+    Cat (tom): The predator character (Tom). Has health (9 lives), speed, mood, and weapons. Represented by the Cat Prisma model in tom-api.
+    Weapon (tom): An offensive tool used by Tom to attack Jerry. Has damage and type (PISTOL, FRYING_PAN, DYNAMITE, ANVIL). Represented by CatWeapon Prisma model in tom-api.
+[0;32m  ✓ Language violations: 0 (clean)[0m
+
+══════════════════════════════════════════════════════
+[0;32m  ALL CHECKS PASSED ✓[0m
+══════════════════════════════════════════════════════
+[1;33m→ Results saved to e2e/results/[0m
+  → claude_output.txt (Claude's full response)
+  → stats.json (graph statistics)
+  → summary.json (test results)
+
+[1;33m→ Work dir preserved at: /tmp/tmp.brGnziXpIA[0m
+[1;33m→ Results saved to: /home/alex/personal/depbot/e2e/results/[0m
