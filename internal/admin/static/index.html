@@ -165,7 +165,7 @@ a{color:var(--primary);text-decoration:none}
           <input x-model="switchPath" placeholder="/home/user/my-project"
                  @keydown.enter="switchProject()"
                  style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace">
-          <button @click="switchProject()" class="btn btn-primary btn-sm">Find</button>
+          <button @click="switchProject()" class="btn btn-primary btn-sm">Open</button>
         </div>
         <div x-show="switchError" style="color:var(--error);font-size:11px;margin-top:6px" x-text="switchError"></div>
         <template x-if="switchResult && switchResult.url">
