@@ -393,6 +393,7 @@ a{color:var(--primary);text-decoration:none}
         <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data')">Data Models</button>
         <button class="mode-btn" :class="{active: graphPreset==='api'}" @click="setPreset('api')">API Surface</button>
         <button class="mode-btn" :class="{active: graphPreset==='services'}" @click="setPreset('services')">Services</button>
+        <button class="mode-btn" :class="{active: graphPreset==='flows'}" @click="setPreset('flows')">Flows</button>
       </div>
 
       <!-- Repo filter -->
@@ -879,6 +880,10 @@ function dashboard() {
           break;
         case 'services':
           this.layerFilters = ['service', 'code'];
+          this.hideStructural = true;
+          break;
+        case 'flows':
+          this.layerFilters = ['flow', 'contract', 'data'];
           this.hideStructural = true;
           break;
       }

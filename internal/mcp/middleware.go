@@ -164,12 +164,14 @@ func autoDiscover(s *store.Store, resultJSON string) {
 		}
 		if controllers > 0 {
 			s.AddDiscovery(store.Discovery{
-				DomainKey:   domain,
-				Category:    "missing_edge",
-				Title:       fmt.Sprintf("%d controllers but 0 EXPOSES_ENDPOINT edges", controllers),
-				Description: "Controllers exist but no endpoints were extracted. Route decorators (@Get, @Post, etc) were likely missed.",
-				Source:      "system",
-				Confidence:  0.8,
+				DomainKey:       domain,
+				Category:        "missing_edge",
+				Severity:        "critical",
+				Title:           fmt.Sprintf("%d controllers but 0 EXPOSES_ENDPOINT edges", controllers),
+				Description:     "Controllers exist but no endpoints were extracted.",
+				SuggestedAction: "Re-scan with focus on controller files: read each @Get/@Post/@Put/@Delete method and create contract:endpoint nodes",
+				Source:          "system",
+				Confidence:      0.8,
 			})
 		}
 	}
@@ -183,12 +185,14 @@ func autoDiscover(s *store.Store, resultJSON string) {
 		}
 		if services > 1 {
 			s.AddDiscovery(store.Discovery{
-				DomainKey:   domain,
-				Category:    "missing_edge",
-				Title:       fmt.Sprintf("%d services but no cross-service edges", services),
-				Description: "Multiple services exist but no CALLS_SERVICE or CALLS_ENDPOINT edges found. HTTP clients and env URL references were likely missed.",
-				Source:      "system",
-				Confidence:  0.7,
+				DomainKey:       domain,
+				Category:        "missing_edge",
+				Severity:        "warning",
+				Title:           fmt.Sprintf("%d services but no cross-service edges", services),
+				Description:     "Multiple services but no CALLS_SERVICE or CALLS_ENDPOINT edges found.",
+				SuggestedAction: "Read HTTP client files, look for fetch() with env URLs like *_API_URL, create CALLS_SERVICE edges",
+				Source:          "system",
+				Confidence:      0.7,
 			})
 		}
 	}

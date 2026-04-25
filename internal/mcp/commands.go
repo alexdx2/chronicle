@@ -10,6 +10,7 @@ var UserCommands = map[string]string{
 	"impact":   "Analyze impact of a specific change — 'what breaks if I change X?'",
 	"deps":     "Show dependencies of a node — 'what does X depend on?'",
 	"path":     "Find path between two nodes — 'how does A connect to B?'",
+	"flows":    "Analyze business use cases — what the system does, end-to-end processes",
 	"services": "Analyze service architecture — cross-service deps, API surface",
 	"status":   "Show current graph state — nodes, edges, layers, last scan",
 	"help":     "Show available Oracle commands",
@@ -64,6 +65,18 @@ var CommandInstructions = map[string]string{
 3. Call oracle_query_path with mode='directed'
 4. If no path found, try mode='connected'
 5. Explain the path with edge types`,
+
+	"flows": `Business flow / use case analysis:
+1. Call oracle_extraction_guide(technology='flow') for detailed instructions
+2. Read the main service files to identify key business processes
+3. For each use case (e.g. PlaceOrder, UserSignup):
+   a. Create flow:use_case node
+   b. Find which endpoint triggers it → TRIGGERS_FLOW edge
+   c. Find which services it calls → REQUIRES edges
+   d. Find which models it reads/writes → REQUIRES edges
+   e. Find what events/outcomes it produces → PRODUCES_OUTCOME edges
+4. Import flows via oracle_import_all
+5. Report the discovered use cases to the user`,
 
 	"services": `Service architecture analysis:
 1. Call oracle_node_list with layer='service'

@@ -3,26 +3,39 @@ package store
 import "fmt"
 
 type Discovery struct {
-	DiscoveryID  int64   `json:"discovery_id"`
-	DomainKey    string  `json:"domain_key"`
-	Category     string  `json:"category"`     // pattern, correction, insight, unknown_pattern, missing_edge, stale_data
-	Title        string  `json:"title"`
-	Description  string  `json:"description"`
-	Source       string  `json:"source"`        // claude, user, system
-	Confidence   float64 `json:"confidence"`
-	RelatedNodes string  `json:"related_nodes"` // JSON array of node_keys
-	Applied      bool    `json:"applied"`
-	CreatedAt    string  `json:"created_at"`
+	DiscoveryID     int64   `json:"discovery_id"`
+	DomainKey       string  `json:"domain_key"`
+	Category        string  `json:"category"`         // pattern, correction, insight, unknown_pattern, missing_edge, stale_data
+	Severity        string  `json:"severity"`         // critical, warning, insight
+	Title           string  `json:"title"`
+	Description     string  `json:"description"`
+	SuggestedAction string  `json:"suggested_action"` // what to do about it
+	Source          string  `json:"source"`           // claude, user, system
+	Confidence      float64 `json:"confidence"`
+	RelatedNodes    string  `json:"related_nodes"`    // JSON array of node_keys
+	Applied         bool    `json:"applied"`
+	CreatedAt       string  `json:"created_at"`
 }
 
 func (s *Store) AddDiscovery(d Discovery) (int64, error) {
 	if d.RelatedNodes == "" {
 		d.RelatedNodes = "[]"
 	}
+	if d.Severity == "" {
+		d.Severity = "insight"
+	}
+	// Encode severity and action in description for backward compatibility
+	desc := d.Description
+	if d.Severity != "" && d.Severity != "insight" {
+		desc = "[" + d.Severity + "] " + desc
+	}
+	if d.SuggestedAction != "" {
+		desc = desc + " → Action: " + d.SuggestedAction
+	}
 	res, err := s.db.Exec(
 		`INSERT INTO graph_discoveries (domain_key, category, title, description, source, confidence, related_nodes, applied)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.DomainKey, d.Category, d.Title, d.Description, d.Source, d.Confidence, d.RelatedNodes, d.Applied,
+		d.DomainKey, d.Category, d.Title, desc, d.Source, d.Confidence, d.RelatedNodes, d.Applied,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("AddDiscovery: %w", err)

@@ -21,9 +21,10 @@ func ExtractionGuide(technology string) string {
 			"5. For large projects (>= 5 modules): spawn Agent per service. Each agent reads files and imports IMMEDIATELY per file.",
 			"6. For each file: READ → extract → oracle_import_all → move on. NEVER accumulate data in context.",
 			"7. Cross-service pass: read HTTP client files, create CALLS_SERVICE + CALLS_ENDPOINT edges (derivation: linked)",
-			"8. oracle_snapshot_create + oracle_stale_mark",
-			"9. Domain language: call oracle_get_glossary. If empty, analyze the codebase and define key terms via oracle_define_term (entities, actions, concepts). Then call oracle_check_language for violations.",
-			"10. oracle_report_discovery for unusual patterns, missing edges, quality assessment",
+			"8. FLOW extraction: identify key business use cases (e.g. PlaceOrder, UserSignup, ProcessPayment). Create flow:use_case nodes + REQUIRES edges to services/models + TRIGGERS_FLOW from endpoints + PRODUCES_OUTCOME to events/state changes.",
+			"9. oracle_snapshot_create + oracle_stale_mark",
+			"10. Domain language: oracle_get_glossary → oracle_define_term → oracle_check_language",
+			"11. oracle_report_discovery with severity (critical/warning/insight) and suggested_action",
 		},
 		"key_rules": map[string]string{
 			"format":     "node_key = layer:type:domain:name (all lowercase)",
@@ -35,9 +36,10 @@ func ExtractionGuide(technology string) string {
 		"onboarding": "ALWAYS call oracle_scan_status first. If response contains 'onboarding.is_first_run=true', ask the user: 'This project hasn't been scanned yet. Would you like me to scan it and build a knowledge graph?' If yes, call oracle_command(command='scan').",
 		"layers": map[string]string{
 			"data":     "Prisma models, entities, enums → data:model, data:enum",
-			"code":     "modules, controllers, providers, resolvers, guards, gateways → code:module, code:controller, code:provider",
+			"code":     "modules, controllers, providers, resolvers, guards → code:module, code:controller, code:provider",
 			"contract": "HTTP endpoints, Kafka topics, GraphQL operations → contract:endpoint, contract:topic",
 			"service":  "Deployable services → service:service",
+			"flow":     "Business use cases, processes → flow:use_case, flow:flow_step, flow:trigger, flow:outcome",
 		},
 		"edge_types": map[string]string{
 			"CONTAINS":          "module → providers (structural, hard)",
@@ -51,7 +53,14 @@ func ExtractionGuide(technology string) string {
 			"REFERENCES_MODEL":  "model → model via @relation/FK (hard)",
 			"DEFINES_MODEL":     "repo → model it defines (hard)",
 		},
-		"call_oracle_extraction_guide_with_technology": "For detailed extraction rules, call this tool again with technology='nestjs', 'prisma', or 'openapi'",
+		"flow_edge_types": map[string]string{
+			"TRIGGERS_FLOW":    "endpoint/event → flow:use_case (what triggers this business process)",
+			"REQUIRES":         "flow → code/data/service (what the flow depends on)",
+			"PRODUCES_OUTCOME": "flow → contract/data (what the flow produces: events, state changes)",
+			"PRECEDES":         "flow_step → flow_step (ordering within a flow)",
+			"TRANSITIONS_TO":   "flow → flow (one use case leads to another)",
+		},
+		"call_oracle_extraction_guide_with_technology": "For detailed rules, call again with technology='nestjs', 'prisma', 'openapi', or 'flow'",
 	}
 
 	data, _ := json.MarshalIndent(guide, "", "  ")
@@ -133,6 +142,73 @@ func detailedGuide(technology string) string {
 			"api": map[string]string{
 				"identify": "Top-level 'info' section",
 				"key":      "contract:http_api:domain:apiname",
+			},
+		}
+
+	case "flow", "flows", "use_cases", "usecases":
+		sections = map[string]any{
+			"what": "Business use cases — the WHY behind the code. Not code structure, but what the system DOES.",
+			"how_to_extract": map[string]any{
+				"step_1": "Identify key user actions/business processes: PlaceOrder, UserSignup, ProcessPayment, SendNotification",
+				"step_2": "For each use case, trace the call chain: which endpoint triggers it → which services execute it → which models it reads/writes → what events/outcomes it produces",
+				"step_3": "Create nodes and edges per use case",
+			},
+			"node_types": map[string]any{
+				"use_case": map[string]string{
+					"key":     "flow:use_case:domain:placeorder",
+					"what":    "A complete business process triggered by a user action or event",
+					"example": "PlaceOrder, UserSignup, ProcessRefund, SendDailyReport",
+				},
+				"flow_step": map[string]string{
+					"key":     "flow:flow_step:domain:placeorder.validate-cart",
+					"what":    "A step within a use case",
+					"example": "ValidateCart, ChargePayment, CreateOrderRecord, SendConfirmation",
+				},
+				"trigger": map[string]string{
+					"key":     "flow:trigger:domain:post:/orders",
+					"what":    "What initiates the use case (endpoint, event, cron)",
+				},
+				"outcome": map[string]string{
+					"key":     "flow:outcome:domain:order-created-event",
+					"what":    "What the use case produces (event, state change, notification)",
+				},
+			},
+			"edge_types": map[string]any{
+				"TRIGGERS_FLOW": map[string]string{
+					"from":    "contract:endpoint or contract:topic",
+					"to":      "flow:use_case",
+					"meaning": "This endpoint/event starts this business process",
+					"example": "POST /orders → TRIGGERS_FLOW → PlaceOrder",
+				},
+				"REQUIRES": map[string]string{
+					"from":    "flow:use_case",
+					"to":      "code:provider or data:model or service:service",
+					"meaning": "The use case depends on this service/model/service",
+					"example": "PlaceOrder REQUIRES OrderService, REQUIRES Product model",
+				},
+				"PRODUCES_OUTCOME": map[string]string{
+					"from":    "flow:use_case",
+					"to":      "contract:topic or data:model",
+					"meaning": "The use case produces this event or state change",
+					"example": "PlaceOrder PRODUCES_OUTCOME order-created topic",
+				},
+				"PRECEDES": map[string]string{
+					"from":    "flow:flow_step",
+					"to":      "flow:flow_step",
+					"meaning": "This step happens before that step",
+				},
+			},
+			"example_flow": map[string]any{
+				"name":    "PlaceOrder",
+				"trigger": "POST /orders endpoint",
+				"steps": []string{
+					"1. ValidateCart → reads Cart model, checks MenuItem prices",
+					"2. ChargePayment → calls PaymentService → calls external payment-api",
+					"3. CreateOrder → writes Order model, OrderItem models",
+					"4. SendConfirmation → publishes order-created topic",
+				},
+				"requires": []string{"OrderService", "PaymentService", "Cart model", "Order model", "MenuItem model"},
+				"produces": []string{"order-created event", "Order record in DB"},
 			},
 		}
 

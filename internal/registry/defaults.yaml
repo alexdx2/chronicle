@@ -47,8 +47,11 @@ node_types:
   flow:
     - flow
     - flow_step
+    - use_case
     - state_transition
     - invariant
+    - trigger
+    - outcome
   ownership:
     - domain
     - team
@@ -165,7 +168,16 @@ edge_types:
     to_layers: [contract]
   REQUIRES:
     from_layers: [flow]
-    to_layers: [code, service, contract]
+    to_layers: [code, service, contract, data]
+  TRIGGERS_FLOW:
+    from_layers: [contract, code]
+    to_layers: [flow]
+  PRODUCES_OUTCOME:
+    from_layers: [flow]
+    to_layers: [contract, data, flow]
+  TRANSITIONS_TO:
+    from_layers: [flow]
+    to_layers: [flow]
   TRIGGERS_ANALYSIS:
     from_layers: [ci]
     to_layers: [service, contract]
