@@ -8,6 +8,9 @@
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+.loader{display:flex;align-items:center;justify-content:center;padding:24px;color:var(--text-muted);font-size:12px;gap:8px}
+.spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 :root{
   --bg:#f0f1f3;--card:#fff;--border:#e0e2e6;--text:#1a1a2e;--text-muted:#6b7280;
   --primary:#4361ee;--primary-light:#e8ecfd;--success:#2ecc71;--warning:#f39c12;
@@ -186,7 +189,7 @@ a{color:var(--primary);text-decoration:none}
   </div>
   <div class="tab-bar">
     <button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview'">Overview</button>
-    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph'; $nextTick(()=>renderGraph())">Graph</button>
+    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph'; if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button>
     <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language'; fetchGlossary(); fetchLanguageCheck()">Language</button>
     <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings'; fetchManifest(); fetchPrompt()">Settings</button>
   </div>
@@ -264,7 +267,10 @@ a{color:var(--primary);text-decoration:none}
         <span>Avg: <strong x-text="(stats.requests?.avg_duration_ms ?? 0) + 'ms'"></strong></span>
       </div>
       <div class="card-body">
-        <template x-if="requests.length === 0">
+        <template x-if="loading.requests">
+          <div class="loader"><div class="spinner"></div> Loading requests...</div>
+        </template>
+        <template x-if="!loading.requests && requests.length === 0">
           <div style="padding:32px;text-align:center;color:var(--text-muted)">No requests recorded yet</div>
         </template>
         <template x-for="r in requests" :key="r.request_id">
@@ -343,7 +349,10 @@ a{color:var(--primary);text-decoration:none}
       <div class="card">
         <div class="card-header"><h3>Scan History</h3></div>
         <div class="card-body" style="max-height:180px;overflow-y:auto">
-          <template x-if="!scans || scans.length === 0">
+          <template x-if="loading.scans">
+            <div class="loader"><div class="spinner"></div></div>
+          </template>
+          <template x-if="!loading.scans && (!scans || scans.length === 0)">
             <div style="text-align:center;color:var(--text-muted);padding:12px">No scans recorded</div>
           </template>
           <template x-for="s in (scans ?? [])" :key="s.snapshot_id">
@@ -460,7 +469,9 @@ a{color:var(--primary);text-decoration:none}
 
     <!-- Main area: canvas + side panel -->
     <div style="display:flex;flex:1;overflow:hidden">
-      <div id="graph-canvas" style="flex:1;overflow:auto"></div>
+      <div id="graph-canvas" style="flex:1;overflow:auto">
+        <template x-if="loading.graph"><div class="loader" style="min-height:200px"><div class="spinner"></div> Loading graph data...</div></template>
+      </div>
       <!-- Side panel for selected node (Tree + Explore mode) -->
       <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore')" x-cloak
            style="width:320px;border-left:1px solid var(--border);overflow-y:auto;background:#fafbfc;flex-shrink:0">
@@ -746,9 +757,11 @@ function dashboard() {
     layerFilters: ['code','contract','service','flow','ownership','infra','ci'],
     hideStructural: false,
     ws: null,
+    loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
+    loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
 
     async init() {
-      // Restore last selected project from localStorage
+      // Restore last selected project
       const lastProject = localStorage.getItem('oracle_current_project');
       if (lastProject) {
         try {
@@ -758,16 +771,22 @@ function dashboard() {
         } catch(e) {}
       }
 
-      await Promise.all([
-        this.fetchStats(),
-        this.fetchRequests(),
-        this.fetchLowConfidence(),
-        this.fetchScans(),
-        this.fetchValidation(),
-        this.fetchDiscoveries(),
-        this.fetchGraphData(),
-      ]);
+      // Only load stats on init — everything else is lazy
+      await this.fetchStats();
+      this.loading.stats = false;
       this.connectWS();
+
+      // Lazy load overview panels
+      this.lazyLoadOverview();
+    },
+
+    async lazyLoadOverview() {
+      // Load in background, not blocking
+      this.fetchRequests().then(() => { this.loading.requests = false; this.loaded.requests = true; });
+      this.fetchDiscoveries().then(() => { this.loading.discoveries = false; this.loaded.discoveries = true; });
+      this.fetchScans().then(() => { this.loading.scans = false; this.loaded.scans = true; });
+      this.fetchLowConfidence().then(() => { this.loading.lowConf = false; this.loaded.lowConf = true; });
+      this.fetchValidation().then(() => { this.loading.validation = false; this.loaded.validation = true; });
     },
 
     async fetchManifest() {
@@ -877,18 +896,17 @@ function dashboard() {
         if (history.length > 10) history.pop();
         localStorage.setItem('oracle_projects', JSON.stringify(history));
 
-        // Reload all dashboard data from new DB
+        // Reload — stats first, rest lazy
         this.domain = '';
         this.showProjectSwitcher = false;
-        await Promise.all([
-          this.fetchStats(),
-          this.fetchRequests(),
-          this.fetchLowConf(),
-          this.fetchScans(),
-          this.fetchValidation(),
-          this.fetchDiscoveries(),
-          this.fetchGraphData(),
-        ]);
+        this.loading = { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true };
+        this.loaded = { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false };
+        this.requests = [];
+        this.discoveries = [];
+        this.scans = [];
+        await this.fetchStats();
+        this.loading.stats = false;
+        this.lazyLoadOverview();
       } catch(e) { this.switchError = e.message; }
     },
 
