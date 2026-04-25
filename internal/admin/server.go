@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/anthropics/depbot/internal/graph"
+	"github.com/anthropics/depbot/internal/mcp"
 	"github.com/anthropics/depbot/internal/registry"
 	"github.com/anthropics/depbot/internal/store"
 	"github.com/anthropics/depbot/internal/validate"
@@ -155,6 +156,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/graph", s.handleGraph)
 	mux.HandleFunc("/api/manifest", s.handleManifest)
 	mux.HandleFunc("/api/settings/prompt", s.handlePromptSetting)
+	mux.HandleFunc("/api/settings/default-guide", s.handleDefaultGuide)
 	mux.HandleFunc("/api/discoveries", s.handleDiscoveries)
 	mux.HandleFunc("/api/glossary", s.handleGlossary)
 	mux.HandleFunc("/api/language-check", s.handleLanguageCheck)
@@ -532,6 +534,11 @@ func (s *Server) handlePromptSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(405)
+}
+
+func (s *Server) handleDefaultGuide(w http.ResponseWriter, r *http.Request) {
+	guide := mcp.ExtractionGuide("")
+	httpJSON(w, map[string]string{"guide": guide})
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {

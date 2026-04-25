@@ -670,16 +670,18 @@ a{color:var(--primary);text-decoration:none}
         <button @click="savePrompt()" style="background:#4361ee;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
       </div>
     </div>
-    <p style="color:#999;font-size:12px;margin-bottom:8px">
-      Custom instructions appended to the extraction guide. Claude sees these when scanning this project. Leave empty to use defaults.
-    </p>
-    <p style="color:#999;font-size:11px;margin-bottom:12px">
-      Example: "Focus on the payment module. Ignore test files. The main API uses Prisma, CRM is React with Zustand stores."
+    <p style="color:#999;font-size:12px;margin-bottom:12px">
+      This is appended to the extraction guide that Claude receives. Edit to customize scanning behavior for this project.
     </p>
     <textarea x-model="customPrompt" @input="promptSaved=false"
-      placeholder="No custom instructions — using default extraction guide"
-      style="width:100%;min-height:150px;font-family:monospace;font-size:12px;line-height:1.6;padding:12px;border:1px solid #e0e0e0;border-radius:6px;background:#fafbfc;resize:vertical;color:#333"
+      style="width:100%;min-height:200px;font-family:monospace;font-size:12px;line-height:1.6;padding:12px;border:1px solid #e0e0e0;border-radius:6px;background:#fafbfc;resize:vertical;color:#333"
       spellcheck="false"></textarea>
+
+    <!-- Show the full default guide (read-only) -->
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--primary)">View full default extraction guide (read-only)</summary>
+      <pre x-text="defaultGuide" style="margin-top:8px;padding:12px;background:#f8f9fa;border:1px solid #e0e0e0;border-radius:6px;font-size:10px;line-height:1.5;overflow:auto;max-height:400px;white-space:pre-wrap;color:#555"></pre>
+    </details>
   </div>
 </div>
 
@@ -702,6 +704,7 @@ function dashboard() {
     editingTerm: null,
     customPrompt: '',
     promptSaved: false,
+    defaultGuide: '',
     showProjectSwitcher: false,
     switchPath: '',
     switchError: '',
@@ -817,9 +820,14 @@ function dashboard() {
 
     async fetchPrompt() {
       try {
-        const r = await fetch('/api/settings/prompt');
-        const d = await r.json();
-        this.customPrompt = d.prompt || '';
+        const [promptRes, guideRes] = await Promise.all([
+          fetch('/api/settings/prompt'),
+          fetch('/api/settings/default-guide'),
+        ]);
+        const promptData = await promptRes.json();
+        const guideData = await guideRes.json();
+        this.customPrompt = promptData.prompt || '';
+        this.defaultGuide = guideData.guide || '';
       } catch(e) { console.error('prompt:', e); }
     },
 
