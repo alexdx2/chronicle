@@ -146,7 +146,21 @@ a{color:var(--primary);text-decoration:none}
       </button>
       <div x-show="showProjectSwitcher" x-cloak @click.outside="showProjectSwitcher=false"
            style="position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);width:350px;z-index:200;padding:12px">
-        <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px">Open another project's dashboard:</div>
+        <!-- Recent projects from localStorage -->
+        <template x-if="getRecentProjects().length > 0">
+          <div style="margin-bottom:8px">
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Recent projects:</div>
+            <template x-for="p in getRecentProjects()" :key="p.path">
+              <a :href="p.url" target="_blank" style="display:flex;justify-content:space-between;padding:4px 8px;border-radius:4px;text-decoration:none;color:var(--text);font-size:11px;margin-bottom:2px;border:1px solid #f0f0f0"
+                 @mouseenter="$el.style.background='#f5f7ff'" @mouseleave="$el.style.background=''">
+                <span x-text="p.name" style="font-weight:500"></span>
+                <span style="color:var(--text-muted);font-size:10px" x-text="':' + p.port"></span>
+              </a>
+            </template>
+          </div>
+        </template>
+
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">Enter project path:</div>
         <div style="display:flex;gap:6px">
           <input x-model="switchPath" placeholder="/home/user/my-project"
                  @keydown.enter="switchProject()"
@@ -783,11 +797,19 @@ function dashboard() {
           this.switchError = data.error;
         } else {
           this.switchResult = data;
-          this.domain = '';
-          await this.fetchStats();
-          this.showProjectSwitcher = false;
+          // Save to localStorage for persistence
+          const history = JSON.parse(localStorage.getItem('oracle_projects') || '[]');
+          if (!history.find(p => p.path === data.path)) {
+            history.unshift({ name: data.name, path: data.path, url: data.url, port: data.port });
+            if (history.length > 10) history.pop();
+            localStorage.setItem('oracle_projects', JSON.stringify(history));
+          }
         }
       } catch(e) { this.switchError = e.message; }
+    },
+
+    getRecentProjects() {
+      return JSON.parse(localStorage.getItem('oracle_projects') || '[]');
     },
 
     async fetchGlossary() {
