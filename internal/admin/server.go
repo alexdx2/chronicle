@@ -104,14 +104,14 @@ func (s *Server) getStore() *store.Store {
 
 // domainFromManifest reads the domain key from the manifest YAML file.
 // Supports both "domain: xxx" and "domains: [{key: xxx}]" formats.
+// Returns empty string if not found — no fallbacks.
 func (s *Server) domainFromManifest() string {
 	data, err := os.ReadFile(s.manifestPath)
 	if err != nil {
-		return s.domainFromDB()
+		return ""
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		// Format 1: "domain: xxx"
 		if strings.HasPrefix(line, "domain:") && !strings.HasPrefix(line, "domains:") {
 			val := strings.TrimSpace(strings.TrimPrefix(line, "domain:"))
 			val = strings.Trim(val, "\"'")
@@ -119,7 +119,6 @@ func (s *Server) domainFromManifest() string {
 				return val
 			}
 		}
-		// Format 2: "- key: xxx" or "key: xxx" (inside domains array)
 		if strings.HasPrefix(line, "key:") || strings.HasPrefix(line, "- key:") {
 			val := line
 			val = strings.TrimPrefix(val, "- ")
@@ -131,26 +130,14 @@ func (s *Server) domainFromManifest() string {
 			}
 		}
 	}
-	return s.domainFromDB()
-}
-
-// domainFromDB reads the first domain_key from existing nodes as fallback.
-func (s *Server) domainFromDB() string {
-	nodes, err := s.getStore().ListNodes(store.NodeFilter{})
-	if err != nil || len(nodes) == 0 {
-		return ""
-	}
-	return nodes[0].DomainKey
+	return ""
 }
 
 func (s *Server) getDomain(r *http.Request) string {
 	if d := r.URL.Query().Get("domain"); d != "" {
 		return d
 	}
-	if d := s.domainFromManifest(); d != "" {
-		return d
-	}
-	return "default"
+	return s.domainFromManifest()
 }
 
 // Start begins serving the admin dashboard on localhost.
