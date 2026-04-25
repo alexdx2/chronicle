@@ -511,24 +511,39 @@ func (s *Server) handleSaveTerm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePromptSetting(w http.ResponseWriter, r *http.Request) {
 	st := s.getStore()
 	if r.Method == "GET" {
-		val, err := st.GetSetting("extraction_prompt")
-		if err != nil {
-			val = "" // no custom prompt set
+		// Return all command prompts — defaults merged with custom overrides
+		result := map[string]string{}
+		for cmd, defaultPrompt := range mcp.CommandInstructions {
+			custom, err := st.GetSetting("prompt_" + cmd)
+			if err != nil || custom == "" {
+				result[cmd] = defaultPrompt
+			} else {
+				result[cmd] = custom
+			}
 		}
-		httpJSON(w, map[string]string{"prompt": val})
+		// Also include the extraction guide custom prompt
+		guideCustom, _ := st.GetSetting("extraction_prompt")
+		result["_extraction_guide"] = guideCustom
+		httpJSON(w, result)
 		return
 	}
 	if r.Method == "PUT" || r.Method == "POST" {
-		var req struct {
-			Prompt string `json:"prompt"`
-		}
+		var req map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpError(w, err, 400)
 			return
 		}
-		if err := st.SetSetting("extraction_prompt", req.Prompt); err != nil {
-			httpError(w, err, 500)
-			return
+		for key, val := range req {
+			if key == "_extraction_guide" {
+				st.SetSetting("extraction_prompt", val)
+			} else {
+				// Only save if different from default
+				if defaultVal, ok := mcp.CommandInstructions[key]; ok && val == defaultVal {
+					st.SetSetting("prompt_"+key, "") // clear override, use default
+				} else {
+					st.SetSetting("prompt_"+key, val)
+				}
+			}
 		}
 		httpJSON(w, map[string]string{"status": "saved"})
 		return

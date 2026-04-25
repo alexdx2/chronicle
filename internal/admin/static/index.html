@@ -660,28 +660,36 @@ a{color:var(--primary);text-decoration:none}
     <p x-show="manifestError" style="color:#e74c3c;font-size:12px;margin-top:8px" x-text="manifestError"></p>
   </div>
 
-  <!-- Extraction Prompt -->
+  <!-- Command Prompts -->
   <div class="card" style="max-width:800px;margin-top:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h3 style="margin:0;color:#4361ee">Extraction Prompt</h3>
+      <h3 style="margin:0;color:#4361ee">Command Prompts</h3>
       <div style="display:flex;gap:8px;align-items:center">
         <span x-show="promptSaved" x-transition style="color:#2ecc71;font-size:12px">Saved!</span>
-        <button @click="customPrompt='';savePrompt()" style="background:none;border:1px solid #ddd;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;color:#999">Reset to default</button>
-        <button @click="savePrompt()" style="background:#4361ee;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
+        <button @click="saveAllPrompts()" style="background:#4361ee;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
       </div>
     </div>
     <p style="color:#999;font-size:12px;margin-bottom:12px">
-      This is appended to the extraction guide that Claude receives. Edit to customize scanning behavior for this project.
+      These are the instructions Claude follows for each command. Edit any prompt to customize for this project.
     </p>
-    <textarea x-model="customPrompt" @input="promptSaved=false"
-      style="width:100%;min-height:200px;font-family:monospace;font-size:12px;line-height:1.6;padding:12px;border:1px solid #e0e0e0;border-radius:6px;background:#fafbfc;resize:vertical;color:#333"
-      spellcheck="false"></textarea>
 
-    <!-- Show the full default guide (read-only) -->
-    <details style="margin-top:12px">
-      <summary style="cursor:pointer;font-size:12px;color:var(--primary)">View full default extraction guide (read-only)</summary>
-      <pre x-text="defaultGuide" style="margin-top:8px;padding:12px;background:#f8f9fa;border:1px solid #e0e0e0;border-radius:6px;font-size:10px;line-height:1.5;overflow:auto;max-height:400px;white-space:pre-wrap;color:#555"></pre>
-    </details>
+    <template x-for="cmd in promptOrder" :key="cmd">
+      <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div @click="expandedPrompt = expandedPrompt === cmd ? null : cmd"
+             style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f8f9fa;cursor:pointer;user-select:none">
+          <div>
+            <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="'oracle ' + cmd"></code>
+            <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="promptDescriptions[cmd] || ''"></span>
+          </div>
+          <span style="color:#999;font-size:12px" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
+        </div>
+        <div x-show="expandedPrompt === cmd" x-cloak>
+          <textarea x-model="commandPrompts[cmd]" @input="promptSaved=false"
+            style="width:100%;min-height:120px;font-family:monospace;font-size:11px;line-height:1.6;padding:10px;border:none;border-top:1px solid var(--border);background:#fff;resize:vertical;color:#333"
+            spellcheck="false"></textarea>
+        </div>
+      </div>
+    </template>
   </div>
 </div>
 
@@ -702,9 +710,21 @@ function dashboard() {
     glossary: [],
     languageViolations: [],
     editingTerm: null,
-    customPrompt: '',
+    commandPrompts: {},
     promptSaved: false,
-    defaultGuide: '',
+    expandedPrompt: null,
+    promptOrder: ['scan', 'data', 'flows', 'language', 'services', 'impact', 'deps', 'path', 'status'],
+    promptDescriptions: {
+      scan: 'Full project scan',
+      data: 'Data models analysis',
+      flows: 'Business use cases',
+      language: 'Domain language',
+      services: 'Service architecture',
+      impact: 'Change impact',
+      deps: 'Dependencies',
+      path: 'Path between nodes',
+      status: 'Graph status',
+    },
     showProjectSwitcher: false,
     switchPath: '',
     switchError: '',
@@ -820,27 +840,21 @@ function dashboard() {
 
     async fetchPrompt() {
       try {
-        const [promptRes, guideRes] = await Promise.all([
-          fetch('/api/settings/prompt'),
-          fetch('/api/settings/default-guide'),
-        ]);
-        const promptData = await promptRes.json();
-        const guideData = await guideRes.json();
-        this.customPrompt = promptData.prompt || '';
-        this.defaultGuide = guideData.guide || '';
+        const r = await fetch('/api/settings/prompt');
+        this.commandPrompts = await r.json();
       } catch(e) { console.error('prompt:', e); }
     },
 
-    async savePrompt() {
+    async saveAllPrompts() {
       try {
         await fetch('/api/settings/prompt', {
           method: 'PUT',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({prompt: this.customPrompt}),
+          body: JSON.stringify(this.commandPrompts),
         });
         this.promptSaved = true;
         setTimeout(() => this.promptSaved = false, 2000);
-      } catch(e) { console.error('save prompt:', e); }
+      } catch(e) { console.error('save prompts:', e); }
     },
 
     async switchProject(path) {

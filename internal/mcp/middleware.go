@@ -343,7 +343,7 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(defineTermTool(), defineTermHandler(g))
 	add(getGlossaryTool(), getGlossaryHandler(g))
 	add(checkLanguageTool(), checkLanguageHandler(g))
-	add(commandTool(), commandHandler())
+	add(commandTool(), commandHandler(g))
 
 	return s
 }

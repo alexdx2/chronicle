@@ -49,7 +49,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(defineTermTool(), defineTermHandler(g))
 	s.AddTool(getGlossaryTool(), getGlossaryHandler(g))
 	s.AddTool(checkLanguageTool(), checkLanguageHandler(g))
-	s.AddTool(commandTool(), commandHandler())
+	s.AddTool(commandTool(), commandHandler(g))
 
 	return s
 }
@@ -1126,13 +1126,23 @@ func commandTool() mcp.Tool {
 	)
 }
 
-func commandHandler() server.ToolHandlerFunc {
+func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		cmd := strParam(req.GetArguments(), "command")
-		instructions, ok := CommandInstructions[cmd]
-		if !ok {
-			// Show help
-			instructions = CommandInstructions["help"]
+
+		// Check for custom override in project settings
+		instructions := ""
+		if customGuideStore != nil {
+			if custom, err := customGuideStore.GetSetting("prompt_" + cmd); err == nil && custom != "" {
+				instructions = custom
+			}
+		}
+		if instructions == "" {
+			var ok bool
+			instructions, ok = CommandInstructions[cmd]
+			if !ok {
+				instructions = CommandInstructions["help"]
+			}
 		}
 		return jsonResult(map[string]any{
 			"command":      cmd,
