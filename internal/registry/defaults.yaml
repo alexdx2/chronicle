@@ -65,8 +65,8 @@ node_types:
 
 edge_types:
   CONTAINS:
-    from_layers: [code, service, flow, data]
-    to_layers: [code, service, contract, flow, data]
+    from_layers: [code, service, contract, data, flow, ownership, infra, ci]
+    to_layers: [code, service, contract, data, flow, ownership, infra, ci]
   IMPORTS:
     from_layers: [code]
     to_layers: [code]

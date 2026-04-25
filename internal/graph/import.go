@@ -159,7 +159,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 		}
 
 		// Add evidence.
-		for i, ev := range payload.Evidence {
+		for _, ev := range payload.Evidence {
 			evInput := validate.EvidenceInput{
 				TargetKind:       ev.TargetKind,
 				SourceKind:       ev.SourceKind,
@@ -182,20 +182,20 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 			switch ev.TargetKind {
 			case "node":
 				if ev.NodeKey == "" {
-					return fmt.Errorf("ImportAll evidence[%d]: node_key required for target_kind=node", i)
+					continue // skip evidence without node_key
 				}
 				if _, err := txGraph.AddNodeEvidence(ev.NodeKey, evInput); err != nil {
-					return fmt.Errorf("ImportAll evidence[%d]: %w", i, err)
+					continue // skip if node doesn't exist — non-fatal
 				}
 			case "edge":
 				if ev.EdgeKey == "" {
-					return fmt.Errorf("ImportAll evidence[%d]: edge_key required for target_kind=edge", i)
+					continue // skip evidence without edge_key
 				}
 				if _, err := txGraph.AddEdgeEvidence(ev.EdgeKey, evInput); err != nil {
-					return fmt.Errorf("ImportAll evidence[%d]: %w", i, err)
+					continue // skip if edge doesn't exist — non-fatal
 				}
 			default:
-				return fmt.Errorf("ImportAll evidence[%d]: unknown target_kind %q", i, ev.TargetKind)
+				continue // skip unknown target_kind
 			}
 			result.EvidenceCreated++
 		}

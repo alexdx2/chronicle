@@ -156,7 +156,7 @@ func ValidateEdgeInput(input EdgeInput, reg *registry.Registry) (*ValidatedEdge,
 		return nil, fmt.Errorf("validation: edge_type is required")
 	}
 	if input.DerivationKind == "" {
-		return nil, fmt.Errorf("validation: derivation_kind is required")
+		input.DerivationKind = "hard" // default
 	}
 
 	if !reg.IsValidEdgeType(input.EdgeType) {
