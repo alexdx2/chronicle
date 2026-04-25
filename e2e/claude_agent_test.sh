@@ -97,9 +97,15 @@ Steps:
 5. Also extract: @UseGuards → INJECTS from controller to guard, @UseInterceptors → INJECTS from controller to interceptor, middleware → INJECTS from module. Bull queue processors, custom decorators, validation pipes — all as providers.
 6. Don't forget the shared library at ./shared — extract as code:package node
 7. Import via oracle_import_all (split into batches if needed — data first, then code, then contracts)
-8. Call oracle_snapshot_create and oracle_stale_mark
-9. AFTER scan: define domain language — call oracle_define_term for the key domain concepts (Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon). Include anti-patterns for each (e.g. Cat term: anti_patterns=['Feline','Kitty']). Then call oracle_check_language.
-10. Call oracle_report_discovery for each observation:
+8. FLOW extraction — identify the key business use cases and create flow:use_case nodes:
+   - TomAttacksJerry: triggered by POST /arena/attack, requires ArenaService+TomClient+JerryClient, produces battle-results topic event
+   - JerrySetsTrap: triggered by POST /arena/trap, requires JerryClient
+   - WatchBattle: triggered by WebSocket watch-battle, requires ArenaService
+   - ViewLeaderboard: triggered by GET /stats/leaderboard, requires SpectatorService
+   Create TRIGGERS_FLOW edges from endpoints to use cases, REQUIRES edges to services/models, PRODUCES_OUTCOME edges to topics.
+9. Call oracle_snapshot_create and oracle_stale_mark
+10. Define domain language — oracle_define_term for Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon. Include anti-patterns. Then oracle_check_language.
+11. Call oracle_report_discovery for each observation:
    - Any code patterns you found unusual or couldn't classify → category: unknown_pattern
    - Any relationships you suspect but couldn't confirm → category: missing_edge
    - Overall scan quality assessment → category: pattern
@@ -376,7 +382,37 @@ else
   echo -e "  ${YELLOW}⚠ Shared library (@tomandjerry/shared) not extracted${NC}"
 fi
 
-# ── 3p: Domain Language ──
+# ── 3p: Business Flows ──
+section "Business Flows"
+FLOW_COUNT=$("$ORACLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+if [ "$FLOW_COUNT" -ge 2 ]; then
+  pass "Flow use cases: $FLOW_COUNT (>= 2)"
+  "$ORACLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "
+import sys,json
+for n in json.load(sys.stdin):
+    print(f'    {n[\"node_type\"]:12s} {n[\"name\"]}')
+" 2>/dev/null
+else
+  echo -e "  ${YELLOW}⚠ Flow use cases: $FLOW_COUNT (want >= 2 — TomAttacksJerry, JerrySetsTrap)${NC}"
+fi
+
+# Check TRIGGERS_FLOW edges
+TRIGGERS_COUNT=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('edges_by_type',{}).get('TRIGGERS_FLOW',0))" 2>/dev/null || echo "0")
+if [ "$TRIGGERS_COUNT" -ge 1 ]; then
+  pass "TRIGGERS_FLOW edges: $TRIGGERS_COUNT"
+else
+  echo -e "  ${YELLOW}⚠ No TRIGGERS_FLOW edges — endpoints not linked to use cases${NC}"
+fi
+
+# Check REQUIRES edges from flows
+REQUIRES_COUNT=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('edges_by_type',{}).get('REQUIRES',0))" 2>/dev/null || echo "0")
+if [ "$REQUIRES_COUNT" -ge 1 ]; then
+  pass "REQUIRES edges (flow→service/model): $REQUIRES_COUNT"
+else
+  echo -e "  ${YELLOW}⚠ No REQUIRES edges — flows not linked to services${NC}"
+fi
+
+# ── 3q: Domain Language ──
 section "Domain Language"
 TERM_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM domain_language" 2>/dev/null || echo "0")
 if [ "$TERM_COUNT" -gt 0 ]; then
