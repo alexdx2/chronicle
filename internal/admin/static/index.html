@@ -151,11 +151,11 @@ a{color:var(--primary);text-decoration:none}
           <div style="margin-bottom:8px">
             <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Recent projects:</div>
             <template x-for="p in getRecentProjects()" :key="p.path">
-              <a :href="p.url" target="_blank" style="display:flex;justify-content:space-between;padding:4px 8px;border-radius:4px;text-decoration:none;color:var(--text);font-size:11px;margin-bottom:2px;border:1px solid #f0f0f0"
+              <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;margin-bottom:2px;border:1px solid #f0f0f0;cursor:pointer"
                  @mouseenter="$el.style.background='#f5f7ff'" @mouseleave="$el.style.background=''">
                 <span x-text="p.name" style="font-weight:500"></span>
-                <span style="color:var(--text-muted);font-size:10px" x-text="':' + p.port"></span>
-              </a>
+                <span style="color:var(--text-muted);font-size:10px;font-family:monospace" x-text="p.path"></span>
+              </div>
             </template>
           </div>
         </template>
@@ -819,25 +819,37 @@ function dashboard() {
       } catch(e) { console.error('save prompt:', e); }
     },
 
-    async switchProject() {
+    async switchProject(path) {
+      const projectPath = path || this.switchPath;
       this.switchError = '';
-      this.switchResult = null;
-      if (!this.switchPath) return;
+      if (!projectPath) return;
       try {
-        const r = await fetch('/api/projects?path=' + encodeURIComponent(this.switchPath));
+        const r = await fetch('/api/projects?path=' + encodeURIComponent(projectPath));
         const data = await r.json();
         if (data.error) {
           this.switchError = data.error;
-        } else {
-          this.switchResult = data;
-          // Save to localStorage for persistence
-          const history = JSON.parse(localStorage.getItem('oracle_projects') || '[]');
-          if (!history.find(p => p.path === data.path)) {
-            history.unshift({ name: data.name, path: data.path, url: data.url, port: data.port });
-            if (history.length > 10) history.pop();
-            localStorage.setItem('oracle_projects', JSON.stringify(history));
-          }
+          return;
         }
+        // Save to localStorage
+        const history = JSON.parse(localStorage.getItem('oracle_projects') || '[]');
+        const existing = history.findIndex(p => p.path === data.path);
+        if (existing >= 0) history.splice(existing, 1);
+        history.unshift({ name: data.name, path: data.path });
+        if (history.length > 10) history.pop();
+        localStorage.setItem('oracle_projects', JSON.stringify(history));
+
+        // Reload all dashboard data from new DB
+        this.domain = '';
+        this.showProjectSwitcher = false;
+        await Promise.all([
+          this.fetchStats(),
+          this.fetchRequests(),
+          this.fetchLowConf(),
+          this.fetchScans(),
+          this.fetchValidation(),
+          this.fetchDiscoveries(),
+          this.fetchGraphData(),
+        ]);
       } catch(e) { this.switchError = e.message; }
     },
 
