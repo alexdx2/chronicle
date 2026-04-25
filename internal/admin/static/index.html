@@ -929,8 +929,8 @@ function dashboard() {
           this.hideStructural = true;
           break;
         case 'flows':
-          this.layerFilters = ['flow', 'contract', 'data'];
-          this.hideStructural = true;
+          this.layerFilters = ['flow'];
+          this.hideStructural = false;
           break;
       }
       this.renderGraph();

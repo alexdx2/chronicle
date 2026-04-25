@@ -14,10 +14,28 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
 	"github.com/anthropics/depbot/internal/graph"
+	"github.com/anthropics/depbot/internal/registry"
 	"github.com/anthropics/depbot/internal/store"
 	"github.com/anthropics/depbot/internal/validate"
 )
+
+// findModuleRoot walks up from the current executable (or working dir) to find go.mod.
+func findModuleRoot() string {
+	dir, _ := os.Getwd()
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "."
+		}
+		dir = parent
+	}
+}
 
 func portFromPath(dir string) int {
 	abs, _ := filepath.Abs(dir)
@@ -31,16 +49,57 @@ var staticFS embed.FS
 
 // Server is the admin dashboard HTTP server.
 type Server struct {
+	mu           sync.RWMutex
 	graph        *graph.Graph
 	store        *store.Store
 	hub          *Hub
 	port         int
 	manifestPath string
+	devMode      bool
+	projectPath  string
 }
 
 // NewServer creates a new admin Server.
-func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string) *Server {
-	return &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath}
+func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool) *Server {
+	cwd, _ := os.Getwd()
+	return &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd}
+}
+
+// switchTo swaps the server's backing store/graph to a different project.
+func (s *Server) switchTo(projectPath string) error {
+	dbPath := filepath.Join(projectPath, ".depbot", "oracle.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return fmt.Errorf("no .depbot/oracle.db found at %s", projectPath)
+	}
+	newStore, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	reg, _ := registry.LoadDefaults()
+	newGraph := graph.New(newStore, reg)
+
+	s.mu.Lock()
+	oldStore := s.store
+	s.store = newStore
+	s.graph = newGraph
+	s.projectPath = projectPath
+	s.manifestPath = filepath.Join(projectPath, ".depbot", "oracle.domain.yaml")
+	s.mu.Unlock()
+
+	oldStore.Close()
+	return nil
+}
+
+func (s *Server) getGraph() *graph.Graph {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.graph
+}
+
+func (s *Server) getStore() *store.Store {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.store
 }
 
 // domainFromManifest reads the domain key from the manifest YAML file.
@@ -77,7 +136,7 @@ func (s *Server) domainFromManifest() string {
 
 // domainFromDB reads the first domain_key from existing nodes as fallback.
 func (s *Server) domainFromDB() string {
-	nodes, err := s.store.ListNodes(store.NodeFilter{})
+	nodes, err := s.getStore().ListNodes(store.NodeFilter{})
 	if err != nil || len(nodes) == 0 {
 		return ""
 	}
@@ -118,11 +177,17 @@ func (s *Server) Start() error {
 		handleWebSocket(s.hub, w, r)
 	})
 
-	staticContent, err := fs.Sub(staticFS, "static")
-	if err != nil {
-		return fmt.Errorf("static fs: %w", err)
+	if s.devMode {
+		staticDir := filepath.Join(findModuleRoot(), "internal", "admin", "static")
+		fmt.Fprintf(os.Stderr, "Dev mode: serving static files from %s\n", staticDir)
+		mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+	} else {
+		staticContent, err := fs.Sub(staticFS, "static")
+		if err != nil {
+			return fmt.Errorf("static fs: %w", err)
+		}
+		mux.Handle("/", http.FileServer(http.FS(staticContent)))
 	}
-	mux.Handle("/", http.FileServer(http.FS(staticContent)))
 
 	go s.hub.Run()
 	go s.pollRequests()
@@ -136,7 +201,7 @@ func (s *Server) pollRequests() {
 	var lastID int64
 	for {
 		time.Sleep(1 * time.Second)
-		entries, err := s.store.ListRequestsSince(lastID)
+		entries, err := s.getStore().ListRequestsSince(lastID)
 		if err != nil || len(entries) == 0 {
 			continue
 		}
@@ -161,55 +226,42 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
-	// Check a specific path for .depbot/oracle.db
 	projectPath := r.URL.Query().Get("path")
 	if projectPath == "" {
-		// Return current project info
-		cwd, _ := os.Getwd()
+		s.mu.RLock()
+		cur := s.projectPath
+		s.mu.RUnlock()
 		httpJSON(w, map[string]any{
-			"current": cwd,
-			"port":    s.port,
-			"hint":    "Pass ?path=/some/project to check another project's Oracle dashboard port",
+			"current": cur,
+			"name":    filepath.Base(cur),
 		})
 		return
 	}
 
-	dbPath := filepath.Join(projectPath, ".depbot", "oracle.db")
-	if _, err := os.Stat(dbPath); err != nil {
-		httpJSON(w, map[string]any{"error": "No .depbot/oracle.db found at " + projectPath, "path": projectPath})
+	if err := s.switchTo(projectPath); err != nil {
+		httpJSON(w, map[string]any{"error": err.Error()})
 		return
 	}
 
-	port := portFromPath(projectPath)
-	name := filepath.Base(projectPath)
-
-	// Try to get node count
-	nodeCount := 0
-	tmpStore, err := store.Open(dbPath)
-	if err == nil {
-		nodes, _ := tmpStore.ListNodes(store.NodeFilter{})
-		nodeCount = len(nodes)
-		tmpStore.Close()
-	}
+	st := s.getStore()
+	nodes, _ := st.ListNodes(store.NodeFilter{})
 
 	httpJSON(w, map[string]any{
-		"name":       name,
+		"name":       filepath.Base(projectPath),
 		"path":       projectPath,
-		"db_path":    dbPath,
-		"port":       port,
-		"url":        fmt.Sprintf("http://localhost:%d", port),
-		"node_count": nodeCount,
+		"node_count": len(nodes),
+		"switched":   true,
 	})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
-	stats, err := s.graph.QueryStats(domain)
+	stats, err := s.getGraph().QueryStats(domain)
 	if err != nil {
 		httpError(w, err, 500)
 		return
 	}
-	reqStats, _ := s.store.RequestStats()
+	reqStats, _ := s.getStore().RequestStats()
 	httpJSON(w, map[string]any{"domain": domain, "graph": stats, "requests": reqStats})
 }
 
@@ -221,7 +273,7 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 			httpError(w, err, 400)
 			return
 		}
-		entries, err := s.store.ListRequestsSince(sinceID)
+		entries, err := s.getStore().ListRequestsSince(sinceID)
 		if err != nil {
 			httpError(w, err, 500)
 			return
@@ -235,7 +287,7 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	entries, err := s.store.ListRecentRequests(limit)
+	entries, err := s.getStore().ListRecentRequests(limit)
 	if err != nil {
 		httpError(w, err, 500)
 		return
@@ -250,7 +302,7 @@ func (s *Server) handleLowConfidence(w http.ResponseWriter, r *http.Request) {
 			threshold = v
 		}
 	}
-	edges, err := s.store.ListEdges(store.EdgeFilter{})
+	edges, err := s.getStore().ListEdges(store.EdgeFilter{})
 	if err != nil {
 		httpError(w, err, 500)
 		return
@@ -259,10 +311,10 @@ func (s *Server) handleLowConfidence(w http.ResponseWriter, r *http.Request) {
 	for _, e := range edges {
 		if e.Confidence < threshold && e.Active {
 			fromName, toName := "", ""
-			if n, _ := s.store.GetNodeByID(e.FromNodeID); n != nil {
+			if n, _ := s.getStore().GetNodeByID(e.FromNodeID); n != nil {
 				fromName = n.Name
 			}
-			if n, _ := s.store.GetNodeByID(e.ToNodeID); n != nil {
+			if n, _ := s.getStore().GetNodeByID(e.ToNodeID); n != nil {
 				toName = n.Name
 			}
 			result = append(result, map[string]any{
@@ -276,14 +328,14 @@ func (s *Server) handleLowConfidence(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleScans(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
-	snaps, _ := s.store.ListSnapshots(domain)
+	snaps, _ := s.getStore().ListSnapshots(domain)
 	httpJSON(w, snaps)
 }
 
 func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	var issues []map[string]string
-	nodes, _ := s.store.ListNodes(store.NodeFilter{})
-	edges, _ := s.store.ListEdges(store.EdgeFilter{})
+	nodes, _ := s.getStore().ListNodes(store.NodeFilter{})
+	edges, _ := s.getStore().ListEdges(store.EdgeFilter{})
 	for _, n := range nodes {
 		if _, err := validate.NormalizeNodeKey(n.NodeKey); err != nil {
 			issues = append(issues, map[string]string{"kind": "malformed_key", "target": n.NodeKey, "message": err.Error()})
@@ -302,8 +354,8 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
-	nodes, _ := s.store.ListNodes(store.NodeFilter{Domain: domain})
-	edges, _ := s.store.ListEdges(store.EdgeFilter{})
+	nodes, _ := s.getStore().ListNodes(store.NodeFilter{Domain: domain})
+	edges, _ := s.getStore().ListEdges(store.EdgeFilter{})
 
 	nodeIDSet := map[int64]bool{}
 	var nodeList []map[string]any
@@ -329,7 +381,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	metrics, err := s.store.GetScanMetrics()
+	metrics, err := s.getStore().GetScanMetrics()
 	if err != nil {
 		httpError(w, err, 500)
 		return
@@ -340,7 +392,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDiscoveries(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
 	category := r.URL.Query().Get("category")
-	discoveries, err := s.store.ListDiscoveries(domain, category)
+	discoveries, err := s.getStore().ListDiscoveries(domain, category)
 	if err != nil {
 		httpError(w, err, 500)
 		return
@@ -353,7 +405,7 @@ func (s *Server) handleDiscoveries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGlossary(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
-	terms, err := s.store.GetGlossary(domain)
+	terms, err := s.getStore().GetGlossary(domain)
 	if err != nil {
 		httpError(w, err, 500)
 		return
@@ -366,7 +418,7 @@ func (s *Server) handleGlossary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLanguageCheck(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
-	violations, err := s.store.CheckLanguage(domain)
+	violations, err := s.getStore().CheckLanguage(domain)
 	if err != nil {
 		httpError(w, err, 500)
 		return
@@ -388,7 +440,7 @@ func (s *Server) handleDeleteTerm(w http.ResponseWriter, r *http.Request) {
 		httpError(w, fmt.Errorf("term parameter required"), 400)
 		return
 	}
-	if err := s.store.DeleteTerm(domain, term); err != nil {
+	if err := s.getStore().DeleteTerm(domain, term); err != nil {
 		httpError(w, err, 500)
 		return
 	}
@@ -407,7 +459,7 @@ func (s *Server) handleDismissViolation(w http.ResponseWriter, r *http.Request) 
 		httpError(w, fmt.Errorf("term and anti parameters required"), 400)
 		return
 	}
-	if err := s.store.RemoveAntiPattern(domain, term, anti); err != nil {
+	if err := s.getStore().RemoveAntiPattern(domain, term, anti); err != nil {
 		httpError(w, err, 500)
 		return
 	}
@@ -458,7 +510,7 @@ func (s *Server) handleSaveTerm(w http.ResponseWriter, r *http.Request) {
 		AntiPatterns: parseCSV(req.AntiPatterns),
 		Examples:     parseCSV(req.Examples),
 	}
-	id, err := s.store.UpsertTerm(t)
+	id, err := s.getStore().UpsertTerm(t)
 	if err != nil {
 		httpError(w, err, 500)
 		return
