@@ -2270,6 +2270,264 @@ function dashboard() {
         boxes.exit().remove();
       });
     },
+
+    // BFS shortest path using provided edges (filtered, not raw graphData)
+    bfsShortestPath(fromId, toId, edges) {
+      // Build undirected adjacency list from provided edges
+      const adj = {};
+      edges.forEach(e => {
+        if (!adj[e.from_node_id]) adj[e.from_node_id] = [];
+        if (!adj[e.to_node_id]) adj[e.to_node_id] = [];
+        adj[e.from_node_id].push(e.to_node_id);
+        adj[e.to_node_id].push(e.from_node_id);
+      });
+      // BFS
+      const queue = [[fromId]];
+      const visited = new Set([fromId]);
+      while (queue.length > 0) {
+        const path = queue.shift();
+        const current = path[path.length - 1];
+        if (current === toId) return path;
+        for (const neighbor of (adj[current] || [])) {
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            queue.push([...path, neighbor]);
+          }
+        }
+      }
+      return null; // no path
+    },
+
+    handleWorkspaceDrop(event) {
+      if (this.graphMode !== 'workspace') return;
+      const nodeId = event.dataTransfer.getData('text/plain');
+      if (!nodeId) return;
+      if (this.workspaceNodes.some(w => w.node_id === nodeId)) return;
+
+      const canvas = document.getElementById('graph-canvas');
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      this.workspaceNodes.push({ node_id: nodeId, x, y, manual: true });
+
+      // Use filtered edges for BFS (respects sidebar filters)
+      const filtered = this.getFilteredData();
+      const manualNodes = this.workspaceNodes.filter(w => w.manual);
+      if (manualNodes.length >= 2) {
+        this.workspacePaths = [];
+        for (let i = 0; i < manualNodes.length; i++) {
+          for (let j = i + 1; j < manualNodes.length; j++) {
+            const path = this.bfsShortestPath(manualNodes[i].node_id, manualNodes[j].node_id, filtered.edges);
+            if (path) {
+              this.workspacePaths.push({ from: manualNodes[i].node_id, to: manualNodes[j].node_id, path });
+            }
+          }
+        }
+      }
+
+      this.renderGraph();
+    },
+
+    expandWorkspaceNode(nodeId) {
+      const filtered = this.getFilteredData();
+      const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
+      const neighbors = new Set();
+      filtered.edges.forEach(e => {
+        if (e.from_node_id === nodeId) neighbors.add(e.to_node_id);
+        if (e.to_node_id === nodeId) neighbors.add(e.from_node_id);
+      });
+      const existing = new Set(this.workspaceNodes.map(w => w.node_id));
+      const nodeById = {};
+      filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
+      // Find position of the node being expanded
+      const source = this.workspaceNodes.find(w => w.node_id === nodeId);
+      const sx = source ? source.x : 400;
+      const sy = source ? source.y : 300;
+      let added = 0;
+      neighbors.forEach(nId => {
+        if (!existing.has(nId) && nodeById[nId]) {
+          const angle = (added / neighbors.size) * Math.PI * 2;
+          this.workspaceNodes.push({
+            node_id: nId,
+            x: sx + Math.cos(angle) * 120,
+            y: sy + Math.sin(angle) * 120,
+            manual: false
+          });
+          added++;
+        }
+      });
+      this.renderGraph();
+    },
+
+    renderWorkspaceGraph(container, allFilteredNodes, allFilteredEdges) {
+      const self = this;
+      container.innerHTML = '';
+      const width = container.clientWidth || 900;
+      const height = Math.max(500, container.clientHeight || 500);
+
+      if (this.workspaceNodes.length === 0) {
+        container.innerHTML = '<div style="padding:80px;text-align:center;color:var(--text-muted)"><div style="font-size:24px;margin-bottom:12px">⊕</div>Drag entities from the left palette onto this canvas.<br><span style="font-size:11px">Drop two entities to auto-discover the shortest path between them.</span></div>';
+        return;
+      }
+
+      // Use filtered data — sidebar filters must apply to workspace too
+      const filtered = this.getFilteredData();
+      const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
+      const nodeById = {};
+      filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
+
+      // Collect all node IDs that should be on canvas
+      const canvasNodeIds = new Set(this.workspaceNodes.map(w => w.node_id).filter(id => filteredNodeIds.has(id)));
+      // Add path intermediate nodes (only if they pass filters)
+      const pathNodeIds = new Set();
+      this.workspacePaths.forEach(p => {
+        p.path.forEach(nId => {
+          if (filteredNodeIds.has(nId)) {
+            pathNodeIds.add(nId);
+            canvasNodeIds.add(nId);
+          }
+        });
+      });
+      // Add direct neighbors of manual nodes (dimmed, with + badge)
+      const allEdges = filtered.edges;
+      const neighborIds = new Set();
+      this.workspaceNodes.filter(w => w.manual).forEach(w => {
+        allEdges.forEach(e => {
+          if (e.from_node_id === w.node_id && !canvasNodeIds.has(e.to_node_id)) neighborIds.add(e.to_node_id);
+          if (e.to_node_id === w.node_id && !canvasNodeIds.has(e.from_node_id)) neighborIds.add(e.from_node_id);
+        });
+      });
+      neighborIds.forEach(nId => canvasNodeIds.add(nId));
+
+      // Build sim nodes
+      const posMap = {};
+      this.workspaceNodes.forEach(w => { posMap[w.node_id] = w; });
+      const simNodes = [...canvasNodeIds].map(nId => {
+        const n = nodeById[nId];
+        if (!n) return null;
+        const pos = posMap[nId];
+        const isManual = this.workspaceNodes.some(w => w.node_id === nId && w.manual);
+        const isPath = pathNodeIds.has(nId) && !isManual;
+        const isNeighbor = neighborIds.has(nId);
+        return {
+          ...n, id: nId,
+          x: pos ? pos.x : width / 2 + (Math.random() - 0.5) * 200,
+          y: pos ? pos.y : height / 2 + (Math.random() - 0.5) * 200,
+          _manual: isManual, _path: isPath, _neighbor: isNeighbor,
+          fx: isManual && pos ? pos.x : null,
+          fy: isManual && pos ? pos.y : null
+        };
+      }).filter(Boolean);
+
+      const simNodeMap = {};
+      simNodes.forEach(n => { simNodeMap[n.id] = n; });
+
+      // Build edges between canvas nodes
+      const pathEdgeKeys = new Set();
+      this.workspacePaths.forEach(p => {
+        for (let i = 0; i < p.path.length - 1; i++) {
+          pathEdgeKeys.add(p.path[i] + '->' + p.path[i + 1]);
+          pathEdgeKeys.add(p.path[i + 1] + '->' + p.path[i]);
+        }
+      });
+
+      const simEdges = allEdges
+        .filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
+        .map(e => ({
+          source: e.from_node_id, target: e.to_node_id, ...e,
+          _isPath: pathEdgeKeys.has(e.from_node_id + '->' + e.to_node_id)
+        }));
+
+      const svg = d3.select(container).append('svg')
+        .attr('class', 'graph-svg')
+        .attr('width', width).attr('height', height);
+
+      const defs = svg.append('defs');
+      defs.append('marker').attr('id', 'ws-arrow').attr('viewBox', '0 0 10 10')
+        .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
+        .attr('orient', 'auto-start-reverse')
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
+      defs.append('marker').attr('id', 'ws-arrow-path').attr('viewBox', '0 0 10 10')
+        .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
+        .attr('orient', 'auto-start-reverse')
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#f59e0b');
+
+      const gRoot = svg.append('g');
+      svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
+        gRoot.attr('transform', event.transform);
+      }));
+
+      // Edges
+      const link = gRoot.selectAll('.edge-line')
+        .data(simEdges).join('line')
+        .attr('class', d => 'edge-line' + (d._isPath ? ' path-edge' : ''))
+        .attr('marker-end', d => d._isPath ? 'url(#ws-arrow-path)' : 'url(#ws-arrow)');
+
+      // Nodes
+      const node = gRoot.selectAll('.node-g')
+        .data(simNodes).join('g')
+        .attr('class', d => 'node-g' + (d._neighbor ? ' neighbor-node' : ''))
+        .call(d3.drag()
+          .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; if (d._manual) { const w = self.workspaceNodes.find(w2 => w2.node_id === d.id); if (w) { w.x = d.x; w.y = d.y; } } })
+          .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); if (!d._manual) { d.fx = null; d.fy = null; } })
+        );
+
+      node.append('rect')
+        .attr('class', 'node-rect')
+        .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
+        .attr('fill', d => self.layerColor(d.layer) + '20')
+        .attr('stroke', d => self.layerColor(d.layer));
+
+      node.append('text')
+        .attr('text-anchor', 'middle').attr('dy', -2).attr('font-size', '10px')
+        .text(d => d.name.length > 14 ? d.name.slice(0, 13) + '\u2026' : d.name);
+
+      node.append('text')
+        .attr('text-anchor', 'middle').attr('dy', 12).attr('font-size', '7px').attr('fill', 'var(--text-muted)')
+        .text(d => d.node_type);
+
+      // Manual dot indicator
+      node.filter(d => d._manual).append('circle')
+        .attr('class', 'manual-dot').attr('cx', 45).attr('cy', -15).attr('r', 4);
+
+      // Auto badge for path nodes
+      node.filter(d => d._path && !d._manual).each(function(d) {
+        const g2 = d3.select(this);
+        g2.append('rect').attr('class', 'auto-badge').attr('x', 30).attr('y', -19).attr('width', 24).attr('height', 13);
+        g2.append('text').attr('class', 'auto-badge-text').attr('x', 42).attr('y', -10).attr('text-anchor', 'middle').text('auto');
+      });
+
+      // + expand badge for neighbor nodes
+      node.filter(d => d._neighbor).each(function(d) {
+        const g2 = d3.select(this);
+        g2.append('circle').attr('class', 'expand-badge').attr('cx', 55).attr('cy', 0).attr('r', 10)
+          .on('click', (event) => { event.stopPropagation(); self.expandWorkspaceNode(d.id); });
+        g2.append('text').attr('class', 'expand-text').attr('x', 55).attr('y', 4).attr('text-anchor', 'middle').text('+')
+          .on('click', (event) => { event.stopPropagation(); self.expandWorkspaceNode(d.id); });
+      });
+
+      // Click handlers
+      node.on('click', (event, d) => {
+        event.stopPropagation();
+        self.selectedNode = d;
+      });
+      svg.on('click', () => { self.selectedNode = null; });
+
+      // Force simulation
+      const sim = d3.forceSimulation(simNodes)
+        .force('link', d3.forceLink(simEdges).id(d => d.id).distance(120).strength(0.2))
+        .force('charge', d3.forceManyBody().strength(-100))
+        .force('collision', d3.forceCollide().radius(55));
+
+      sim.on('tick', () => {
+        link
+          .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+      });
+    },
   };
 }
 </script>
