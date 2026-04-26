@@ -242,7 +242,7 @@ a{color:var(--primary);text-decoration:none}
     <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button>
     <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button>
     <template x-if="diagramSessionId">
-      <button class="tab-btn" :class="{active: tab==='diagram'}" @click="tab='diagram';history.pushState(null,'','/diagram/'+diagramSessionId)">
+      <button class="tab-btn" :class="{active: tab==='workspace' && wsDataSource==='diagram'}" @click="tab='workspace';wsDataSource='diagram';history.pushState(null,'','/diagram/'+diagramSessionId);renderGraph()">
         Diagram<template x-if="diagramData?.title"><span x-text="': '+diagramData.title"></span></template>
       </button>
     </template>
@@ -499,15 +499,15 @@ a{color:var(--primary);text-decoration:none}
       <div class="mode-toggle">
         <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';renderGraph()">Tree</button>
         <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';renderGraph()">Explore</button>
-        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';filterSidebarOpen=true;renderGraph()">Workspace</button>
+        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;history.pushState(null,'','/workspace');renderGraph()">Workspace</button>
       </div>
 
-      <!-- Workspace layout toggle -->
-      <template x-if="graphMode==='workspace' && workspaceNodes.length === 0">
+      <!-- Workspace layout toggle (always available, including diagram mode) -->
+      <template x-if="graphMode==='workspace'">
         <div class="mode-toggle">
-          <button class="mode-btn" :class="{active:wsLayout==='grid'}" @click="wsLayout='grid';renderGraph()">Grid</button>
-          <button class="mode-btn" :class="{active:wsLayout==='dagre'}" @click="wsLayout='dagre';renderGraph()">Dagre</button>
-          <button class="mode-btn" :class="{active:wsLayout==='force'}" @click="wsLayout='force';renderGraph()">Force</button>
+          <button class="mode-btn" :class="{active:wsLayout==='grid'}" @click="wsLayout='grid';renderWorkspace()">Grid</button>
+          <button class="mode-btn" :class="{active:wsLayout==='dagre'}" @click="wsLayout='dagre';renderWorkspace()">Dagre</button>
+          <button class="mode-btn" :class="{active:wsLayout==='force'}" @click="wsLayout='force';renderWorkspace()">Force</button>
         </div>
       </template>
 
@@ -548,10 +548,40 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </template>
 
+      <!-- Diagram step navigation (when workspace shows diagram data) -->
+      <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.total_steps > 0">
+        <div style="display:flex;align-items:center;gap:6px;margin-left:8px">
+          <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:2px 8px;font-size:10px">Clean</button>
+          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:2px 8px">◀</button>
+          <span style="font-size:11px;min-width:80px;text-align:center">
+            <template x-if="diagramStep >= 0">
+              <span>
+                <strong x-text="'Step '+(diagramStep+1)+'/'+diagramData.total_steps"></strong>
+                <template x-if="diagramData.step_titles?.[diagramStep]">
+                  <span style="color:var(--text-muted)" x-text="': '+diagramData.step_titles[diagramStep]"></span>
+                </template>
+              </span>
+            </template>
+            <template x-if="diagramStep < 0">
+              <span style="color:var(--text-muted)">No highlights</span>
+            </template>
+          </span>
+          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
+        </div>
+      </template>
+
+      <!-- Diagram title -->
+      <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.title">
+        <span style="font-size:11px;color:var(--primary);margin-left:8px" x-text="diagramData.title"></span>
+      </template>
+
       <!-- Right side controls -->
       <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-        <template x-if="graphMode==='workspace' && workspaceNodes.length > 0">
+        <template x-if="graphMode==='workspace' && wsDataSource==='graph' && workspaceNodes.length > 0">
           <button class="mode-btn" @click="workspaceNodes=[];workspacePaths=[];_wsPositionCache={};renderGraph()">← Overview</button>
+        </template>
+        <template x-if="graphMode==='workspace' && wsDataSource==='diagram'">
+          <button class="mode-btn" @click="wsDataSource='graph';diagramSessionId=null;diagramData=null;history.pushState(null,'','/workspace');renderGraph()">← Graph</button>
         </template>
         <template x-if="graphMode==='tree' || graphMode==='explore'">
           <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
@@ -667,7 +697,7 @@ a{color:var(--primary);text-decoration:none}
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
             <div style="display:flex;gap:4px;align-items:center">
-              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';renderGraph()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
+              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';renderWorkspace()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
               <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
             </div>
           </div>
@@ -911,93 +941,12 @@ a{color:var(--primary);text-decoration:none}
   </div>
 </div>
 
-<!-- Diagram tab (live from Claude) -->
-<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='diagram'" x-cloak>
-  <div class="graph-container" :style="graphFullscreen ? 'height:calc(100vh - 100px)' : 'height:calc(100vh - 200px);min-height:500px'">
-    <div class="graph-toolbar">
-      <span style="font-weight:600;font-size:13px" x-text="diagramData?.title || 'Diagram'"></span>
-      <!-- Step navigation -->
-      <template x-if="diagramData?.total_steps > 0">
-        <div style="display:flex;align-items:center;gap:6px;margin-left:12px">
-          <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:2px 8px;font-size:10px">Clean</button>
-          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:2px 8px">◀</button>
-          <span style="font-size:11px;min-width:80px;text-align:center">
-            <template x-if="diagramStep >= 0">
-              <span>
-                <strong x-text="'Step '+(diagramStep+1)+'/'+diagramData.total_steps"></strong>
-                <template x-if="diagramData.step_titles?.[diagramStep]">
-                  <span style="color:var(--text-muted)" x-text="': '+diagramData.step_titles[diagramStep]"></span>
-                </template>
-              </span>
-            </template>
-            <template x-if="diagramStep < 0">
-              <span style="color:var(--text-muted)">No highlights</span>
-            </template>
-          </span>
-          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
-        </div>
-      </template>
-      <!-- Diagram layout toggle -->
-      <template x-if="diagramData">
-        <div class="mode-toggle" style="margin-left:8px">
-          <button class="mode-btn" :class="{active:diagramLayout==='dagre'}" @click="diagramLayout='dagre';renderDiagram()">Dagre</button>
-          <button class="mode-btn" :class="{active:diagramLayout==='force'}" @click="diagramLayout='force';renderDiagram()">Force</button>
-        </div>
-      </template>
-      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-        <span style="font-size:10px;color:var(--text-muted)" x-text="diagramData ? (diagramData.nodes?.length || 0) + ' nodes, ' + (diagramData.edges?.length || 0) + ' edges' : 'Waiting for data...'"></span>
-        <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
-        <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderDiagram())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
-      </div>
-    </div>
-    <div style="display:flex;flex:1;overflow:hidden;min-height:0">
-      <div id="diagram-canvas" style="flex:1;overflow:hidden;min-height:0">
-        <template x-if="!diagramData">
-          <div style="padding:80px;text-align:center;color:var(--text-muted)">
-            <div style="font-size:18px;margin-bottom:8px">Waiting for Claude...</div>
-            <div style="font-size:12px">Claude will push a diagram here via MCP tools.</div>
-          </div>
-        </template>
-      </div>
-      <!-- Filter sidebar for diagram -->
-      <template x-if="filterSidebarOpen && tab==='diagram' && diagramData">
-        <div class="filter-sidebar">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <strong>Filters</strong>
-            <div style="display:flex;gap:4px;align-items:center">
-              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
-              <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
-            </div>
-          </div>
-          <div class="group">
-            <h4>Node Types</h4>
-            <template x-for="nt in getDiagramNodeTypes()" :key="nt.type">
-              <label>
-                <input type="checkbox" :checked="!hiddenNodeTypes.includes(nt.type)" @change="toggleNodeType(nt.type);renderDiagram()">
-                <span :style="'color:'+layerColor(nt.layer)" x-text="nt.type + ' (' + nt.count + ')'"></span>
-              </label>
-            </template>
-          </div>
-          <div class="group">
-            <h4>Edge Types</h4>
-            <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
-              <label>
-                <input type="checkbox" :checked="!hiddenEdgeTypes.includes(et.type)" @change="toggleEdgeType(et.type);renderDiagram()">
-                <span x-text="et.type + ' (' + et.count + ')'"></span>
-              </label>
-            </template>
-          </div>
-        </div>
-      </template>
-    </div>
-    <!-- Step description bar -->
-    <template x-if="diagramData?.step_descriptions?.[diagramStep]">
-      <div style="padding:10px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--text);line-height:1.5;background:var(--primary-light)">
-        <span x-text="diagramData.step_descriptions[diagramStep]"></span>
-      </div>
-    </template>
+<!-- Step description bar (shown below workspace when diagram has step descriptions) -->
+<template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.step_descriptions?.[diagramStep]">
+  <div style="padding:10px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--text);line-height:1.5;background:var(--primary-light);margin-top:-1px">
+    <span x-text="diagramData.step_descriptions[diagramStep]"></span>
   </div>
-</div>
+</template>
 
 <script>
 function dashboard() {
@@ -1055,9 +1004,10 @@ function dashboard() {
     allLayers: ['code','contract','service','data','flow','ownership','infra','ci'],
     layerFilters: ['code','contract','service','data','flow','ownership','infra','ci'],
     hideStructural: false,
-    // Workspace grouping
+    // Workspace
     groupByField: 'domain_key',
-    wsLayout: 'grid',  // 'grid' or 'force'
+    wsLayout: 'dagre',  // 'grid', 'dagre', or 'force'
+    wsDataSource: 'graph', // 'graph' or 'diagram'
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
     filterSidebarOpen: false,
     hiddenNodeTypes: [],      // string[] of node_type values
@@ -1074,7 +1024,6 @@ function dashboard() {
     diagramSessionId: null,
     diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
     diagramStep: -1,    // -1 = clean (no highlights), 0+ = step index
-    diagramLayout: 'dagre',  // 'dagre' or 'force'
     ws: null,
     loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
     loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
@@ -1085,7 +1034,9 @@ function dashboard() {
       const diagramMatch = path.match(/^\/diagram\/([a-zA-Z0-9]+)$/);
       if (diagramMatch) {
         this.diagramSessionId = diagramMatch[1];
-        this.tab = 'diagram';
+        this.wsDataSource = 'diagram';
+        this.tab = 'workspace';
+        this.filterSidebarOpen = true;
       } else if (path === '/workspace') {
         this.tab = 'workspace';
       } else if (path === '/graph') {
@@ -1096,7 +1047,7 @@ function dashboard() {
         this.tab = 'settings';
       }
 
-      if (this.tab === 'diagram') {
+      if (this.wsDataSource === 'diagram') {
         this.fetchDiagram();
       }
 
@@ -1395,7 +1346,9 @@ function dashboard() {
               step_descriptions: msg.data.step_descriptions || {},
               total_steps: msg.data.total_steps || 0
             };
-            this.$nextTick(() => this.renderDiagram());
+            if (this.tab === 'workspace' && this.wsDataSource === 'diagram') {
+              this.$nextTick(() => this.renderDiagram());
+            }
           }
         } catch(e) {}
       };
@@ -1752,7 +1705,11 @@ function dashboard() {
       if (this.graphMode !== 'workspace') container.innerHTML = '';
       const data = this.getFilteredData();
       if (this.graphMode === 'workspace') {
-        this.renderWorkspaceGraph(container, data.nodes, data.edges);
+        if (this.wsDataSource === 'diagram') {
+          this.renderDiagram();
+        } else {
+          this.renderWorkspaceGraph(container, data.nodes, data.edges);
+        }
         return;
       }
       if (data.nodes.length === 0) {
@@ -2879,6 +2836,14 @@ function dashboard() {
       return { nodes: visibleNodes, edges: filteredEdges.filter(e => visibleIds.has(e.from_node_id) && visibleIds.has(e.to_node_id)) };
     },
 
+    renderWorkspace() {
+      if (this.wsDataSource === 'diagram') {
+        this.renderDiagram();
+      } else {
+        this.renderGraph();
+      }
+    },
+
     async fetchDiagram() {
       if (!this.diagramSessionId) return;
       try {
@@ -2900,7 +2865,7 @@ function dashboard() {
 
     // Update annotation visuals without re-rendering the entire diagram
     updateDiagramAnnotations() {
-      const container = document.getElementById('diagram-canvas');
+      const container = document.getElementById('graph-canvas');
       if (!container) return;
       const svg = d3.select(container).select('svg');
       if (svg.empty()) return;
@@ -2948,7 +2913,7 @@ function dashboard() {
     },
 
     renderDiagram() {
-      const container = document.getElementById('diagram-canvas');
+      const container = document.getElementById('graph-canvas');
       if (!container || !this.diagramData) return;
       container.innerHTML = '';
 
@@ -2969,11 +2934,47 @@ function dashboard() {
         if (gk) { if (!groupMap[gk]) groupMap[gk] = []; groupMap[gk].push(n); }
       });
       const groupKeys = Object.keys(groupMap).sort();
-      const useDagre = self.diagramLayout === 'dagre' && typeof dagre !== 'undefined';
+      const useDagre = self.wsLayout === 'dagre' && typeof dagre !== 'undefined';
+      const useGrid = self.wsLayout === 'grid' && groupKeys.length > 0;
 
       let simNodes = [], simNodeMap = {}, simEdges = [], boxPositions = {};
 
-      if (useDagre) {
+      if (useGrid) {
+        // GRID LAYOUT for diagram
+        const boxPadding = 30, labelH = 22, nodeW = 120, nodeH = 55, boxGap = 25;
+        const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
+        const boxRects = {};
+        groupKeys.forEach(gk => {
+          const count = (groupMap[gk] || []).length;
+          const ic = Math.max(1, Math.ceil(Math.sqrt(count)));
+          boxRects[gk] = { w: ic * nodeW + boxPadding * 2, h: Math.ceil(count / ic) * nodeH + boxPadding * 2 + labelH, innerCols: ic };
+        });
+        const colWidths = new Array(cols).fill(0);
+        const rowHeights = new Array(Math.ceil(groupKeys.length / cols)).fill(0);
+        groupKeys.forEach((gk, i) => { const c = i % cols, r = Math.floor(i / cols); colWidths[c] = Math.max(colWidths[c], boxRects[gk].w); rowHeights[r] = Math.max(rowHeights[r], boxRects[gk].h); });
+        groupKeys.forEach((gk, i) => {
+          const c = i % cols, r = Math.floor(i / cols);
+          let x = boxGap, y = boxGap;
+          for (let cc = 0; cc < c; cc++) x += colWidths[cc] + boxGap;
+          for (let rr = 0; rr < r; rr++) y += rowHeights[rr] + boxGap;
+          boxPositions[gk] = { x, y, w: colWidths[c], h: rowHeights[r] };
+        });
+        groupKeys.forEach(gk => {
+          const bp = boxPositions[gk], br = boxRects[gk];
+          (groupMap[gk] || []).forEach((n, idx) => {
+            const col = idx % br.innerCols, row = Math.floor(idx / br.innerCols);
+            const sn = { ...n, id: n.node_id, _group: gk, x: bp.x + boxPadding + col * nodeW + nodeW / 2, y: bp.y + labelH + boxPadding + row * nodeH + nodeH / 2 };
+            simNodes.push(sn); simNodeMap[sn.id] = sn;
+          });
+        });
+        nodes.filter(n => !n.domain_key).forEach((n, i) => {
+          const totalH = rowHeights.reduce((a, b) => a + b + boxGap, boxGap);
+          const sn = { ...n, id: n.node_id, _group: null, x: boxGap + i * nodeW + 60, y: totalH + 50 };
+          simNodes.push(sn); simNodeMap[sn.id] = sn;
+        });
+        simEdges = edges.filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
+          .map(e => ({ ...e, source: simNodeMap[e.from_node_id], target: simNodeMap[e.to_node_id] }));
+      } else if (useDagre) {
         // DAGRE LAYOUT
         const gDag = new dagre.graphlib.Graph({ compound: true });
         gDag.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 20, marginx: 30, marginy: 30 });
