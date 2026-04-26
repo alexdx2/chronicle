@@ -910,29 +910,29 @@ a{color:var(--primary);text-decoration:none}
 </div>
 
 <!-- Diagram tab (live from Claude) -->
-<div class="container" x-show="tab==='diagram'" x-cloak :style="graphFullscreen ? 'height:calc(100vh - 100px)' : ''">
+<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='diagram'" x-cloak>
   <div class="graph-container" style="min-height:500px">
     <div class="graph-toolbar">
       <span style="font-weight:600;font-size:13px" x-text="diagramData?.title || 'Diagram'"></span>
       <!-- Step navigation -->
       <template x-if="diagramData?.total_steps > 0">
         <div style="display:flex;align-items:center;gap:6px;margin-left:12px">
-          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);renderDiagram()" :disabled="diagramStep===0" style="padding:2px 8px">◀</button>
+          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep===0" style="padding:2px 8px">◀</button>
           <span style="font-size:11px;min-width:80px;text-align:center">
             <strong x-text="'Step '+(diagramStep+1)+'/'+diagramData.total_steps"></strong>
             <template x-if="diagramData.step_titles?.[diagramStep]">
               <span style="color:var(--text-muted)" x-text="': '+diagramData.step_titles[diagramStep]"></span>
             </template>
           </span>
-          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);renderDiagram()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
+          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
         </div>
       </template>
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
         <span style="font-size:10px;color:var(--text-muted)" x-text="diagramData ? (diagramData.nodes?.length || 0) + ' nodes, ' + (diagramData.edges?.length || 0) + ' edges' : 'Waiting for data...'"></span>
-        <button class="mode-btn" @click="graphFullscreen=!graphFullscreen" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
+        <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderDiagram())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
       </div>
     </div>
-    <div style="display:flex;flex:1;overflow:hidden">
+    <div style="display:flex;flex:1;overflow:hidden" :style="graphFullscreen ? 'height:calc(100vh - 140px)' : ''">
       <div id="diagram-canvas" style="flex:1;overflow:auto">
         <template x-if="!diagramData">
           <div style="padding:80px;text-align:center;color:var(--text-muted)">
@@ -2733,6 +2733,44 @@ function dashboard() {
       } catch(e) { console.error('diagram fetch:', e); }
     },
 
+    // Get merged annotations for current step
+    _getDiagramAnnotations() {
+      if (!this.diagramData) return {};
+      const globalAnn = this.diagramData.annotations || {};
+      const steps = this.diagramData.steps || {};
+      const stepAnn = steps[this.diagramStep] || {};
+      return { ...globalAnn, ...stepAnn };
+    },
+
+    // Update annotation visuals without re-rendering the entire diagram
+    updateDiagramAnnotations() {
+      const container = document.getElementById('diagram-canvas');
+      if (!container) return;
+      const svg = d3.select(container).select('svg');
+      if (svg.empty()) return;
+      const self = this;
+      const annotations = this._getDiagramAnnotations();
+
+      // Update node rects
+      svg.selectAll('.node-g').each(function(d) {
+        const g = d3.select(this);
+        const ann = annotations[d.node_key];
+        g.select('.node-rect')
+          .attr('stroke', ann?.highlight || self.layerColor(d.layer))
+          .attr('stroke-width', ann?.highlight ? 3 : 1.5)
+          .style('filter', ann?.highlight ? 'drop-shadow(0 0 6px ' + ann.highlight + ')' : 'none');
+        // Remove old note, add new if exists
+        g.selectAll('.ann-note').remove();
+        if (ann?.note) {
+          g.append('text').attr('class', 'ann-note')
+            .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
+            .attr('fill', ann.highlight || 'var(--primary)')
+            .attr('font-style', 'italic')
+            .text(ann.note.length > 30 ? ann.note.slice(0, 29) + '\u2026' : ann.note);
+        }
+      });
+    },
+
     renderDiagram() {
       const container = document.getElementById('diagram-canvas');
       if (!container || !this.diagramData) return;
@@ -2740,16 +2778,12 @@ function dashboard() {
 
       const nodes = this.diagramData.nodes || [];
       const edges = this.diagramData.edges || [];
-      // Merge global annotations with current step annotations
-      const globalAnn = this.diagramData.annotations || {};
-      const steps = this.diagramData.steps || {};
-      const stepAnn = steps[this.diagramStep] || {};
-      const annotations = { ...globalAnn, ...stepAnn };
+      const annotations = this._getDiagramAnnotations();
       if (nodes.length === 0) return;
 
       const self = this;
-      const width = container.clientWidth || 900;
-      const height = Math.max(500, container.clientHeight || 500);
+      const width = Math.max(900, container.clientWidth || 900);
+      const height = Math.max(600, container.clientHeight || 600);
 
       // Group by domain
       const groupMap = {};
@@ -2758,31 +2792,67 @@ function dashboard() {
         if (gk) { if (!groupMap[gk]) groupMap[gk] = []; groupMap[gk].push(n); }
       });
       const groupKeys = Object.keys(groupMap).sort();
-      const groupCenters = {};
-      if (groupKeys.length > 0) {
-        const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
-        const cellW = Math.max(450, width / (cols + 0.5));
-        const cellH = 400;
-        groupKeys.forEach((gk, i) => {
-          groupCenters[gk] = { x: cellW * ((i % cols) + 0.75), y: cellH * (Math.floor(i / cols) + 0.75) };
-        });
-      }
 
-      // Build sim nodes
-      const simNodes = nodes.map(n => {
-        const gk = n.domain_key || null;
-        const center = gk && groupCenters[gk] ? groupCenters[gk] : { x: width / 2, y: height / 2 };
-        return {
-          ...n, id: n.node_id, _group: gk,
-          x: center.x + (Math.random() - 0.5) * 100,
-          y: center.y + (Math.random() - 0.5) * 100
-        };
+      // FIXED GRID LAYOUT — compute box sizes from member counts
+      const boxPadding = 30, labelH = 22, nodeW = 120, nodeH = 55, boxGap = 25;
+      const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length || 1)));
+      const boxRects = {};
+      groupKeys.forEach(gk => {
+        const count = (groupMap[gk] || []).length;
+        const innerCols = Math.max(1, Math.ceil(Math.sqrt(count)));
+        const innerRows = Math.ceil(count / innerCols);
+        boxRects[gk] = { w: innerCols * nodeW + boxPadding * 2, h: innerRows * nodeH + boxPadding * 2 + labelH, innerCols };
       });
-      const simNodeMap = {};
-      simNodes.forEach(n => { simNodeMap[n.id] = n; });
+      const colWidths = new Array(cols).fill(0);
+      const rowArr = Math.ceil(groupKeys.length / cols);
+      const rowHeights = new Array(rowArr).fill(0);
+      groupKeys.forEach((gk, i) => {
+        const c = i % cols, r = Math.floor(i / cols);
+        colWidths[c] = Math.max(colWidths[c], boxRects[gk].w);
+        rowHeights[r] = Math.max(rowHeights[r], boxRects[gk].h);
+      });
+      const boxPositions = {};
+      groupKeys.forEach((gk, i) => {
+        const c = i % cols, r = Math.floor(i / cols);
+        let xOff = boxGap;
+        for (let cc = 0; cc < c; cc++) xOff += colWidths[cc] + boxGap;
+        let yOff = boxGap;
+        for (let rr = 0; rr < r; rr++) yOff += rowHeights[rr] + boxGap;
+        boxPositions[gk] = { x: xOff, y: yOff, w: colWidths[c], h: rowHeights[r] };
+      });
 
+      // Place nodes inside their boxes in a grid
+      const simNodes = [];
+      const simNodeMap = {};
+      groupKeys.forEach(gk => {
+        const bp = boxPositions[gk];
+        const br = boxRects[gk];
+        (groupMap[gk] || []).forEach((n, idx) => {
+          const col = idx % br.innerCols;
+          const row = Math.floor(idx / br.innerCols);
+          const sn = {
+            ...n, id: n.node_id, _group: gk,
+            x: bp.x + boxPadding + col * nodeW + nodeW / 2,
+            y: bp.y + labelH + boxPadding + row * nodeH + nodeH / 2
+          };
+          simNodes.push(sn);
+          simNodeMap[sn.id] = sn;
+        });
+      });
+      // Ungrouped nodes
+      const totalW = colWidths.reduce((a, b) => a + b + boxGap, boxGap);
+      let ungroupedX = boxGap;
+      nodes.filter(n => !n.domain_key).forEach(n => {
+        const totalH = rowHeights.reduce((a, b) => a + b + boxGap, boxGap);
+        const sn = { ...n, id: n.node_id, _group: null, x: ungroupedX + 60, y: totalH + 50 };
+        ungroupedX += nodeW;
+        simNodes.push(sn);
+        simNodeMap[sn.id] = sn;
+      });
+
+      // Resolve edges
       const simEdges = edges.filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
-        .map(e => ({ source: e.from_node_id, target: e.to_node_id, ...e }));
+        .map(e => ({ ...e, source: simNodeMap[e.from_node_id], target: simNodeMap[e.to_node_id] }));
 
       // SVG setup
       const svg = d3.select(container).append('svg')
@@ -2798,9 +2868,8 @@ function dashboard() {
         gRoot.attr('transform', event.transform);
       }));
 
-      const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
-
-      // Edges
+      // Render order: edges FIRST, then boxes ON TOP, then nodes ON TOP of boxes
+      // Edges (behind everything)
       const link = gRoot.selectAll('.edge-line')
         .data(simEdges).join('line')
         .attr('class', d => {
@@ -2808,19 +2877,34 @@ function dashboard() {
           if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
           return cls;
         })
-        .attr('marker-end', 'url(#dia-arrow)');
+        .attr('marker-end', 'url(#dia-arrow)')
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
 
-      // Nodes
+      // Boxes (on top of edges)
+      groupKeys.forEach(gk => {
+        const bp = boxPositions[gk];
+        const bg = gRoot.append('g').attr('class', 'domain-g');
+        bg.append('rect').attr('class', 'domain-box')
+          .attr('x', bp.x).attr('y', bp.y).attr('width', bp.w).attr('height', bp.h);
+        bg.append('text').attr('class', 'domain-label')
+          .attr('x', bp.x + 10).attr('y', bp.y + 16).text(gk.toUpperCase());
+      });
+
+      // Nodes (on top of boxes)
       const node = gRoot.selectAll('.node-g')
         .data(simNodes).join('g')
         .attr('class', 'node-g')
+        .attr('transform', d => `translate(${d.x},${d.y})`)
         .call(d3.drag()
-          .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
-          .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+          .on('drag', (event, d) => {
+            d.x = event.x; d.y = event.y;
+            d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
+            link.filter(e => e.source.id === d.id).attr('x1', d.x).attr('y1', d.y);
+            link.filter(e => e.target.id === d.id).attr('x2', d.x).attr('y2', d.y);
+          })
         );
 
-      // Node rects with annotation highlighting
       node.append('rect')
         .attr('class', 'node-rect')
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
@@ -2842,8 +2926,9 @@ function dashboard() {
         .attr('text-anchor', 'middle').attr('dy', 12).attr('font-size', '7px').attr('fill', 'var(--text-muted)')
         .text(d => d.node_type);
 
-      // Annotation notes (below node)
+      // Annotation notes
       node.filter(d => annotations[d.node_key]?.note).append('text')
+        .attr('class', 'ann-note')
         .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
         .attr('fill', d => annotations[d.node_key]?.highlight || 'var(--primary)')
         .attr('font-style', 'italic')
@@ -2854,55 +2939,7 @@ function dashboard() {
 
       // Click handlers
       node.on('click', (event, d) => { event.stopPropagation(); self.selectedNode = d; });
-      node.on('mouseenter', (event, d) => {
-        self.highlightNode(d.node_id, simEdges.map(e => ({
-          from_node_id: e.source.id || e.source,
-          to_node_id: e.target.id || e.target,
-          edge_type: e.edge_type
-        })));
-      }).on('mouseleave', () => { if (!self.selectedNode) self.highlightNode(null); });
-      svg.on('click', () => { self.selectedNode = null; self.highlightNode(null); });
-
-      // Force simulation
-      const sim = d3.forceSimulation(simNodes)
-        .force('link', d3.forceLink(simEdges).id(d => d.id).distance(140).strength(0.15))
-        .force('charge', d3.forceManyBody().strength(-300))
-        .force('collision', d3.forceCollide().radius(60));
-
-      if (groupKeys.length > 0) {
-        sim.force('x', d3.forceX(d => d._group && groupCenters[d._group] ? groupCenters[d._group].x : width / 2).strength(d => d._group ? 0.15 : 0.03));
-        sim.force('y', d3.forceY(d => d._group && groupCenters[d._group] ? groupCenters[d._group].y : height / 2).strength(d => d._group ? 0.15 : 0.03));
-      }
-
-      sim.on('tick', () => {
-        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-        node.attr('transform', d => `translate(${d.x},${d.y})`);
-
-        // Group bounding boxes
-        if (groupKeys.length > 0) {
-          const padding = 25, labelH = 16;
-          const boxData = groupKeys.map(gk => {
-            const members = (groupMap[gk] || []).map(m => simNodeMap[m.node_id]).filter(Boolean);
-            if (members.length === 0) return null;
-            return {
-              gk,
-              x: d3.min(members, d => d.x) - 50 - padding,
-              y: d3.min(members, d => d.y) - 20 - padding - labelH,
-              w: d3.max(members, d => d.x) - d3.min(members, d => d.x) + 100 + padding * 2,
-              h: d3.max(members, d => d.y) - d3.min(members, d => d.y) + 40 + padding * 2 + labelH
-            };
-          }).filter(Boolean);
-          const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
-          const enter = boxes.enter().append('g').attr('class', 'domain-g');
-          enter.append('rect').attr('class', 'domain-box');
-          enter.append('text').attr('class', 'domain-label');
-          const merged = enter.merge(boxes);
-          merged.select('.domain-box').attr('x', d => d.x).attr('y', d => d.y).attr('width', d => d.w).attr('height', d => d.h);
-          merged.select('.domain-label').attr('x', d => d.x + 10).attr('y', d => d.y + 14).text(d => d.gk.toUpperCase());
-          boxes.exit().remove();
-        }
-      });
+      svg.on('click', () => { self.selectedNode = null; });
     },
   };
 }
