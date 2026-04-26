@@ -160,6 +160,7 @@ a{color:var(--primary);text-decoration:none}
 .graph-svg .expand-text{font-size:11px;fill:var(--text);cursor:pointer;font-weight:600}
 .graph-svg .path-edge{stroke:#f59e0b;stroke-width:2.5}
 .graph-svg .neighbor-node{opacity:.55}
+.opacity-50{opacity:.5}
 
 /* Scan history */
 .scan-row{display:grid;grid-template-columns:1fr 60px 60px auto;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;align-items:center}
@@ -580,7 +581,7 @@ a{color:var(--primary);text-decoration:none}
         <template x-if="loading.graph"><div class="loader" style="min-height:200px"><div class="spinner"></div> Loading graph data...</div></template>
       </div>
       <!-- Side panel for selected node (Tree + Explore + Architecture mode) -->
-      <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='architecture')" x-cloak
+      <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='architecture' || graphMode==='workspace')" x-cloak
            style="width:320px;border-left:1px solid var(--border);overflow-y:auto;background:#fafbfc;flex-shrink:0">
         <template x-if="selectedNode">
           <div style="padding:12px;font-size:11px">
@@ -2122,9 +2123,10 @@ function dashboard() {
       const g = svg.append('g');
 
       // Zoom + pan
-      svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
+      const zoom = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
         g.attr('transform', event.transform);
-      }));
+      });
+      svg.call(zoom);
 
       // Group nodes by domain
       const domainGroups = {};
@@ -2278,16 +2280,20 @@ function dashboard() {
           .attr('x', d => d.x + 12).attr('y', d => d.y + 16)
           .text(d => d.dk === '_unassigned' ? 'UNASSIGNED' : d.dk.toUpperCase());
         boxes.exit().remove();
-        merged.on('click', (event, d) => {
-          event.stopPropagation();
-          const centerX = d.x + d.w / 2;
-          const centerY = d.y + d.h / 2;
-          svg.transition().duration(500).call(
-            d3.zoom().scaleExtent([0.1, 4]).on('zoom', (ev) => { g.attr('transform', ev.transform); })
-              .transform,
-            d3.zoomIdentity.translate(width / 2 - centerX, height / 2 - centerY)
-          );
-        });
+      });
+
+      // Domain box click-to-center (uses stored zoom variable)
+      domainBoxGroup.on('click', (event) => {
+        const target = event.target.closest('.domain-g') || event.target.parentNode;
+        const d = d3.select(target).datum();
+        if (!d) return;
+        event.stopPropagation();
+        const centerX = d.x + d.w / 2;
+        const centerY = d.y + d.h / 2;
+        svg.transition().duration(500).call(
+          zoom.transform,
+          d3.zoomIdentity.translate(width / 2 - centerX, height / 2 - centerY)
+        );
       });
     },
 
