@@ -496,6 +496,14 @@ a{color:var(--primary);text-decoration:none}
         <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';filterSidebarOpen=true;renderGraph()">Workspace</button>
       </div>
 
+      <!-- Workspace layout toggle -->
+      <template x-if="graphMode==='workspace' && workspaceNodes.length === 0">
+        <div class="mode-toggle">
+          <button class="mode-btn" :class="{active:wsLayout==='grid'}" @click="wsLayout='grid';renderGraph()">Grid</button>
+          <button class="mode-btn" :class="{active:wsLayout==='force'}" @click="wsLayout='force';renderGraph()">Force</button>
+        </div>
+      </template>
+
       <!-- Filter presets (Tree + Explore only) -->
       <template x-if="graphMode==='tree' || graphMode==='explore'">
         <div class="mode-toggle">
@@ -950,6 +958,7 @@ function dashboard() {
     hideStructural: false,
     // Workspace grouping
     groupByField: 'domain_key',
+    wsLayout: 'grid',  // 'grid' or 'force'
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
     filterSidebarOpen: false,
     hiddenNodeTypes: [],      // string[] of node_type values
@@ -2421,58 +2430,169 @@ function dashboard() {
       }).on('mouseleave', () => { if (!self.selectedNode) self.highlightNode(null); });
       svg.on('click', () => { self.selectedNode = null; self.highlightNode(null); });
 
-      // --- Force simulation ---
-      const sim = d3.forceSimulation(simNodes)
-        .force('link', d3.forceLink(simEdges).id(d => d.id).distance(isInvestigating ? 120 : 140).strength(isInvestigating ? 0.2 : 0.15))
-        .force('charge', d3.forceManyBody().strength(isInvestigating ? -100 : -300))
-        .force('collision', d3.forceCollide().radius(isInvestigating ? 55 : 60));
+      // --- Layout: Grid (fixed boxes) or Force (floating) ---
+      const useGrid = !isInvestigating && self.wsLayout === 'grid' && groupKeys.length > 0;
 
-      // In overview, cluster nodes toward group centers (gentle pull — let charge spread them)
-      if (!isInvestigating && groupKeys.length > 0) {
-        sim.force('x', d3.forceX(d => d._group && groupCenters[d._group] ? groupCenters[d._group].x : width / 2).strength(d => d._group ? 0.15 : 0.03));
-        sim.force('y', d3.forceY(d => d._group && groupCenters[d._group] ? groupCenters[d._group].y : height / 2).strength(d => d._group ? 0.15 : 0.03));
-      }
+      if (useGrid) {
+        // GRID LAYOUT: pre-compute fixed box rects, place nodes inside, constrained sim
+        const boxPadding = 30;
+        const labelH = 22;
+        const nodeW = 110, nodeH = 50; // space per node
+        const boxGap = 20;
+        const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
 
-      sim.on('tick', () => {
-        link
-          .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        // Size each box based on member count
+        const boxRects = {};
+        groupKeys.forEach((gk, i) => {
+          const count = (groupMap[gk] || []).length;
+          const innerCols = Math.max(1, Math.ceil(Math.sqrt(count)));
+          const innerRows = Math.ceil(count / innerCols);
+          const bw = innerCols * nodeW + boxPadding * 2;
+          const bh = innerRows * nodeH + boxPadding * 2 + labelH;
+          boxRects[gk] = { w: bw, h: bh, innerCols, innerRows };
+        });
+
+        // Position boxes in a grid, accounting for variable sizes
+        const colWidths = [];
+        const rowHeights = [];
+        for (let c = 0; c < cols; c++) colWidths.push(0);
+        const rows = Math.ceil(groupKeys.length / cols);
+        for (let r = 0; r < rows; r++) rowHeights.push(0);
+        groupKeys.forEach((gk, i) => {
+          const c = i % cols, r = Math.floor(i / cols);
+          colWidths[c] = Math.max(colWidths[c], boxRects[gk].w);
+          rowHeights[r] = Math.max(rowHeights[r], boxRects[gk].h);
+        });
+
+        // Compute box positions
+        const boxPositions = {};
+        let yOff = boxGap;
+        groupKeys.forEach((gk, i) => {
+          const c = i % cols, r = Math.floor(i / cols);
+          let xOff = boxGap;
+          for (let cc = 0; cc < c; cc++) xOff += colWidths[cc] + boxGap;
+          if (r > 0 && c === 0) yOff = boxGap;
+          let yBase = boxGap;
+          for (let rr = 0; rr < r; rr++) yBase += rowHeights[rr] + boxGap;
+          boxPositions[gk] = { x: xOff, y: yBase, w: colWidths[c], h: rowHeights[r] };
+        });
+
+        // Draw fixed boxes immediately
+        const boxColor = groupField === 'layer' ? null : '#3b82f6';
+        groupKeys.forEach(gk => {
+          const bp = boxPositions[gk];
+          const color = boxColor || self.layerColor(gk);
+          const bg = boxGroup.append('g').attr('class', 'domain-g');
+          bg.append('rect').attr('class', 'domain-box')
+            .attr('x', bp.x).attr('y', bp.y).attr('width', bp.w).attr('height', bp.h)
+            .attr('stroke', color);
+          bg.append('text').attr('class', 'domain-label')
+            .attr('x', bp.x + 10).attr('y', bp.y + 16).attr('fill', color)
+            .text(gk.toUpperCase());
+        });
+
+        // Position nodes inside their box in a grid
+        simNodes.forEach(n => {
+          const gk = n._group;
+          if (gk && boxPositions[gk]) {
+            const bp = boxPositions[gk];
+            const br = boxRects[gk];
+            const members = groupMap[gk] || [];
+            const idx = members.indexOf(n);
+            const col = idx % br.innerCols;
+            const row = Math.floor(idx / br.innerCols);
+            n.x = bp.x + boxPadding + col * nodeW + nodeW / 2;
+            n.y = bp.y + labelH + boxPadding + row * nodeH + nodeH / 2;
+            n.fx = n.x; n.fy = n.y; // fix position
+          } else {
+            // Ungrouped: place below all boxes
+            const totalH = rowHeights.reduce((a, b) => a + b + boxGap, boxGap);
+            n.x = width / 2 + (Math.random() - 0.5) * 200;
+            n.y = totalH + 50 + (Math.random() - 0.5) * 100;
+          }
+        });
+
+        // Static layout — just place everything, no simulation needed
+        link.attr('x1', d => simNodeMap[d.source.id || d.source]?.x || 0)
+          .attr('y1', d => simNodeMap[d.source.id || d.source]?.y || 0)
+          .attr('x2', d => simNodeMap[d.target.id || d.target]?.x || 0)
+          .attr('y2', d => simNodeMap[d.target.id || d.target]?.y || 0);
+        viaLabels.attr('x', d => {
+          const sx = simNodeMap[d.source.id || d.source]?.x || 0;
+          const tx = simNodeMap[d.target.id || d.target]?.x || 0;
+          return (sx + tx) / 2;
+        }).attr('y', d => {
+          const sy = simNodeMap[d.source.id || d.source]?.y || 0;
+          const ty = simNodeMap[d.target.id || d.target]?.y || 0;
+          return (sy + ty) / 2 - 6;
+        });
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+
+        // Resolve D3 force link references for edge positioning
+        // D3 forceLink replaces source/target IDs with objects — we skip sim, so do it manually
+        simEdges.forEach(e => {
+          if (typeof e.source !== 'object') e.source = simNodeMap[e.source] || { x: 0, y: 0 };
+          if (typeof e.target !== 'object') e.target = simNodeMap[e.target] || { x: 0, y: 0 };
+        });
+        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
         viaLabels
           .attr('x', d => (d.source.x + d.target.x) / 2)
           .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
-        node.attr('transform', d => `translate(${d.x},${d.y})`);
 
-        // Group bounding boxes
-        if (groupKeys.length > 0) {
-          const padding = 25;
-          const labelH = 16;
-          const boxColor = groupField === 'layer' ? null : '#3b82f6';
-          const boxData = groupKeys.map(gk => {
-            const members = (groupMap[gk] || []).filter(n => simNodeMap[n.id]);
-            if (members.length === 0) return null;
-            const minX = d3.min(members, d => d.x) - 50 - padding;
-            const maxX = d3.max(members, d => d.x) + 50 + padding;
-            const minY = d3.min(members, d => d.y) - 20 - padding - labelH;
-            const maxY = d3.max(members, d => d.y) + 20 + padding;
-            return { gk, x: minX, y: minY, w: maxX - minX, h: maxY - minY, color: boxColor || self.layerColor(gk) };
-          }).filter(Boolean);
+      } else {
+        // FORCE LAYOUT: existing floating behavior
+        const sim = d3.forceSimulation(simNodes)
+          .force('link', d3.forceLink(simEdges).id(d => d.id).distance(isInvestigating ? 120 : 140).strength(isInvestigating ? 0.2 : 0.15))
+          .force('charge', d3.forceManyBody().strength(isInvestigating ? -100 : -300))
+          .force('collision', d3.forceCollide().radius(isInvestigating ? 55 : 60));
 
-          const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
-          const enter = boxes.enter().append('g').attr('class', 'domain-g');
-          enter.append('rect').attr('class', 'domain-box');
-          enter.append('text').attr('class', 'domain-label');
-          const merged = enter.merge(boxes);
-          merged.select('.domain-box')
-            .attr('x', d => d.x).attr('y', d => d.y)
-            .attr('width', d => d.w).attr('height', d => d.h)
-            .attr('stroke', d => d.color);
-          merged.select('.domain-label')
-            .attr('x', d => d.x + 10).attr('y', d => d.y + 14)
-            .attr('fill', d => d.color)
-            .text(d => d.gk.toUpperCase());
-          boxes.exit().remove();
+        if (!isInvestigating && groupKeys.length > 0) {
+          sim.force('x', d3.forceX(d => d._group && groupCenters[d._group] ? groupCenters[d._group].x : width / 2).strength(d => d._group ? 0.15 : 0.03));
+          sim.force('y', d3.forceY(d => d._group && groupCenters[d._group] ? groupCenters[d._group].y : height / 2).strength(d => d._group ? 0.15 : 0.03));
         }
-      });
+
+        sim.on('tick', () => {
+          link
+            .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+          viaLabels
+            .attr('x', d => (d.source.x + d.target.x) / 2)
+            .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+          node.attr('transform', d => `translate(${d.x},${d.y})`);
+
+          // Floating group bounding boxes
+          if (groupKeys.length > 0) {
+            const padding = 25;
+            const labelH2 = 16;
+            const boxColor = groupField === 'layer' ? null : '#3b82f6';
+            const boxData = groupKeys.map(gk => {
+              const members = (groupMap[gk] || []).filter(n => simNodeMap[n.id]);
+              if (members.length === 0) return null;
+              const minX = d3.min(members, d => d.x) - 50 - padding;
+              const maxX = d3.max(members, d => d.x) + 50 + padding;
+              const minY = d3.min(members, d => d.y) - 20 - padding - labelH2;
+              const maxY = d3.max(members, d => d.y) + 20 + padding;
+              return { gk, x: minX, y: minY, w: maxX - minX, h: maxY - minY, color: boxColor || self.layerColor(gk) };
+            }).filter(Boolean);
+
+            const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
+            const enter = boxes.enter().append('g').attr('class', 'domain-g');
+            enter.append('rect').attr('class', 'domain-box');
+            enter.append('text').attr('class', 'domain-label');
+            const merged = enter.merge(boxes);
+            merged.select('.domain-box')
+              .attr('x', d => d.x).attr('y', d => d.y)
+              .attr('width', d => d.w).attr('height', d => d.h)
+              .attr('stroke', d => d.color);
+            merged.select('.domain-label')
+              .attr('x', d => d.x + 10).attr('y', d => d.y + 14)
+              .attr('fill', d => d.color)
+              .text(d => d.gk.toUpperCase());
+            boxes.exit().remove();
+          }
+        });
+      }
     },
   };
 }
