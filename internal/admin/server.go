@@ -49,13 +49,16 @@ func portFromPath(dir string) int {
 var staticFS embed.FS
 
 type DiagramSession struct {
-	ID          string                 `json:"id"`
-	Title       string                 `json:"title"`
-	Nodes       []map[string]any       `json:"nodes"`
-	Edges       []map[string]any       `json:"edges"`
-	Annotations map[string]DiagramNote `json:"annotations"`
-	CreatedAt   string                 `json:"created_at"`
-	UpdatedAt   string                 `json:"updated_at"`
+	ID          string                            `json:"id"`
+	Title       string                            `json:"title"`
+	Nodes       []map[string]any                  `json:"nodes"`
+	Edges       []map[string]any                  `json:"edges"`
+	Annotations map[string]DiagramNote            `json:"annotations"`
+	Steps       map[int]map[string]DiagramNote    `json:"steps"`       // step_number → {node_key → annotation}
+	StepTitles  map[int]string                    `json:"step_titles"` // step_number → title
+	TotalSteps  int                               `json:"total_steps"`
+	CreatedAt   string                            `json:"created_at"`
+	UpdatedAt   string                            `json:"updated_at"`
 }
 
 type DiagramNote struct {
@@ -683,6 +686,8 @@ func (s *Server) handleDiagramCreate(w http.ResponseWriter, r *http.Request) {
 		ID:          body.SessionID,
 		Title:       body.Title,
 		Annotations: make(map[string]DiagramNote),
+		Steps:       make(map[int]map[string]DiagramNote),
+		StepTitles:  make(map[int]string),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -743,17 +748,35 @@ func (s *Server) handleDiagramAnnotate(w http.ResponseWriter, r *http.Request, i
 		NodeKey   string `json:"node_key"`
 		Note      string `json:"note"`
 		Highlight string `json:"highlight"`
+		Step      *int   `json:"step"`       // nil = global annotation, number = step-specific
+		StepTitle string `json:"step_title"` // optional title for this step
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", 400)
 		return
 	}
 	s.mu.Lock()
-	session.Annotations[body.NodeKey] = DiagramNote{Note: body.Note, Highlight: body.Highlight}
+	if body.Step != nil {
+		step := *body.Step
+		if session.Steps[step] == nil {
+			session.Steps[step] = make(map[string]DiagramNote)
+		}
+		session.Steps[step][body.NodeKey] = DiagramNote{Note: body.Note, Highlight: body.Highlight}
+		if body.StepTitle != "" {
+			session.StepTitles[step] = body.StepTitle
+		}
+		if step+1 > session.TotalSteps {
+			session.TotalSteps = step + 1
+		}
+	} else {
+		session.Annotations[body.NodeKey] = DiagramNote{Note: body.Note, Highlight: body.Highlight}
+	}
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.mu.Unlock()
 	s.hub.Send("diagram_update", map[string]any{
-		"session_id": id, "nodes": session.Nodes, "edges": session.Edges, "annotations": session.Annotations,
+		"session_id": id, "nodes": session.Nodes, "edges": session.Edges,
+		"annotations": session.Annotations, "steps": session.Steps,
+		"step_titles": session.StepTitles, "total_steps": session.TotalSteps,
 	})
 	httpJSON(w, map[string]any{"status": "ok"})
 }

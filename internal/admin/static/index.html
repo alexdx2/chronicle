@@ -914,6 +914,19 @@ a{color:var(--primary);text-decoration:none}
   <div class="graph-container" style="min-height:500px">
     <div class="graph-toolbar">
       <span style="font-weight:600;font-size:13px" x-text="diagramData?.title || 'Diagram'"></span>
+      <!-- Step navigation -->
+      <template x-if="diagramData?.total_steps > 0">
+        <div style="display:flex;align-items:center;gap:6px;margin-left:12px">
+          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);renderDiagram()" :disabled="diagramStep===0" style="padding:2px 8px">◀</button>
+          <span style="font-size:11px;min-width:80px;text-align:center">
+            <strong x-text="'Step '+(diagramStep+1)+'/'+diagramData.total_steps"></strong>
+            <template x-if="diagramData.step_titles?.[diagramStep]">
+              <span style="color:var(--text-muted)" x-text="': '+diagramData.step_titles[diagramStep]"></span>
+            </template>
+          </span>
+          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);renderDiagram()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
+        </div>
+      </template>
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
         <span style="font-size:10px;color:var(--text-muted)" x-text="diagramData ? (diagramData.nodes?.length || 0) + ' nodes, ' + (diagramData.edges?.length || 0) + ' edges' : 'Waiting for data...'"></span>
         <button class="mode-btn" @click="graphFullscreen=!graphFullscreen" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
@@ -1005,7 +1018,8 @@ function dashboard() {
     workspaceSearch: '',
     // Diagram (live from Claude)
     diagramSessionId: null,
-    diagramData: null,  // {id, title, nodes, edges, annotations}
+    diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
+    diagramStep: 0,     // current presentation step
     ws: null,
     loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
     loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
@@ -1320,7 +1334,10 @@ function dashboard() {
               title: this.diagramData?.title || '',
               nodes: msg.data.nodes || [],
               edges: msg.data.edges || [],
-              annotations: msg.data.annotations || {}
+              annotations: msg.data.annotations || {},
+              steps: msg.data.steps || {},
+              step_titles: msg.data.step_titles || {},
+              total_steps: msg.data.total_steps || 0
             };
             this.$nextTick(() => this.renderDiagram());
           }
@@ -2723,7 +2740,11 @@ function dashboard() {
 
       const nodes = this.diagramData.nodes || [];
       const edges = this.diagramData.edges || [];
-      const annotations = this.diagramData.annotations || {};
+      // Merge global annotations with current step annotations
+      const globalAnn = this.diagramData.annotations || {};
+      const steps = this.diagramData.steps || {};
+      const stepAnn = steps[this.diagramStep] || {};
+      const annotations = { ...globalAnn, ...stepAnn };
       if (nodes.length === 0) return;
 
       const self = this;

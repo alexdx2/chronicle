@@ -1321,20 +1321,23 @@ func diagramUpdateHandler() server.ToolHandlerFunc {
 
 func diagramAnnotateTool() mcp.Tool {
 	return mcp.NewTool("oracle_diagram_annotate",
-		mcp.WithDescription("Add a highlight or text note to a node in a live diagram. The node gets a colored glow and/or a text label."),
+		mcp.WithDescription("Add a highlight or text note to a node in a live diagram. The node gets a colored glow and/or a text label. Use 'step' to create presentation steps — user navigates with Next/Back buttons."),
 		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from oracle_diagram_create")),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("node_key of the node to annotate")),
 		mcp.WithString("note", mcp.Description("Text note shown near the node, e.g. 'This is the bottleneck'")),
 		mcp.WithString("highlight", mcp.Description("Highlight color — name or hex, e.g. 'red', '#ff6600', 'green'")),
+		mcp.WithNumber("step", mcp.Description("Presentation step number (0-based). Omit for always-visible annotations. User sees Next/Back buttons to navigate steps.")),
+		mcp.WithString("step_title", mcp.Description("Title for this step shown in the navigation bar, e.g. 'Tom attacks'")),
 	)
 }
 
 func diagramAnnotateHandler() server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		sessionID := strParam(req.GetArguments(), "session_id")
-		nodeKey := strParam(req.GetArguments(), "node_key")
-		note := strParam(req.GetArguments(), "note")
-		highlight := strParam(req.GetArguments(), "highlight")
+		args := req.GetArguments()
+		sessionID := strParam(args, "session_id")
+		nodeKey := strParam(args, "node_key")
+		note := strParam(args, "note")
+		highlight := strParam(args, "highlight")
 		if sessionID == "" || nodeKey == "" {
 			return errorResult(fmt.Errorf("session_id and node_key are required")), nil
 		}
@@ -1347,7 +1350,19 @@ func diagramAnnotateHandler() server.ToolHandlerFunc {
 			port = 4200
 		}
 
-		body, _ := json.Marshal(map[string]string{"node_key": nodeKey, "note": note, "highlight": highlight})
+		payload := map[string]any{"node_key": nodeKey, "note": note, "highlight": highlight}
+		if stepVal, ok := args["step"]; ok {
+			if stepNum, ok2 := stepVal.(float64); ok2 {
+				step := int(stepNum)
+				payload["step"] = step
+			}
+		}
+		stepTitle := strParam(args, "step_title")
+		if stepTitle != "" {
+			payload["step_title"] = stepTitle
+		}
+
+		body, _ := json.Marshal(payload)
 		url := fmt.Sprintf("http://localhost:%d/api/diagram/%s/annotate", port, sessionID)
 		httpReq, _ := http.NewRequest("PUT", url, bytes.NewReader(body))
 		httpReq.Header.Set("Content-Type", "application/json")
