@@ -917,11 +917,19 @@ a{color:var(--primary);text-decoration:none}
       <!-- Step navigation -->
       <template x-if="diagramData?.total_steps > 0">
         <div style="display:flex;align-items:center;gap:6px;margin-left:12px">
-          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep===0" style="padding:2px 8px">◀</button>
+          <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:2px 8px;font-size:10px">Clean</button>
+          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:2px 8px">◀</button>
           <span style="font-size:11px;min-width:80px;text-align:center">
-            <strong x-text="'Step '+(diagramStep+1)+'/'+diagramData.total_steps"></strong>
-            <template x-if="diagramData.step_titles?.[diagramStep]">
-              <span style="color:var(--text-muted)" x-text="': '+diagramData.step_titles[diagramStep]"></span>
+            <template x-if="diagramStep >= 0">
+              <span>
+                <strong x-text="'Step '+(diagramStep+1)+'/'+diagramData.total_steps"></strong>
+                <template x-if="diagramData.step_titles?.[diagramStep]">
+                  <span style="color:var(--text-muted)" x-text="': '+diagramData.step_titles[diagramStep]"></span>
+                </template>
+              </span>
+            </template>
+            <template x-if="diagramStep < 0">
+              <span style="color:var(--text-muted)">No highlights</span>
             </template>
           </span>
           <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
@@ -1019,7 +1027,7 @@ function dashboard() {
     // Diagram (live from Claude)
     diagramSessionId: null,
     diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
-    diagramStep: 0,     // current presentation step
+    diagramStep: -1,    // -1 = clean (no highlights), 0+ = step index
     ws: null,
     loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
     loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
@@ -2749,16 +2757,26 @@ function dashboard() {
       const svg = d3.select(container).select('svg');
       if (svg.empty()) return;
       const self = this;
-      const annotations = this._getDiagramAnnotations();
+      const annotations = this.diagramStep < 0 ? {} : this._getDiagramAnnotations();
+      const hasAny = Object.keys(annotations).length > 0;
 
-      // Update node rects
+      // Update node groups
       svg.selectAll('.node-g').each(function(d) {
         const g = d3.select(this);
         const ann = annotations[d.node_key];
+        const dimmed = hasAny && !ann;
+
         g.select('.node-rect')
           .attr('stroke', ann?.highlight || self.layerColor(d.layer))
           .attr('stroke-width', ann?.highlight ? 3 : 1.5)
-          .style('filter', ann?.highlight ? 'drop-shadow(0 0 6px ' + ann.highlight + ')' : 'none');
+          .style('filter', ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none')
+          .attr('fill', dimmed ? '#f0f0f0' : (self.layerColor(d.layer) + '20'))
+          .style('opacity', dimmed ? 0.3 : 1);
+
+        // Dim text too
+        g.selectAll('text:not(.ann-note)')
+          .style('opacity', dimmed ? 0.3 : 1);
+
         // Remove old note, add new if exists
         g.selectAll('.ann-note').remove();
         if (ann?.note) {
@@ -2768,6 +2786,16 @@ function dashboard() {
             .attr('font-style', 'italic')
             .text(ann.note.length > 30 ? ann.note.slice(0, 29) + '\u2026' : ann.note);
         }
+      });
+
+      // Dim edges not connected to highlighted nodes
+      const highlightedIds = new Set();
+      svg.selectAll('.node-g').each(function(d) {
+        if (annotations[d.node_key]) highlightedIds.add(d.id);
+      });
+      svg.selectAll('.edge-line').style('opacity', function(d) {
+        if (!hasAny) return 0.6;
+        return (highlightedIds.has(d.source.id || d.source) || highlightedIds.has(d.target.id || d.target)) ? 0.8 : 0.1;
       });
     },
 
