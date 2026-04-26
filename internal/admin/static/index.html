@@ -2228,6 +2228,16 @@ function dashboard() {
         })));
       });
 
+      node.on('mouseenter', (event, d) => {
+        self.highlightNode(d.node_id, simEdges.map(e => ({
+          from_node_id: e.source.id || e.source,
+          to_node_id: e.target.id || e.target,
+          edge_type: e.edge_type
+        })));
+      }).on('mouseleave', () => {
+        if (!self.selectedNode) self.highlightNode(null);
+      });
+
       svg.on('click', () => {
         self.selectedNode = null;
         self.highlightNode(null);
@@ -2268,6 +2278,16 @@ function dashboard() {
           .attr('x', d => d.x + 12).attr('y', d => d.y + 16)
           .text(d => d.dk === '_unassigned' ? 'UNASSIGNED' : d.dk.toUpperCase());
         boxes.exit().remove();
+        merged.on('click', (event, d) => {
+          event.stopPropagation();
+          const centerX = d.x + d.w / 2;
+          const centerY = d.y + d.h / 2;
+          svg.transition().duration(500).call(
+            d3.zoom().scaleExtent([0.1, 4]).on('zoom', (ev) => { g.attr('transform', ev.transform); })
+              .transform,
+            d3.zoomIdentity.translate(width / 2 - centerX, height / 2 - centerY)
+          );
+        });
       });
     },
 
