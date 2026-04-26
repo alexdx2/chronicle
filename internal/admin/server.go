@@ -48,6 +48,21 @@ func portFromPath(dir string) int {
 //go:embed static/*
 var staticFS embed.FS
 
+type DiagramSession struct {
+	ID          string                 `json:"id"`
+	Title       string                 `json:"title"`
+	Nodes       []map[string]any       `json:"nodes"`
+	Edges       []map[string]any       `json:"edges"`
+	Annotations map[string]DiagramNote `json:"annotations"`
+	CreatedAt   string                 `json:"created_at"`
+	UpdatedAt   string                 `json:"updated_at"`
+}
+
+type DiagramNote struct {
+	Note      string `json:"note,omitempty"`
+	Highlight string `json:"highlight,omitempty"`
+}
+
 // Server is the admin dashboard HTTP server.
 type Server struct {
 	mu           sync.RWMutex
@@ -59,12 +74,13 @@ type Server struct {
 	devMode      bool
 	projectPath  string
 	originalPath string
+	diagrams     map[string]*DiagramSession
 }
 
 // NewServer creates a new admin Server.
 func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool) *Server {
 	cwd, _ := os.Getwd()
-	return &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd, originalPath: cwd}
+	return &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd, originalPath: cwd, diagrams: make(map[string]*DiagramSession)}
 }
 
 // switchTo swaps the server's backing store/graph to a different project.
@@ -177,16 +193,37 @@ func (s *Server) Start() error {
 		handleWebSocket(s.hub, w, r)
 	})
 
+	mux.HandleFunc("/api/diagram/", s.handleDiagram)
+	mux.HandleFunc("/api/diagram", s.handleDiagram)
+
 	if s.devMode {
 		staticDir := filepath.Join(findModuleRoot(), "internal", "admin", "static")
 		fmt.Fprintf(os.Stderr, "Dev mode: serving static files from %s\n", staticDir)
-		mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+		fileServer := http.FileServer(http.Dir(staticDir))
+		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := filepath.Join(staticDir, r.URL.Path)
+			if _, err := os.Stat(path); err == nil {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+			http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
+		}))
 	} else {
 		staticContent, err := fs.Sub(staticFS, "static")
 		if err != nil {
 			return fmt.Errorf("static fs: %w", err)
 		}
-		mux.Handle("/", http.FileServer(http.FS(staticContent)))
+		fileServer := http.FileServer(http.FS(staticContent))
+		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			f, err := staticContent.Open(strings.TrimPrefix(r.URL.Path, "/"))
+			if err == nil {
+				f.Close()
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+			r.URL.Path = "/"
+			fileServer.ServeHTTP(w, r)
+		}))
 	}
 
 	go s.hub.Run()
@@ -610,6 +647,115 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(405)
+}
+
+func (s *Server) handleDiagram(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/diagram")
+	path = strings.TrimPrefix(path, "/")
+	parts := strings.SplitN(path, "/", 2)
+	sessionID := parts[0]
+
+	switch {
+	case r.Method == "POST" && sessionID == "":
+		s.handleDiagramCreate(w, r)
+	case r.Method == "GET" && sessionID != "":
+		s.handleDiagramGet(w, r, sessionID)
+	case r.Method == "PUT" && len(parts) == 2 && parts[1] == "annotate":
+		s.handleDiagramAnnotate(w, r, sessionID)
+	case r.Method == "PUT" && sessionID != "":
+		s.handleDiagramUpdate(w, r, sessionID)
+	default:
+		http.Error(w, "not found", 404)
+	}
+}
+
+func (s *Server) handleDiagramCreate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SessionID string `json:"session_id"`
+		Title     string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	session := &DiagramSession{
+		ID:          body.SessionID,
+		Title:       body.Title,
+		Annotations: make(map[string]DiagramNote),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	s.mu.Lock()
+	s.diagrams[body.SessionID] = session
+	s.mu.Unlock()
+	url := fmt.Sprintf("http://localhost:%d/diagram/%s", s.port, body.SessionID)
+	httpJSON(w, map[string]any{"session_id": body.SessionID, "url": url})
+}
+
+func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.RLock()
+	session, ok := s.diagrams[id]
+	s.mu.RUnlock()
+	if !ok {
+		http.Error(w, "session not found", 404)
+		return
+	}
+	httpJSON(w, session)
+}
+
+func (s *Server) handleDiagramUpdate(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.RLock()
+	session, ok := s.diagrams[id]
+	s.mu.RUnlock()
+	if !ok {
+		http.Error(w, "session not found", 404)
+		return
+	}
+	var body struct {
+		Nodes []map[string]any `json:"nodes"`
+		Edges []map[string]any `json:"edges"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	s.mu.Lock()
+	session.Nodes = body.Nodes
+	session.Edges = body.Edges
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.mu.Unlock()
+	s.hub.Send("diagram_update", map[string]any{
+		"session_id": id, "nodes": session.Nodes, "edges": session.Edges, "annotations": session.Annotations,
+	})
+	httpJSON(w, map[string]any{"status": "ok", "node_count": len(body.Nodes), "edge_count": len(body.Edges)})
+}
+
+func (s *Server) handleDiagramAnnotate(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.RLock()
+	session, ok := s.diagrams[id]
+	s.mu.RUnlock()
+	if !ok {
+		http.Error(w, "session not found", 404)
+		return
+	}
+	var body struct {
+		NodeKey   string `json:"node_key"`
+		Note      string `json:"note"`
+		Highlight string `json:"highlight"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	s.mu.Lock()
+	session.Annotations[body.NodeKey] = DiagramNote{Note: body.Note, Highlight: body.Highlight}
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.mu.Unlock()
+	s.hub.Send("diagram_update", map[string]any{
+		"session_id": id, "nodes": session.Nodes, "edges": session.Edges, "annotations": session.Annotations,
+	})
+	httpJSON(w, map[string]any{"status": "ok"})
 }
 
 func httpJSON(w http.ResponseWriter, v any) {
