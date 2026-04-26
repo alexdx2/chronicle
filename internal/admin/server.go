@@ -54,9 +54,10 @@ type DiagramSession struct {
 	Nodes       []map[string]any                  `json:"nodes"`
 	Edges       []map[string]any                  `json:"edges"`
 	Annotations map[string]DiagramNote            `json:"annotations"`
-	Steps       map[int]map[string]DiagramNote    `json:"steps"`       // step_number → {node_key → annotation}
-	StepTitles  map[int]string                    `json:"step_titles"` // step_number → title
-	TotalSteps  int                               `json:"total_steps"`
+	Steps            map[int]map[string]DiagramNote `json:"steps"`             // step_number → {node_key → annotation}
+	StepTitles       map[int]string                `json:"step_titles"`       // step_number → title
+	StepDescriptions map[int]string                `json:"step_descriptions"` // step_number → description text
+	TotalSteps       int                           `json:"total_steps"`
 	CreatedAt   string                            `json:"created_at"`
 	UpdatedAt   string                            `json:"updated_at"`
 }
@@ -686,8 +687,9 @@ func (s *Server) handleDiagramCreate(w http.ResponseWriter, r *http.Request) {
 		ID:          body.SessionID,
 		Title:       body.Title,
 		Annotations: make(map[string]DiagramNote),
-		Steps:       make(map[int]map[string]DiagramNote),
-		StepTitles:  make(map[int]string),
+		Steps:            make(map[int]map[string]DiagramNote),
+		StepTitles:       make(map[int]string),
+		StepDescriptions: make(map[int]string),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -748,8 +750,9 @@ func (s *Server) handleDiagramAnnotate(w http.ResponseWriter, r *http.Request, i
 		NodeKey   string `json:"node_key"`
 		Note      string `json:"note"`
 		Highlight string `json:"highlight"`
-		Step      *int   `json:"step"`       // nil = global annotation, number = step-specific
-		StepTitle string `json:"step_title"` // optional title for this step
+		Step            *int   `json:"step"`              // nil = global annotation, number = step-specific
+		StepTitle       string `json:"step_title"`        // optional title for this step
+		StepDescription string `json:"step_description"`  // optional description text for this step
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", 400)
@@ -765,6 +768,9 @@ func (s *Server) handleDiagramAnnotate(w http.ResponseWriter, r *http.Request, i
 		if body.StepTitle != "" {
 			session.StepTitles[step] = body.StepTitle
 		}
+		if body.StepDescription != "" {
+			session.StepDescriptions[step] = body.StepDescription
+		}
 		if step+1 > session.TotalSteps {
 			session.TotalSteps = step + 1
 		}
@@ -776,7 +782,7 @@ func (s *Server) handleDiagramAnnotate(w http.ResponseWriter, r *http.Request, i
 	s.hub.Send("diagram_update", map[string]any{
 		"session_id": id, "nodes": session.Nodes, "edges": session.Edges,
 		"annotations": session.Annotations, "steps": session.Steps,
-		"step_titles": session.StepTitles, "total_steps": session.TotalSteps,
+		"step_titles": session.StepTitles, "step_descriptions": session.StepDescriptions, "total_steps": session.TotalSteps,
 	})
 	httpJSON(w, map[string]any{"status": "ok"})
 }

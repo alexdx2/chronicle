@@ -950,6 +950,12 @@ a{color:var(--primary);text-decoration:none}
         </template>
       </div>
     </div>
+    <!-- Step description bar -->
+    <template x-if="diagramData?.step_descriptions?.[diagramStep]">
+      <div style="padding:10px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--text);line-height:1.5;background:var(--primary-light)">
+        <span x-text="diagramData.step_descriptions[diagramStep]"></span>
+      </div>
+    </template>
   </div>
 </div>
 
@@ -1345,6 +1351,7 @@ function dashboard() {
               annotations: msg.data.annotations || {},
               steps: msg.data.steps || {},
               step_titles: msg.data.step_titles || {},
+              step_descriptions: msg.data.step_descriptions || {},
               total_steps: msg.data.total_steps || 0
             };
             this.$nextTick(() => this.renderDiagram());

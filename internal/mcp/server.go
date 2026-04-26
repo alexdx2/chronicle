@@ -1328,6 +1328,7 @@ func diagramAnnotateTool() mcp.Tool {
 		mcp.WithString("highlight", mcp.Description("Highlight color — name or hex, e.g. 'red', '#ff6600', 'green'")),
 		mcp.WithNumber("step", mcp.Description("Presentation step number (0-based). Omit for always-visible annotations. User sees Next/Back buttons to navigate steps.")),
 		mcp.WithString("step_title", mcp.Description("Title for this step shown in the navigation bar, e.g. 'Tom attacks'")),
+		mcp.WithString("step_description", mcp.Description("Longer description text shown below the diagram for this step")),
 	)
 }
 
@@ -1360,6 +1361,10 @@ func diagramAnnotateHandler() server.ToolHandlerFunc {
 		stepTitle := strParam(args, "step_title")
 		if stepTitle != "" {
 			payload["step_title"] = stepTitle
+		}
+		stepDesc := strParam(args, "step_description")
+		if stepDesc != "" {
+			payload["step_description"] = stepDesc
 		}
 
 		body, _ := json.Marshal(payload)
