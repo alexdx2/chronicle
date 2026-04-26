@@ -912,7 +912,7 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Diagram tab (live from Claude) -->
 <div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='diagram'" x-cloak>
-  <div class="graph-container" style="min-height:500px">
+  <div class="graph-container" :style="graphFullscreen ? 'height:calc(100vh - 100px)' : 'height:calc(100vh - 200px);min-height:500px'">
     <div class="graph-toolbar">
       <span style="font-weight:600;font-size:13px" x-text="diagramData?.title || 'Diagram'"></span>
       <!-- Step navigation -->
