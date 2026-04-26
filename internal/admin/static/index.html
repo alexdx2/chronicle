@@ -493,7 +493,7 @@ a{color:var(--primary);text-decoration:none}
       <div class="mode-toggle">
         <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';renderGraph()">Tree</button>
         <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';renderGraph()">Explore</button>
-        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';workspaceNodes=[];workspacePaths=[];filterSidebarOpen=true;renderGraph()">Workspace</button>
+        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';filterSidebarOpen=true;renderGraph()">Workspace</button>
       </div>
 
       <!-- Filter presets (Tree + Explore only) -->
@@ -535,8 +535,8 @@ a{color:var(--primary);text-decoration:none}
 
       <!-- Right side controls -->
       <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-        <template x-if="graphMode==='workspace'">
-          <button class="mode-btn" @click="workspaceNodes=[];workspacePaths=[];renderGraph()" style="color:var(--warning);border-color:var(--warning)">Clear Canvas</button>
+        <template x-if="graphMode==='workspace' && workspaceNodes.length > 0">
+          <button class="mode-btn" @click="workspaceNodes=[];workspacePaths=[];_wsPositionCache={};renderGraph()">← Overview</button>
         </template>
         <template x-if="graphMode==='tree' || graphMode==='explore'">
           <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
@@ -646,12 +646,23 @@ a{color:var(--primary);text-decoration:none}
         </template>
       </div>
 
-      <!-- Filter sidebar (Grouped + Workspace modes) -->
-      <template x-if="filterSidebarOpen && (graphMode==='workspace')">
+      <!-- Filter sidebar (Workspace mode) -->
+      <template x-if="filterSidebarOpen && graphMode==='workspace'">
         <div class="filter-sidebar">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
             <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+          </div>
+
+          <!-- Group By -->
+          <div class="group">
+            <h4>Group By</h4>
+            <select @change="groupByField=$event.target.value;renderGraph()" :value="groupByField" style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--card)">
+              <option value="domain_key">Domain</option>
+              <option value="layer">Layer</option>
+              <option value="node_type">Node Type</option>
+              <option value="repo_name">Repository</option>
+            </select>
           </div>
 
           <!-- Node types by layer -->
@@ -937,6 +948,8 @@ function dashboard() {
     allLayers: ['code','contract','service','flow','ownership','infra','ci'],
     layerFilters: ['code','contract','service','flow','ownership','infra','ci'],
     hideStructural: false,
+    // Workspace grouping
+    groupByField: 'domain_key',
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
     filterSidebarOpen: false,
     hiddenNodeTypes: [],      // string[] of node_type values
@@ -2200,8 +2213,9 @@ function dashboard() {
 
     renderWorkspaceGraph(container, allFilteredNodes, allFilteredEdges) {
       const self = this;
+      const isInvestigating = this.workspaceNodes.length > 0;
 
-      // Save current node positions before clearing (preserves layout across re-renders)
+      // Save current node positions before clearing
       const prevSvg = container.querySelector('svg');
       if (prevSvg) {
         d3.select(prevSvg).selectAll('.node-g').each(function(d) {
@@ -2211,89 +2225,103 @@ function dashboard() {
           }
         });
       }
-
       container.innerHTML = '';
-      const width = container.clientWidth || 900;
-      const height = Math.max(500, container.clientHeight || 500);
+      const width = Math.max(900, container.clientWidth || 900);
+      const height = Math.max(600, container.clientHeight || 600);
 
-      if (this.workspaceNodes.length === 0) {
-        this._wsPositionCache = {};
-        container.innerHTML = '<div style="padding:80px;text-align:center;color:var(--text-muted)"><div style="font-size:24px;margin-bottom:12px">⊕</div>Drag entities from the left palette onto this canvas.<br><span style="font-size:11px">Drop two entities to auto-discover the shortest path between them.</span></div>';
-        return;
-      }
-
-      // Use filtered data — sidebar filters must apply to workspace too
       const filtered = this.getFilteredData();
-      const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
       const nodeById = {};
       filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
+      const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
       const posCache = this._wsPositionCache || {};
+      const groupField = this.groupByField || 'domain_key';
 
-      // Collect all node IDs that should be on canvas
-      const canvasNodeIds = new Set(this.workspaceNodes.map(w => w.node_id).filter(id => filteredNodeIds.has(id)));
-      // Add path intermediate nodes (only if they pass filters)
-      const pathNodeIds = new Set();
-      this.workspacePaths.forEach(p => {
-        p.path.forEach(nId => {
-          if (filteredNodeIds.has(nId)) {
-            pathNodeIds.add(nId);
-            canvasNodeIds.add(nId);
+      // --- Determine which nodes to show ---
+      let simNodes, pathNodeIds = new Set(), neighborIds = new Set();
+      const pathEdgeKeys = new Set();
+
+      if (!isInvestigating) {
+        // OVERVIEW: show all filtered nodes, grouped
+        simNodes = filtered.nodes.map(n => {
+          const cached = posCache[n.node_id];
+          return {
+            ...n, id: n.node_id, _group: n[groupField] || null,
+            x: cached ? cached.x : width / 2 + (Math.random() - 0.5) * 300,
+            y: cached ? cached.y : height / 2 + (Math.random() - 0.5) * 300,
+            _manual: false, _path: false, _neighbor: false
+          };
+        });
+      } else {
+        // INVESTIGATION: dragged nodes + paths + neighbors
+        const canvasNodeIds = new Set(this.workspaceNodes.map(w => w.node_id).filter(id => filteredNodeIds.has(id)));
+        this.workspacePaths.forEach(p => {
+          p.path.forEach(nId => { if (filteredNodeIds.has(nId)) { pathNodeIds.add(nId); canvasNodeIds.add(nId); } });
+          for (let i = 0; i < p.path.length - 1; i++) {
+            pathEdgeKeys.add(p.path[i] + '->' + p.path[i + 1]);
+            pathEdgeKeys.add(p.path[i + 1] + '->' + p.path[i]);
           }
         });
-      });
-      // Add direct neighbors of manual nodes (dimmed, with + badge)
-      const allEdges = filtered.edges;
-      const neighborIds = new Set();
-      this.workspaceNodes.filter(w => w.manual).forEach(w => {
-        allEdges.forEach(e => {
-          if (e.from_node_id === w.node_id && !canvasNodeIds.has(e.to_node_id)) neighborIds.add(e.to_node_id);
-          if (e.to_node_id === w.node_id && !canvasNodeIds.has(e.from_node_id)) neighborIds.add(e.from_node_id);
+        this.workspaceNodes.filter(w => w.manual).forEach(w => {
+          filtered.edges.forEach(e => {
+            if (e.from_node_id === w.node_id && !canvasNodeIds.has(e.to_node_id)) neighborIds.add(e.to_node_id);
+            if (e.to_node_id === w.node_id && !canvasNodeIds.has(e.from_node_id)) neighborIds.add(e.from_node_id);
+          });
         });
-      });
-      neighborIds.forEach(nId => canvasNodeIds.add(nId));
+        neighborIds.forEach(nId => canvasNodeIds.add(nId));
 
-      // Build sim nodes
-      const posMap = {};
-      this.workspaceNodes.forEach(w => { posMap[w.node_id] = w; });
-      const simNodes = [...canvasNodeIds].map(nId => {
-        const n = nodeById[nId];
-        if (!n) return null;
-        const pos = posMap[nId];
-        const isManual = this.workspaceNodes.some(w => w.node_id === nId && w.manual);
-        const isPath = pathNodeIds.has(nId) && !isManual;
-        const isNeighbor = neighborIds.has(nId);
-        // Use cached position from previous render, then manual position, then random
-        const cached = posCache[nId];
-        const startX = pos ? pos.x : cached ? cached.x : width / 2 + (Math.random() - 0.5) * 200;
-        const startY = pos ? pos.y : cached ? cached.y : height / 2 + (Math.random() - 0.5) * 200;
-        return {
-          ...n, id: nId,
-          x: startX, y: startY,
-          _manual: isManual, _path: isPath, _neighbor: isNeighbor,
-          fx: isManual && pos ? pos.x : null,
-          fy: isManual && pos ? pos.y : null
-        };
-      }).filter(Boolean);
+        const posMap = {};
+        this.workspaceNodes.forEach(w => { posMap[w.node_id] = w; });
+        simNodes = [...canvasNodeIds].map(nId => {
+          const n = nodeById[nId];
+          if (!n) return null;
+          const pos = posMap[nId];
+          const isManual = this.workspaceNodes.some(w => w.node_id === nId && w.manual);
+          const cached = posCache[nId];
+          const startX = pos ? pos.x : cached ? cached.x : width / 2 + (Math.random() - 0.5) * 200;
+          const startY = pos ? pos.y : cached ? cached.y : height / 2 + (Math.random() - 0.5) * 200;
+          return {
+            ...n, id: nId, _group: n[groupField] || null,
+            x: startX, y: startY,
+            _manual: isManual, _path: pathNodeIds.has(nId) && !isManual, _neighbor: neighborIds.has(nId),
+            fx: isManual && pos ? pos.x : null, fy: isManual && pos ? pos.y : null
+          };
+        }).filter(Boolean);
+      }
+
+      if (simNodes.length === 0) {
+        container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">No nodes to display. Adjust filters or import data.</div>';
+        return;
+      }
 
       const simNodeMap = {};
       simNodes.forEach(n => { simNodeMap[n.id] = n; });
 
-      // Build edges between canvas nodes
-      const pathEdgeKeys = new Set();
-      this.workspacePaths.forEach(p => {
-        for (let i = 0; i < p.path.length - 1; i++) {
-          pathEdgeKeys.add(p.path[i] + '->' + p.path[i + 1]);
-          pathEdgeKeys.add(p.path[i + 1] + '->' + p.path[i]);
-        }
-      });
-
-      const simEdges = allEdges
+      // Build edges
+      const simEdges = filtered.edges
         .filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
         .map(e => ({
           source: e.from_node_id, target: e.to_node_id, ...e,
           _isPath: pathEdgeKeys.has(e.from_node_id + '->' + e.to_node_id)
         }));
 
+      // --- Group centers for force clustering ---
+      const groupMap = {};
+      simNodes.forEach(n => {
+        const gk = n._group;
+        if (gk) { if (!groupMap[gk]) groupMap[gk] = []; groupMap[gk].push(n); }
+      });
+      const groupKeys = Object.keys(groupMap).sort();
+      const groupCenters = {};
+      if (groupKeys.length > 0) {
+        const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
+        const cellW = Math.max(300, width / (cols + 0.5));
+        const cellH = Math.max(300, height / (Math.ceil(groupKeys.length / cols) + 0.5));
+        groupKeys.forEach((gk, i) => {
+          groupCenters[gk] = { x: cellW * ((i % cols) + 0.75), y: cellH * (Math.floor(i / cols) + 0.75) };
+        });
+      }
+
+      // --- SVG setup ---
       const svg = d3.select(container).append('svg')
         .attr('class', 'graph-svg')
         .attr('width', width).attr('height', height);
@@ -2309,28 +2337,30 @@ function dashboard() {
         .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#f59e0b');
 
       const gRoot = svg.append('g');
-      svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', (event) => {
+      svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
         gRoot.attr('transform', event.transform);
       }));
 
-      // Domain bounding boxes (behind everything)
-      const domainBoxGroup = gRoot.append('g').attr('class', 'domain-boxes');
-      // Collect domain keys from canvas nodes
-      const domainMap = {};
-      simNodes.forEach(n => {
-        const dk = n.domain_key;
-        if (dk) {
-          if (!domainMap[dk]) domainMap[dk] = [];
-          domainMap[dk].push(n);
-        }
-      });
-      const domainKeys = Object.keys(domainMap);
+      // Group bounding boxes (behind everything)
+      const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
 
       // Edges
       const link = gRoot.selectAll('.edge-line')
         .data(simEdges).join('line')
-        .attr('class', d => 'edge-line' + (d._isPath ? ' path-edge' : ''))
+        .attr('class', d => {
+          let cls = 'edge-line';
+          if (d._isPath) cls += ' path-edge';
+          else if (d._transitive) cls += ' transitive';
+          else if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
+          return cls;
+        })
         .attr('marker-end', d => d._isPath ? 'url(#ws-arrow-path)' : 'url(#ws-arrow)');
+
+      // Via labels for transitive edges
+      const viaLabels = gRoot.selectAll('.via-label')
+        .data(simEdges.filter(e => e._transitive)).join('text')
+        .attr('class', 'via-label').attr('text-anchor', 'middle')
+        .text(d => d._viaLabel || '');
 
       // Nodes
       const node = gRoot.selectAll('.node-g')
@@ -2347,79 +2377,99 @@ function dashboard() {
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
         .attr('fill', d => self.layerColor(d.layer) + '20')
         .attr('stroke', d => self.layerColor(d.layer));
-
       node.append('text')
         .attr('text-anchor', 'middle').attr('dy', -2).attr('font-size', '10px')
         .text(d => d.name.length > 14 ? d.name.slice(0, 13) + '\u2026' : d.name);
-
       node.append('text')
         .attr('text-anchor', 'middle').attr('dy', 12).attr('font-size', '7px').attr('fill', 'var(--text-muted)')
         .text(d => d.node_type);
 
-      // Manual dot indicator
-      node.filter(d => d._manual).append('circle')
-        .attr('class', 'manual-dot').attr('cx', 45).attr('cy', -15).attr('r', 4);
-
-      // Auto badge for path nodes
-      node.filter(d => d._path && !d._manual).each(function(d) {
-        const g2 = d3.select(this);
-        g2.append('rect').attr('class', 'auto-badge').attr('x', 30).attr('y', -19).attr('width', 24).attr('height', 13);
-        g2.append('text').attr('class', 'auto-badge-text').attr('x', 42).attr('y', -10).attr('text-anchor', 'middle').text('auto');
-      });
-
-      // + expand badge for neighbor nodes
-      node.filter(d => d._neighbor).each(function(d) {
-        const g2 = d3.select(this);
-        g2.append('circle').attr('class', 'expand-badge').attr('cx', 55).attr('cy', 0).attr('r', 10)
-          .on('click', (event) => { event.stopPropagation(); self.expandWorkspaceNode(d.id); });
-        g2.append('text').attr('class', 'expand-text').attr('x', 55).attr('y', 4).attr('text-anchor', 'middle').text('+')
-          .on('click', (event) => { event.stopPropagation(); self.expandWorkspaceNode(d.id); });
-      });
+      // Investigation indicators
+      if (isInvestigating) {
+        node.filter(d => d._manual).append('circle')
+          .attr('class', 'manual-dot').attr('cx', 45).attr('cy', -15).attr('r', 4);
+        node.filter(d => d._path && !d._manual).each(function(d) {
+          const g2 = d3.select(this);
+          g2.append('rect').attr('class', 'auto-badge').attr('x', 30).attr('y', -19).attr('width', 24).attr('height', 13);
+          g2.append('text').attr('class', 'auto-badge-text').attr('x', 42).attr('y', -10).attr('text-anchor', 'middle').text('auto');
+        });
+        node.filter(d => d._neighbor).each(function(d) {
+          const g2 = d3.select(this);
+          g2.append('circle').attr('class', 'expand-badge').attr('cx', 55).attr('cy', 0).attr('r', 10)
+            .on('click', (event) => { event.stopPropagation(); self.expandWorkspaceNode(d.id); });
+          g2.append('text').attr('class', 'expand-text').attr('x', 55).attr('y', 4).attr('text-anchor', 'middle').text('+')
+            .on('click', (event) => { event.stopPropagation(); self.expandWorkspaceNode(d.id); });
+        });
+      }
 
       // Click handlers
       node.on('click', (event, d) => {
         event.stopPropagation();
         self.selectedNode = d;
+        self.highlightNode(d.node_id, simEdges.map(e => ({
+          from_node_id: e.source.id || e.source,
+          to_node_id: e.target.id || e.target,
+          edge_type: e.edge_type
+        })));
       });
-      svg.on('click', () => { self.selectedNode = null; });
+      node.on('mouseenter', (event, d) => {
+        self.highlightNode(d.node_id, simEdges.map(e => ({
+          from_node_id: e.source.id || e.source,
+          to_node_id: e.target.id || e.target,
+          edge_type: e.edge_type
+        })));
+      }).on('mouseleave', () => { if (!self.selectedNode) self.highlightNode(null); });
+      svg.on('click', () => { self.selectedNode = null; self.highlightNode(null); });
 
-      // Force simulation
+      // --- Force simulation ---
       const sim = d3.forceSimulation(simNodes)
-        .force('link', d3.forceLink(simEdges).id(d => d.id).distance(120).strength(0.2))
-        .force('charge', d3.forceManyBody().strength(-100))
-        .force('collision', d3.forceCollide().radius(55));
+        .force('link', d3.forceLink(simEdges).id(d => d.id).distance(isInvestigating ? 120 : 80).strength(isInvestigating ? 0.2 : 0.3))
+        .force('charge', d3.forceManyBody().strength(isInvestigating ? -100 : -150))
+        .force('collision', d3.forceCollide().radius(isInvestigating ? 55 : 30));
+
+      // In overview, cluster nodes toward group centers
+      if (!isInvestigating && groupKeys.length > 0) {
+        sim.force('x', d3.forceX(d => d._group && groupCenters[d._group] ? groupCenters[d._group].x : width / 2).strength(d => d._group ? 0.4 : 0.05));
+        sim.force('y', d3.forceY(d => d._group && groupCenters[d._group] ? groupCenters[d._group].y : height / 2).strength(d => d._group ? 0.4 : 0.05));
+      }
 
       sim.on('tick', () => {
         link
           .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        viaLabels
+          .attr('x', d => (d.source.x + d.target.x) / 2)
+          .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
         node.attr('transform', d => `translate(${d.x},${d.y})`);
 
-        // Domain bounding boxes
-        if (domainKeys.length > 0) {
+        // Group bounding boxes
+        if (groupKeys.length > 0) {
           const padding = 25;
           const labelH = 16;
-          const boxData = domainKeys.map(dk => {
-            const members = domainMap[dk].filter(n => simNodeMap[n.id]);
+          const boxColor = groupField === 'layer' ? null : '#3b82f6';
+          const boxData = groupKeys.map(gk => {
+            const members = (groupMap[gk] || []).filter(n => simNodeMap[n.id]);
             if (members.length === 0) return null;
             const minX = d3.min(members, d => d.x) - 50 - padding;
             const maxX = d3.max(members, d => d.x) + 50 + padding;
             const minY = d3.min(members, d => d.y) - 20 - padding - labelH;
             const maxY = d3.max(members, d => d.y) + 20 + padding;
-            return { dk, x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+            return { gk, x: minX, y: minY, w: maxX - minX, h: maxY - minY, color: boxColor || self.layerColor(gk) };
           }).filter(Boolean);
 
-          const boxes = domainBoxGroup.selectAll('.domain-g').data(boxData, d => d.dk);
+          const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
           const enter = boxes.enter().append('g').attr('class', 'domain-g');
           enter.append('rect').attr('class', 'domain-box');
           enter.append('text').attr('class', 'domain-label');
           const merged = enter.merge(boxes);
           merged.select('.domain-box')
             .attr('x', d => d.x).attr('y', d => d.y)
-            .attr('width', d => d.w).attr('height', d => d.h);
+            .attr('width', d => d.w).attr('height', d => d.h)
+            .attr('stroke', d => d.color);
           merged.select('.domain-label')
-            .attr('x', d => d.x + 10).attr('y', d => d.y + 13)
-            .text(d => d.dk.toUpperCase());
+            .attr('x', d => d.x + 10).attr('y', d => d.y + 14)
+            .attr('fill', d => d.color)
+            .text(d => d.gk.toUpperCase());
           boxes.exit().remove();
         }
       });
