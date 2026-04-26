@@ -1,11 +1,14 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anthropics/depbot/internal/graph"
 	"github.com/anthropics/depbot/internal/store"
@@ -37,6 +40,8 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(queryStatsTool(), queryStatsHandler(g))
 	s.AddTool(snapshotCreateTool(), snapshotCreateHandler(g))
 	s.AddTool(staleMarkTool(), staleMarkHandler(g))
+	s.AddTool(invalidateChangedTool(), invalidateChangedHandler(g))
+	s.AddTool(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
 	s.AddTool(queryPathTool(), queryPathHandler(g))
 	s.AddTool(impactTool(), impactHandler(g))
 	s.AddTool(extractionGuideTool(), extractionGuideHandler())
@@ -50,6 +55,9 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(getGlossaryTool(), getGlossaryHandler(g))
 	s.AddTool(checkLanguageTool(), checkLanguageHandler(g))
 	s.AddTool(commandTool(), commandHandler(g))
+	s.AddTool(diagramCreateTool(), diagramCreateHandler())
+	s.AddTool(diagramUpdateTool(), diagramUpdateHandler())
+	s.AddTool(diagramAnnotateTool(), diagramAnnotateHandler())
 
 	return s
 }
@@ -366,11 +374,11 @@ func edgeListHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func evidenceAddTool() mcp.Tool {
 	return mcp.NewTool("oracle_evidence_add",
-		mcp.WithDescription("Add provenance evidence for a node or edge. Evidence records where in source code a relationship was found. Include file_path and line_start at minimum. Extractor_id should be 'claude-code'. Evidence is deduplicated — same location + extractor = update, different location = new entry."),
+		mcp.WithDescription("Add provenance evidence for a node or edge. For code evidence: include file_path and line_start, source_kind='file'. For user corrections: use source_kind='user_feedback', polarity='negative', confidence=0.95, and include the user's reason in metadata. Negative evidence with high confidence contradicts the fact and effectively removes it from the graph. Extractor_id should be 'claude-code'."),
 		mcp.WithString("extractor_id", mcp.Required(), mcp.Description("Extractor ID")),
 		mcp.WithString("extractor_version", mcp.Required(), mcp.Description("Extractor version")),
 		mcp.WithString("target_kind", mcp.Description("Target kind: node or edge")),
-		mcp.WithString("source_kind", mcp.Description("Source kind")),
+		mcp.WithString("source_kind", mcp.Description("Source kind: 'file' for code evidence, 'user_feedback' for user corrections")),
 		mcp.WithString("node_key", mcp.Description("Node key (for target_kind=node)")),
 		mcp.WithString("edge_key", mcp.Description("Edge key (for target_kind=edge)")),
 		mcp.WithString("repo_name", mcp.Description("Repository name")),
@@ -379,6 +387,8 @@ func evidenceAddTool() mcp.Tool {
 		mcp.WithNumber("line_start", mcp.Description("Start line number")),
 		mcp.WithNumber("line_end", mcp.Description("End line number")),
 		mcp.WithNumber("confidence", mcp.Description("Confidence [0,1]")),
+		mcp.WithString("polarity", mcp.Description("Evidence polarity: positive (default) or negative. Use negative to explicitly record that a relationship was confirmed removed.")),
+		mcp.WithNumber("revision_id", mcp.Description("Revision ID for this evidence")),
 	)
 }
 
@@ -405,6 +415,8 @@ func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
 			LineStart:        intParam(args, "line_start"),
 			LineEnd:          intParam(args, "line_end"),
 			Confidence:       float64Param(args, "confidence"),
+			Polarity:         strParam(args, "polarity"),
+			RevisionID:       int64Param(args, "revision_id"),
 		}
 
 		nodeKey := strParam(args, "node_key")
@@ -679,6 +691,80 @@ func staleMarkHandler(g *graph.Graph) server.ToolHandlerFunc {
 			"stale_nodes": staleNodes,
 			"stale_edges": staleEdges,
 		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// oracle_invalidate_changed
+// ---------------------------------------------------------------------------
+
+func invalidateChangedTool() mcp.Tool {
+	return mcp.NewTool("oracle_invalidate_changed",
+		mcp.WithDescription("Mark evidence from changed files as stale and recalculate trust scores. Call during incremental scans after getting changed files from git diff. Returns list of files to rescan."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("changed_files", mcp.Required(), mcp.Description("JSON array of changed file paths")),
+	)
+}
+
+func invalidateChangedHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+		filesJSON := strParam(args, "changed_files")
+		if filesJSON == "" {
+			return errorResult(fmt.Errorf("changed_files is required")), nil
+		}
+
+		var files []string
+		if err := json.Unmarshal([]byte(filesJSON), &files); err != nil {
+			return errorResult(fmt.Errorf("changed_files must be a JSON array: %w", err)), nil
+		}
+
+		result, err := g.InvalidateChanged(domain, revisionID, files)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// oracle_finalize_incremental_scan
+// ---------------------------------------------------------------------------
+
+func finalizeIncrementalScanTool() mcp.Tool {
+	return mcp.NewTool("oracle_finalize_incremental_scan",
+		mcp.WithDescription("Complete an incremental scan. Counts revalidated/stale/contradicted evidence and recalculates trust scores. Stale evidence stays stale — only negative evidence causes invalidation."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+	)
+}
+
+func finalizeIncrementalScanHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+
+		result, err := g.FinalizeIncrementalScan(domain, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
 	}
 }
 
@@ -1149,5 +1235,130 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 			"instructions": instructions,
 			"execute_now":  "Follow the instructions above step by step. Do not ask for confirmation — execute immediately.",
 		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// oracle_diagram_create
+// ---------------------------------------------------------------------------
+
+func diagramCreateTool() mcp.Tool {
+	return mcp.NewTool("oracle_diagram_create",
+		mcp.WithDescription("Create a live diagram session. Returns a URL the user can open to see the diagram. Use oracle_diagram_update to push content."),
+		mcp.WithString("title", mcp.Description("Human-readable title for the diagram, e.g. 'Auth Flow' or 'Order Dependencies'")),
+	)
+}
+
+func diagramCreateHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		title := strParam(req.GetArguments(), "title")
+		if title == "" {
+			title = "Diagram"
+		}
+		sessionID := fmt.Sprintf("%x", time.Now().UnixNano())[len(fmt.Sprintf("%x", time.Now().UnixNano()))-8:]
+
+		port := adminPortValue
+		if port == 0 {
+			port = 4200
+		}
+
+		body, _ := json.Marshal(map[string]string{"session_id": sessionID, "title": title})
+		resp, err := http.Post(fmt.Sprintf("http://localhost:%d/api/diagram", port), "application/json", bytes.NewReader(body))
+		if err != nil {
+			return errorResult(fmt.Errorf("failed to create diagram session: %w", err)), nil
+		}
+		defer resp.Body.Close()
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// oracle_diagram_update
+// ---------------------------------------------------------------------------
+
+func diagramUpdateTool() mcp.Tool {
+	return mcp.NewTool("oracle_diagram_update",
+		mcp.WithDescription("Push graph data to a live diagram. The dashboard updates in real-time. Can be called repeatedly to evolve the diagram. Payload uses standard Oracle graph format: {nodes: [...], edges: [...]}"),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from oracle_diagram_create")),
+		mcp.WithString("payload", mcp.Required(), mcp.Description("JSON string: {\"nodes\": [{\"node_id\": 1, \"node_key\": \"...\", \"name\": \"...\", \"layer\": \"...\", \"node_type\": \"...\"}], \"edges\": [{\"from_node_id\": 1, \"to_node_id\": 2, \"edge_type\": \"...\"}]}")),
+	)
+}
+
+func diagramUpdateHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		sessionID := strParam(req.GetArguments(), "session_id")
+		payloadStr := strParam(req.GetArguments(), "payload")
+		if sessionID == "" || payloadStr == "" {
+			return errorResult(fmt.Errorf("session_id and payload are required")), nil
+		}
+
+		port := adminPortValue
+		if port == 0 {
+			port = 4200
+		}
+
+		url := fmt.Sprintf("http://localhost:%d/api/diagram/%s", port, sessionID)
+		httpReq, _ := http.NewRequest("PUT", url, strings.NewReader(payloadStr))
+		httpReq.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			return errorResult(fmt.Errorf("failed to update diagram: %w", err)), nil
+		}
+		defer resp.Body.Close()
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// oracle_diagram_annotate
+// ---------------------------------------------------------------------------
+
+func diagramAnnotateTool() mcp.Tool {
+	return mcp.NewTool("oracle_diagram_annotate",
+		mcp.WithDescription("Add a highlight or text note to a node in a live diagram. The node gets a colored glow and/or a text label."),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from oracle_diagram_create")),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("node_key of the node to annotate")),
+		mcp.WithString("note", mcp.Description("Text note shown near the node, e.g. 'This is the bottleneck'")),
+		mcp.WithString("highlight", mcp.Description("Highlight color — name or hex, e.g. 'red', '#ff6600', 'green'")),
+	)
+}
+
+func diagramAnnotateHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		sessionID := strParam(req.GetArguments(), "session_id")
+		nodeKey := strParam(req.GetArguments(), "node_key")
+		note := strParam(req.GetArguments(), "note")
+		highlight := strParam(req.GetArguments(), "highlight")
+		if sessionID == "" || nodeKey == "" {
+			return errorResult(fmt.Errorf("session_id and node_key are required")), nil
+		}
+		if note == "" && highlight == "" {
+			return errorResult(fmt.Errorf("at least one of note or highlight is required")), nil
+		}
+
+		port := adminPortValue
+		if port == 0 {
+			port = 4200
+		}
+
+		body, _ := json.Marshal(map[string]string{"node_key": nodeKey, "note": note, "highlight": highlight})
+		url := fmt.Sprintf("http://localhost:%d/api/diagram/%s/annotate", port, sessionID)
+		httpReq, _ := http.NewRequest("PUT", url, bytes.NewReader(body))
+		httpReq.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			return errorResult(fmt.Errorf("failed to annotate diagram: %w", err)), nil
+		}
+		defer resp.Body.Close()
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		return jsonResult(result), nil
 	}
 }

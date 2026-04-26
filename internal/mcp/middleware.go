@@ -298,6 +298,15 @@ func makeSummary(toolName, resultJSON string) string {
 			return fmt.Sprintf("%d issues", len(issues))
 		}
 		return "validated"
+	case "oracle_invalidate_changed":
+		stale, _ := data["stale_evidence"].(float64)
+		edges, _ := data["affected_edges"].(float64)
+		return fmt.Sprintf("%.0f stale, %.0f edges affected", stale, edges)
+	case "oracle_finalize_incremental_scan":
+		reval, _ := data["revalidated"].(float64)
+		still, _ := data["still_stale"].(float64)
+		contra, _ := data["contradicted"].(float64)
+		return fmt.Sprintf("%.0f revalidated, %.0f stale, %.0f contradicted", reval, still, contra)
 	default:
 		return ""
 	}
@@ -331,6 +340,8 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(queryStatsTool(), queryStatsHandler(g))
 	add(snapshotCreateTool(), snapshotCreateHandler(g))
 	add(staleMarkTool(), staleMarkHandler(g))
+	add(invalidateChangedTool(), invalidateChangedHandler(g))
+	add(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
 	add(queryPathTool(), queryPathHandler(g))
 	add(impactTool(), impactHandler(g))
 	add(extractionGuideTool(), extractionGuideHandler())
@@ -344,6 +355,9 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(getGlossaryTool(), getGlossaryHandler(g))
 	add(checkLanguageTool(), checkLanguageHandler(g))
 	add(commandTool(), commandHandler(g))
+	add(diagramCreateTool(), diagramCreateHandler())
+	add(diagramUpdateTool(), diagramUpdateHandler())
+	add(diagramAnnotateTool(), diagramAnnotateHandler())
 
 	return s
 }
