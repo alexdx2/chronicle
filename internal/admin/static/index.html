@@ -1548,20 +1548,21 @@ function dashboard() {
       return Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
     },
 
-    // Compute flow membership: node_id -> flow node name (via PART_OF_FLOW edges)
+    // Compute flow membership: node_id -> flow name
+    // Flows use CONTAINS edges (flow→step) and PART_OF_FLOW if present
     _getFlowMap() {
       const nodeById = {};
       (this.graphData.nodes || []).forEach(n => { nodeById[n.node_id] = n; });
       const flowMap = {}; // node_id -> flow_name
       (this.graphData.edges || []).forEach(e => {
-        if (e.edge_type === 'PART_OF_FLOW') {
-          // convention: from=step/node, to=flow  OR  from=flow, to=step — check which is the flow node
-          const toNode = nodeById[e.to_node_id];
+        if (e.edge_type === 'PART_OF_FLOW' || e.edge_type === 'CONTAINS') {
           const fromNode = nodeById[e.from_node_id];
-          if (toNode && toNode.layer === 'flow') {
-            flowMap[e.from_node_id] = toNode.name;
-          } else if (fromNode && fromNode.layer === 'flow') {
+          const toNode = nodeById[e.to_node_id];
+          // flow CONTAINS step/service  OR  step PART_OF_FLOW flow
+          if (fromNode && fromNode.layer === 'flow') {
             flowMap[e.to_node_id] = fromNode.name;
+          } else if (e.edge_type === 'PART_OF_FLOW' && toNode && toNode.layer === 'flow') {
+            flowMap[e.from_node_id] = toNode.name;
           }
         }
       });
