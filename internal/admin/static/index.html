@@ -937,6 +937,7 @@ a{color:var(--primary);text-decoration:none}
       </template>
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
         <span style="font-size:10px;color:var(--text-muted)" x-text="diagramData ? (diagramData.nodes?.length || 0) + ' nodes, ' + (diagramData.edges?.length || 0) + ' edges' : 'Waiting for data...'"></span>
+        <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
         <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderDiagram())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
       </div>
     </div>
@@ -949,6 +950,36 @@ a{color:var(--primary);text-decoration:none}
           </div>
         </template>
       </div>
+      <!-- Filter sidebar for diagram -->
+      <template x-if="filterSidebarOpen && tab==='diagram' && diagramData">
+        <div class="filter-sidebar">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <strong>Filters</strong>
+            <div style="display:flex;gap:4px;align-items:center">
+              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
+              <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+            </div>
+          </div>
+          <div class="group">
+            <h4>Node Types</h4>
+            <template x-for="nt in getDiagramNodeTypes()" :key="nt.type">
+              <label>
+                <input type="checkbox" :checked="!hiddenNodeTypes.includes(nt.type)" @change="toggleNodeType(nt.type);renderDiagram()">
+                <span :style="'color:'+layerColor(nt.layer)" x-text="nt.type + ' (' + nt.count + ')'"></span>
+              </label>
+            </template>
+          </div>
+          <div class="group">
+            <h4>Edge Types</h4>
+            <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
+              <label>
+                <input type="checkbox" :checked="!hiddenEdgeTypes.includes(et.type)" @change="toggleEdgeType(et.type);renderDiagram()">
+                <span x-text="et.type + ' (' + et.count + ')'"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+      </template>
     </div>
     <!-- Step description bar -->
     <template x-if="diagramData?.step_descriptions?.[diagramStep]">
@@ -2738,6 +2769,54 @@ function dashboard() {
       }
     },
 
+    getDiagramNodeTypes() {
+      if (!this.diagramData) return [];
+      const types = {};
+      (this.diagramData.nodes || []).forEach(n => {
+        const t = n.node_type || '?';
+        if (!types[t]) types[t] = { type: t, layer: n.layer, count: 0 };
+        types[t].count++;
+      });
+      return Object.values(types).sort((a, b) => a.type.localeCompare(b.type));
+    },
+
+    getDiagramEdgeTypes() {
+      if (!this.diagramData) return [];
+      const types = {};
+      (this.diagramData.edges || []).forEach(e => {
+        const t = e.edge_type || '?';
+        if (!types[t]) types[t] = { type: t, count: 0 };
+        types[t].count++;
+      });
+      return Object.values(types).sort((a, b) => a.type.localeCompare(b.type));
+    },
+
+    // Filter diagram nodes/edges with transitive collapsing (reuses existing engine)
+    _filterDiagramData() {
+      const nodes = this.diagramData.nodes || [];
+      const edges = this.diagramData.edges || [];
+      const hiddenTypes = new Set(this.hiddenNodeTypes);
+      const hiddenEdges = new Set(this.hiddenEdgeTypes);
+
+      if (hiddenTypes.size === 0 && hiddenEdges.size === 0) return { nodes, edges };
+
+      const visibleNodes = nodes.filter(n => !hiddenTypes.has(n.node_type));
+      let filteredEdges = edges;
+      if (hiddenEdges.size > 0) {
+        filteredEdges = filteredEdges.filter(e => !hiddenEdges.has(e.edge_type));
+      }
+
+      // Transitive collapsing for hidden collapsible types
+      const collapsibleSet = new Set(this.collapsibleTypes);
+      const hasCollapsible = this.hiddenNodeTypes.some(t => collapsibleSet.has(t));
+      if (hasCollapsible) {
+        return this.computeTransitiveEdges(visibleNodes, nodes, filteredEdges);
+      }
+
+      const visibleIds = new Set(visibleNodes.map(n => n.node_id));
+      return { nodes: visibleNodes, edges: filteredEdges.filter(e => visibleIds.has(e.from_node_id) && visibleIds.has(e.to_node_id)) };
+    },
+
     async fetchDiagram() {
       if (!this.diagramSessionId) return;
       try {
@@ -2811,8 +2890,9 @@ function dashboard() {
       if (!container || !this.diagramData) return;
       container.innerHTML = '';
 
-      const nodes = this.diagramData.nodes || [];
-      const edges = this.diagramData.edges || [];
+      const filtered = this._filterDiagramData();
+      const nodes = filtered.nodes;
+      const edges = filtered.edges;
       const annotations = this._getDiagramAnnotations();
       if (nodes.length === 0) return;
 
@@ -2897,6 +2977,10 @@ function dashboard() {
         .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
         .attr('orient', 'auto-start-reverse')
         .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
+      defs.append('marker').attr('id', 'dia-arrow-transitive').attr('viewBox', '0 0 10 10')
+        .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
+        .attr('orient', 'auto-start-reverse')
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#f59e0b');
 
       const gRoot = svg.append('g');
       svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
@@ -2909,12 +2993,21 @@ function dashboard() {
         .data(simEdges).join('line')
         .attr('class', d => {
           let cls = 'edge-line';
-          if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
+          if (d._transitive) cls += ' transitive';
+          else if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
           return cls;
         })
-        .attr('marker-end', 'url(#dia-arrow)')
+        .attr('marker-end', d => d._transitive ? 'url(#dia-arrow-transitive)' : 'url(#dia-arrow)')
         .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
         .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+
+      // Via labels for transitive edges
+      gRoot.selectAll('.via-label')
+        .data(simEdges.filter(e => e._transitive)).join('text')
+        .attr('class', 'via-label').attr('text-anchor', 'middle')
+        .attr('x', d => (d.source.x + d.target.x) / 2)
+        .attr('y', d => (d.source.y + d.target.y) / 2 - 6)
+        .text(d => d._viaLabel || '');
 
       // Boxes (on top of edges)
       groupKeys.forEach(gk => {
