@@ -506,6 +506,7 @@ a{color:var(--primary);text-decoration:none}
       <template x-if="graphMode==='workspace' && workspaceNodes.length === 0">
         <div class="mode-toggle">
           <button class="mode-btn" :class="{active:wsLayout==='grid'}" @click="wsLayout='grid';renderGraph()">Grid</button>
+          <button class="mode-btn" :class="{active:wsLayout==='dagre'}" @click="wsLayout='dagre';renderGraph()">Dagre</button>
           <button class="mode-btn" :class="{active:wsLayout==='force'}" @click="wsLayout='force';renderGraph()">Force</button>
         </div>
       </template>
@@ -936,6 +937,13 @@ a{color:var(--primary);text-decoration:none}
           <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
         </div>
       </template>
+      <!-- Diagram layout toggle -->
+      <template x-if="diagramData">
+        <div class="mode-toggle" style="margin-left:8px">
+          <button class="mode-btn" :class="{active:diagramLayout==='dagre'}" @click="diagramLayout='dagre';renderDiagram()">Dagre</button>
+          <button class="mode-btn" :class="{active:diagramLayout==='force'}" @click="diagramLayout='force';renderDiagram()">Force</button>
+        </div>
+      </template>
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
         <span style="font-size:10px;color:var(--text-muted)" x-text="diagramData ? (diagramData.nodes?.length || 0) + ' nodes, ' + (diagramData.edges?.length || 0) + ' edges' : 'Waiting for data...'"></span>
         <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
@@ -1066,6 +1074,7 @@ function dashboard() {
     diagramSessionId: null,
     diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
     diagramStep: -1,    // -1 = clean (no highlights), 0+ = step index
+    diagramLayout: 'dagre',  // 'dagre' or 'force'
     ws: null,
     loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
     loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
@@ -2581,6 +2590,7 @@ function dashboard() {
 
       // --- Layout: Grid (fixed boxes) or Force (floating) ---
       const useGrid = !isInvestigating && self.wsLayout === 'grid' && groupKeys.length > 0;
+      const useWsDagre = !isInvestigating && self.wsLayout === 'dagre' && typeof dagre !== 'undefined';
 
       if (useGrid) {
         // GRID LAYOUT: pre-compute fixed box rects, place nodes inside, constrained sim
@@ -2714,6 +2724,57 @@ function dashboard() {
         viaLabels
           .attr('x', d => (d.source.x + d.target.x) / 2)
           .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+
+      } else if (useWsDagre) {
+        // DAGRE LAYOUT for workspace overview
+        const gDag = new dagre.graphlib.Graph({ compound: true });
+        gDag.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 20, marginx: 30, marginy: 30 });
+        gDag.setDefaultEdgeLabel(() => ({}));
+        groupKeys.forEach(gk => {
+          gDag.setNode('group_' + gk, { label: gk, paddingTop: 30, paddingBottom: 15, paddingLeft: 15, paddingRight: 15 });
+        });
+        simNodes.forEach(n => {
+          gDag.setNode(String(n.id), { label: n.name || '', width: 110, height: 44 });
+          if (n._group && groupKeys.includes(n._group)) gDag.setParent(String(n.id), 'group_' + n._group);
+        });
+        simEdges.forEach(e => {
+          const from = String(typeof e.source === 'object' ? e.source.id : e.source);
+          const to = String(typeof e.target === 'object' ? e.target.id : e.target);
+          if (gDag.hasNode(from) && gDag.hasNode(to)) gDag.setEdge(from, to, { _edge: e });
+        });
+        dagre.layout(gDag);
+        // Apply dagre positions to existing simNodes
+        simNodes.forEach(n => {
+          const pos = gDag.node(String(n.id));
+          if (pos) { n.x = pos.x; n.y = pos.y; n.fx = pos.x; n.fy = pos.y; }
+        });
+        // Draw dagre boxes
+        groupKeys.forEach(gk => {
+          const gn = gDag.node('group_' + gk); if (!gn) return;
+          const bg = boxGroup.append('g').attr('class', 'domain-g');
+          bg.append('rect').attr('class', 'domain-box')
+            .attr('x', gn.x - gn.width / 2).attr('y', gn.y - gn.height / 2).attr('width', gn.width).attr('height', gn.height)
+            .attr('stroke', groupField === 'layer' ? self.layerColor(gk) : '#3b82f6');
+          bg.append('text').attr('class', 'domain-label')
+            .attr('x', gn.x - gn.width / 2 + 10).attr('y', gn.y - gn.height / 2 + 16)
+            .attr('fill', groupField === 'layer' ? self.layerColor(gk) : '#3b82f6')
+            .text(gk.toUpperCase());
+        });
+        // Resolve edge source/target objects and get dagre points
+        const dagreLineGen = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
+        gDag.edges().forEach(e => {
+          const ed = gDag.edge(e);
+          const origEdge = ed._edge;
+          if (origEdge) origEdge._points = ed.points || [];
+        });
+        // Position edges + nodes statically
+        simEdges.forEach(e => {
+          if (typeof e.source !== 'object') e.source = simNodeMap[e.source] || { x: 0, y: 0 };
+          if (typeof e.target !== 'object') e.target = simNodeMap[e.target] || { x: 0, y: 0 };
+        });
+        link.attr('d', d => d._points?.length > 1 ? dagreLineGen(d._points) : `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
+        viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
 
       } else {
         // FORCE LAYOUT: existing floating behavior
@@ -2908,73 +2969,61 @@ function dashboard() {
         if (gk) { if (!groupMap[gk]) groupMap[gk] = []; groupMap[gk].push(n); }
       });
       const groupKeys = Object.keys(groupMap).sort();
+      const useDagre = self.diagramLayout === 'dagre' && typeof dagre !== 'undefined';
 
-      // DAGRE LAYOUT — hierarchical positioning with compound nodes
-      const gDag = new dagre.graphlib.Graph({ compound: true });
-      gDag.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 20, marginx: 30, marginy: 30 });
-      gDag.setDefaultEdgeLabel(() => ({}));
+      let simNodes = [], simNodeMap = {}, simEdges = [], boxPositions = {};
 
-      // Add group parent nodes
-      groupKeys.forEach(gk => {
-        gDag.setNode('group_' + gk, { label: gk, clusterLabelPos: 'top', style: 'fill: none', paddingTop: 30, paddingBottom: 15, paddingLeft: 15, paddingRight: 15 });
-      });
-
-      // Add nodes (inside their groups)
-      nodes.forEach(n => {
-        const nid = String(n.node_id);
-        gDag.setNode(nid, { label: n.name, width: 110, height: 44 });
-        const gk = n.domain_key;
-        if (gk && groupKeys.includes(gk)) {
-          gDag.setParent(nid, 'group_' + gk);
-        }
-      });
-
-      // Add edges
-      edges.forEach(e => {
-        const from = String(e.from_node_id), to = String(e.to_node_id);
-        if (gDag.hasNode(from) && gDag.hasNode(to)) {
-          gDag.setEdge(from, to, { label: e.edge_type || '', _edge: e });
-        }
-      });
-
-      // Run dagre layout
-      dagre.layout(gDag);
-
-      // Extract positions
-      const simNodes = [];
-      const simNodeMap = {};
-      nodes.forEach(n => {
-        const nid = String(n.node_id);
-        const pos = gDag.node(nid);
-        if (!pos) return;
-        const sn = { ...n, id: n.node_id, _group: n.domain_key || null, x: pos.x, y: pos.y };
-        simNodes.push(sn);
-        simNodeMap[sn.id] = sn;
-      });
-
-      // Extract group box positions from dagre
-      const boxPositions = {};
-      groupKeys.forEach(gk => {
-        const gn = gDag.node('group_' + gk);
-        if (gn) {
-          boxPositions[gk] = { x: gn.x - gn.width / 2, y: gn.y - gn.height / 2, w: gn.width, h: gn.height };
-        }
-      });
-
-      // Build edges with dagre points
-      const simEdges = [];
-      gDag.edges().forEach(e => {
-        const edgeData = gDag.edge(e);
-        const fromNode = simNodeMap[Number(e.v)];
-        const toNode = simNodeMap[Number(e.w)];
-        if (!fromNode || !toNode) return;
-        const origEdge = edgeData._edge || {};
-        simEdges.push({
-          ...origEdge,
-          source: fromNode, target: toNode,
-          _points: edgeData.points || [] // dagre path points for curved edges
+      if (useDagre) {
+        // DAGRE LAYOUT
+        const gDag = new dagre.graphlib.Graph({ compound: true });
+        gDag.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 20, marginx: 30, marginy: 30 });
+        gDag.setDefaultEdgeLabel(() => ({}));
+        groupKeys.forEach(gk => {
+          gDag.setNode('group_' + gk, { label: gk, clusterLabelPos: 'top', paddingTop: 30, paddingBottom: 15, paddingLeft: 15, paddingRight: 15 });
         });
-      });
+        nodes.forEach(n => {
+          const nid = String(n.node_id);
+          gDag.setNode(nid, { label: n.name, width: 110, height: 44 });
+          if (n.domain_key && groupKeys.includes(n.domain_key)) gDag.setParent(nid, 'group_' + n.domain_key);
+        });
+        edges.forEach(e => {
+          const from = String(e.from_node_id), to = String(e.to_node_id);
+          if (gDag.hasNode(from) && gDag.hasNode(to)) gDag.setEdge(from, to, { _edge: e });
+        });
+        dagre.layout(gDag);
+        nodes.forEach(n => {
+          const pos = gDag.node(String(n.node_id));
+          if (!pos) return;
+          const sn = { ...n, id: n.node_id, _group: n.domain_key || null, x: pos.x, y: pos.y };
+          simNodes.push(sn); simNodeMap[sn.id] = sn;
+        });
+        groupKeys.forEach(gk => {
+          const gn = gDag.node('group_' + gk);
+          if (gn) boxPositions[gk] = { x: gn.x - gn.width / 2, y: gn.y - gn.height / 2, w: gn.width, h: gn.height };
+        });
+        gDag.edges().forEach(e => {
+          const ed = gDag.edge(e), fn = simNodeMap[Number(e.v)], tn = simNodeMap[Number(e.w)];
+          if (fn && tn) simEdges.push({ ...(ed._edge || {}), source: fn, target: tn, _points: ed.points || [] });
+        });
+      } else {
+        // FORCE LAYOUT — compute group centers, positions assigned by simulation
+        const groupCenters = {};
+        if (groupKeys.length > 0) {
+          const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
+          const cellW = Math.max(450, width / (cols + 0.5)), cellH = 400;
+          groupKeys.forEach((gk, i) => {
+            groupCenters[gk] = { x: cellW * ((i % cols) + 0.75), y: cellH * (Math.floor(i / cols) + 0.75) };
+          });
+        }
+        nodes.forEach(n => {
+          const gk = n.domain_key || null;
+          const c = gk && groupCenters[gk] ? groupCenters[gk] : { x: width / 2, y: height / 2 };
+          const sn = { ...n, id: n.node_id, _group: gk, x: c.x + (Math.random() - 0.5) * 100, y: c.y + (Math.random() - 0.5) * 100 };
+          simNodes.push(sn); simNodeMap[sn.id] = sn;
+        });
+        simEdges = edges.filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
+          .map(e => ({ ...e, source: simNodeMap[e.from_node_id], target: simNodeMap[e.to_node_id] }));
+      }
 
       // SVG setup
       const svg = d3.select(container).append('svg')
@@ -2995,19 +3044,21 @@ function dashboard() {
         gRoot.attr('transform', event.transform);
       }));
 
-      // Render order: boxes FIRST (background), then edges, then nodes on top
-      // Boxes (behind everything — light fill)
-      groupKeys.forEach(gk => {
-        const bp = boxPositions[gk];
-        const bg = gRoot.append('g').attr('class', 'domain-g');
-        bg.append('rect').attr('class', 'domain-box')
-          .attr('x', bp.x).attr('y', bp.y).attr('width', bp.w).attr('height', bp.h)
-          .style('fill', 'rgba(59,130,246,0.04)');
-        bg.append('text').attr('class', 'domain-label')
-          .attr('x', bp.x + 10).attr('y', bp.y + 16).text(gk.toUpperCase());
-      });
+      // Boxes (behind everything)
+      const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
+      if (useDagre) {
+        groupKeys.forEach(gk => {
+          const bp = boxPositions[gk]; if (!bp) return;
+          const bg = boxGroup.append('g').attr('class', 'domain-g');
+          bg.append('rect').attr('class', 'domain-box')
+            .attr('x', bp.x).attr('y', bp.y).attr('width', bp.w).attr('height', bp.h)
+            .style('fill', 'rgba(59,130,246,0.04)');
+          bg.append('text').attr('class', 'domain-label')
+            .attr('x', bp.x + 10).attr('y', bp.y + 16).text(gk.toUpperCase());
+        });
+      }
 
-      // Edges (on top of boxes) — use dagre path points for routed lines
+      // Edges
       const lineGen = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
       const link = gRoot.selectAll('.edge-path')
         .data(simEdges).join('path')
@@ -3018,36 +3069,37 @@ function dashboard() {
           return cls;
         })
         .attr('fill', 'none')
-        .attr('marker-end', d => d._transitive ? 'url(#dia-arrow-transitive)' : 'url(#dia-arrow)')
-        .attr('d', d => {
-          if (d._points && d._points.length > 1) return lineGen(d._points);
-          return `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`;
-        });
+        .attr('marker-end', d => d._transitive ? 'url(#dia-arrow-transitive)' : 'url(#dia-arrow)');
 
-      // Via labels for transitive edges
-      gRoot.selectAll('.via-label')
+      // Via labels
+      const viaLabels = gRoot.selectAll('.via-label')
         .data(simEdges.filter(e => e._transitive)).join('text')
         .attr('class', 'via-label').attr('text-anchor', 'middle')
-        .attr('x', d => (d.source.x + d.target.x) / 2)
-        .attr('y', d => (d.source.y + d.target.y) / 2 - 6)
         .text(d => d._viaLabel || '');
 
-      // Nodes (on top of boxes)
+      // Position edges (dagre: use points, force: will be set by tick)
+      if (useDagre) {
+        link.attr('d', d => d._points?.length > 1 ? lineGen(d._points) : `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
+        viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+      }
+
+      // Nodes (on top)
       const node = gRoot.selectAll('.node-g')
         .data(simNodes).join('g')
         .attr('class', 'node-g')
-        .attr('transform', d => `translate(${d.x},${d.y})`)
-        .call(d3.drag()
-          .on('drag', (event, d) => {
-            d.x = event.x; d.y = event.y;
-            d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
-            // Update edge paths on drag
-            link.filter(e => e.source.id === d.id || e.target.id === d.id)
-              .attr('d', e => `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`);
-          })
-        );
+        .attr('transform', d => `translate(${d.x},${d.y})`);
 
-      // White background rect (so node is opaque over edges)
+      // Drag — works for both layouts
+      node.call(d3.drag()
+        .on('drag', (event, d) => {
+          d.x = event.x; d.y = event.y;
+          d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
+          link.filter(e => e.source.id === d.id || e.target.id === d.id)
+            .attr('d', e => `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`);
+        })
+      );
+
+      // Node rendering
       node.append('rect')
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
         .attr('fill', '#fff').attr('rx', 6).attr('ry', 6);
@@ -3055,37 +3107,63 @@ function dashboard() {
         .attr('class', 'node-rect')
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
         .attr('fill', d => self.layerColor(d.layer) + '15')
-        .attr('stroke', d => {
-          const ann = annotations[d.node_key];
-          return ann?.highlight || self.layerColor(d.layer);
-        })
+        .attr('stroke', d => (annotations[d.node_key]?.highlight || self.layerColor(d.layer)))
         .attr('stroke-width', d => annotations[d.node_key]?.highlight ? 3 : 1.5)
-        .style('filter', d => {
-          const ann = annotations[d.node_key];
-          return ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none';
-        });
-
+        .style('filter', d => annotations[d.node_key]?.highlight ? 'drop-shadow(0 0 8px ' + annotations[d.node_key].highlight + ')' : 'none');
       node.append('text')
         .attr('text-anchor', 'middle').attr('dy', -2).attr('font-size', '10px')
         .text(d => d.name.length > 14 ? d.name.slice(0, 13) + '\u2026' : d.name);
       node.append('text')
         .attr('text-anchor', 'middle').attr('dy', 12).attr('font-size', '7px').attr('fill', 'var(--text-muted)')
         .text(d => d.node_type);
-
-      // Annotation notes
       node.filter(d => annotations[d.node_key]?.note).append('text')
         .attr('class', 'ann-note')
         .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
         .attr('fill', d => annotations[d.node_key]?.highlight || 'var(--primary)')
         .attr('font-style', 'italic')
-        .text(d => {
-          const n = annotations[d.node_key].note;
-          return n.length > 30 ? n.slice(0, 29) + '\u2026' : n;
-        });
+        .text(d => { const n = annotations[d.node_key].note; return n.length > 30 ? n.slice(0, 29) + '\u2026' : n; });
 
-      // Click handlers
       node.on('click', (event, d) => { event.stopPropagation(); self.selectedNode = d; });
       svg.on('click', () => { self.selectedNode = null; });
+
+      // Force simulation (only for force layout)
+      if (!useDagre) {
+        const sim = d3.forceSimulation(simNodes)
+          .force('link', d3.forceLink(simEdges).id(d => d.id).distance(140).strength(0.15))
+          .force('charge', d3.forceManyBody().strength(-300))
+          .force('collision', d3.forceCollide().radius(60));
+        if (groupKeys.length > 0) {
+          const groupCenters = {};
+          const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
+          const cellW = Math.max(450, width / (cols + 0.5)), cellH = 400;
+          groupKeys.forEach((gk, i) => { groupCenters[gk] = { x: cellW * ((i % cols) + 0.75), y: cellH * (Math.floor(i / cols) + 0.75) }; });
+          sim.force('x', d3.forceX(d => d._group && groupCenters[d._group] ? groupCenters[d._group].x : width / 2).strength(d => d._group ? 0.15 : 0.03));
+          sim.force('y', d3.forceY(d => d._group && groupCenters[d._group] ? groupCenters[d._group].y : height / 2).strength(d => d._group ? 0.15 : 0.03));
+        }
+        sim.on('tick', () => {
+          link.attr('d', d => `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
+          viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+          node.attr('transform', d => `translate(${d.x},${d.y})`);
+          // Floating boxes
+          if (groupKeys.length > 0) {
+            const pad = 25, lh = 16;
+            const boxData = groupKeys.map(gk => {
+              const m = (groupMap[gk] || []).map(n => simNodeMap[n.node_id]).filter(Boolean);
+              if (!m.length) return null;
+              return { gk, x: d3.min(m, d => d.x) - 50 - pad, y: d3.min(m, d => d.y) - 20 - pad - lh,
+                w: d3.max(m, d => d.x) - d3.min(m, d => d.x) + 100 + pad * 2, h: d3.max(m, d => d.y) - d3.min(m, d => d.y) + 40 + pad * 2 + lh };
+            }).filter(Boolean);
+            const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
+            const enter = boxes.enter().append('g').attr('class', 'domain-g');
+            enter.append('rect').attr('class', 'domain-box').style('fill', 'rgba(59,130,246,0.04)');
+            enter.append('text').attr('class', 'domain-label');
+            const merged = enter.merge(boxes);
+            merged.select('.domain-box').attr('x', d => d.x).attr('y', d => d.y).attr('width', d => d.w).attr('height', d => d.h);
+            merged.select('.domain-label').attr('x', d => d.x + 10).attr('y', d => d.y + 14).text(d => d.gk.toUpperCase());
+            boxes.exit().remove();
+          }
+        });
+      }
     },
   };
 }
