@@ -497,17 +497,19 @@ a{color:var(--primary);text-decoration:none}
         <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';workspaceNodes=[];workspacePaths=[];renderGraph()">Workspace</button>
       </div>
 
-      <!-- Filter -->
-      <div class="mode-toggle">
-        <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all')">All</button>
-        <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data')">Data Models</button>
-        <button class="mode-btn" :class="{active: graphPreset==='api'}" @click="setPreset('api')">API Surface</button>
-        <button class="mode-btn" :class="{active: graphPreset==='services'}" @click="setPreset('services')">Services</button>
-        <button class="mode-btn" :class="{active: graphPreset==='flows'}" @click="setPreset('flows')">Flows</button>
-      </div>
+      <!-- Filter presets (Tree + Explore only) -->
+      <template x-if="graphMode==='tree' || graphMode==='explore'">
+        <div class="mode-toggle">
+          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all')">All</button>
+          <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data')">Data Models</button>
+          <button class="mode-btn" :class="{active: graphPreset==='api'}" @click="setPreset('api')">API Surface</button>
+          <button class="mode-btn" :class="{active: graphPreset==='services'}" @click="setPreset('services')">Services</button>
+          <button class="mode-btn" :class="{active: graphPreset==='flows'}" @click="setPreset('flows')">Flows</button>
+        </div>
+      </template>
 
-      <!-- Repo filter -->
-      <template x-if="allRepos.length > 1">
+      <!-- Repo filter (Tree + Explore only) -->
+      <template x-if="(graphMode==='tree' || graphMode==='explore') && allRepos.length > 1">
         <div style="display:flex;gap:4px;align-items:center">
           <span style="font-size:10px;color:#999">Repo:</span>
           <select @change="graphRepoFilter=$event.target.value;renderGraph()" style="font-size:10px;padding:2px 6px;border:1px solid #ddd;border-radius:4px">
@@ -537,9 +539,11 @@ a{color:var(--primary);text-decoration:none}
         <template x-if="graphMode==='workspace'">
           <button class="mode-btn" @click="workspaceNodes=[];workspacePaths=[];renderGraph()" style="color:var(--warning);border-color:var(--warning)">Clear Canvas</button>
         </template>
-        <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
-          <input type="checkbox" x-model="hideStructural" @change="renderGraph()"> Hide structural
-        </label>
+        <template x-if="graphMode==='tree' || graphMode==='explore'">
+          <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" x-model="hideStructural" @change="renderGraph()"> Hide CONTAINS/OWNS
+          </label>
+        </template>
         <template x-if="graphMode==='architecture' || graphMode==='workspace'">
           <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
         </template>
@@ -1504,7 +1508,12 @@ function dashboard() {
 
     getWorkspacePaletteGroups() {
       const search = (this.workspaceSearch || '').toLowerCase();
+      // Respect current filters — only show nodes that would appear on canvas
       const nodes = (this.graphData.nodes || []).filter(n => {
+        if (!this.layerFilters.includes(n.layer)) return false;
+        if (this.hiddenNodeTypes.includes(n.node_type)) return false;
+        if (this.hiddenDomains.includes(n.domain_key || '_unassigned')) return false;
+        if (this.minConfidence > 0 && (n.confidence || 1) < this.minConfidence) return false;
         if (search && !n.name.toLowerCase().includes(search) && !(n.node_type || '').toLowerCase().includes(search)) return false;
         return true;
       });
@@ -2101,8 +2110,8 @@ function dashboard() {
 
     renderArchitectureGraph(container, nodes, edges) {
       const self = this;
-      const width = container.clientWidth || 900;
-      const height = Math.max(600, container.clientHeight || 600);
+      const width = Math.max(900, container.clientWidth || 900);
+      const height = Math.max(700, container.clientHeight || 700);
 
       const svg = d3.select(container).append('svg')
         .attr('class', 'graph-svg')
@@ -2128,20 +2137,22 @@ function dashboard() {
       });
       svg.call(zoom);
 
-      // Group nodes by domain
+      // Group nodes by domain (skip empty domain_key — those float freely)
       const domainGroups = {};
+      const freeNodes = [];
       nodes.forEach(n => {
-        const dk = n.domain_key || '_unassigned';
+        const dk = n.domain_key;
+        if (!dk) { freeNodes.push(n); return; }
         if (!domainGroups[dk]) domainGroups[dk] = [];
         domainGroups[dk].push(n);
       });
       const domainKeys = Object.keys(domainGroups).sort();
 
-      // Assign domain center positions (grid layout)
+      // Assign domain center positions (grid layout with generous spacing)
       const domainCenters = {};
-      const cols = Math.ceil(Math.sqrt(domainKeys.length));
-      const cellW = width / (cols + 0.5);
-      const cellH = 300;
+      const cols = Math.max(2, Math.ceil(Math.sqrt(domainKeys.length)));
+      const cellW = Math.max(350, width / (cols + 0.5));
+      const cellH = Math.max(350, 300);
       domainKeys.forEach((dk, i) => {
         const col = i % cols;
         const row = Math.floor(i / cols);
@@ -2151,9 +2162,9 @@ function dashboard() {
       // Create simulation nodes with domain grouping
       const nodeMap = {};
       const simNodes = nodes.map(n => {
-        const dk = n.domain_key || '_unassigned';
-        const center = domainCenters[dk];
-        const sn = { ...n, id: n.node_id, _domain: dk, x: center.x + (Math.random() - 0.5) * 80, y: center.y + (Math.random() - 0.5) * 80 };
+        const dk = n.domain_key || null;
+        const center = dk ? domainCenters[dk] : { x: width / 2, y: (domainKeys.length > 0 ? (Math.ceil(domainKeys.length / cols) + 0.5) * cellH : height / 2) };
+        const sn = { ...n, id: n.node_id, _domain: dk, x: center.x + (Math.random() - 0.5) * 100, y: center.y + (Math.random() - 0.5) * 100 };
         nodeMap[n.node_id] = sn;
         return sn;
       });
@@ -2165,9 +2176,9 @@ function dashboard() {
         .force('link', d3.forceLink(simEdges).id(d => d.id).distance(80).strength(0.3))
         .force('charge', d3.forceManyBody().strength(-150))
         .force('collision', d3.forceCollide().radius(25))
-        // Pull nodes toward their domain center
-        .force('x', d3.forceX(d => domainCenters[d._domain].x).strength(0.4))
-        .force('y', d3.forceY(d => domainCenters[d._domain].y).strength(0.4));
+        // Pull domain-assigned nodes toward their domain center; free nodes drift
+        .force('x', d3.forceX(d => d._domain ? domainCenters[d._domain].x : width / 2).strength(d => d._domain ? 0.4 : 0.05))
+        .force('y', d3.forceY(d => d._domain ? domainCenters[d._domain].y : height / 2).strength(d => d._domain ? 0.4 : 0.05));
 
       // Domain bounding box group (rendered behind everything)
       const domainBoxGroup = g.append('g').attr('class', 'domain-boxes');
@@ -2258,7 +2269,7 @@ function dashboard() {
         // Compute and render domain bounding boxes
         const padding = 30;
         const labelHeight = 20;
-        const boxData = domainKeys.map(dk => {
+        const boxData = domainKeys.filter(dk => dk).map(dk => {
           const members = simNodes.filter(n => n._domain === dk);
           if (members.length === 0) return null;
           const minX = d3.min(members, d => d.x) - 45 - padding;
@@ -2278,7 +2289,7 @@ function dashboard() {
           .attr('width', d => d.w).attr('height', d => d.h);
         merged.select('.domain-label')
           .attr('x', d => d.x + 12).attr('y', d => d.y + 16)
-          .text(d => d.dk === '_unassigned' ? 'UNASSIGNED' : d.dk.toUpperCase());
+          .text(d => d.dk.toUpperCase());
         boxes.exit().remove();
       });
 
@@ -2326,8 +2337,12 @@ function dashboard() {
 
     handleWorkspaceDrop(event) {
       if (this.graphMode !== 'workspace') return;
-      const nodeId = event.dataTransfer.getData('text/plain');
-      if (!nodeId) return;
+      const rawId = event.dataTransfer.getData('text/plain');
+      if (!rawId) return;
+      // node_id is int64 from API but drag converts to string — match against actual data
+      const matchNode = (this.graphData.nodes || []).find(n => String(n.node_id) === rawId);
+      if (!matchNode) return;
+      const nodeId = matchNode.node_id;
       if (this.workspaceNodes.some(w => w.node_id === nodeId)) return;
 
       const canvas = document.getElementById('graph-canvas');
