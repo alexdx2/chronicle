@@ -84,7 +84,50 @@ type Server struct {
 // NewServer creates a new admin Server.
 func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool) *Server {
 	cwd, _ := os.Getwd()
-	return &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd, originalPath: cwd, diagrams: make(map[string]*DiagramSession)}
+	srv := &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd, originalPath: cwd, diagrams: make(map[string]*DiagramSession)}
+	srv.loadDiagramSessions()
+	return srv
+}
+
+// loadDiagramSessions restores diagram sessions from SQLite on startup.
+func (s *Server) loadDiagramSessions() {
+	sessions, err := s.getStore().ListDiagramSessions()
+	if err != nil {
+		return
+	}
+	for _, row := range sessions {
+		_, dataJSON, err := s.getStore().GetDiagramSession(row["session_id"])
+		if err != nil {
+			continue
+		}
+		var session DiagramSession
+		if err := json.Unmarshal([]byte(dataJSON), &session); err != nil {
+			continue
+		}
+		session.ID = row["session_id"]
+		if session.Annotations == nil {
+			session.Annotations = make(map[string]DiagramNote)
+		}
+		if session.Steps == nil {
+			session.Steps = make(map[int]map[string]DiagramNote)
+		}
+		if session.StepTitles == nil {
+			session.StepTitles = make(map[int]string)
+		}
+		if session.StepDescriptions == nil {
+			session.StepDescriptions = make(map[int]string)
+		}
+		s.diagrams[session.ID] = &session
+	}
+}
+
+// persistDiagramSession saves a diagram session to SQLite.
+func (s *Server) persistDiagramSession(session *DiagramSession) {
+	data, err := json.Marshal(session)
+	if err != nil {
+		return
+	}
+	s.getStore().SaveDiagramSession(session.ID, session.Title, string(data))
 }
 
 // switchTo swaps the server's backing store/graph to a different project.
@@ -696,6 +739,7 @@ func (s *Server) handleDiagramCreate(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.diagrams[body.SessionID] = session
 	s.mu.Unlock()
+	s.persistDiagramSession(session)
 	url := fmt.Sprintf("http://localhost:%d/diagram/%s", s.port, body.SessionID)
 	httpJSON(w, map[string]any{"session_id": body.SessionID, "url": url})
 }
@@ -732,6 +776,7 @@ func (s *Server) handleDiagramUpdate(w http.ResponseWriter, r *http.Request, id 
 	session.Edges = body.Edges
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.mu.Unlock()
+	s.persistDiagramSession(session)
 	s.hub.Send("diagram_update", map[string]any{
 		"session_id": id, "nodes": session.Nodes, "edges": session.Edges, "annotations": session.Annotations,
 	})
@@ -779,6 +824,7 @@ func (s *Server) handleDiagramAnnotate(w http.ResponseWriter, r *http.Request, i
 	}
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.mu.Unlock()
+	s.persistDiagramSession(session)
 	s.hub.Send("diagram_update", map[string]any{
 		"session_id": id, "nodes": session.Nodes, "edges": session.Edges,
 		"annotations": session.Annotations, "steps": session.Steps,

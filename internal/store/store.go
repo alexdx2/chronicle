@@ -74,12 +74,37 @@ func (s *Store) WithTx(fn func(tx *Store) error) error {
 
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+	// Best-effort column additions for existing databases.
+	// SQLite doesn't support IF NOT EXISTS for ALTER TABLE,
+	// so we attempt each and ignore "duplicate column" errors.
+	alters := []string{
+		`ALTER TABLE graph_evidence ADD COLUMN evidence_status TEXT NOT NULL DEFAULT 'valid'`,
+		`ALTER TABLE graph_evidence ADD COLUMN evidence_polarity TEXT NOT NULL DEFAULT 'positive'`,
+		`ALTER TABLE graph_evidence ADD COLUMN valid_from_revision_id INTEGER`,
+		`ALTER TABLE graph_evidence ADD COLUMN valid_to_revision_id INTEGER`,
+		`ALTER TABLE graph_evidence ADD COLUMN last_verified_revision_id INTEGER`,
+		`ALTER TABLE graph_evidence ADD COLUMN invalidated_by_revision_id INTEGER`,
+		`ALTER TABLE graph_evidence ADD COLUMN invalidated_reason TEXT`,
+		`ALTER TABLE graph_edges ADD COLUMN freshness REAL NOT NULL DEFAULT 1.0`,
+		`ALTER TABLE graph_edges ADD COLUMN trust_score REAL NOT NULL DEFAULT 1.0`,
+		`ALTER TABLE graph_nodes ADD COLUMN freshness REAL NOT NULL DEFAULT 1.0`,
+		`ALTER TABLE graph_nodes ADD COLUMN trust_score REAL NOT NULL DEFAULT 1.0`,
+	}
+	for _, q := range alters {
+		s.db.Exec(q) // ignore errors (column already exists)
+	}
+	// Ensure indexes exist (idempotent).
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_status ON graph_evidence(evidence_status)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_file_status ON graph_evidence(file_path, evidence_status)`)
+	return nil
 }
 
 // ResetDB drops all data and recreates the schema. Use when schema changes.
 func (s *Store) ResetDB() error {
-	tables := []string{"mcp_request_log", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions"}
+	tables := []string{"mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions"}
 	for _, t := range tables {
 		s.db.Exec("DROP TABLE IF EXISTS " + t)
 	}
@@ -121,11 +146,15 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
   environment            TEXT,
   visibility             TEXT,
   status                 TEXT NOT NULL DEFAULT 'active'
-                           CHECK (status IN ('active','stale','deleted','unknown')),
+                           CHECK (status IN ('active','stale','deleted','unknown','contradicted')),
   first_seen_revision_id INTEGER REFERENCES graph_revisions(revision_id),
   last_seen_revision_id  INTEGER REFERENCES graph_revisions(revision_id),
   confidence             REAL NOT NULL DEFAULT 1.0
                            CHECK (confidence >= 0 AND confidence <= 1),
+  freshness              REAL NOT NULL DEFAULT 1.0
+                           CHECK (freshness >= 0 AND freshness <= 1),
+  trust_score            REAL NOT NULL DEFAULT 1.0
+                           CHECK (trust_score >= 0 AND trust_score <= 1),
   metadata               TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -147,6 +176,10 @@ CREATE TABLE IF NOT EXISTS graph_edges (
   last_seen_revision_id  INTEGER REFERENCES graph_revisions(revision_id),
   confidence             REAL NOT NULL DEFAULT 1.0
                            CHECK (confidence >= 0 AND confidence <= 1),
+  freshness              REAL NOT NULL DEFAULT 1.0
+                           CHECK (freshness >= 0 AND freshness <= 1),
+  trust_score            REAL NOT NULL DEFAULT 1.0
+                           CHECK (trust_score >= 0 AND trust_score <= 1),
   metadata               TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -177,6 +210,15 @@ CREATE TABLE IF NOT EXISTS graph_evidence (
   verified_at      TEXT,
   confidence       REAL NOT NULL DEFAULT 1.0
                      CHECK (confidence >= 0 AND confidence <= 1),
+  evidence_status  TEXT NOT NULL DEFAULT 'valid'
+                     CHECK (evidence_status IN ('valid','stale','revalidated','invalidated','superseded')),
+  evidence_polarity TEXT NOT NULL DEFAULT 'positive'
+                     CHECK (evidence_polarity IN ('positive','negative')),
+  valid_from_revision_id  INTEGER REFERENCES graph_revisions(revision_id),
+  valid_to_revision_id    INTEGER REFERENCES graph_revisions(revision_id),
+  last_verified_revision_id INTEGER REFERENCES graph_revisions(revision_id),
+  invalidated_by_revision_id INTEGER REFERENCES graph_revisions(revision_id),
+  invalidated_reason TEXT,
   metadata         TEXT NOT NULL DEFAULT '{}',
   CHECK (
     (target_kind = 'node' AND node_id IS NOT NULL AND edge_id IS NULL) OR
@@ -256,4 +298,47 @@ CREATE TABLE IF NOT EXISTS domain_language (
   updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   UNIQUE(domain_key, term)
 );
+
+CREATE TABLE IF NOT EXISTS diagram_sessions (
+  session_id   TEXT PRIMARY KEY,
+  title        TEXT NOT NULL DEFAULT '',
+  data         TEXT NOT NULL DEFAULT '{}',
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 `
+
+// SaveDiagramSession upserts a diagram session as a JSON blob.
+func (s *Store) SaveDiagramSession(sessionID, title, dataJSON string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO diagram_sessions (session_id, title, data, updated_at)
+		VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		ON CONFLICT(session_id) DO UPDATE SET
+			title = excluded.title,
+			data = excluded.data,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+	`, sessionID, title, dataJSON)
+	return err
+}
+
+// GetDiagramSession returns the JSON blob for a diagram session.
+func (s *Store) GetDiagramSession(sessionID string) (title, dataJSON string, err error) {
+	err = s.db.QueryRow(`SELECT title, data FROM diagram_sessions WHERE session_id = ?`, sessionID).Scan(&title, &dataJSON)
+	return
+}
+
+// ListDiagramSessions returns all session IDs and titles.
+func (s *Store) ListDiagramSessions() ([]map[string]string, error) {
+	rows, err := s.db.Query(`SELECT session_id, title, created_at, updated_at FROM diagram_sessions ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]string
+	for rows.Next() {
+		var id, title, created, updated string
+		rows.Scan(&id, &title, &created, &updated)
+		result = append(result, map[string]string{"session_id": id, "title": title, "created_at": created, "updated_at": updated})
+	}
+	return result, nil
+}
