@@ -242,7 +242,7 @@ a{color:var(--primary);text-decoration:none}
     <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button>
     <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button>
     <template x-if="diagramSessionId">
-      <button class="tab-btn" :class="{active: tab==='workspace' && wsDataSource==='diagram'}" @click="tab='workspace';wsDataSource='diagram';history.pushState(null,'','/diagram/'+diagramSessionId);renderGraph()">
+      <button class="tab-btn" :class="{active: tab==='graph' && graphMode==='workspace' && wsDataSource==='diagram'}" @click="tab='graph';graphMode='workspace';wsDataSource='diagram';history.pushState(null,'','/diagram/'+diagramSessionId);if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">
         Diagram<template x-if="diagramData?.title"><span x-text="': '+diagramData.title"></span></template>
       </button>
     </template>
@@ -1035,10 +1035,12 @@ function dashboard() {
       if (diagramMatch) {
         this.diagramSessionId = diagramMatch[1];
         this.wsDataSource = 'diagram';
-        this.tab = 'workspace';
+        this.tab = 'graph';
+        this.graphMode = 'workspace';
         this.filterSidebarOpen = true;
       } else if (path === '/workspace') {
-        this.tab = 'workspace';
+        this.tab = 'graph';
+        this.graphMode = 'workspace';
       } else if (path === '/graph') {
         this.tab = 'graph';
       } else if (path === '/language') {
@@ -1048,6 +1050,9 @@ function dashboard() {
       }
 
       if (this.wsDataSource === 'diagram') {
+        // For diagram mode, mark graph as loaded (we don't need graph API data)
+        this.loading.graph = false;
+        this.loaded.graph = true;
         this.fetchDiagram();
       }
 
@@ -1346,7 +1351,7 @@ function dashboard() {
               step_descriptions: msg.data.step_descriptions || {},
               total_steps: msg.data.total_steps || 0
             };
-            if (this.tab === 'workspace' && this.wsDataSource === 'diagram') {
+            if (this.graphMode === 'workspace' && this.wsDataSource === 'diagram') {
               this.$nextTick(() => this.renderDiagram());
             }
           }
