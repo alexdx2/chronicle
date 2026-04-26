@@ -2987,8 +2987,19 @@ function dashboard() {
         gRoot.attr('transform', event.transform);
       }));
 
-      // Render order: edges FIRST, then boxes ON TOP, then nodes ON TOP of boxes
-      // Edges (behind everything)
+      // Render order: boxes FIRST (background), then edges, then nodes on top
+      // Boxes (behind everything — light fill)
+      groupKeys.forEach(gk => {
+        const bp = boxPositions[gk];
+        const bg = gRoot.append('g').attr('class', 'domain-g');
+        bg.append('rect').attr('class', 'domain-box')
+          .attr('x', bp.x).attr('y', bp.y).attr('width', bp.w).attr('height', bp.h)
+          .style('fill', 'rgba(59,130,246,0.04)');
+        bg.append('text').attr('class', 'domain-label')
+          .attr('x', bp.x + 10).attr('y', bp.y + 16).text(gk.toUpperCase());
+      });
+
+      // Edges (on top of boxes)
       const link = gRoot.selectAll('.edge-line')
         .data(simEdges).join('line')
         .attr('class', d => {
@@ -3009,16 +3020,6 @@ function dashboard() {
         .attr('y', d => (d.source.y + d.target.y) / 2 - 6)
         .text(d => d._viaLabel || '');
 
-      // Boxes (on top of edges)
-      groupKeys.forEach(gk => {
-        const bp = boxPositions[gk];
-        const bg = gRoot.append('g').attr('class', 'domain-g');
-        bg.append('rect').attr('class', 'domain-box')
-          .attr('x', bp.x).attr('y', bp.y).attr('width', bp.w).attr('height', bp.h);
-        bg.append('text').attr('class', 'domain-label')
-          .attr('x', bp.x + 10).attr('y', bp.y + 16).text(gk.toUpperCase());
-      });
-
       // Nodes (on top of boxes)
       const node = gRoot.selectAll('.node-g')
         .data(simNodes).join('g')
@@ -3033,10 +3034,14 @@ function dashboard() {
           })
         );
 
+      // White background rect (so node is opaque over edges)
+      node.append('rect')
+        .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
+        .attr('fill', '#fff').attr('rx', 6).attr('ry', 6);
       node.append('rect')
         .attr('class', 'node-rect')
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
-        .attr('fill', d => self.layerColor(d.layer) + '20')
+        .attr('fill', d => self.layerColor(d.layer) + '15')
         .attr('stroke', d => {
           const ann = annotations[d.node_key];
           return ann?.highlight || self.layerColor(d.layer);
@@ -3044,7 +3049,7 @@ function dashboard() {
         .attr('stroke-width', d => annotations[d.node_key]?.highlight ? 3 : 1.5)
         .style('filter', d => {
           const ann = annotations[d.node_key];
-          return ann?.highlight ? 'drop-shadow(0 0 6px ' + ann.highlight + ')' : 'none';
+          return ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none';
         });
 
       node.append('text')
