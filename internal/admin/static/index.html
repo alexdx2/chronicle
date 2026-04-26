@@ -236,10 +236,15 @@ a{color:var(--primary);text-decoration:none}
     </span>
   </div>
   <div class="tab-bar">
-    <button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview'">Overview</button>
-    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph'; if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button>
-    <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language'; fetchGlossary(); fetchLanguageCheck()">Language</button>
-    <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings'; fetchManifest(); fetchPrompt()">Settings</button>
+    <button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button>
+    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph'); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button>
+    <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button>
+    <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button>
+    <template x-if="diagramSessionId">
+      <button class="tab-btn" :class="{active: tab==='diagram'}" @click="tab='diagram';history.pushState(null,'','/diagram/'+diagramSessionId)">
+        Diagram<template x-if="diagramData?.title"><span x-text="': '+diagramData.title"></span></template>
+      </button>
+    </template>
   </div>
 </header>
 
@@ -904,6 +909,29 @@ a{color:var(--primary);text-decoration:none}
   </div>
 </div>
 
+<!-- Diagram tab (live from Claude) -->
+<div class="container" x-show="tab==='diagram'" x-cloak :style="graphFullscreen ? 'height:calc(100vh - 100px)' : ''">
+  <div class="graph-container" style="min-height:500px">
+    <div class="graph-toolbar">
+      <span style="font-weight:600;font-size:13px" x-text="diagramData?.title || 'Diagram'"></span>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <span style="font-size:10px;color:var(--text-muted)" x-text="diagramData ? (diagramData.nodes?.length || 0) + ' nodes, ' + (diagramData.edges?.length || 0) + ' edges' : 'Waiting for data...'"></span>
+        <button class="mode-btn" @click="graphFullscreen=!graphFullscreen" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
+      </div>
+    </div>
+    <div style="display:flex;flex:1;overflow:hidden">
+      <div id="diagram-canvas" style="flex:1;overflow:auto">
+        <template x-if="!diagramData">
+          <div style="padding:80px;text-align:center;color:var(--text-muted)">
+            <div style="font-size:18px;margin-bottom:8px">Waiting for Claude...</div>
+            <div style="font-size:12px">Claude will push a diagram here via MCP tools.</div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 function dashboard() {
   return {
@@ -975,11 +1003,34 @@ function dashboard() {
     workspaceNodes: [],       // [{node_id, x, y, manual: bool}]
     workspacePaths: [],       // [{from, to, path: [node_ids]}]
     workspaceSearch: '',
+    // Diagram (live from Claude)
+    diagramSessionId: null,
+    diagramData: null,  // {id, title, nodes, edges, annotations}
     ws: null,
     loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
     loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
 
     async init() {
+      // Path-based routing
+      const path = window.location.pathname;
+      const diagramMatch = path.match(/^\/diagram\/([a-zA-Z0-9]+)$/);
+      if (diagramMatch) {
+        this.diagramSessionId = diagramMatch[1];
+        this.tab = 'diagram';
+      } else if (path === '/workspace') {
+        this.tab = 'workspace';
+      } else if (path === '/graph') {
+        this.tab = 'graph';
+      } else if (path === '/language') {
+        this.tab = 'language';
+      } else if (path === '/settings') {
+        this.tab = 'settings';
+      }
+
+      if (this.tab === 'diagram') {
+        this.fetchDiagram();
+      }
+
       // Get the original project path (where the server was started)
       try {
         const p = await fetch('/api/projects');
@@ -1262,6 +1313,16 @@ function dashboard() {
               this.fetchStats();
               this.fetchDiscoveries();
             }, 2000);
+          }
+          if (msg.type === 'diagram_update' && msg.data?.session_id === this.diagramSessionId) {
+            this.diagramData = {
+              id: msg.data.session_id,
+              title: this.diagramData?.title || '',
+              nodes: msg.data.nodes || [],
+              edges: msg.data.edges || [],
+              annotations: msg.data.annotations || {}
+            };
+            this.$nextTick(() => this.renderDiagram());
           }
         } catch(e) {}
       };
@@ -2643,6 +2704,184 @@ function dashboard() {
           }
         });
       }
+    },
+
+    async fetchDiagram() {
+      if (!this.diagramSessionId) return;
+      try {
+        const r = await fetch('/api/diagram/' + this.diagramSessionId);
+        if (!r.ok) return;
+        this.diagramData = await r.json();
+        this.$nextTick(() => this.renderDiagram());
+      } catch(e) { console.error('diagram fetch:', e); }
+    },
+
+    renderDiagram() {
+      const container = document.getElementById('diagram-canvas');
+      if (!container || !this.diagramData) return;
+      container.innerHTML = '';
+
+      const nodes = this.diagramData.nodes || [];
+      const edges = this.diagramData.edges || [];
+      const annotations = this.diagramData.annotations || {};
+      if (nodes.length === 0) return;
+
+      const self = this;
+      const width = container.clientWidth || 900;
+      const height = Math.max(500, container.clientHeight || 500);
+
+      // Group by domain
+      const groupMap = {};
+      nodes.forEach(n => {
+        const gk = n.domain_key || null;
+        if (gk) { if (!groupMap[gk]) groupMap[gk] = []; groupMap[gk].push(n); }
+      });
+      const groupKeys = Object.keys(groupMap).sort();
+      const groupCenters = {};
+      if (groupKeys.length > 0) {
+        const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
+        const cellW = Math.max(450, width / (cols + 0.5));
+        const cellH = 400;
+        groupKeys.forEach((gk, i) => {
+          groupCenters[gk] = { x: cellW * ((i % cols) + 0.75), y: cellH * (Math.floor(i / cols) + 0.75) };
+        });
+      }
+
+      // Build sim nodes
+      const simNodes = nodes.map(n => {
+        const gk = n.domain_key || null;
+        const center = gk && groupCenters[gk] ? groupCenters[gk] : { x: width / 2, y: height / 2 };
+        return {
+          ...n, id: n.node_id, _group: gk,
+          x: center.x + (Math.random() - 0.5) * 100,
+          y: center.y + (Math.random() - 0.5) * 100
+        };
+      });
+      const simNodeMap = {};
+      simNodes.forEach(n => { simNodeMap[n.id] = n; });
+
+      const simEdges = edges.filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
+        .map(e => ({ source: e.from_node_id, target: e.to_node_id, ...e }));
+
+      // SVG setup
+      const svg = d3.select(container).append('svg')
+        .attr('class', 'graph-svg').attr('width', width).attr('height', height);
+      const defs = svg.append('defs');
+      defs.append('marker').attr('id', 'dia-arrow').attr('viewBox', '0 0 10 10')
+        .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
+        .attr('orient', 'auto-start-reverse')
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
+
+      const gRoot = svg.append('g');
+      svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
+        gRoot.attr('transform', event.transform);
+      }));
+
+      const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
+
+      // Edges
+      const link = gRoot.selectAll('.edge-line')
+        .data(simEdges).join('line')
+        .attr('class', d => {
+          let cls = 'edge-line';
+          if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
+          return cls;
+        })
+        .attr('marker-end', 'url(#dia-arrow)');
+
+      // Nodes
+      const node = gRoot.selectAll('.node-g')
+        .data(simNodes).join('g')
+        .attr('class', 'node-g')
+        .call(d3.drag()
+          .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+          .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+        );
+
+      // Node rects with annotation highlighting
+      node.append('rect')
+        .attr('class', 'node-rect')
+        .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
+        .attr('fill', d => self.layerColor(d.layer) + '20')
+        .attr('stroke', d => {
+          const ann = annotations[d.node_key];
+          return ann?.highlight || self.layerColor(d.layer);
+        })
+        .attr('stroke-width', d => annotations[d.node_key]?.highlight ? 3 : 1.5)
+        .style('filter', d => {
+          const ann = annotations[d.node_key];
+          return ann?.highlight ? 'drop-shadow(0 0 6px ' + ann.highlight + ')' : 'none';
+        });
+
+      node.append('text')
+        .attr('text-anchor', 'middle').attr('dy', -2).attr('font-size', '10px')
+        .text(d => d.name.length > 14 ? d.name.slice(0, 13) + '\u2026' : d.name);
+      node.append('text')
+        .attr('text-anchor', 'middle').attr('dy', 12).attr('font-size', '7px').attr('fill', 'var(--text-muted)')
+        .text(d => d.node_type);
+
+      // Annotation notes (below node)
+      node.filter(d => annotations[d.node_key]?.note).append('text')
+        .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
+        .attr('fill', d => annotations[d.node_key]?.highlight || 'var(--primary)')
+        .attr('font-style', 'italic')
+        .text(d => {
+          const n = annotations[d.node_key].note;
+          return n.length > 30 ? n.slice(0, 29) + '\u2026' : n;
+        });
+
+      // Click handlers
+      node.on('click', (event, d) => { event.stopPropagation(); self.selectedNode = d; });
+      node.on('mouseenter', (event, d) => {
+        self.highlightNode(d.node_id, simEdges.map(e => ({
+          from_node_id: e.source.id || e.source,
+          to_node_id: e.target.id || e.target,
+          edge_type: e.edge_type
+        })));
+      }).on('mouseleave', () => { if (!self.selectedNode) self.highlightNode(null); });
+      svg.on('click', () => { self.selectedNode = null; self.highlightNode(null); });
+
+      // Force simulation
+      const sim = d3.forceSimulation(simNodes)
+        .force('link', d3.forceLink(simEdges).id(d => d.id).distance(140).strength(0.15))
+        .force('charge', d3.forceManyBody().strength(-300))
+        .force('collision', d3.forceCollide().radius(60));
+
+      if (groupKeys.length > 0) {
+        sim.force('x', d3.forceX(d => d._group && groupCenters[d._group] ? groupCenters[d._group].x : width / 2).strength(d => d._group ? 0.15 : 0.03));
+        sim.force('y', d3.forceY(d => d._group && groupCenters[d._group] ? groupCenters[d._group].y : height / 2).strength(d => d._group ? 0.15 : 0.03));
+      }
+
+      sim.on('tick', () => {
+        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+
+        // Group bounding boxes
+        if (groupKeys.length > 0) {
+          const padding = 25, labelH = 16;
+          const boxData = groupKeys.map(gk => {
+            const members = (groupMap[gk] || []).map(m => simNodeMap[m.node_id]).filter(Boolean);
+            if (members.length === 0) return null;
+            return {
+              gk,
+              x: d3.min(members, d => d.x) - 50 - padding,
+              y: d3.min(members, d => d.y) - 20 - padding - labelH,
+              w: d3.max(members, d => d.x) - d3.min(members, d => d.x) + 100 + padding * 2,
+              h: d3.max(members, d => d.y) - d3.min(members, d => d.y) + 40 + padding * 2 + labelH
+            };
+          }).filter(Boolean);
+          const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
+          const enter = boxes.enter().append('g').attr('class', 'domain-g');
+          enter.append('rect').attr('class', 'domain-box');
+          enter.append('text').attr('class', 'domain-label');
+          const merged = enter.merge(boxes);
+          merged.select('.domain-box').attr('x', d => d.x).attr('y', d => d.y).attr('width', d => d.w).attr('height', d => d.h);
+          merged.select('.domain-label').attr('x', d => d.x + 10).attr('y', d => d.y + 14).text(d => d.gk.toUpperCase());
+          boxes.exit().remove();
+        }
+      });
     },
   };
 }
