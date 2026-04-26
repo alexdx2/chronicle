@@ -6,6 +6,7 @@
 <title>Oracle Admin Dashboard</title>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 .loader{display:flex;align-items:center;justify-content:center;padding:24px;color:var(--text-muted);font-size:12px;gap:8px}
@@ -2908,78 +2909,84 @@ function dashboard() {
       });
       const groupKeys = Object.keys(groupMap).sort();
 
-      // FIXED GRID LAYOUT — compute box sizes from member counts
-      const boxPadding = 30, labelH = 22, nodeW = 120, nodeH = 55, boxGap = 25;
-      const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length || 1)));
-      const boxRects = {};
+      // DAGRE LAYOUT — hierarchical positioning with compound nodes
+      const gDag = new dagre.graphlib.Graph({ compound: true });
+      gDag.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 20, marginx: 30, marginy: 30 });
+      gDag.setDefaultEdgeLabel(() => ({}));
+
+      // Add group parent nodes
       groupKeys.forEach(gk => {
-        const count = (groupMap[gk] || []).length;
-        const innerCols = Math.max(1, Math.ceil(Math.sqrt(count)));
-        const innerRows = Math.ceil(count / innerCols);
-        boxRects[gk] = { w: innerCols * nodeW + boxPadding * 2, h: innerRows * nodeH + boxPadding * 2 + labelH, innerCols };
-      });
-      const colWidths = new Array(cols).fill(0);
-      const rowArr = Math.ceil(groupKeys.length / cols);
-      const rowHeights = new Array(rowArr).fill(0);
-      groupKeys.forEach((gk, i) => {
-        const c = i % cols, r = Math.floor(i / cols);
-        colWidths[c] = Math.max(colWidths[c], boxRects[gk].w);
-        rowHeights[r] = Math.max(rowHeights[r], boxRects[gk].h);
-      });
-      const boxPositions = {};
-      groupKeys.forEach((gk, i) => {
-        const c = i % cols, r = Math.floor(i / cols);
-        let xOff = boxGap;
-        for (let cc = 0; cc < c; cc++) xOff += colWidths[cc] + boxGap;
-        let yOff = boxGap;
-        for (let rr = 0; rr < r; rr++) yOff += rowHeights[rr] + boxGap;
-        boxPositions[gk] = { x: xOff, y: yOff, w: colWidths[c], h: rowHeights[r] };
+        gDag.setNode('group_' + gk, { label: gk, clusterLabelPos: 'top', style: 'fill: none', paddingTop: 30, paddingBottom: 15, paddingLeft: 15, paddingRight: 15 });
       });
 
-      // Place nodes inside their boxes in a grid
+      // Add nodes (inside their groups)
+      nodes.forEach(n => {
+        const nid = String(n.node_id);
+        gDag.setNode(nid, { label: n.name, width: 110, height: 44 });
+        const gk = n.domain_key;
+        if (gk && groupKeys.includes(gk)) {
+          gDag.setParent(nid, 'group_' + gk);
+        }
+      });
+
+      // Add edges
+      edges.forEach(e => {
+        const from = String(e.from_node_id), to = String(e.to_node_id);
+        if (gDag.hasNode(from) && gDag.hasNode(to)) {
+          gDag.setEdge(from, to, { label: e.edge_type || '', _edge: e });
+        }
+      });
+
+      // Run dagre layout
+      dagre.layout(gDag);
+
+      // Extract positions
       const simNodes = [];
       const simNodeMap = {};
-      groupKeys.forEach(gk => {
-        const bp = boxPositions[gk];
-        const br = boxRects[gk];
-        (groupMap[gk] || []).forEach((n, idx) => {
-          const col = idx % br.innerCols;
-          const row = Math.floor(idx / br.innerCols);
-          const sn = {
-            ...n, id: n.node_id, _group: gk,
-            x: bp.x + boxPadding + col * nodeW + nodeW / 2,
-            y: bp.y + labelH + boxPadding + row * nodeH + nodeH / 2
-          };
-          simNodes.push(sn);
-          simNodeMap[sn.id] = sn;
-        });
-      });
-      // Ungrouped nodes
-      const totalW = colWidths.reduce((a, b) => a + b + boxGap, boxGap);
-      let ungroupedX = boxGap;
-      nodes.filter(n => !n.domain_key).forEach(n => {
-        const totalH = rowHeights.reduce((a, b) => a + b + boxGap, boxGap);
-        const sn = { ...n, id: n.node_id, _group: null, x: ungroupedX + 60, y: totalH + 50 };
-        ungroupedX += nodeW;
+      nodes.forEach(n => {
+        const nid = String(n.node_id);
+        const pos = gDag.node(nid);
+        if (!pos) return;
+        const sn = { ...n, id: n.node_id, _group: n.domain_key || null, x: pos.x, y: pos.y };
         simNodes.push(sn);
         simNodeMap[sn.id] = sn;
       });
 
-      // Resolve edges
-      const simEdges = edges.filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
-        .map(e => ({ ...e, source: simNodeMap[e.from_node_id], target: simNodeMap[e.to_node_id] }));
+      // Extract group box positions from dagre
+      const boxPositions = {};
+      groupKeys.forEach(gk => {
+        const gn = gDag.node('group_' + gk);
+        if (gn) {
+          boxPositions[gk] = { x: gn.x - gn.width / 2, y: gn.y - gn.height / 2, w: gn.width, h: gn.height };
+        }
+      });
+
+      // Build edges with dagre points
+      const simEdges = [];
+      gDag.edges().forEach(e => {
+        const edgeData = gDag.edge(e);
+        const fromNode = simNodeMap[Number(e.v)];
+        const toNode = simNodeMap[Number(e.w)];
+        if (!fromNode || !toNode) return;
+        const origEdge = edgeData._edge || {};
+        simEdges.push({
+          ...origEdge,
+          source: fromNode, target: toNode,
+          _points: edgeData.points || [] // dagre path points for curved edges
+        });
+      });
 
       // SVG setup
       const svg = d3.select(container).append('svg')
         .attr('class', 'graph-svg').attr('width', width).attr('height', height);
       const defs = svg.append('defs');
       defs.append('marker').attr('id', 'dia-arrow').attr('viewBox', '0 0 10 10')
-        .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
-        .attr('orient', 'auto-start-reverse')
+        .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
+        .attr('orient', 'auto')
         .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
       defs.append('marker').attr('id', 'dia-arrow-transitive').attr('viewBox', '0 0 10 10')
-        .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
-        .attr('orient', 'auto-start-reverse')
+        .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
+        .attr('orient', 'auto')
         .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#f59e0b');
 
       const gRoot = svg.append('g');
@@ -2999,18 +3006,22 @@ function dashboard() {
           .attr('x', bp.x + 10).attr('y', bp.y + 16).text(gk.toUpperCase());
       });
 
-      // Edges (on top of boxes)
-      const link = gRoot.selectAll('.edge-line')
-        .data(simEdges).join('line')
+      // Edges (on top of boxes) — use dagre path points for routed lines
+      const lineGen = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
+      const link = gRoot.selectAll('.edge-path')
+        .data(simEdges).join('path')
         .attr('class', d => {
           let cls = 'edge-line';
           if (d._transitive) cls += ' transitive';
           else if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
           return cls;
         })
+        .attr('fill', 'none')
         .attr('marker-end', d => d._transitive ? 'url(#dia-arrow-transitive)' : 'url(#dia-arrow)')
-        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        .attr('d', d => {
+          if (d._points && d._points.length > 1) return lineGen(d._points);
+          return `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`;
+        });
 
       // Via labels for transitive edges
       gRoot.selectAll('.via-label')
@@ -3029,8 +3040,9 @@ function dashboard() {
           .on('drag', (event, d) => {
             d.x = event.x; d.y = event.y;
             d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
-            link.filter(e => e.source.id === d.id).attr('x1', d.x).attr('y1', d.y);
-            link.filter(e => e.target.id === d.id).attr('x2', d.x).attr('y2', d.y);
+            // Update edge paths on drag
+            link.filter(e => e.source.id === d.id || e.target.id === d.id)
+              .attr('d', e => `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`);
           })
         );
 
