@@ -58,20 +58,24 @@ type Server struct {
 	manifestPath string
 	devMode      bool
 	projectPath  string
+	originalPath string
 }
 
 // NewServer creates a new admin Server.
 func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool) *Server {
 	cwd, _ := os.Getwd()
-	return &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd}
+	return &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd, originalPath: cwd}
 }
 
 // switchTo swaps the server's backing store/graph to a different project.
+// Creates .depbot/oracle.db if the directory exists but the DB doesn't.
 func (s *Server) switchTo(projectPath string) error {
-	dbPath := filepath.Join(projectPath, ".depbot", "oracle.db")
-	if _, err := os.Stat(dbPath); err != nil {
-		return fmt.Errorf("no .depbot/oracle.db found at %s", projectPath)
+	if _, err := os.Stat(projectPath); err != nil {
+		return fmt.Errorf("directory not found: %s", projectPath)
 	}
+	dbDir := filepath.Join(projectPath, ".depbot")
+	os.MkdirAll(dbDir, 0755)
+	dbPath := filepath.Join(dbDir, "oracle.db")
 	newStore, err := store.Open(dbPath)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -79,12 +83,18 @@ func (s *Server) switchTo(projectPath string) error {
 	reg, _ := registry.LoadDefaults()
 	newGraph := graph.New(newStore, reg)
 
+	// Find manifest: prefer project root, fall back to .depbot/
+	manifestPath := filepath.Join(projectPath, "oracle.domain.yaml")
+	if _, err := os.Stat(manifestPath); err != nil {
+		manifestPath = filepath.Join(projectPath, ".depbot", "oracle.domain.yaml")
+	}
+
 	s.mu.Lock()
 	oldStore := s.store
 	s.store = newStore
 	s.graph = newGraph
 	s.projectPath = projectPath
-	s.manifestPath = filepath.Join(projectPath, ".depbot", "oracle.domain.yaml")
+	s.manifestPath = manifestPath
 	s.mu.Unlock()
 
 	oldStore.Close()
@@ -188,7 +198,12 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) pollRequests() {
+	// Initialize lastID from existing data so we only broadcast NEW requests.
+	existing, _ := s.getStore().ListRecentRequests(1)
 	var lastID int64
+	if len(existing) > 0 {
+		lastID = existing[0].RequestID
+	}
 	for {
 		time.Sleep(1 * time.Second)
 		entries, err := s.getStore().ListRequestsSince(lastID)
@@ -222,8 +237,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		cur := s.projectPath
 		s.mu.RUnlock()
 		httpJSON(w, map[string]any{
-			"current": cur,
-			"name":    filepath.Base(cur),
+			"current":  cur,
+			"name":     filepath.Base(cur),
+			"original": s.originalPath,
 		})
 		return
 	}
@@ -271,13 +287,19 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		httpJSON(w, entries)
 		return
 	}
-	limit := 100
+	limit := 50
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	entries, err := s.getStore().ListRecentRequests(limit)
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if n, err := strconv.Atoi(o); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	entries, err := s.getStore().ListRecentRequestsOffset(limit, offset)
 	if err != nil {
 		httpError(w, err, 500)
 		return
@@ -353,8 +375,9 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		nodeIDSet[n.NodeID] = true
 		nodeList = append(nodeList, map[string]any{
 			"node_id": n.NodeID, "node_key": n.NodeKey, "layer": n.Layer,
-			"node_type": n.NodeType, "name": n.Name, "repo_name": n.RepoName,
-			"file_path": n.FilePath, "status": n.Status, "confidence": n.Confidence,
+			"node_type": n.NodeType, "domain_key": n.DomainKey, "name": n.Name,
+			"repo_name": n.RepoName, "file_path": n.FilePath, "status": n.Status,
+			"confidence": n.Confidence,
 		})
 	}
 	var edgeList []map[string]any
