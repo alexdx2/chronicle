@@ -132,6 +132,34 @@ a{color:var(--primary);text-decoration:none}
 .graph-svg .layer-band{fill:#f8f9fa;stroke:var(--border);stroke-dasharray:4,2}
 .graph-svg .layer-label{font-size:12px;font-weight:600;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1px}
 .graph-svg .arrow-head{fill:#94a3b8}
+/* Filter sidebar */
+.filter-sidebar{width:200px;background:var(--card);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;font-size:11px;padding:10px}
+.filter-sidebar h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:10px 0 4px}
+.filter-sidebar label{display:flex;align-items:center;gap:5px;padding:2px 0;cursor:pointer;color:var(--text)}
+.filter-sidebar label input[type=checkbox]{margin:0}
+.filter-sidebar .group{margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px}
+/* Transitive edges */
+.graph-svg .edge-line.transitive{stroke:#f59e0b;stroke-dasharray:6,3;stroke-width:1.5}
+.graph-svg .via-label{font-size:8px;fill:#f59e0b;font-weight:500}
+.graph-svg .via-pill{fill:#fef3c7;stroke:#f59e0b;stroke-width:0.5;rx:4}
+/* Domain boxes (Architecture mode) */
+.graph-svg .domain-box{fill:none;stroke:#3b82f6;stroke-width:2;rx:10;opacity:.7}
+.graph-svg .domain-label{font-size:11px;fill:#3b82f6;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+/* Workspace palette */
+.ws-palette{width:220px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.ws-palette input[type=text]{width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;margin:8px;width:calc(100% - 16px)}
+.ws-palette .ws-item{display:flex;align-items:center;gap:6px;padding:5px 8px;margin:2px 8px;border:1px solid var(--border);border-radius:4px;cursor:grab;font-size:11px}
+.ws-palette .ws-item:hover{background:var(--primary-light)}
+.ws-palette .ws-group-label{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);padding:6px 8px 2px}
+/* Workspace canvas indicators */
+.graph-svg .manual-dot{fill:#3b82f6}
+.graph-svg .auto-badge{fill:#f59e0b;rx:3}
+.graph-svg .auto-badge-text{fill:#fff;font-size:7px;font-weight:700}
+.graph-svg .expand-badge{fill:var(--card);stroke:var(--border);stroke-width:1;cursor:pointer}
+.graph-svg .expand-badge:hover{fill:var(--primary-light);stroke:var(--primary)}
+.graph-svg .expand-text{font-size:11px;fill:var(--text);cursor:pointer;font-weight:600}
+.graph-svg .path-edge{stroke:#f59e0b;stroke-width:2.5}
+.graph-svg .neighbor-node{opacity:.55}
 
 /* Scan history */
 .scan-row{display:grid;grid-template-columns:1fr 60px 60px auto;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;align-items:center}
@@ -511,13 +539,41 @@ a{color:var(--primary);text-decoration:none}
       </div>
     </div>
 
-    <!-- Main area: canvas + side panel -->
+    <!-- Main area: palette (workspace) + canvas + side panel + filter sidebar -->
     <div style="display:flex;flex:1;overflow:hidden">
-      <div id="graph-canvas" style="flex:1;overflow:auto">
+
+      <!-- Workspace search palette (only in workspace mode) -->
+      <template x-if="graphMode==='workspace'">
+        <div class="ws-palette">
+          <input type="text" placeholder="Search entities..." x-model="workspaceSearch">
+          <div style="flex:1;overflow-y:auto">
+            <template x-for="group in getWorkspacePaletteGroups()" :key="group.type">
+              <div>
+                <div class="ws-group-label" x-text="group.type + ' (' + group.nodes.length + ')'"></div>
+                <template x-for="n in group.nodes" :key="n.node_id">
+                  <div class="ws-item"
+                       :style="'border-left:3px solid '+layerColor(n.layer)"
+                       draggable="true"
+                       @dragstart="$event.dataTransfer.setData('text/plain', n.node_id); $event.dataTransfer.effectAllowed='copy'"
+                       :class="{'opacity-50': workspaceNodes.some(w => w.node_id === n.node_id)}">
+                    <span style="color:#999;font-size:9px">⠿</span>
+                    <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
+                    <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <div id="graph-canvas" style="flex:1;overflow:auto"
+           @dragover.prevent="$event.dataTransfer.dropEffect='copy'"
+           @drop.prevent="handleWorkspaceDrop($event)">
         <template x-if="loading.graph"><div class="loader" style="min-height:200px"><div class="spinner"></div> Loading graph data...</div></template>
       </div>
-      <!-- Side panel for selected node (Tree + Explore mode) -->
-      <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore')" x-cloak
+      <!-- Side panel for selected node (Tree + Explore + Architecture mode) -->
+      <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='architecture')" x-cloak
            style="width:320px;border-left:1px solid var(--border);overflow-y:auto;background:#fafbfc;flex-shrink:0">
         <template x-if="selectedNode">
           <div style="padding:12px;font-size:11px">
@@ -578,6 +634,72 @@ a{color:var(--primary);text-decoration:none}
           </div>
         </template>
       </div>
+
+      <!-- Filter sidebar (Architecture + Workspace modes) -->
+      <template x-if="filterSidebarOpen && (graphMode==='architecture' || graphMode==='workspace')">
+        <div class="filter-sidebar">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <strong>Filters</strong>
+            <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+          </div>
+
+          <!-- Node types by layer -->
+          <div class="group">
+            <h4>Node Types</h4>
+            <template x-for="layer in allLayers" :key="layer">
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
+                <template x-for="nt in getNodeTypesForLayer(layer)" :key="nt">
+                  <label>
+                    <input type="checkbox"
+                           :checked="!hiddenNodeTypes.includes(nt)"
+                           @change="toggleNodeType(nt)">
+                    <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
+                  </label>
+                </template>
+              </div>
+            </template>
+          </div>
+
+          <!-- Domains -->
+          <div class="group">
+            <h4>Domains</h4>
+            <template x-for="d in getAllDomains()" :key="d">
+              <label>
+                <input type="checkbox"
+                       :checked="!hiddenDomains.includes(d)"
+                       @change="toggleDomain(d)">
+                <span x-text="d === '_unassigned' ? 'Unassigned' : d"></span>
+              </label>
+            </template>
+          </div>
+
+          <!-- Edge types -->
+          <div class="group">
+            <h4>Edge Types</h4>
+            <template x-for="et in getAllEdgeTypes()" :key="et">
+              <label>
+                <input type="checkbox"
+                       :checked="!hiddenEdgeTypes.includes(et)"
+                       @change="toggleEdgeType(et)">
+                <span x-text="et"></span>
+              </label>
+            </template>
+          </div>
+
+          <!-- Confidence slider -->
+          <div class="group">
+            <h4>Min Confidence</h4>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="range" min="0" max="100" step="5"
+                     :value="minConfidence * 100"
+                     @input="minConfidence = $event.target.value / 100; renderGraph()"
+                     style="flex:1">
+              <span style="font-size:10px;min-width:28px" x-text="minConfidence.toFixed(2)"></span>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </div>
