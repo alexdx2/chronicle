@@ -1164,9 +1164,9 @@ function dashboard() {
       try {
         const r = await fetch('/api/requests?limit=50');
         const data = await r.json();
-        this.requests = data;
-        this.hasMoreRequests = data.length >= 50;
-      } catch(e) { console.error('requests:', e); }
+        this.requests = data || [];
+        this.hasMoreRequests = this.requests.length >= 50;
+      } catch(e) { this.requests = []; console.error('requests:', e); }
     },
 
     async loadMoreRequests() {
@@ -1330,7 +1330,7 @@ function dashboard() {
     async fetchDiscoveries() {
       try {
         const r = await fetch('/api/discoveries' + (this.domain ? '?domain=' + this.domain : ''));
-        this.discoveries = await r.json();
+        this.discoveries = (await r.json()) || [];
       } catch(e) { console.error('discoveries:', e); }
     },
 
