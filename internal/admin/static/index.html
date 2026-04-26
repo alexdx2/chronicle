@@ -670,7 +670,6 @@ a{color:var(--primary);text-decoration:none}
               <option value="layer">Layer</option>
               <option value="node_type">Node Type</option>
               <option value="repo_name">Repository</option>
-              <option value="_flow">Flow</option>
             </select>
           </div>
 
@@ -1548,33 +1547,6 @@ function dashboard() {
       return Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
     },
 
-    // Compute flow membership: node_id -> flow name
-    // Flows use CONTAINS edges (flow→step) and PART_OF_FLOW if present
-    _getFlowMap() {
-      const nodeById = {};
-      (this.graphData.nodes || []).forEach(n => { nodeById[n.node_id] = n; });
-      const flowMap = {}; // node_id -> flow_name
-      (this.graphData.edges || []).forEach(e => {
-        if (e.edge_type === 'PART_OF_FLOW' || e.edge_type === 'CONTAINS') {
-          const fromNode = nodeById[e.from_node_id];
-          const toNode = nodeById[e.to_node_id];
-          // flow CONTAINS step/service  OR  step PART_OF_FLOW flow
-          if (fromNode && fromNode.layer === 'flow') {
-            flowMap[e.to_node_id] = fromNode.name;
-          } else if (e.edge_type === 'PART_OF_FLOW' && toNode && toNode.layer === 'flow') {
-            flowMap[e.from_node_id] = toNode.name;
-          }
-        }
-      });
-      // Flow nodes belong to themselves
-      (this.graphData.nodes || []).forEach(n => {
-        if (n.layer === 'flow' && !flowMap[n.node_id]) {
-          flowMap[n.node_id] = n.name;
-        }
-      });
-      return flowMap;
-    },
-
     selectNodeByKey(key) {
       const node = (this.graphData.nodes || []).find(n => n.node_key === key);
       if (node) this.selectedNode = node;
@@ -2272,9 +2244,6 @@ function dashboard() {
       const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
       const posCache = this._wsPositionCache || {};
       const groupField = this.groupByField || 'domain_key';
-      // For flow grouping, pre-compute flow membership from edges
-      const flowMap = groupField === '_flow' ? this._getFlowMap() : null;
-
       // --- Determine which nodes to show ---
       let simNodes, pathNodeIds = new Set(), neighborIds = new Set();
       const pathEdgeKeys = new Set();
@@ -2283,7 +2252,7 @@ function dashboard() {
         // OVERVIEW: show all filtered nodes, grouped
         simNodes = filtered.nodes.map(n => {
           const cached = posCache[n.node_id];
-          const gv = flowMap ? (flowMap[n.node_id] || null) : (n[groupField] || null);
+          const gv = n[groupField] || null;
           return {
             ...n, id: n.node_id, _group: gv,
             x: cached ? cached.x : width / 2 + (Math.random() - 0.5) * 300,
@@ -2320,7 +2289,7 @@ function dashboard() {
           const startX = pos ? pos.x : cached ? cached.x : width / 2 + (Math.random() - 0.5) * 200;
           const startY = pos ? pos.y : cached ? cached.y : height / 2 + (Math.random() - 0.5) * 200;
           return {
-            ...n, id: nId, _group: flowMap ? (flowMap[nId] || null) : (n[groupField] || null),
+            ...n, id: nId, _group: n[groupField] || null,
             x: startX, y: startY,
             _manual: isManual, _path: pathNodeIds.has(nId) && !isManual, _neighbor: neighborIds.has(nId),
             fx: isManual && pos ? pos.x : null, fy: isManual && pos ? pos.y : null
