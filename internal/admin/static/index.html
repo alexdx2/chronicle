@@ -942,8 +942,8 @@ a{color:var(--primary);text-decoration:none}
         <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderDiagram())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
       </div>
     </div>
-    <div style="display:flex;flex:1;overflow:hidden" :style="graphFullscreen ? 'height:calc(100vh - 140px)' : ''">
-      <div id="diagram-canvas" style="flex:1;overflow:auto">
+    <div style="display:flex;flex:1;overflow:hidden;min-height:0">
+      <div id="diagram-canvas" style="flex:1;overflow:auto;min-height:0">
         <template x-if="!diagramData">
           <div style="padding:80px;text-align:center;color:var(--text-muted)">
             <div style="font-size:18px;margin-bottom:8px">Waiting for Claude...</div>
@@ -2978,7 +2978,8 @@ function dashboard() {
 
       // SVG setup
       const svg = d3.select(container).append('svg')
-        .attr('class', 'graph-svg').attr('width', width).attr('height', height);
+        .attr('class', 'graph-svg')
+        .style('width', '100%').style('height', '100%').style('min-height', height + 'px');
       const defs = svg.append('defs');
       defs.append('marker').attr('id', 'dia-arrow').attr('viewBox', '0 0 10 10')
         .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
