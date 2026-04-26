@@ -659,7 +659,10 @@ a{color:var(--primary);text-decoration:none}
         <div class="filter-sidebar">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
-            <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+            <div style="display:flex;gap:4px;align-items:center">
+              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';renderGraph()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
+              <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+            </div>
           </div>
 
           <!-- Group By -->
@@ -2477,18 +2480,44 @@ function dashboard() {
           boxPositions[gk] = { x: xOff, y: yBase, w: colWidths[c], h: rowHeights[r] };
         });
 
-        // Draw fixed boxes immediately
+        // Draw fixed boxes immediately (draggable — moves all member nodes)
         const boxColor = groupField === 'layer' ? null : '#3b82f6';
+        const boxElements = {};
         groupKeys.forEach(gk => {
           const bp = boxPositions[gk];
           const color = boxColor || self.layerColor(gk);
-          const bg = boxGroup.append('g').attr('class', 'domain-g');
+          const bg = boxGroup.append('g').attr('class', 'domain-g').datum({ gk, ...bp })
+            .style('cursor', 'grab')
+            .call(d3.drag()
+              .on('start', function() { d3.select(this).style('cursor', 'grabbing'); })
+              .on('drag', function(event) {
+                const d = d3.select(this).datum();
+                const dx = event.dx, dy = event.dy;
+                d.x += dx; d.y += dy;
+                d3.select(this).select('.domain-box').attr('x', d.x).attr('y', d.y);
+                d3.select(this).select('.domain-label').attr('x', d.x + 10).attr('y', d.y + 16);
+                // Move all member nodes
+                (groupMap[d.gk] || []).forEach(n => {
+                  n.x += dx; n.y += dy;
+                  if (n.fx != null) n.fx += dx;
+                  if (n.fy != null) n.fy += dy;
+                });
+                // Update node + edge positions
+                node.attr('transform', nd => `translate(${nd.x},${nd.y})`);
+                link.attr('x1', e => e.source.x).attr('y1', e => e.source.y)
+                  .attr('x2', e => e.target.x).attr('y2', e => e.target.y);
+                viaLabels.attr('x', e => (e.source.x + e.target.x) / 2)
+                  .attr('y', e => (e.source.y + e.target.y) / 2 - 6);
+              })
+              .on('end', function() { d3.select(this).style('cursor', 'grab'); })
+            );
           bg.append('rect').attr('class', 'domain-box')
             .attr('x', bp.x).attr('y', bp.y).attr('width', bp.w).attr('height', bp.h)
             .attr('stroke', color);
           bg.append('text').attr('class', 'domain-label')
             .attr('x', bp.x + 10).attr('y', bp.y + 16).attr('fill', color)
             .text(gk.toUpperCase());
+          boxElements[gk] = bg;
         });
 
         // Position nodes inside their box in a grid
