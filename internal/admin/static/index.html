@@ -669,6 +669,7 @@ a{color:var(--primary);text-decoration:none}
           <div class="group">
             <h4>Group By</h4>
             <select @change="groupByField=$event.target.value;renderGraph()" :value="groupByField" style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--card)">
+              <option value="">None</option>
               <option value="domain_key">Domain</option>
               <option value="layer">Layer</option>
               <option value="node_type">Node Type</option>
@@ -2375,13 +2376,33 @@ function dashboard() {
         .text(d => d._viaLabel || '');
 
       // Nodes
+      // sim is declared here so drag handlers can reference it; assigned later in force mode
+      let sim = null;
       const node = gRoot.selectAll('.node-g')
         .data(simNodes).join('g')
         .attr('class', d => 'node-g' + (d._neighbor ? ' neighbor-node' : ''))
         .call(d3.drag()
-          .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; if (d._manual) { const w = self.workspaceNodes.find(w2 => w2.node_id === d.id); if (w) { w.x = d.x; w.y = d.y; } } })
-          .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); if (!d._manual) { d.fx = null; d.fy = null; } })
+          .on('start', (event, d) => {
+            if (sim && !event.active) sim.alphaTarget(0.3).restart();
+            d.fx = d.x; d.fy = d.y;
+          })
+          .on('drag', (event, d) => {
+            d.x = event.x; d.y = event.y;
+            d.fx = event.x; d.fy = event.y;
+            if (d._manual) { const w = self.workspaceNodes.find(w2 => w2.node_id === d.id); if (w) { w.x = d.x; w.y = d.y; } }
+            // In grid mode (no sim), update positions directly
+            if (!sim) {
+              d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
+              link.attr('x1', e => e.source.x).attr('y1', e => e.source.y)
+                .attr('x2', e => e.target.x).attr('y2', e => e.target.y);
+              viaLabels.attr('x', e => (e.source.x + e.target.x) / 2)
+                .attr('y', e => (e.source.y + e.target.y) / 2 - 6);
+            }
+          })
+          .on('end', (event, d) => {
+            if (sim && !event.active) sim.alphaTarget(0);
+            if (sim && !d._manual) { d.fx = null; d.fy = null; }
+          })
         );
 
       node.append('rect')
@@ -2571,7 +2592,7 @@ function dashboard() {
 
       } else {
         // FORCE LAYOUT: existing floating behavior
-        const sim = d3.forceSimulation(simNodes)
+        sim = d3.forceSimulation(simNodes)
           .force('link', d3.forceLink(simEdges).id(d => d.id).distance(isInvestigating ? 120 : 140).strength(isInvestigating ? 0.2 : 0.15))
           .force('charge', d3.forceManyBody().strength(isInvestigating ? -100 : -300))
           .force('collision', d3.forceCollide().radius(isInvestigating ? 55 : 60));
