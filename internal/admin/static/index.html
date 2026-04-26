@@ -492,7 +492,8 @@ a{color:var(--primary);text-decoration:none}
       <div class="mode-toggle">
         <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';renderGraph()">Tree</button>
         <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';renderGraph()">Explore</button>
-        <button class="mode-btn" :class="{active:graphMode==='force'}" @click="graphMode='force';renderGraph()">Force</button>
+        <button class="mode-btn" :class="{active:graphMode==='architecture'}" @click="graphMode='architecture';renderGraph()">Architecture</button>
+        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';workspaceNodes=[];workspacePaths=[];renderGraph()">Workspace</button>
       </div>
 
       <!-- Filter -->
@@ -532,9 +533,15 @@ a{color:var(--primary);text-decoration:none}
 
       <!-- Right side controls -->
       <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+        <template x-if="graphMode==='workspace'">
+          <button class="mode-btn" @click="workspaceNodes=[];workspacePaths=[];renderGraph()" style="color:var(--warning);border-color:var(--warning)">Clear Canvas</button>
+        </template>
         <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
           <input type="checkbox" x-model="hideStructural" @change="renderGraph()"> Hide structural
         </label>
+        <template x-if="graphMode==='architecture' || graphMode==='workspace'">
+          <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
+        </template>
         <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderGraph())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
       </div>
     </div>
@@ -1449,6 +1456,64 @@ function dashboard() {
         ...e, source_name: nodeById[e.from_node_id]?.name || '?', source_key: nodeById[e.from_node_id]?.node_key || '',
         source_layer: nodeById[e.from_node_id]?.layer || '?'
       }));
+    },
+
+    getNodeTypesForLayer(layer) {
+      const types = new Set();
+      (this.graphData.nodes || []).forEach(n => {
+        if (n.layer === layer) types.add(n.node_type);
+      });
+      return [...types].sort();
+    },
+
+    getAllDomains() {
+      const domains = new Set();
+      (this.graphData.nodes || []).forEach(n => {
+        domains.add(n.domain_key || '_unassigned');
+      });
+      return [...domains].sort();
+    },
+
+    getAllEdgeTypes() {
+      const types = new Set();
+      (this.graphData.edges || []).forEach(e => types.add(e.edge_type));
+      return [...types].sort();
+    },
+
+    toggleNodeType(nt) {
+      const idx = this.hiddenNodeTypes.indexOf(nt);
+      if (idx >= 0) this.hiddenNodeTypes.splice(idx, 1);
+      else this.hiddenNodeTypes.push(nt);
+      this.renderGraph();
+    },
+
+    toggleDomain(d) {
+      const idx = this.hiddenDomains.indexOf(d);
+      if (idx >= 0) this.hiddenDomains.splice(idx, 1);
+      else this.hiddenDomains.push(d);
+      this.renderGraph();
+    },
+
+    toggleEdgeType(et) {
+      const idx = this.hiddenEdgeTypes.indexOf(et);
+      if (idx >= 0) this.hiddenEdgeTypes.splice(idx, 1);
+      else this.hiddenEdgeTypes.push(et);
+      this.renderGraph();
+    },
+
+    getWorkspacePaletteGroups() {
+      const search = (this.workspaceSearch || '').toLowerCase();
+      const nodes = (this.graphData.nodes || []).filter(n => {
+        if (search && !n.name.toLowerCase().includes(search) && !(n.node_type || '').toLowerCase().includes(search)) return false;
+        return true;
+      });
+      const groups = {};
+      nodes.forEach(n => {
+        const t = n.node_type || 'unknown';
+        if (!groups[t]) groups[t] = { type: t, nodes: [] };
+        groups[t].nodes.push(n);
+      });
+      return Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
     },
 
     selectNodeByKey(key) {
