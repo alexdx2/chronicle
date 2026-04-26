@@ -58,12 +58,19 @@ a{color:var(--primary);text-decoration:none}
 .request-panel .card-body{overflow-y:auto;padding:0;flex:1}
 .req-summary{display:flex;gap:16px;padding:8px 16px;background:var(--bg);font-size:12px;color:var(--text-muted);border-bottom:1px solid var(--border)}
 .req-summary strong{color:var(--text)}
-.req-row{display:grid;grid-template-columns:130px 1fr 70px 60px;gap:8px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background .1s}
+.req-row{display:grid;grid-template-columns:130px 1fr 70px 60px;gap:8px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background .1s;cursor:pointer}
 .req-row:hover{background:var(--bg)}
 .req-row.error-row{border-left:3px solid var(--error)}
 .req-row .ts{color:var(--text-muted);font-family:monospace;font-size:11px}
 .req-row .tool{font-weight:500}
 .req-row .dur{text-align:right;color:var(--text-muted);font-family:monospace}
+.req-detail{grid-column:1/-1;background:var(--bg);border-radius:6px;padding:12px;margin-top:4px;font-size:11px;font-family:monospace;overflow-x:auto}
+.req-detail pre{margin:0;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto}
+.req-detail-label{font-weight:600;color:var(--accent);margin-bottom:4px;font-family:var(--font)}
+.req-detail-section{margin-bottom:8px}
+.req-detail-section:last-child{margin-bottom:0}
+.load-more-btn{display:block;width:100%;padding:10px;text-align:center;background:none;border:none;border-top:1px solid var(--border);color:var(--accent);cursor:pointer;font-size:12px;font-weight:500}
+.load-more-btn:hover{background:var(--bg)}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase}
 .badge.ok{background:#d1fae5;color:#065f46}
 .badge.err{background:var(--error-light);color:var(--error)}
@@ -149,6 +156,18 @@ a{color:var(--primary);text-decoration:none}
       </button>
       <div x-show="showProjectSwitcher" x-cloak @click.outside="showProjectSwitcher=false"
            style="position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);width:350px;z-index:200;padding:12px">
+        <!-- Default project -->
+        <template x-if="originalProject">
+          <div style="margin-bottom:8px">
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Default project:</div>
+            <div @click="resetToDefault()" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;border:1px solid var(--accent);cursor:pointer;background:var(--accent)08"
+               @mouseenter="$el.style.background='#f0f5ff'" @mouseleave="$el.style.background='var(--accent)08'">
+              <span style="font-weight:500" x-text="originalProject.split('/').pop()"></span>
+              <span style="color:var(--text-muted);font-size:10px;font-family:monospace" x-text="originalProject"></span>
+            </div>
+          </div>
+        </template>
+
         <!-- Recent projects from localStorage -->
         <template x-if="getRecentProjects().length > 0">
           <div style="margin-bottom:8px">
@@ -274,19 +293,44 @@ a{color:var(--primary);text-decoration:none}
           <div style="padding:32px;text-align:center;color:var(--text-muted)">No requests recorded yet</div>
         </template>
         <template x-for="r in requests" :key="r.request_id">
-          <div class="req-row" :class="{'error-row': r.error_message}">
-            <span class="ts" x-text="formatTime(r.timestamp)"></span>
-            <span>
-              <span class="tool" x-text="r.tool_name"></span>
-              <template x-if="r.summary"><span style="color:var(--text-muted);margin-left:6px" x-text="'- '+r.summary"></span></template>
-            </span>
-            <span>
-              <span class="badge ok" x-show="!r.error_message && r.result_json">ok</span>
-              <span class="badge err" x-show="r.error_message">err</span>
-              <span class="badge empty" x-show="!r.error_message && !r.result_json">empty</span>
-            </span>
-            <span class="dur" x-text="r.duration_ms + 'ms'"></span>
+          <div>
+            <div class="req-row" :class="{'error-row': r.error_message}" @click="expandedReq === r.request_id ? expandedReq = null : expandedReq = r.request_id">
+              <span class="ts" x-text="formatTime(r.timestamp)"></span>
+              <span>
+                <span class="tool" x-text="r.tool_name"></span>
+                <template x-if="r.summary"><span style="color:var(--text-muted);margin-left:6px" x-text="'- '+r.summary"></span></template>
+              </span>
+              <span>
+                <span class="badge ok" x-show="!r.error_message && r.result_json">ok</span>
+                <span class="badge err" x-show="r.error_message">err</span>
+                <span class="badge empty" x-show="!r.error_message && !r.result_json">empty</span>
+              </span>
+              <span class="dur" x-text="r.duration_ms + 'ms'"></span>
+            </div>
+            <template x-if="expandedReq === r.request_id">
+              <div class="req-detail">
+                <div class="req-detail-section">
+                  <div class="req-detail-label">Parameters</div>
+                  <pre x-text="formatJSON(r.params_json)"></pre>
+                </div>
+                <template x-if="r.result_json">
+                  <div class="req-detail-section">
+                    <div class="req-detail-label">Result</div>
+                    <pre x-text="formatJSON(r.result_json)"></pre>
+                  </div>
+                </template>
+                <template x-if="r.error_message">
+                  <div class="req-detail-section">
+                    <div class="req-detail-label" style="color:var(--error)">Error</div>
+                    <pre x-text="r.error_message"></pre>
+                  </div>
+                </template>
+              </div>
+            </template>
           </div>
+        </template>
+        <template x-if="hasMoreRequests">
+          <button class="load-more-btn" @click="loadMoreRequests()" x-text="loadingMore ? 'Loading...' : 'Load more'"></button>
         </template>
       </div>
     </div>
@@ -714,6 +758,9 @@ function dashboard() {
     wsConnected: false,
     stats: {},
     requests: [],
+    expandedReq: null,
+    hasMoreRequests: false,
+    loadingMore: false,
     lowConf: [],
     scans: [],
     validation: {},
@@ -740,6 +787,7 @@ function dashboard() {
     switchPath: '',
     switchError: '',
     switchResult: null,
+    originalProject: '',
     graphData: { nodes: [], edges: [] },
     graphMode: 'tree',
     explorePath: [],
@@ -756,11 +804,30 @@ function dashboard() {
     allLayers: ['code','contract','service','flow','ownership','infra','ci'],
     layerFilters: ['code','contract','service','flow','ownership','infra','ci'],
     hideStructural: false,
+    // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
+    filterSidebarOpen: false,
+    hiddenNodeTypes: [],      // string[] of node_type values
+    hiddenEdgeTypes: [],      // string[] of edge_type values
+    hiddenDomains: [],        // string[] of domain_key values
+    minConfidence: 0,
+    // Only these types produce transitive edges when hidden; others just disappear
+    collapsibleTypes: ['endpoint', 'function', 'topic', 'schema'],
+    // Workspace state
+    workspaceNodes: [],       // [{node_id, x, y, manual: bool}]
+    workspacePaths: [],       // [{from, to, path: [node_ids]}]
+    workspaceSearch: '',
     ws: null,
     loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
     loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
 
     async init() {
+      // Get the original project path (where the server was started)
+      try {
+        const p = await fetch('/api/projects');
+        const pData = await p.json();
+        this.originalProject = pData.original || pData.current || '';
+      } catch(e) {}
+
       // Restore last selected project
       const lastProject = localStorage.getItem('oracle_current_project');
       if (lastProject) {
@@ -825,9 +892,29 @@ function dashboard() {
 
     async fetchRequests() {
       try {
-        const r = await fetch('/api/requests?limit=200');
-        this.requests = await r.json();
+        const r = await fetch('/api/requests?limit=50');
+        const data = await r.json();
+        this.requests = data;
+        this.hasMoreRequests = data.length >= 50;
       } catch(e) { console.error('requests:', e); }
+    },
+
+    async loadMoreRequests() {
+      if (this.loadingMore) return;
+      this.loadingMore = true;
+      try {
+        const r = await fetch(`/api/requests?limit=50&offset=${this.requests.length}`);
+        const data = await r.json();
+        this.requests = [...this.requests, ...data];
+        this.hasMoreRequests = data.length >= 50;
+      } catch(e) { console.error('load more:', e); }
+      this.loadingMore = false;
+    },
+
+    formatJSON(str) {
+      if (!str) return '';
+      try { return JSON.stringify(JSON.parse(str), null, 2); }
+      catch(e) { return str; }
     },
 
     async fetchLowConfidence() {
@@ -874,6 +961,11 @@ function dashboard() {
         this.promptSaved = true;
         setTimeout(() => this.promptSaved = false, 2000);
       } catch(e) { console.error('save prompts:', e); }
+    },
+
+    async resetToDefault() {
+      localStorage.removeItem('oracle_current_project');
+      await this.switchProject(this.originalProject);
     },
 
     async switchProject(path) {
@@ -1005,8 +1097,12 @@ function dashboard() {
           if (msg.type === 'mcp_request') {
             this.requests.unshift(msg.data);
             if (this.requests.length > 200) this.requests.pop();
-            this.fetchStats();
-            this.fetchDiscoveries();
+            // Debounce stats/discoveries refresh — wait 2s after last request
+            clearTimeout(this._refreshTimer);
+            this._refreshTimer = setTimeout(() => {
+              this.fetchStats();
+              this.fetchDiscoveries();
+            }, 2000);
           }
         } catch(e) {}
       };
@@ -1062,19 +1158,155 @@ function dashboard() {
 
     getFilteredData() {
       const structuralTypes = ['CONTAINS','DEPLOYS_AS','SELECTS_PODS','OWNED_BY','MAINTAINED_BY','PART_OF_FLOW','BUILDS_ARTIFACT','DEPLOYS_RESOURCE','HAS_FIELD'];
-      let nodes = (this.graphData.nodes || []).filter(n => this.layerFilters.includes(n.layer));
+      const allNodes = this.graphData.nodes || [];
+      const allEdges = this.graphData.edges || [];
+      const hiddenTypesSet = new Set(this.hiddenNodeTypes);
+      const hiddenDomainsSet = new Set(this.hiddenDomains);
+      const hiddenEdgesSet = new Set(this.hiddenEdgeTypes);
+
+      // Layer filter
+      let nodes = allNodes.filter(n => this.layerFilters.includes(n.layer));
       // Repo filter
       if (this.graphRepoFilter) {
         nodes = nodes.filter(n => !n.repo_name || n.repo_name === this.graphRepoFilter);
       }
-      const nodeIds = new Set(nodes.map(n => n.node_id));
-      let edges = (this.graphData.edges || []).filter(e => nodeIds.has(e.from_node_id) || nodeIds.has(e.to_node_id));
-      // For filtered views, only show edges where BOTH ends are visible
-      edges = edges.filter(e => nodeIds.has(e.from_node_id) && nodeIds.has(e.to_node_id));
-      if (this.hideStructural) {
-        edges = edges.filter(e => !structuralTypes.includes(e.edge_type));
+      // Node type filter (from sidebar)
+      if (hiddenTypesSet.size > 0) {
+        nodes = nodes.filter(n => !hiddenTypesSet.has(n.node_type));
       }
+      // Domain filter
+      if (hiddenDomainsSet.size > 0) {
+        nodes = nodes.filter(n => !hiddenDomainsSet.has(n.domain_key || '_unassigned'));
+      }
+      // Confidence filter
+      if (this.minConfidence > 0) {
+        nodes = nodes.filter(n => (n.confidence || 1) >= this.minConfidence);
+      }
+
+      // Edge type filters
+      let filteredEdges = allEdges;
+      if (this.hideStructural) {
+        filteredEdges = filteredEdges.filter(e => !structuralTypes.includes(e.edge_type));
+      }
+      if (hiddenEdgesSet.size > 0) {
+        filteredEdges = filteredEdges.filter(e => !hiddenEdgesSet.has(e.edge_type));
+      }
+
+      // Check if any hidden types are collapsible (should produce transitive edges)
+      const hasCollapsibleHidden = this.hiddenNodeTypes.some(t => this.collapsibleTypes.includes(t));
+      if (hasCollapsibleHidden) {
+        // Pass all layer-filtered nodes (before hiding) so collapsible nodes are available for bridging
+        const allVisibleByLayer = allNodes.filter(n => this.layerFilters.includes(n.layer));
+        return this.computeTransitiveEdges(nodes, allVisibleByLayer, filteredEdges);
+      }
+
+      // No collapsible types hidden — standard filtering (hidden non-collapsible types just vanish)
+      const nodeIds = new Set(nodes.map(n => n.node_id));
+      const edges = filteredEdges.filter(e => nodeIds.has(e.from_node_id) && nodeIds.has(e.to_node_id));
       return { nodes, edges };
+    },
+
+    // Compute transitive edges when collapsible node types are hidden.
+    // Only types in this.collapsibleTypes produce transitive edges.
+    // Non-collapsible hidden types (service, database, team, etc.) just disappear — no false bridges.
+    computeTransitiveEdges(visibleNodes, allNodes, allEdges) {
+      const visibleIds = new Set(visibleNodes.map(n => n.node_id));
+      const nodeById = {};
+      allNodes.forEach(n => { nodeById[n.node_id] = n; });
+
+      // Split hidden nodes into collapsible (produce transitive edges) vs opaque (just gone)
+      const collapsibleSet = new Set(this.collapsibleTypes);
+      const collapsibleIds = new Set();
+      allNodes.forEach(n => {
+        if (!visibleIds.has(n.node_id) && collapsibleSet.has(n.node_type)) {
+          collapsibleIds.add(n.node_id);
+        }
+      });
+
+      if (collapsibleIds.size === 0) {
+        return { nodes: visibleNodes, edges: allEdges.filter(e => visibleIds.has(e.from_node_id) && visibleIds.has(e.to_node_id)) };
+      }
+
+      // Direct edges between visible nodes
+      const directEdges = allEdges.filter(e => visibleIds.has(e.from_node_id) && visibleIds.has(e.to_node_id));
+      const directEdgeKeys = new Set(directEdges.map(e => e.from_node_id + '->' + e.to_node_id));
+
+      // Build adjacency only through collapsible hidden nodes (not opaque ones)
+      const incomingToCollapsible = {};  // collapsible_id -> [{from_id, edge}]
+      const outgoingFromCollapsible = {}; // collapsible_id -> [{to_id, edge}]
+      allEdges.forEach(e => {
+        const fromCollapsible = collapsibleIds.has(e.from_node_id);
+        const toCollapsible = collapsibleIds.has(e.to_node_id);
+        const fromVisible = visibleIds.has(e.from_node_id);
+        const toVisible = visibleIds.has(e.to_node_id);
+
+        if (toCollapsible && fromVisible) {
+          if (!incomingToCollapsible[e.to_node_id]) incomingToCollapsible[e.to_node_id] = [];
+          incomingToCollapsible[e.to_node_id].push({ from_id: e.from_node_id, edge: e });
+        }
+        if (fromCollapsible && toVisible) {
+          if (!outgoingFromCollapsible[e.from_node_id]) outgoingFromCollapsible[e.from_node_id] = [];
+          outgoingFromCollapsible[e.from_node_id].push({ to_id: e.to_node_id, edge: e });
+        }
+        // Collapsible-to-collapsible edges (for chaining, e.g. endpoint → schema)
+        if (fromCollapsible && toCollapsible) {
+          if (!outgoingFromCollapsible[e.from_node_id]) outgoingFromCollapsible[e.from_node_id] = [];
+          outgoingFromCollapsible[e.from_node_id].push({ to_id: e.to_node_id, edge: e });
+          if (!incomingToCollapsible[e.to_node_id]) incomingToCollapsible[e.to_node_id] = [];
+          incomingToCollapsible[e.to_node_id].push({ from_id: e.from_node_id, edge: e });
+        }
+      });
+
+      // BFS from each collapsible node to find paths: visible -> collapsible+ -> visible
+      const transitiveMap = {}; // "fromId->toId" -> {viaNames: [], confidence: number}
+      collapsibleIds.forEach(hId => {
+        const incoming = incomingToCollapsible[hId] || [];
+        const queue = [{ nodeId: hId, viaNames: [nodeById[hId]?.name || '?'], minConf: 1.0 }];
+        const visited = new Set([hId]);
+        const reachableVisible = [];
+
+        while (queue.length > 0) {
+          const cur = queue.shift();
+          const outgoing = outgoingFromCollapsible[cur.nodeId] || [];
+          for (const { to_id, edge } of outgoing) {
+            const conf = Math.min(cur.minConf, edge.confidence || 1);
+            if (visibleIds.has(to_id)) {
+              reachableVisible.push({ to_id, viaNames: cur.viaNames, confidence: conf });
+            } else if (collapsibleIds.has(to_id) && !visited.has(to_id)) {
+              visited.add(to_id);
+              queue.push({ nodeId: to_id, viaNames: [...cur.viaNames, nodeById[to_id]?.name || '?'], minConf: conf });
+            }
+            // If to_id is opaque-hidden (not collapsible, not visible), stop — no bridging through it
+          }
+        }
+
+        for (const inc of incoming) {
+          for (const reach of reachableVisible) {
+            if (inc.from_id === reach.to_id) continue;
+            const key = inc.from_id + '->' + reach.to_id;
+            if (directEdgeKeys.has(key)) continue;
+            const conf = Math.min(inc.edge.confidence || 1, reach.confidence);
+            if (!transitiveMap[key] || conf > transitiveMap[key].confidence) {
+              transitiveMap[key] = { viaNames: reach.viaNames, confidence: conf };
+            }
+          }
+        }
+      });
+
+      const transitiveEdges = Object.entries(transitiveMap).map(([key, val]) => {
+        const [fromId, toId] = key.split('->');
+        return {
+          from_node_id: fromId,
+          to_node_id: toId,
+          edge_type: 'TRANSITIVE',
+          derivation: 'transitive',
+          confidence: val.confidence,
+          _transitive: true,
+          _viaLabel: 'via ' + val.viaNames.join(', ')
+        };
+      });
+
+      return { nodes: visibleNodes, edges: [...directEdges, ...transitiveEdges] };
     },
 
     // Helper: get edges for selected node (for side panel)
