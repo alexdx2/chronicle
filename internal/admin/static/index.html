@@ -493,7 +493,7 @@ a{color:var(--primary);text-decoration:none}
       <div class="mode-toggle">
         <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';renderGraph()">Tree</button>
         <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';renderGraph()">Explore</button>
-        <button class="mode-btn" :class="{active:graphMode==='architecture'}" @click="graphMode='architecture';renderGraph()">Architecture</button>
+        <button class="mode-btn" :class="{active:graphMode==='grouped'}" @click="graphMode='grouped';filterSidebarOpen=true;renderGraph()">Grouped</button>
         <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';workspaceNodes=[];workspacePaths=[];renderGraph()">Workspace</button>
       </div>
 
@@ -544,7 +544,7 @@ a{color:var(--primary);text-decoration:none}
             <input type="checkbox" x-model="hideStructural" @change="renderGraph()"> Hide CONTAINS/OWNS
           </label>
         </template>
-        <template x-if="graphMode==='architecture' || graphMode==='workspace'">
+        <template x-if="graphMode==='grouped' || graphMode==='workspace'">
           <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
         </template>
         <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderGraph())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
@@ -585,7 +585,7 @@ a{color:var(--primary);text-decoration:none}
         <template x-if="loading.graph"><div class="loader" style="min-height:200px"><div class="spinner"></div> Loading graph data...</div></template>
       </div>
       <!-- Side panel for selected node (Tree + Explore + Architecture mode) -->
-      <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='architecture' || graphMode==='workspace')" x-cloak
+      <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='grouped' || graphMode==='workspace')" x-cloak
            style="width:320px;border-left:1px solid var(--border);overflow-y:auto;background:#fafbfc;flex-shrink:0">
         <template x-if="selectedNode">
           <div style="padding:12px;font-size:11px">
@@ -647,13 +647,26 @@ a{color:var(--primary);text-decoration:none}
         </template>
       </div>
 
-      <!-- Filter sidebar (Architecture + Workspace modes) -->
-      <template x-if="filterSidebarOpen && (graphMode==='architecture' || graphMode==='workspace')">
+      <!-- Filter sidebar (Grouped + Workspace modes) -->
+      <template x-if="filterSidebarOpen && (graphMode==='grouped' || graphMode==='workspace')">
         <div class="filter-sidebar">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
             <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
           </div>
+
+          <!-- Group By (Grouped mode only) -->
+          <template x-if="graphMode==='grouped'">
+            <div class="group">
+              <h4>Group By</h4>
+              <select @change="groupByField=$event.target.value;renderGraph()" :value="groupByField" style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--card)">
+                <option value="domain_key">Domain</option>
+                <option value="layer">Layer</option>
+                <option value="node_type">Node Type</option>
+                <option value="repo_name">Repository</option>
+              </select>
+            </div>
+          </template>
 
           <!-- Node types by layer -->
           <div class="group">
@@ -938,6 +951,8 @@ function dashboard() {
     allLayers: ['code','contract','service','flow','ownership','infra','ci'],
     layerFilters: ['code','contract','service','flow','ownership','infra','ci'],
     hideStructural: false,
+    // Grouped mode
+    groupByField: 'domain_key',  // field to group nodes by in Grouped mode
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
     filterSidebarOpen: false,
     hiddenNodeTypes: [],      // string[] of node_type values
@@ -1605,7 +1620,7 @@ function dashboard() {
       } else if (this.graphMode === 'explore') {
         this.renderExploreGraph(container, data.nodes, data.edges);
       } else if (this.graphMode === 'architecture') {
-        this.renderArchitectureGraph(container, data.nodes, data.edges);
+        this.renderGroupedGraph(container, data.nodes, data.edges);
       }
     },
 
@@ -2108,7 +2123,7 @@ function dashboard() {
       container.appendChild(wrapper);
     },
 
-    renderArchitectureGraph(container, nodes, edges) {
+    renderGroupedGraph(container, nodes, edges) {
       const self = this;
       const width = Math.max(900, container.clientWidth || 900);
       const height = Math.max(700, container.clientHeight || 700);
@@ -2137,34 +2152,35 @@ function dashboard() {
       });
       svg.call(zoom);
 
-      // Group nodes by domain (skip empty domain_key — those float freely)
-      const domainGroups = {};
+      // Group nodes by the selected field
+      const groupField = self.groupByField || 'domain_key';
+      const groups = {};
       const freeNodes = [];
       nodes.forEach(n => {
-        const dk = n.domain_key;
-        if (!dk) { freeNodes.push(n); return; }
-        if (!domainGroups[dk]) domainGroups[dk] = [];
-        domainGroups[dk].push(n);
+        const gk = n[groupField] || '';
+        if (!gk) { freeNodes.push(n); return; }
+        if (!groups[gk]) groups[gk] = [];
+        groups[gk].push(n);
       });
-      const domainKeys = Object.keys(domainGroups).sort();
+      const groupKeys = Object.keys(groups).sort();
 
-      // Assign domain center positions (grid layout with generous spacing)
-      const domainCenters = {};
-      const cols = Math.max(2, Math.ceil(Math.sqrt(domainKeys.length)));
+      // Assign group center positions (grid layout with generous spacing)
+      const groupCenters = {};
+      const cols = Math.max(2, Math.ceil(Math.sqrt(groupKeys.length)));
       const cellW = Math.max(350, width / (cols + 0.5));
       const cellH = Math.max(350, 300);
-      domainKeys.forEach((dk, i) => {
+      groupKeys.forEach((gk, i) => {
         const col = i % cols;
         const row = Math.floor(i / cols);
-        domainCenters[dk] = { x: cellW * (col + 0.75), y: cellH * (row + 0.75) };
+        groupCenters[gk] = { x: cellW * (col + 0.75), y: cellH * (row + 0.75) };
       });
 
-      // Create simulation nodes with domain grouping
+      // Create simulation nodes with group assignment
       const nodeMap = {};
       const simNodes = nodes.map(n => {
-        const dk = n.domain_key || null;
-        const center = dk ? domainCenters[dk] : { x: width / 2, y: (domainKeys.length > 0 ? (Math.ceil(domainKeys.length / cols) + 0.5) * cellH : height / 2) };
-        const sn = { ...n, id: n.node_id, _domain: dk, x: center.x + (Math.random() - 0.5) * 100, y: center.y + (Math.random() - 0.5) * 100 };
+        const gk = n[groupField] || null;
+        const center = gk && groupCenters[gk] ? groupCenters[gk] : { x: width / 2, y: (groupKeys.length > 0 ? (Math.ceil(groupKeys.length / cols) + 0.5) * cellH : height / 2) };
+        const sn = { ...n, id: n.node_id, _group: gk, x: center.x + (Math.random() - 0.5) * 100, y: center.y + (Math.random() - 0.5) * 100 };
         nodeMap[n.node_id] = sn;
         return sn;
       });
@@ -2176,9 +2192,9 @@ function dashboard() {
         .force('link', d3.forceLink(simEdges).id(d => d.id).distance(80).strength(0.3))
         .force('charge', d3.forceManyBody().strength(-150))
         .force('collision', d3.forceCollide().radius(25))
-        // Pull domain-assigned nodes toward their domain center; free nodes drift
-        .force('x', d3.forceX(d => d._domain ? domainCenters[d._domain].x : width / 2).strength(d => d._domain ? 0.4 : 0.05))
-        .force('y', d3.forceY(d => d._domain ? domainCenters[d._domain].y : height / 2).strength(d => d._domain ? 0.4 : 0.05));
+        // Pull grouped nodes toward their group center; ungrouped nodes drift
+        .force('x', d3.forceX(d => d._group && groupCenters[d._group] ? groupCenters[d._group].x : width / 2).strength(d => d._group ? 0.4 : 0.05))
+        .force('y', d3.forceY(d => d._group && groupCenters[d._group] ? groupCenters[d._group].y : height / 2).strength(d => d._group ? 0.4 : 0.05));
 
       // Domain bounding box group (rendered behind everything)
       const domainBoxGroup = g.append('g').attr('class', 'domain-boxes');
@@ -2269,27 +2285,29 @@ function dashboard() {
         // Compute and render domain bounding boxes
         const padding = 30;
         const labelHeight = 20;
-        const boxData = domainKeys.filter(dk => dk).map(dk => {
-          const members = simNodes.filter(n => n._domain === dk);
+        const boxData = groupKeys.map(gk => {
+          const members = simNodes.filter(n => n._group === gk);
           if (members.length === 0) return null;
           const minX = d3.min(members, d => d.x) - 45 - padding;
           const maxX = d3.max(members, d => d.x) + 45 + padding;
           const minY = d3.min(members, d => d.y) - 18 - padding - labelHeight;
           const maxY = d3.max(members, d => d.y) + 18 + padding;
-          return { dk, x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+          return { gk, x: minX, y: minY, w: maxX - minX, h: maxY - minY, color: groupField === 'layer' ? self.layerColor(gk) : '#3b82f6' };
         }).filter(Boolean);
 
-        const boxes = domainBoxGroup.selectAll('.domain-g').data(boxData, d => d.dk);
+        const boxes = domainBoxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
         const enter = boxes.enter().append('g').attr('class', 'domain-g');
         enter.append('rect').attr('class', 'domain-box');
         enter.append('text').attr('class', 'domain-label');
         const merged = enter.merge(boxes);
         merged.select('.domain-box')
           .attr('x', d => d.x).attr('y', d => d.y)
-          .attr('width', d => d.w).attr('height', d => d.h);
+          .attr('width', d => d.w).attr('height', d => d.h)
+          .attr('stroke', d => d.color);
         merged.select('.domain-label')
           .attr('x', d => d.x + 12).attr('y', d => d.y + 16)
-          .text(d => d.dk.toUpperCase());
+          .attr('fill', d => d.color)
+          .text(d => d.gk.toUpperCase());
         boxes.exit().remove();
       });
 
@@ -2403,11 +2421,24 @@ function dashboard() {
 
     renderWorkspaceGraph(container, allFilteredNodes, allFilteredEdges) {
       const self = this;
+
+      // Save current node positions before clearing (preserves layout across re-renders)
+      const prevSvg = container.querySelector('svg');
+      if (prevSvg) {
+        d3.select(prevSvg).selectAll('.node-g').each(function(d) {
+          if (d && d.id) {
+            if (!self._wsPositionCache) self._wsPositionCache = {};
+            self._wsPositionCache[d.id] = { x: d.x, y: d.y };
+          }
+        });
+      }
+
       container.innerHTML = '';
       const width = container.clientWidth || 900;
       const height = Math.max(500, container.clientHeight || 500);
 
       if (this.workspaceNodes.length === 0) {
+        this._wsPositionCache = {};
         container.innerHTML = '<div style="padding:80px;text-align:center;color:var(--text-muted)"><div style="font-size:24px;margin-bottom:12px">⊕</div>Drag entities from the left palette onto this canvas.<br><span style="font-size:11px">Drop two entities to auto-discover the shortest path between them.</span></div>';
         return;
       }
@@ -2417,6 +2448,7 @@ function dashboard() {
       const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
       const nodeById = {};
       filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
+      const posCache = this._wsPositionCache || {};
 
       // Collect all node IDs that should be on canvas
       const canvasNodeIds = new Set(this.workspaceNodes.map(w => w.node_id).filter(id => filteredNodeIds.has(id)));
@@ -2451,10 +2483,13 @@ function dashboard() {
         const isManual = this.workspaceNodes.some(w => w.node_id === nId && w.manual);
         const isPath = pathNodeIds.has(nId) && !isManual;
         const isNeighbor = neighborIds.has(nId);
+        // Use cached position from previous render, then manual position, then random
+        const cached = posCache[nId];
+        const startX = pos ? pos.x : cached ? cached.x : width / 2 + (Math.random() - 0.5) * 200;
+        const startY = pos ? pos.y : cached ? cached.y : height / 2 + (Math.random() - 0.5) * 200;
         return {
           ...n, id: nId,
-          x: pos ? pos.x : width / 2 + (Math.random() - 0.5) * 200,
-          y: pos ? pos.y : height / 2 + (Math.random() - 0.5) * 200,
+          x: startX, y: startY,
           _manual: isManual, _path: isPath, _neighbor: isNeighbor,
           fx: isManual && pos ? pos.x : null,
           fy: isManual && pos ? pos.y : null
