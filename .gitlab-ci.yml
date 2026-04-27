@@ -1,8 +1,3 @@
-workflow:
-  rules:
-    - if: $CI_COMMIT_TAG
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH
-
 stages:
   - test
   - build
@@ -16,6 +11,8 @@ test:
     GOTOOLCHAIN: auto
   script:
     - go test ./... -count=1 -v
+  rules:
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_TAG == null
 
 build:
   stage: build
@@ -33,8 +30,8 @@ build:
     paths:
       - dist/
     expire_in: 30 days
-  only:
-    - tags
+  rules:
+    - if: $CI_COMMIT_TAG
 
 release:
   stage: release
@@ -67,8 +64,8 @@ release:
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/oracle-darwin-arm64"
         - name: oracle-windows-amd64.exe
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/oracle-windows-amd64.exe"
-  only:
-    - tags
+  rules:
+    - if: $CI_COMMIT_TAG
 
 publish-npm:
   stage: publish
@@ -78,5 +75,5 @@ publish-npm:
   script:
     - echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
     - cd npm && npm publish --access public
-  only:
-    - tags
+  rules:
+    - if: $CI_COMMIT_TAG
