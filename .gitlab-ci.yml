@@ -38,22 +38,30 @@ release:
     - job: build
       artifacts: true
   script:
-    - echo "Creating release for $CI_COMMIT_TAG"
+    - apk add --no-cache curl
+    - |
+      for binary in dist/*; do
+        name=$(basename "$binary")
+        echo "Uploading $name to generic package registry..."
+        curl --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          --upload-file "$binary" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/${name}"
+      done
   release:
     tag_name: $CI_COMMIT_TAG
     description: "Oracle CLI $CI_COMMIT_TAG"
     assets:
       links:
         - name: oracle-linux-amd64
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/oracle-linux-amd64?job=build"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/oracle-linux-amd64"
         - name: oracle-linux-arm64
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/oracle-linux-arm64?job=build"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/oracle-linux-arm64"
         - name: oracle-darwin-amd64
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/oracle-darwin-amd64?job=build"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/oracle-darwin-amd64"
         - name: oracle-darwin-arm64
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/oracle-darwin-arm64?job=build"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/oracle-darwin-arm64"
         - name: oracle-windows-amd64.exe
-          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/oracle-windows-amd64.exe?job=build"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/oracle/${CI_COMMIT_TAG}/oracle-windows-amd64.exe"
   only:
     - tags
 

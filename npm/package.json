@@ -1,6 +1,6 @@
 {
   "name": "@alexdx/depbot-oracle",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Domain Oracle — self-learning knowledge graph for code analysis. MCP server for Claude Code.",
   "bin": {
     "oracle": "./bin/run.js"

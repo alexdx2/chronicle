@@ -7,7 +7,8 @@ const https = require('https');
 const http = require('http');
 
 const VERSION = require('../package.json').version;
-const REPO = 'https://gitlab.com/Alex_dx3/depbot';
+const PROJECT_ID = '81624373';
+const REGISTRY = `https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/oracle`;
 
 const PLATFORM_MAP = {
   'darwin-x64': 'oracle-darwin-amd64',
@@ -30,8 +31,8 @@ if (!binaryName) {
 const binDir = path.join(__dirname, '..', 'bin');
 const binaryPath = path.join(binDir, process.platform === 'win32' ? 'oracle.exe' : 'oracle');
 
-// Try downloading from GitLab releases
-const releaseURL = `${REPO}/-/releases/v${VERSION}/downloads/${binaryName}`;
+// Download from GitLab generic package registry
+const releaseURL = `${REGISTRY}/v${VERSION}/${binaryName}`;
 
 console.log(`Oracle MCP v${VERSION}`);
 console.log(`Platform: ${platform} → ${binaryName}`);
@@ -84,7 +85,7 @@ function fallbackToBuild() {
     // Clone if needed
     if (!fs.existsSync(goSrcDir)) {
       console.log('Cloning repository...');
-      execSync(`git clone --depth 1 --branch v${VERSION} ${REPO}.git ${goSrcDir}`, { stdio: 'inherit' });
+      execSync(`git clone --depth 1 --branch v${VERSION} https://gitlab.com/Alex_dx3/depbot.git ${goSrcDir}`, { stdio: 'inherit' });
     }
 
     // Build
