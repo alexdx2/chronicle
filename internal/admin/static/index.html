@@ -1057,7 +1057,25 @@ function dashboard() {
         this.loading.graph = false;
         this.loaded.graph = true;
         this.fetchDiagram();
+      } else if (this.tab === 'graph') {
+        // Graph tab on page load — fetch data
+        this.loading.graph = true;
+        this.fetchGraphData().then(() => {
+          this.loading.graph = false;
+          this.loaded.graph = true;
+          this.$nextTick(() => this.renderGraph());
+        });
       }
+
+      // Always try to load the latest diagram so the tab appears
+      try {
+        const dr = await fetch('/api/diagram/latest');
+        if (dr.ok) {
+          const dd = await dr.json();
+          this.diagramSessionId = dd.id;
+          this.diagramData = dd;
+        }
+      } catch(e) {}
 
       // Get the original project path (where the server was started)
       try {
