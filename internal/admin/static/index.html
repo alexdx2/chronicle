@@ -935,8 +935,10 @@ a{color:var(--primary);text-decoration:none}
               <div class="ws-item"
                    :style="'border-left:3px solid '+layerColor(n.layer)"
                    @click="addNodeToDiagram(n)"
+                   draggable="true"
+                   @dragstart="$event.dataTransfer.setData('text/plain', JSON.stringify(n)); $event.dataTransfer.effectAllowed='copy'"
                    :class="{'opacity-50': (diagramData?.nodes||[]).some(d => d.node_id === n.node_id)}">
-                <span style="color:#999;font-size:9px">+</span>
+                <span style="color:#999;font-size:9px;cursor:grab">⠿</span>
                 <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
                 <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
               </div>
@@ -955,11 +957,19 @@ a{color:var(--primary);text-decoration:none}
         </template>
         <template x-if="diagramData?.total_steps > 0">
           <div style="display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
+            <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:4px 8px;font-size:10px" title="Clear all highlights">Clear</button>
             <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
             <span style="font-size:13px;min-width:120px;text-align:center">
-              <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
-              <template x-if="diagramData.step_titles?.[diagramStep]">
-                <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
+              <template x-if="diagramStep >= 0">
+                <span>
+                  <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
+                  <template x-if="diagramData.step_titles?.[diagramStep]">
+                    <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
+                  </template>
+                </span>
+              </template>
+              <template x-if="diagramStep < 0">
+                <span style="color:var(--text-muted);font-size:12px">No highlights</span>
               </template>
             </span>
             <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:4px 10px;font-size:14px">▶</button>
@@ -969,7 +979,9 @@ a{color:var(--primary);text-decoration:none}
       </div>
 
       <!-- Diagram SVG canvas -->
-      <div id="diagram-canvas" style="flex:1;overflow:auto"></div>
+      <div id="diagram-canvas" style="flex:1;overflow:auto"
+           @dragover.prevent="$event.dataTransfer.dropEffect='copy'"
+           @drop.prevent="handleDiagramDrop($event)"></div>
 
       <!-- Resizable description panel -->
       <template x-if="diagramData?.total_steps > 0">
@@ -2986,6 +2998,13 @@ function dashboard() {
       return Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
     },
 
+    handleDiagramDrop(event) {
+      try {
+        const node = JSON.parse(event.dataTransfer.getData('text/plain'));
+        if (node && node.node_id) this.addNodeToDiagram(node);
+      } catch(e) {}
+    },
+
     addNodeToDiagram(node) {
       if (!this.diagramData) return;
       this.diagramData.nodes.push({
@@ -3412,6 +3431,9 @@ function dashboard() {
           }
         });
       }
+
+      // Re-apply step annotations after render
+      this.$nextTick(() => this.updateDiagramAnnotations());
     },
   };
 }
