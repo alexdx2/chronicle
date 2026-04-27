@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/anthropics/depbot/internal/graph"
 	"github.com/anthropics/depbot/internal/registry"
@@ -77,8 +79,28 @@ func openGraph() *graph.Graph {
 
 	s, err := store.Open(dbPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error opening database %q: %v\n", dbPath, err)
-		os.Exit(1)
+		if strings.Contains(err.Error(), "no such column") || strings.Contains(err.Error(), "SQL logic error") {
+			fmt.Fprintf(os.Stderr, "Database schema is outdated: %v\n", err)
+			fmt.Fprintf(os.Stderr, "The database needs to be reset to apply new schema changes.\n")
+			fmt.Fprintf(os.Stderr, "This will delete all existing graph data. Reset database? [y/N] ")
+			reader := bufio.NewReader(os.Stdin)
+			answer, _ := reader.ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(answer)) == "y" {
+				os.Remove(dbPath)
+				s, err = store.Open(dbPath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error opening database after reset: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Fprintf(os.Stderr, "Database reset successfully. Run 'oracle scan' to rebuild the graph.\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "Aborted. Database not modified.\n")
+				os.Exit(1)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "error opening database %q: %v\n", dbPath, err)
+			os.Exit(1)
+		}
 	}
 
 	var reg *registry.Registry

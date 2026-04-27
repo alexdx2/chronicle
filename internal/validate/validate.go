@@ -82,6 +82,8 @@ type EvidenceInput struct {
 	SnippetHash      string
 	CommitSHA        string
 	Confidence       float64
+	Polarity         string
+	RevisionID       int64
 	Metadata         string
 }
 

@@ -88,6 +88,7 @@ type ImportEvidence struct {
 	SnippetHash      string  `json:"snippet_hash,omitempty"`
 	CommitSHA        string  `json:"commit_sha,omitempty"`
 	Confidence       float64 `json:"confidence,omitempty"`
+	Polarity         string  `json:"polarity,omitempty"`
 	Metadata         string  `json:"metadata,omitempty"`
 }
 
@@ -176,6 +177,8 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				SnippetHash:      ev.SnippetHash,
 				CommitSHA:        ev.CommitSHA,
 				Confidence:       ev.Confidence,
+				Polarity:         ev.Polarity,
+				RevisionID:       revisionID,
 				Metadata:         ev.Metadata,
 			}
 

@@ -73,6 +73,7 @@ func (g *Graph) UpsertEdge(input validate.EdgeInput, revisionID int64) (int64, e
 		return 0, fmt.Errorf("UpsertEdge: to_node_key %q: %w", ve.ToNodeKey, err)
 	}
 
+	confidence := ConfidenceFromDerivation(ve.DerivationKind)
 	row := store.EdgeRow{
 		EdgeKey:             ve.EdgeKey,
 		FromNodeID:          fromID,
@@ -83,7 +84,9 @@ func (g *Graph) UpsertEdge(input validate.EdgeInput, revisionID int64) (int64, e
 		Active:              true,
 		FirstSeenRevisionID: revisionID,
 		LastSeenRevisionID:  revisionID,
-		Confidence:          ve.Confidence,
+		Confidence:          confidence,
+		Freshness:           1.0,
+		TrustScore:          confidence,
 		Metadata:            ve.Metadata,
 	}
 	id, err := g.store.UpsertEdge(row)
@@ -107,35 +110,44 @@ func (g *Graph) AddNodeEvidence(nodeKey string, input validate.EvidenceInput) (i
 
 	confidence := input.Confidence
 	if confidence == 0 {
-		confidence = 1.0
+		confidence = 0.95
 	}
 	metadata := input.Metadata
 	if metadata == "" {
 		metadata = "{}"
 	}
+	polarity := input.Polarity
+	if polarity == "" {
+		polarity = "positive"
+	}
 
 	row := store.EvidenceRow{
-		TargetKind:       "node",
-		NodeID:           nodeID,
-		SourceKind:       input.SourceKind,
-		RepoName:         input.RepoName,
-		FilePath:         input.FilePath,
-		LineStart:        input.LineStart,
-		LineEnd:          input.LineEnd,
-		ColumnStart:      input.ColumnStart,
-		ColumnEnd:        input.ColumnEnd,
-		Locator:          input.Locator,
-		ExtractorID:      input.ExtractorID,
-		ExtractorVersion: input.ExtractorVersion,
-		ASTRule:          input.ASTRule,
-		SnippetHash:      input.SnippetHash,
-		CommitSHA:        input.CommitSHA,
-		Confidence:       confidence,
-		Metadata:         metadata,
+		TargetKind:              "node",
+		NodeID:                  nodeID,
+		SourceKind:              input.SourceKind,
+		RepoName:                input.RepoName,
+		FilePath:                input.FilePath,
+		LineStart:               input.LineStart,
+		LineEnd:                 input.LineEnd,
+		ColumnStart:             input.ColumnStart,
+		ColumnEnd:               input.ColumnEnd,
+		Locator:                 input.Locator,
+		ExtractorID:             input.ExtractorID,
+		ExtractorVersion:        input.ExtractorVersion,
+		ASTRule:                 input.ASTRule,
+		SnippetHash:             input.SnippetHash,
+		CommitSHA:               input.CommitSHA,
+		Confidence:              confidence,
+		EvidencePolarity:        polarity,
+		ValidFromRevisionID:     input.RevisionID,
+		Metadata:                metadata,
 	}
 	id, err := g.store.AddEvidence(row)
 	if err != nil {
 		return 0, fmt.Errorf("AddNodeEvidence: %w", err)
+	}
+	if err := g.RecalculateNodeTrust(nodeID); err != nil {
+		return id, fmt.Errorf("AddNodeEvidence recalc: %w", err)
 	}
 	return id, nil
 }
@@ -152,37 +164,46 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 		return 0, fmt.Errorf("AddEdgeEvidence: %w", err)
 	}
 
-	confidence := input.Confidence
-	if confidence == 0 {
-		confidence = 1.0
+	confidence := ConfidenceFromDerivation(edge.DerivationKind)
+	if input.Confidence > 0 {
+		confidence = input.Confidence
 	}
 	metadata := input.Metadata
 	if metadata == "" {
 		metadata = "{}"
 	}
+	polarity := input.Polarity
+	if polarity == "" {
+		polarity = "positive"
+	}
 
 	row := store.EvidenceRow{
-		TargetKind:       "edge",
-		EdgeID:           edge.EdgeID,
-		SourceKind:       input.SourceKind,
-		RepoName:         input.RepoName,
-		FilePath:         input.FilePath,
-		LineStart:        input.LineStart,
-		LineEnd:          input.LineEnd,
-		ColumnStart:      input.ColumnStart,
-		ColumnEnd:        input.ColumnEnd,
-		Locator:          input.Locator,
-		ExtractorID:      input.ExtractorID,
-		ExtractorVersion: input.ExtractorVersion,
-		ASTRule:          input.ASTRule,
-		SnippetHash:      input.SnippetHash,
-		CommitSHA:        input.CommitSHA,
-		Confidence:       confidence,
-		Metadata:         metadata,
+		TargetKind:              "edge",
+		EdgeID:                  edge.EdgeID,
+		SourceKind:              input.SourceKind,
+		RepoName:                input.RepoName,
+		FilePath:                input.FilePath,
+		LineStart:               input.LineStart,
+		LineEnd:                 input.LineEnd,
+		ColumnStart:             input.ColumnStart,
+		ColumnEnd:               input.ColumnEnd,
+		Locator:                 input.Locator,
+		ExtractorID:             input.ExtractorID,
+		ExtractorVersion:        input.ExtractorVersion,
+		ASTRule:                 input.ASTRule,
+		SnippetHash:             input.SnippetHash,
+		CommitSHA:               input.CommitSHA,
+		Confidence:              confidence,
+		EvidencePolarity:        polarity,
+		ValidFromRevisionID:     input.RevisionID,
+		Metadata:                metadata,
 	}
 	id, err := g.store.AddEvidence(row)
 	if err != nil {
 		return 0, fmt.Errorf("AddEdgeEvidence: %w", err)
+	}
+	if err := g.RecalculateEdgeTrust(edge.EdgeID); err != nil {
+		return id, fmt.Errorf("AddEdgeEvidence recalc: %w", err)
 	}
 	return id, nil
 }

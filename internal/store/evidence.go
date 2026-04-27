@@ -28,6 +28,13 @@ type EvidenceRow struct {
 	ObservedAt       string  `json:"observed_at"`
 	VerifiedAt       string  `json:"verified_at,omitempty"`
 	Confidence       float64 `json:"confidence"`
+	EvidenceStatus   string  `json:"evidence_status"`
+	EvidencePolarity string  `json:"evidence_polarity"`
+	ValidFromRevisionID      int64  `json:"valid_from_revision_id,omitempty"`
+	ValidToRevisionID        int64  `json:"valid_to_revision_id,omitempty"`
+	LastVerifiedRevisionID   int64  `json:"last_verified_revision_id,omitempty"`
+	InvalidatedByRevisionID  int64  `json:"invalidated_by_revision_id,omitempty"`
+	InvalidatedReason        string `json:"invalidated_reason,omitempty"`
 	Metadata         string  `json:"metadata"`
 }
 
@@ -42,7 +49,11 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		edgeID = &e.EdgeID
 	}
 
-	// Check for duplicate.
+	// Check for duplicate (polarity is part of dedup key — negative evidence is separate from positive).
+	polarity := e.EvidencePolarity
+	if polarity == "" {
+		polarity = "positive"
+	}
 	const dedupQ = `
 		SELECT evidence_id FROM graph_evidence
 		WHERE target_kind = ?
@@ -53,6 +64,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		  AND COALESCE(file_path,'') = ?
 		  AND COALESCE(line_start,0) = ?
 		  AND extractor_id = ?
+		  AND evidence_polarity = ?
 		LIMIT 1
 	`
 	var existingID int64
@@ -61,6 +73,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		e.SourceKind,
 		e.RepoName, e.FilePath, e.LineStart,
 		e.ExtractorID,
+		polarity,
 	).Scan(&existingID)
 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -68,16 +81,26 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 	}
 
 	if err == nil {
-		// Update existing.
+		// Update existing — if it was stale, mark as revalidated; otherwise keep valid.
+		newStatus := "valid"
+		var oldStatus string
+		s.db.QueryRow("SELECT evidence_status FROM graph_evidence WHERE evidence_id=?", existingID).Scan(&oldStatus)
+		if oldStatus == "stale" {
+			newStatus = "revalidated"
+		}
+
 		const updQ = `
 			UPDATE graph_evidence
 			SET observed_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),
 			    confidence=?,
 			    commit_sha=?,
-			    extractor_version=?
+			    extractor_version=?,
+			    evidence_status=?,
+			    last_verified_revision_id=?
 			WHERE evidence_id=?
 		`
-		_, err = s.db.Exec(updQ, e.Confidence, nullableStr(e.CommitSHA), e.ExtractorVersion, existingID)
+		_, err = s.db.Exec(updQ, e.Confidence, nullableStr(e.CommitSHA), e.ExtractorVersion,
+			newStatus, nullableInt64(e.ValidFromRevisionID), existingID)
 		if err != nil {
 			return 0, fmt.Errorf("AddEvidence update: %w", err)
 		}
@@ -85,13 +108,20 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 	}
 
 	// Insert new.
+	status := e.EvidenceStatus
+	if status == "" {
+		status = "valid"
+	}
+
 	const insQ = `
 		INSERT INTO graph_evidence
 		  (target_kind, node_id, edge_id, source_kind, repo_name, file_path,
 		   line_start, line_end, column_start, column_end, locator,
 		   extractor_id, extractor_version, ast_rule, snippet_hash, commit_sha,
-		   confidence, metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   confidence, evidence_status, evidence_polarity,
+		   valid_from_revision_id, last_verified_revision_id,
+		   metadata)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`
 	res, err := s.db.Exec(insQ,
 		e.TargetKind, nodeID, edgeID,
@@ -102,7 +132,9 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		nullableStr(e.Locator),
 		e.ExtractorID, e.ExtractorVersion,
 		nullableStr(e.ASTRule), nullableStr(e.SnippetHash), nullableStr(e.CommitSHA),
-		e.Confidence, e.Metadata,
+		e.Confidence, status, polarity,
+		nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ValidFromRevisionID),
+		e.Metadata,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("AddEvidence insert: %w", err)
@@ -133,7 +165,11 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 		       extractor_id, extractor_version,
 		       COALESCE(ast_rule,''), COALESCE(snippet_hash,''), COALESCE(commit_sha,''),
 		       observed_at, COALESCE(verified_at,''),
-		       confidence, metadata
+		       confidence, evidence_status, evidence_polarity,
+		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0),
+		       COALESCE(last_verified_revision_id,0), COALESCE(invalidated_by_revision_id,0),
+		       COALESCE(invalidated_reason,''),
+		       metadata
 		FROM graph_evidence
 		WHERE ` + col + ` = ?
 		ORDER BY evidence_id
@@ -154,7 +190,11 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 			&r.Locator, &r.ExtractorID, &r.ExtractorVersion,
 			&r.ASTRule, &r.SnippetHash, &r.CommitSHA,
 			&r.ObservedAt, &r.VerifiedAt,
-			&r.Confidence, &r.Metadata,
+			&r.Confidence, &r.EvidenceStatus, &r.EvidencePolarity,
+			&r.ValidFromRevisionID, &r.ValidToRevisionID,
+			&r.LastVerifiedRevisionID, &r.InvalidatedByRevisionID,
+			&r.InvalidatedReason,
+			&r.Metadata,
 		); err != nil {
 			return nil, fmt.Errorf("listEvidence scan: %w", err)
 		}
@@ -163,8 +203,116 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 	return out, rows.Err()
 }
 
+// MarkEvidenceStaleByFiles marks all valid/revalidated evidence from the given file paths as stale.
+// Returns the count and the affected edge/node IDs.
+func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, affectedEdgeIDs, affectedNodeIDs []int64, err error) {
+	if len(filePaths) == 0 {
+		return 0, nil, nil, nil
+	}
+
+	// Build placeholders.
+	placeholders := ""
+	args := make([]any, len(filePaths))
+	for i, fp := range filePaths {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args[i] = fp
+	}
+
+	// Mark stale.
+	updQ := `UPDATE graph_evidence SET evidence_status='stale'
+		WHERE file_path IN (` + placeholders + `)
+		AND evidence_status IN ('valid','revalidated')`
+	res, err := s.db.Exec(updQ, args...)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles update: %w", err)
+	}
+	staleCount, _ = res.RowsAffected()
+
+	// Get affected edge IDs.
+	edgeQ := `SELECT DISTINCT edge_id FROM graph_evidence
+		WHERE file_path IN (` + placeholders + `) AND edge_id IS NOT NULL AND evidence_status='stale'`
+	rows, err := s.db.Query(edgeQ, args...)
+	if err != nil {
+		return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles edges: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		rows.Scan(&id)
+		affectedEdgeIDs = append(affectedEdgeIDs, id)
+	}
+
+	// Get affected node IDs.
+	nodeQ := `SELECT DISTINCT node_id FROM graph_evidence
+		WHERE file_path IN (` + placeholders + `) AND node_id IS NOT NULL AND evidence_status='stale'`
+	rows2, err := s.db.Query(nodeQ, args...)
+	if err != nil {
+		return staleCount, affectedEdgeIDs, nil, fmt.Errorf("MarkEvidenceStaleByFiles nodes: %w", err)
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var id int64
+		rows2.Scan(&id)
+		affectedNodeIDs = append(affectedNodeIDs, id)
+	}
+
+	return staleCount, affectedEdgeIDs, affectedNodeIDs, nil
+}
+
+// CountEvidenceByStatus returns counts of evidence grouped by status for a domain.
+func (s *Store) CountEvidenceByStatus(domainKey string) (map[string]int, error) {
+	q := `SELECT e.evidence_status, COUNT(*)
+		FROM graph_evidence e
+		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+		LEFT JOIN graph_nodes en ON ed.from_node_id = en.node_id
+		WHERE COALESCE(n.domain_key, en.domain_key) = ?
+		GROUP BY e.evidence_status`
+	rows, err := s.db.Query(q, domainKey)
+	if err != nil {
+		return nil, fmt.Errorf("CountEvidenceByStatus: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var count int
+		rows.Scan(&status, &count)
+		result[status] = count
+	}
+	return result, rows.Err()
+}
+
+// StaleFilePaths returns distinct file paths that have stale evidence.
+func (s *Store) StaleFilePaths() ([]string, error) {
+	q := `SELECT DISTINCT file_path FROM graph_evidence WHERE evidence_status='stale' AND file_path != ''`
+	rows, err := s.db.Query(q)
+	if err != nil {
+		return nil, fmt.Errorf("StaleFilePaths: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var fp string
+		rows.Scan(&fp)
+		out = append(out, fp)
+	}
+	return out, rows.Err()
+}
+
 // nullableInt returns nil for zero ints so they're stored as NULL.
 func nullableInt(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
+}
+
+// nullableInt64 returns nil for zero int64s so they're stored as NULL.
+func nullableInt64(n int64) any {
 	if n == 0 {
 		return nil
 	}

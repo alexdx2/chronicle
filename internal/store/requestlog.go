@@ -32,13 +32,17 @@ func (s *Store) LogRequest(e RequestLogEntry) (int64, error) {
 }
 
 func (s *Store) ListRecentRequests(limit int) ([]RequestLogEntry, error) {
+	return s.ListRecentRequestsOffset(limit, 0)
+}
+
+func (s *Store) ListRecentRequestsOffset(limit, offset int) ([]RequestLogEntry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	rows, err := s.db.Query(
 		`SELECT request_id, timestamp, tool_name, params_json,
 		 COALESCE(result_json,''), COALESCE(error_message,''), duration_ms, COALESCE(summary,'')
-		 FROM mcp_request_log ORDER BY request_id DESC LIMIT ?`, limit,
+		 FROM mcp_request_log ORDER BY request_id DESC LIMIT ? OFFSET ?`, limit, offset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ListRecentRequests: %w", err)

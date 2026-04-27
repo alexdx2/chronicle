@@ -12,12 +12,14 @@ func newAdminCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			g := openGraph()
 			port, _ := cmd.Flags().GetInt("port")
-			srv := admin.NewServer(g, g.Store(), port, manifestPath)
+			dev, _ := cmd.Flags().GetBool("dev")
+			srv := admin.NewServer(g, g.Store(), port, manifestPath, dev)
 			if err := srv.Start(); err != nil {
 				outputError(err)
 			}
 		},
 	}
 	cmd.Flags().Int("port", 4200, "HTTP port")
+	cmd.Flags().Bool("dev", false, "Serve static files from disk (live reload without rebuild)")
 	return cmd
 }

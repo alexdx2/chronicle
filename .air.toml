@@ -1,0 +1,13 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/oracle ./cmd/oracle"
+  bin = "./tmp/oracle"
+  args_bin = ["admin", "--dev"]
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "node_modules", ".git", ".depbot"]
+  delay = 500
+
+[misc]
+  clean_on_exit = true

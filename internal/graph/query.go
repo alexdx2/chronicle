@@ -8,11 +8,14 @@ import (
 
 // DepNode is a node in the dependency traversal result.
 type DepNode struct {
-	NodeKey  string `json:"node_key"`
-	Name     string `json:"name"`
-	Layer    string `json:"layer"`
-	NodeType string `json:"node_type"`
-	Depth    int    `json:"depth"`
+	NodeKey    string  `json:"node_key"`
+	Name       string  `json:"name"`
+	Layer      string  `json:"layer"`
+	NodeType   string  `json:"node_type"`
+	Depth      int     `json:"depth"`
+	TrustScore float64 `json:"trust_score"`
+	Freshness  float64 `json:"freshness"`
+	Status     string  `json:"status"`
 }
 
 // Stats holds aggregate counts for a domain.
@@ -109,11 +112,14 @@ func (g *Graph) traverseDeps(nodeKey string, maxDepth int, derivationFilter []st
 
 			nextDepth := item.depth + 1
 			result = append(result, DepNode{
-				NodeKey:  node.NodeKey,
-				Name:     node.Name,
-				Layer:    node.Layer,
-				NodeType: node.NodeType,
-				Depth:    nextDepth,
+				NodeKey:    node.NodeKey,
+				Name:       node.Name,
+				Layer:      node.Layer,
+				NodeType:   node.NodeType,
+				Depth:      nextDepth,
+				TrustScore: node.TrustScore,
+				Freshness:  node.Freshness,
+				Status:     node.Status,
 			})
 
 			queue = append(queue, queueItem{nodeID: nextID, depth: nextDepth})

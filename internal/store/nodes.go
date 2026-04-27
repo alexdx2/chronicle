@@ -26,6 +26,8 @@ type NodeRow struct {
 	FirstSeenRevisionID int64   `json:"first_seen_revision_id"`
 	LastSeenRevisionID  int64   `json:"last_seen_revision_id"`
 	Confidence          float64 `json:"confidence"`
+	Freshness           float64 `json:"freshness"`
+	TrustScore          float64 `json:"trust_score"`
 	Metadata            string  `json:"metadata"`
 }
 
@@ -58,15 +60,15 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 			INSERT INTO graph_nodes
 			  (node_key, layer, node_type, domain_key, name, qualified_name, repo_name,
 			   file_path, lang, owner_key, environment, visibility, status,
-			   first_seen_revision_id, last_seen_revision_id, confidence, metadata)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			   first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		`
 		res, err := s.db.Exec(insQ,
 			n.NodeKey, n.Layer, n.NodeType, n.DomainKey, n.Name,
 			nullableStr(n.QualifiedName), nullableStr(n.RepoName), nullableStr(n.FilePath),
 			nullableStr(n.Lang), nullableStr(n.OwnerKey), nullableStr(n.Environment),
 			nullableStr(n.Visibility), n.Status,
-			n.FirstSeenRevisionID, n.LastSeenRevisionID, n.Confidence, n.Metadata,
+			n.FirstSeenRevisionID, n.LastSeenRevisionID, n.Confidence, n.Freshness, n.TrustScore, n.Metadata,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("UpsertNode insert: %w", err)
@@ -86,13 +88,13 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 		UPDATE graph_nodes
 		SET name=?, qualified_name=?, repo_name=?, file_path=?, lang=?, owner_key=?,
 		    environment=?, visibility=?, status=?, last_seen_revision_id=?,
-		    confidence=?, metadata=?
+		    confidence=?, freshness=?, trust_score=?, metadata=?
 		WHERE node_key=?
 	`
 	_, err = s.db.Exec(updQ,
 		n.Name, nullableStr(n.QualifiedName), nullableStr(n.RepoName), nullableStr(n.FilePath),
 		nullableStr(n.Lang), nullableStr(n.OwnerKey), nullableStr(n.Environment),
-		nullableStr(n.Visibility), n.Status, n.LastSeenRevisionID, n.Confidence, n.Metadata,
+		nullableStr(n.Visibility), n.Status, n.LastSeenRevisionID, n.Confidence, n.Freshness, n.TrustScore, n.Metadata,
 		n.NodeKey,
 	)
 	if err != nil {
@@ -108,7 +110,7 @@ func (s *Store) GetNodeByKey(key string) (*NodeRow, error) {
 		       COALESCE(qualified_name,''), COALESCE(repo_name,''), COALESCE(file_path,''),
 		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
 		       COALESCE(visibility,''), status,
-		       first_seen_revision_id, last_seen_revision_id, confidence, metadata
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
 		FROM graph_nodes WHERE node_key = ?
 	`
 	r := &NodeRow{}
@@ -116,7 +118,7 @@ func (s *Store) GetNodeByKey(key string) (*NodeRow, error) {
 		&r.NodeID, &r.NodeKey, &r.Layer, &r.NodeType, &r.DomainKey, &r.Name,
 		&r.QualifiedName, &r.RepoName, &r.FilePath, &r.Lang, &r.OwnerKey,
 		&r.Environment, &r.Visibility, &r.Status,
-		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Metadata,
+		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("GetNodeByKey %q: %w", key, ErrNotFound)
@@ -134,7 +136,7 @@ func (s *Store) GetNodeByID(id int64) (*NodeRow, error) {
 		       COALESCE(qualified_name,''), COALESCE(repo_name,''), COALESCE(file_path,''),
 		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
 		       COALESCE(visibility,''), status,
-		       first_seen_revision_id, last_seen_revision_id, confidence, metadata
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
 		FROM graph_nodes WHERE node_id = ?
 	`
 	r := &NodeRow{}
@@ -142,7 +144,7 @@ func (s *Store) GetNodeByID(id int64) (*NodeRow, error) {
 		&r.NodeID, &r.NodeKey, &r.Layer, &r.NodeType, &r.DomainKey, &r.Name,
 		&r.QualifiedName, &r.RepoName, &r.FilePath, &r.Lang, &r.OwnerKey,
 		&r.Environment, &r.Visibility, &r.Status,
-		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Metadata,
+		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("GetNodeByID %d: %w", id, ErrNotFound)
@@ -173,7 +175,7 @@ func (s *Store) ListNodes(f NodeFilter) ([]NodeRow, error) {
 		       COALESCE(qualified_name,''), COALESCE(repo_name,''), COALESCE(file_path,''),
 		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
 		       COALESCE(visibility,''), status,
-		       first_seen_revision_id, last_seen_revision_id, confidence, metadata
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
 		FROM graph_nodes
 	`
 	var conds []string
@@ -216,7 +218,7 @@ func (s *Store) ListNodes(f NodeFilter) ([]NodeRow, error) {
 			&r.NodeID, &r.NodeKey, &r.Layer, &r.NodeType, &r.DomainKey, &r.Name,
 			&r.QualifiedName, &r.RepoName, &r.FilePath, &r.Lang, &r.OwnerKey,
 			&r.Environment, &r.Visibility, &r.Status,
-			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Metadata,
+			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 		); err != nil {
 			return nil, fmt.Errorf("ListNodes scan: %w", err)
 		}
@@ -234,6 +236,17 @@ func (s *Store) DeleteNode(key string) error {
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("DeleteNode %q: %w", key, ErrNotFound)
+	}
+	return nil
+}
+
+// UpdateNodeTrust updates computed trust fields on a node.
+func (s *Store) UpdateNodeTrust(nodeID int64, confidence, freshness, trustScore float64, status string) error {
+	_, err := s.db.Exec(`
+		UPDATE graph_nodes SET confidence=?, freshness=?, trust_score=?, status=? WHERE node_id=?
+	`, confidence, freshness, trustScore, status, nodeID)
+	if err != nil {
+		return fmt.Errorf("UpdateNodeTrust: %w", err)
 	}
 	return nil
 }

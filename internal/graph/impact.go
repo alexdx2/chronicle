@@ -25,6 +25,7 @@ type ImpactEntry struct {
 	NodeType    string   `json:"node_type"`
 	Depth       int      `json:"depth"`
 	ImpactScore float64  `json:"impact_score"`
+	TrustChain  float64  `json:"trust_chain"`
 	Path        []string `json:"path"`
 	EdgeTypes   []string `json:"edge_types"`
 }
@@ -132,8 +133,8 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 				maxDepthReached = nextDepth
 			}
 
-			// Compute impact score: 100 * Π(edge_confidence) * 0.95^(depth-1)
-			newScoreProduct := item.scoreProduct * edge.Confidence
+			// Compute impact score: 100 * Π(trust_score) * 0.95^(depth-1)
+			newScoreProduct := item.scoreProduct * edge.TrustScore
 			score := 100.0 * newScoreProduct * math.Pow(0.95, float64(nextDepth-1))
 			score = math.Round(score*100) / 100 // round to 2 decimal places
 
@@ -153,6 +154,7 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 				NodeType:    node.NodeType,
 				Depth:       nextDepth,
 				ImpactScore: score,
+				TrustChain:  math.Round(newScoreProduct*1000) / 1000,
 				Path:        newPath,
 				EdgeTypes:   newEdgeTypes,
 			})

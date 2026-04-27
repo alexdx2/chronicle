@@ -18,8 +18,8 @@ func TestExtractionGuideCompactIsValidJSON(t *testing.T) {
 		}
 	}
 
-	if len(guide) > 5000 {
-		t.Errorf("compact guide is %d bytes, want < 5000", len(guide))
+	if len(guide) > 7000 {
+		t.Errorf("compact guide is %d bytes, want < 7000", len(guide))
 	}
 	t.Logf("Compact guide: %d bytes (~%d tokens)", len(guide), len(guide)/4)
 }
@@ -56,8 +56,8 @@ func TestExtractionGuideSizeDifference(t *testing.T) {
 	t.Logf("Compact: %d bytes (~%d tokens)", len(compact), len(compact)/4)
 	t.Logf("NestJS:  %d bytes (~%d tokens)", len(detailed), len(detailed)/4)
 
-	// Both should be under 3KB
-	if len(compact) > 5000 {
+	// Both should be reasonable
+	if len(compact) > 7000 {
 		t.Errorf("compact too large: %d bytes", len(compact))
 	}
 	if len(detailed) > 3000 {

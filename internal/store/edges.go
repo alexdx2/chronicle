@@ -20,6 +20,8 @@ type EdgeRow struct {
 	FirstSeenRevisionID int64   `json:"first_seen_revision_id"`
 	LastSeenRevisionID  int64   `json:"last_seen_revision_id"`
 	Confidence          float64 `json:"confidence"`
+	Freshness           float64 `json:"freshness"`
+	TrustScore          float64 `json:"trust_score"`
 	Metadata            string  `json:"metadata"`
 }
 
@@ -50,13 +52,13 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 		const insQ = `
 			INSERT INTO graph_edges
 			  (edge_key, from_node_id, to_node_id, edge_type, derivation_kind, context_key,
-			   active, first_seen_revision_id, last_seen_revision_id, confidence, metadata)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?)
+			   active, first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		`
 		res, err := s.db.Exec(insQ,
 			e.EdgeKey, e.FromNodeID, e.ToNodeID, e.EdgeType, e.DerivationKind,
 			nullableStr(e.ContextKey), activeInt,
-			e.FirstSeenRevisionID, e.LastSeenRevisionID, e.Confidence, e.Metadata,
+			e.FirstSeenRevisionID, e.LastSeenRevisionID, e.Confidence, e.Freshness, e.TrustScore, e.Metadata,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("UpsertEdge insert: %w", err)
@@ -69,12 +71,12 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 	const updQ = `
 		UPDATE graph_edges
 		SET derivation_kind=?, context_key=?, active=?, last_seen_revision_id=?,
-		    confidence=?, metadata=?
+		    confidence=?, freshness=?, trust_score=?, metadata=?
 		WHERE edge_key=?
 	`
 	_, err = s.db.Exec(updQ,
 		e.DerivationKind, nullableStr(e.ContextKey), activeInt,
-		e.LastSeenRevisionID, e.Confidence, e.Metadata,
+		e.LastSeenRevisionID, e.Confidence, e.Freshness, e.TrustScore, e.Metadata,
 		e.EdgeKey,
 	)
 	if err != nil {
@@ -88,7 +90,7 @@ func (s *Store) GetEdgeByKey(key string) (*EdgeRow, error) {
 	const q = `
 		SELECT edge_id, edge_key, from_node_id, to_node_id, edge_type, derivation_kind,
 		       COALESCE(context_key,''), active,
-		       first_seen_revision_id, last_seen_revision_id, confidence, metadata
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
 		FROM graph_edges WHERE edge_key = ?
 	`
 	r := &EdgeRow{}
@@ -96,7 +98,7 @@ func (s *Store) GetEdgeByKey(key string) (*EdgeRow, error) {
 	err := s.db.QueryRow(q, key).Scan(
 		&r.EdgeID, &r.EdgeKey, &r.FromNodeID, &r.ToNodeID, &r.EdgeType, &r.DerivationKind,
 		&r.ContextKey, &activeInt,
-		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Metadata,
+		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("GetEdgeByKey %q: %w", key, ErrNotFound)
@@ -113,7 +115,7 @@ func (s *Store) ListEdges(f EdgeFilter) ([]EdgeRow, error) {
 	base := `
 		SELECT edge_id, edge_key, from_node_id, to_node_id, edge_type, derivation_kind,
 		       COALESCE(context_key,''), active,
-		       first_seen_revision_id, last_seen_revision_id, confidence, metadata
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
 		FROM graph_edges
 	`
 	var conds []string
@@ -160,7 +162,7 @@ func (s *Store) ListEdges(f EdgeFilter) ([]EdgeRow, error) {
 		if err := rows.Scan(
 			&r.EdgeID, &r.EdgeKey, &r.FromNodeID, &r.ToNodeID, &r.EdgeType, &r.DerivationKind,
 			&r.ContextKey, &activeInt,
-			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Metadata,
+			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 		); err != nil {
 			return nil, fmt.Errorf("ListEdges scan: %w", err)
 		}
@@ -179,6 +181,21 @@ func (s *Store) DeleteEdge(key string) error {
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("DeleteEdge %q: %w", key, ErrNotFound)
+	}
+	return nil
+}
+
+// UpdateEdgeTrust updates computed trust fields on an edge.
+func (s *Store) UpdateEdgeTrust(edgeID int64, confidence, freshness, trustScore float64, status string) error {
+	activeInt := 1
+	if status == "removed" || status == "contradicted" {
+		activeInt = 0
+	}
+	_, err := s.db.Exec(`
+		UPDATE graph_edges SET confidence=?, freshness=?, trust_score=?, active=? WHERE edge_id=?
+	`, confidence, freshness, trustScore, activeInt, edgeID)
+	if err != nil {
+		return fmt.Errorf("UpdateEdgeTrust: %w", err)
 	}
 	return nil
 }
