@@ -3270,8 +3270,13 @@ function dashboard() {
         .attr('class', 'via-label').attr('text-anchor', 'middle')
         .text(d => d._viaLabel || '');
 
-      // Position edges (static — all positions from cache)
-      link.attr('d', d => `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
+      // Position edges with slight curve to avoid overlap
+      function edgePath(d) {
+        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+        const dr = Math.sqrt(dx * dx + dy * dy) * 1.5;
+        return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+      }
+      link.attr('d', edgePath);
       viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
 
       // Nodes (on top)
@@ -3287,7 +3292,7 @@ function dashboard() {
           self._diagramPositions[d.id] = { x: d.x, y: d.y };
           d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
           link.filter(e => e.source.id === d.id || e.target.id === d.id)
-            .attr('d', e => `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`);
+            .attr('d', edgePath);
           viaLabels.filter(e => e.source.id === d.id || e.target.id === d.id)
             .attr('x', e => (e.source.x + e.target.x) / 2).attr('y', e => (e.source.y + e.target.y) / 2 - 6);
         })
