@@ -14,6 +14,7 @@ import (
 )
 
 var (
+	projectPath  string
 	dbPath       string
 	registryPath string
 	manifestPath string
@@ -27,9 +28,10 @@ func NewRootCmd() *cobra.Command {
 		Short: "Chronicle MCP — knowledge graph for your codebase",
 	}
 
-	root.PersistentFlags().StringVar(&dbPath, "db", "", "Path to SQLite database (default: .depbot/chronicle.db)")
-	root.PersistentFlags().StringVar(&registryPath, "registry", "", "Path to type registry (default: .depbot/chronicle.types.yaml)")
-	root.PersistentFlags().StringVar(&manifestPath, "manifest", "", "Path to domain manifest (default: .depbot/chronicle.domain.yaml)")
+	root.PersistentFlags().StringVar(&projectPath, "project", "", "Path to project root containing .depbot/ (default: current directory)")
+	root.PersistentFlags().StringVar(&dbPath, "db", "", "Path to SQLite database (overrides --project)")
+	root.PersistentFlags().StringVar(&registryPath, "registry", "", "Path to type registry (overrides --project)")
+	root.PersistentFlags().StringVar(&manifestPath, "manifest", "", "Path to domain manifest (overrides --project)")
 
 	root.AddCommand(
 		newVersionCmd(),
@@ -61,15 +63,20 @@ func newVersionCmd() *cobra.Command {
 }
 
 // resolveDefaults sets default paths under .depbot/ if not explicitly provided.
+// If --project is set, all paths are relative to that directory.
 func resolveDefaults() {
+	base := depbotDir
+	if projectPath != "" {
+		base = filepath.Join(projectPath, depbotDir)
+	}
 	if dbPath == "" {
-		dbPath = filepath.Join(depbotDir, "chronicle.db")
+		dbPath = filepath.Join(base, "chronicle.db")
 	}
 	if registryPath == "" {
-		registryPath = filepath.Join(depbotDir, "chronicle.types.yaml")
+		registryPath = filepath.Join(base, "chronicle.types.yaml")
 	}
 	if manifestPath == "" {
-		manifestPath = filepath.Join(depbotDir, "chronicle.domain.yaml")
+		manifestPath = filepath.Join(base, "chronicle.domain.yaml")
 	}
 }
 

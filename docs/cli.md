@@ -6,9 +6,16 @@ All commands accept these flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--db` | `.depbot/chronicle.db` | Path to SQLite database |
-| `--manifest` | `.depbot/chronicle.domain.yaml` | Path to domain manifest |
-| `--registry` | `.depbot/chronicle.types.yaml` | Path to type registry |
+| `--project` | `.` (current dir) | Path to project root containing `.depbot/` |
+| `--db` | `<project>/.depbot/chronicle.db` | Path to SQLite database (overrides `--project`) |
+| `--manifest` | `<project>/.depbot/chronicle.domain.yaml` | Path to domain manifest (overrides `--project`) |
+| `--registry` | `<project>/.depbot/chronicle.types.yaml` | Path to type registry (overrides `--project`) |
+
+Most of the time you only need `--project`:
+
+```bash
+chronicle query stats --project /path/to/my-app
+```
 
 ---
 
