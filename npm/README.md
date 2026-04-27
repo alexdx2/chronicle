@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/alexdx2/chronicle/main/assets/logo.png" alt="Chronicle MCP" width="180">
+</p>
+
 # Chronicle MCP — Knowledge Graph
 
 Self-learning code analysis tool for Claude Code. Builds a knowledge graph of your codebase — data models, services, endpoints, dependencies — and answers questions like "what breaks if I change X?"
@@ -47,4 +51,4 @@ chronicle status        — Dashboard URL + graph stats
 
 ## Links
 
-- [Repository](https://github.com/anthropics/chronicle-mcp)
+- [Repository](https://github.com/alexdx2/chronicle)
