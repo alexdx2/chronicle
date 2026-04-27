@@ -19,15 +19,25 @@ Chronicle:
 
 ## Why
 
-You can grep a codebase. You can ask an AI to read files. But neither gives you the answer to "what happens downstream if I change this?" — because that answer lives in the connections between things, not in any single file.
+AI coding assistants are stateless. Every conversation starts from zero — Claude re-reads files, re-discovers architecture, re-learns what it already understood yesterday. Context windows are finite and expensive. Your codebase isn't.
 
-Chronicle extracts those connections into a persistent graph: data models, services, controllers, endpoints, Kafka topics, cross-service calls. Every relationship has a derivation (hard from AST, or linked by convention) and evidence (file + line number). The graph survives between sessions. Claude doesn't re-read your entire codebase every time — it queries what Chronicle already knows.
+**Chronicle is long-lived memory for Claude Code.** It persists a knowledge graph of your codebase in SQLite — data models, services, endpoints, dependencies, cross-service calls — and survives between sessions. Claude doesn't re-read your entire codebase every time. It queries what Chronicle already knows.
+
+**Incremental updates via git diff.** After the first full scan, Chronicle tracks what changed. Say `chronicle scan` again and it runs an incremental update: `git diff` to find changed files, invalidate stale evidence, re-scan only what moved. The graph stays fresh with minimal work — every commit makes it smarter, not slower.
+
+**Evidence-backed trust.** Every fact in the graph has provenance — file path, line number, confidence score, derivation kind (hard from AST, linked by convention, inferred). When code changes, evidence gets re-evaluated. Stale facts lose trust. Fresh scans add new evidence. The graph doesn't just remember — it knows how much to trust what it remembers.
 
 ## How It Works
 
 **Claude reads. Chronicle remembers.**
 
 When you say `chronicle scan`, Claude reads your code file by file — Prisma schemas, NestJS modules, controllers, services — and extracts structured facts: "UserService injects PrismaService", "OrderController exposes POST /orders", "api-service calls payments-service via HTTP". Chronicle validates each fact, normalizes keys, and stores it in SQLite.
+
+**Incremental scan flow:**
+```
+git diff → changed files → invalidate stale evidence → re-scan only affected files
+  → new evidence added → trust scores recalculated → graph updated
+```
 
 The graph is layered:
 
