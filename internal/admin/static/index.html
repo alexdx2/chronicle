@@ -1164,10 +1164,10 @@ function dashboard() {
       }
 
       if (this.tab === 'diagram') {
-        // For diagram mode, mark graph as loaded (we don't need graph API data)
         this.loading.graph = false;
         this.loaded.graph = true;
         this.fetchDiagram();
+        this.fetchGraphData().then(() => { this.diagramGraphLoaded = true; });
       } else if (this.tab === 'graph') {
         // Graph tab on page load — fetch data
         this.loading.graph = true;
@@ -1185,6 +1185,10 @@ function dashboard() {
           const dd = await dr.json();
           this.diagramSessionId = dd.id;
           this.diagramData = dd;
+          // Prefetch graph data for entity palette
+          if (!this.diagramGraphLoaded) {
+            this.fetchGraphData().then(() => { this.diagramGraphLoaded = true; });
+          }
         }
       } catch(e) {}
 
