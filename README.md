@@ -126,6 +126,8 @@ Or if you already have the dashboard running — paste the path to `fixtures/tom
 | `chronicle language` | Domain glossary + violations |
 | `chronicle status` | Dashboard URL + graph stats |
 
+Full CLI reference with all subcommands, flags, and data model: **[docs/cli.md](docs/cli.md)**
+
 ## Development
 
 ```bash
