@@ -242,9 +242,10 @@ a{color:var(--primary);text-decoration:none}
     <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph'); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button>
     <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button>
     <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button>
-    <template x-if="diagramSessionId">
-      <button class="tab-btn" :class="{active: tab==='graph' && graphMode==='workspace' && wsDataSource==='diagram'}" @click="tab='graph';graphMode='workspace';wsDataSource='diagram';history.pushState(null,'','/diagram/'+diagramSessionId);if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">
-        Diagram<template x-if="diagramData?.title"><span x-text="': '+diagramData.title"></span></template>
+    <template x-if="diagramData">
+      <button class="tab-btn" :class="{active: tab==='diagram'}" @click="showDiagram()" style="position:relative">
+        Diagram
+        <span x-show="diagramFlash" x-transition style="position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--primary)"></span>
       </button>
     </template>
   </div>
@@ -493,7 +494,7 @@ a{color:var(--primary);text-decoration:none}
 </div>
 
 <!-- Graph Tab -->
-<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='graph'" x-cloak>
+<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='graph' || tab==='diagram'" x-cloak>
   <div class="graph-container" :style="graphFullscreen ? 'height:calc(100vh - 100px)' : ''">
     <div class="graph-toolbar" style="flex-wrap:wrap;gap:6px">
       <!-- View toggle -->
@@ -550,12 +551,12 @@ a{color:var(--primary);text-decoration:none}
       </template>
 
       <!-- Diagram title -->
-      <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.title">
+      <template x-if="tab==='diagram' && diagramData?.title">
         <span style="font-size:13px;font-weight:600;color:var(--primary);margin-left:12px" x-text="diagramData.title"></span>
       </template>
 
       <!-- Diagram step navigation (when workspace shows diagram data) -->
-      <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.total_steps > 0">
+      <template x-if="tab==='diagram' && diagramData?.total_steps > 0">
         <div style="display:flex;align-items:center;gap:10px;margin-left:16px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
           <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:4px 10px;font-size:11px">Overview</button>
           <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
@@ -581,8 +582,8 @@ a{color:var(--primary);text-decoration:none}
         <template x-if="graphMode==='workspace' && wsDataSource==='graph' && workspaceNodes.length > 0">
           <button class="mode-btn" @click="workspaceNodes=[];workspacePaths=[];_wsPositionCache={};renderGraph()">← Overview</button>
         </template>
-        <template x-if="graphMode==='workspace' && wsDataSource==='diagram'">
-          <button class="mode-btn" @click="wsDataSource='graph';diagramSessionId=null;diagramData=null;history.pushState(null,'','/workspace');renderGraph()">← Graph</button>
+        <template x-if="tab==='diagram'">
+          <button class="mode-btn" @click="tab='graph';wsDataSource='graph';graphMode='workspace';history.pushState(null,'','/graph');$nextTick(()=>renderGraph())">← Graph</button>
         </template>
         <template x-if="graphMode==='tree' || graphMode==='explore'">
           <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
@@ -943,7 +944,7 @@ a{color:var(--primary);text-decoration:none}
 </div>
 
 <!-- Step description bar (shown below workspace when diagram has step descriptions) -->
-<template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.step_descriptions?.[diagramStep]">
+<template x-if="tab==='diagram' && diagramData?.step_descriptions?.[diagramStep]">
   <div style="padding:16px 24px;border-top:2px solid var(--primary);font-size:15px;color:var(--text);line-height:1.7;background:var(--primary-light);margin-top:-1px;letter-spacing:0.01em">
     <span x-text="diagramData.step_descriptions[diagramStep]"></span>
   </div>
@@ -1021,10 +1022,11 @@ function dashboard() {
     workspaceNodes: [],       // [{node_id, x, y, manual: bool}]
     workspacePaths: [],       // [{from, to, path: [node_ids]}]
     workspaceSearch: '',
-    // Diagram (live from Claude)
+    // Diagram (live from Claude — single slot, auto-navigates)
     diagramSessionId: null,
     diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
     diagramStep: -1,    // -1 = clean (no highlights), 0+ = step index
+    diagramFlash: false,
     ws: null,
     loading: { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true },
     loaded: { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false },
@@ -1032,12 +1034,12 @@ function dashboard() {
     async init() {
       // Path-based routing
       const path = window.location.pathname;
-      const diagramMatch = path.match(/^\/diagram\/([a-zA-Z0-9_-]+)$/);
+      const diagramMatch = path.match(/^\/diagram(\/[a-zA-Z0-9_-]+)?$/);
       if (diagramMatch) {
-        this.diagramSessionId = diagramMatch[1];
-        this.wsDataSource = 'diagram';
-        this.tab = 'graph';
+        this.diagramSessionId = diagramMatch[1] ? diagramMatch[1].slice(1) : null;
+        this.tab = 'diagram';
         this.graphMode = 'workspace';
+        this.wsDataSource = 'diagram';
         this.filterSidebarOpen = true;
       } else if (path === '/workspace') {
         this.tab = 'graph';
@@ -1050,7 +1052,7 @@ function dashboard() {
         this.tab = 'settings';
       }
 
-      if (this.wsDataSource === 'diagram') {
+      if (this.tab === 'diagram') {
         // For diagram mode, mark graph as loaded (we don't need graph API data)
         this.loading.graph = false;
         this.loaded.graph = true;
@@ -1340,10 +1342,11 @@ function dashboard() {
               this.fetchDiscoveries();
             }, 2000);
           }
-          if (msg.type === 'diagram_update' && msg.data?.session_id === this.diagramSessionId) {
+          if (msg.type === 'diagram_update') {
+            this.diagramSessionId = msg.data?.session_id;
             this.diagramData = {
               id: msg.data.session_id,
-              title: this.diagramData?.title || '',
+              title: this.diagramData?.title || msg.data.title || '',
               nodes: msg.data.nodes || [],
               edges: msg.data.edges || [],
               annotations: msg.data.annotations || {},
@@ -1352,7 +1355,12 @@ function dashboard() {
               step_descriptions: msg.data.step_descriptions || {},
               total_steps: msg.data.total_steps || 0
             };
-            if (this.graphMode === 'workspace' && this.wsDataSource === 'diagram') {
+            // Auto-navigate to diagram tab
+            if (this.tab !== 'diagram') {
+              this.diagramFlash = true;
+              setTimeout(() => { this.diagramFlash = false; }, 3000);
+              this.showDiagram();
+            } else {
               this.$nextTick(() => this.renderDiagram());
             }
           }
@@ -2850,8 +2858,31 @@ function dashboard() {
       }
     },
 
+    showDiagram() {
+      this.tab = 'diagram';
+      this.graphMode = 'workspace';
+      this.wsDataSource = 'diagram';
+      this.loading.graph = false;
+      this.loaded.graph = true;
+      history.pushState(null, '', '/diagram');
+      this.$nextTick(() => this.renderDiagram());
+    },
+
     async fetchDiagram() {
-      if (!this.diagramSessionId) return;
+      if (!this.diagramSessionId) {
+        // Try to load the latest diagram session
+        try {
+          const r = await fetch('/api/diagram/latest');
+          if (r.ok) {
+            const data = await r.json();
+            this.diagramSessionId = data.id;
+            this.diagramData = data;
+            this.$nextTick(() => this.renderDiagram());
+            return;
+          }
+        } catch(e) {}
+        return;
+      }
       try {
         const r = await fetch('/api/diagram/' + this.diagramSessionId);
         if (!r.ok) return;

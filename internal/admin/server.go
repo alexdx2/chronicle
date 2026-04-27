@@ -709,6 +709,8 @@ func (s *Server) handleDiagram(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == "POST" && sessionID == "":
 		s.handleDiagramCreate(w, r)
+	case r.Method == "GET" && sessionID == "latest":
+		s.handleDiagramLatest(w, r)
 	case r.Method == "GET" && sessionID != "":
 		s.handleDiagramGet(w, r, sessionID)
 	case r.Method == "PUT" && len(parts) == 2 && parts[1] == "annotate":
@@ -746,6 +748,22 @@ func (s *Server) handleDiagramCreate(w http.ResponseWriter, r *http.Request) {
 	s.persistDiagramSession(session)
 	url := fmt.Sprintf("http://localhost:%d/diagram/%s", s.port, body.SessionID)
 	httpJSON(w, map[string]any{"session_id": body.SessionID, "url": url})
+}
+
+func (s *Server) handleDiagramLatest(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	var latest *DiagramSession
+	for _, session := range s.diagrams {
+		if latest == nil || session.UpdatedAt > latest.UpdatedAt {
+			latest = session
+		}
+	}
+	s.mu.RUnlock()
+	if latest == nil {
+		http.Error(w, "no diagrams", 404)
+		return
+	}
+	httpJSON(w, latest)
 }
 
 func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id string) {
