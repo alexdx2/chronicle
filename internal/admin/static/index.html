@@ -3287,13 +3287,20 @@ function dashboard() {
         .attr('class', 'via-label').attr('text-anchor', 'middle')
         .text(d => d._viaLabel || '');
 
-      // Position edges: dagre-routed in strict, arc curves in free
+      // Position edges
       const lineGen = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
       function edgePath(d) {
+        // Use dagre waypoints if available (strict mode)
         if (d._points && d._points.length > 1) return lineGen(d._points);
-        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
-        const dr = Math.sqrt(dx * dx + dy * dy) * 1.5;
-        return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+        // Free mode: route through a midpoint offset perpendicular to the line
+        const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
+        const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+        const dx = tx - sx, dy = ty - sy;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        // Offset perpendicular, proportional to distance
+        const off = Math.min(30, len * 0.15);
+        const cx = mx + (-dy / len) * off, cy = my + (dx / len) * off;
+        return lineGen([{x: sx, y: sy}, {x: cx, y: cy}, {x: tx, y: ty}]);
       }
       link.attr('d', edgePath);
       viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
