@@ -6,6 +6,8 @@ oracle.db-wal
 dist/
 .oracle/
 .depbot/
+!fixtures/tom-and-jerry/.depbot/
+!fixtures/tom-and-jerry/.depbot/**
 .superpowers/
 oracle.domain.yaml
 oracle.types.yaml

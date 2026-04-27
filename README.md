@@ -1,246 +1,129 @@
 # Domain Oracle
 
-A self-learning code analysis tool that builds a multi-layered knowledge graph of any codebase. Claude Code reads and understands your code, Oracle validates, stores, and queries the structured result. The system improves with every scan — tracking what it knows, what it doesn't, and what changed.
+A knowledge graph for your codebase. Oracle maps the invisible structure — how models connect to services, services to endpoints, endpoints to the outside world — and gives Claude Code the ability to reason about it, query it, and explain it visually.
 
 ```
 You: "What breaks if I change the User model?"
 
 Oracle:
-  → UserService (depth 1, score 100) — USES_MODEL
-  → AuthController (depth 2, score 95) — INJECTS
-  → GET /auth/profile endpoint (depth 3, score 90) — EXPOSES_ENDPOINT
+  → UserService (depth 1) — USES_MODEL
+  → AuthController (depth 2) — INJECTS
+  → GET /auth/profile (depth 3) — EXPOSES_ENDPOINT
 
   3 services affected, 1 Kafka consumer downstream.
-  Evidence: user.service.ts:12, auth.controller.ts:8
 ```
 
-## Install
+## Why
 
-```bash
-npm install -g @alexdx/depbot-oracle
-```
+You can grep a codebase. You can ask an AI to read files. But neither gives you the answer to "what happens downstream if I change this?" — because that answer lives in the connections between things, not in any single file.
 
-Or build from source:
-```bash
-git clone https://gitlab.com/Alex_dx3/depbot.git
-cd depbot && go build -o oracle ./cmd/oracle
-```
-
-## Setup
-
-Add to Claude Code MCP config (`~/.claude.json` → project → mcpServers):
-
-```json
-{
-  "oracle": {
-    "command": "oracle",
-    "args": ["mcp", "serve", "--open"]
-  }
-}
-```
-
-That's it. Open Claude Code in any project — Oracle auto-creates `.depbot/`, auto-discovers your project structure, and the admin dashboard opens in your browser.
-
-## Commands
-
-Say these in Claude Code:
-
-| Command | What it does |
-|---|---|
-| `oracle scan` | Full project scan — data models, code, endpoints, services |
-| `oracle data` | Analyze data models (Prisma, TypeORM, entities) |
-| `oracle language` | Define domain language glossary, check violations |
-| `oracle impact X` | "What breaks if I change X?" |
-| `oracle deps X` | "What depends on X?" |
-| `oracle path A B` | "How does A connect to B?" |
-| `oracle services` | Service architecture overview |
-| `oracle status` | Dashboard URL + graph stats |
-| `oracle help` | Show all commands |
-
-On first run, Claude automatically detects it's a new project and offers to run the scan.
+Oracle extracts those connections into a persistent graph: data models, services, controllers, endpoints, Kafka topics, cross-service calls. Every relationship has a derivation (hard from AST, or linked by convention) and evidence (file + line number). The graph survives between sessions. Claude doesn't re-read your entire codebase every time — it queries what Oracle already knows.
 
 ## How It Works
 
-### The scan loop
+**Claude reads. Oracle remembers.**
+
+When you say `oracle scan`, Claude reads your code file by file — Prisma schemas, NestJS modules, controllers, services — and extracts structured facts: "UserService injects PrismaService", "OrderController exposes POST /orders", "api-service calls payments-service via HTTP". Oracle validates each fact, normalizes keys, and stores it in SQLite.
+
+The graph is layered:
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│  1. Claude calls oracle_scan_status                       │
-│     → Detects first run → asks "Want me to scan?"         │
-│                                                            │
-│  2. Claude calls oracle_extraction_guide                   │
-│     → Gets methodology (compact ~760 tokens)               │
-│                                                            │
-│  3. Claude reads your code file by file                    │
-│     → READ file → extract → oracle_import_all → forget     │
-│     → Never accumulates in context (streaming)             │
-│                                                            │
-│  4. System auto-discovers quality gaps                     │
-│     → Missing endpoints? Missing evidence? Low confidence? │
-│                                                            │
-│  5. Claude reports discoveries                             │
-│     → Unusual patterns, uncertain relationships            │
-│     → Defines domain language terms                        │
-│                                                            │
-│  Next scan reads previous discoveries and improves         │
-└───────────────────────────────────────────────────────────┘
+DATA         User ──→ Order ──→ OrderItem       (models, enums, relations)
+               ↑
+CODE         UserService ──→ PrismaService       (modules, controllers, providers)
+               ↓
+CONTRACT     GET /users/:id, order-created topic (endpoints, Kafka topics)
+               ↓
+SERVICE      api-service ──→ payments-service    (deployable services)
 ```
 
-### What the graph captures
+This means you can ask questions that cross layers: "how does the User model connect to the payments-service?" Oracle traces the path through code and contract layers to give you a real answer.
+
+**Self-learning.** After each import, Oracle auto-discovers gaps — missing endpoint extractions, nodes without evidence, orphan providers. Claude discovers too: uncertain relationships, unknown patterns, naming inconsistencies. All discoveries are stored and fed into the next scan. The graph gets more complete and more confident over time.
+
+**Domain language.** Oracle tracks your project's vocabulary — define terms, aliases, anti-patterns. If someone names a service "PurchaseService" in a project where the correct term is "Order", Oracle flags it. The glossary lives in the dashboard and feeds into scan analysis.
+
+## Live Diagrams
+
+Oracle doesn't just answer questions — it can show you.
+
+Claude creates a live diagram session, pushes nodes and edges to your browser in real-time, and annotates what it's explaining. You open a URL, and as Claude talks through the architecture, the diagram updates in front of you — nodes light up, annotations appear, the view evolves step by step.
 
 ```
-DATA LAYER          User ──REFERENCES──→ Order ──REFERENCES──→ OrderItem
-(Prisma models,     Merchant ──REFERENCES──→ Product
- entities, enums)
+You: "Show me how the order flow works"
 
-        ↑ USES_MODEL
-        │
-CODE LAYER          UserController ──INJECTS──→ UserService ──INJECTS──→ PrismaService
-(modules,           OrderController ──INJECTS──→ OrderService
- controllers,                                        │
- providers)                               CALLS_SERVICE (linked)
-        │                                            │
-        │ EXPOSES_ENDPOINT                           ↓
-        ↓                                 SERVICE LAYER
-CONTRACT LAYER      GET /users/:id        api-service
-(endpoints,         POST /orders          payments-service
- topics)            order-created topic   notifications-service
+Claude:
+  1. Creates a diagram session → opens in your browser
+  2. Queries the graph for order-related nodes
+  3. Pushes them to the canvas — you see OrderController, OrderService, Kafka topics
+  4. Highlights the flow path, adds annotations at each step
+  5. Walks you through it: "Step 1: POST /orders hits OrderController..."
 ```
 
-Every relationship has:
-- **Derivation**: `hard` (visible in AST) or `linked` (convention-based)
-- **Evidence**: file path + line number
-- **Traversal policy**: structural edges excluded from dependency analysis
+Diagrams support step-through presentations — Claude builds a guided walkthrough with numbered steps, each highlighting different parts of the system. You navigate with Previous/Next. It's a live architecture tour, not a static PNG.
 
-### Self-learning
+## Dashboard
 
-**System auto-discovers** after each import:
-- Missing endpoint extractions
-- Missing cross-service edges
-- Nodes without evidence
-- Structural gaps
+The admin dashboard starts automatically with the MCP server. It's an embedded SPA — zero infrastructure, single binary.
 
-**Claude discovers** during analysis:
-- Unknown code patterns
-- Relationships it can't confirm
-- Orphan providers, unused decorators
+- **Overview** — graph stats, real-time MCP request log via WebSocket, discoveries feed
+- **Graph** — multiple exploration modes:
+  - **Tree** — hierarchical drill-down by layer
+  - **Explore** — breadcrumb navigation, layer by layer
+  - **Workspace** — drag entities from a search palette onto a canvas; drop two nodes and Oracle auto-finds the shortest path between them; expand neighbors incrementally
+- **Language** — domain glossary editor + violation checker
+- **Diagrams** — live sessions pushed by Claude, with annotations and step-through navigation
 
-**Users can teach it** — discoveries stored for future scans.
+Filter by node type, by repo. Hide a node type and Oracle preserves logical connections through it — transitive edges show "via POST /api" so you don't lose the story.
 
-### Domain Language
-
-Oracle tracks your project's ubiquitous language:
-- Define terms with aliases and anti-patterns
-- Automatic violation checking against the knowledge graph
-- Edit glossary in the admin dashboard
-
-```
-Term: "Order"
-Context: "ordering"
-Anti-patterns: ["Purchase", "Booking"]
-→ If a node is named "PurchaseService" → violation warning
-```
-
-### Admin Dashboard
-
-Starts automatically with MCP server. Use `--open` flag to auto-open browser.
-
-- **Overview** — stats, MCP request log (real-time WebSocket), discoveries
-- **Graph** — Tree / Explore (drill-down) / Force (D3.js) views with filters
-- **Language** — Domain glossary editor + violation checker
-- **Settings** — Manifest editor
-
-Filter presets: All | Data Models | API Surface | Services. Filter by repo.
-
-## Graph Model
-
-### Layers
-
-| Layer | Purpose |
-|---|---|
-| `data` | Prisma models, entities, enums, relations |
-| `code` | Modules, controllers, providers, resolvers, guards |
-| `service` | Deployable services |
-| `contract` | HTTP endpoints, Kafka topics, GraphQL operations |
-| `flow` | Business process flows |
-| `ownership` | Teams, owners |
-| `infra` | Terraform, K8s |
-| `ci` | Pipelines, releases |
-
-### Key edge types
-
-| Edge | Meaning | Derivation |
-|---|---|---|
-| `INJECTS` | Constructor DI, @UseGuards, @UseInterceptors | hard |
-| `EXPOSES_ENDPOINT` | Controller → HTTP route | hard |
-| `CALLS_SERVICE` | HTTP client → service via env URL | linked |
-| `USES_MODEL` | Service → Prisma model | hard |
-| `REFERENCES_MODEL` | Model → model via @relation | hard |
-| `PUBLISHES_TOPIC` | Producer → Kafka topic | hard |
-| `CONSUMES_TOPIC` | Consumer ← Kafka topic | hard |
-| `CONTAINS` | Module → providers (structural) | hard |
-
-## MCP Tools
-
-25+ tools including:
-
-| Tool | Purpose |
-|---|---|
-| `oracle_command` | Execute commands (scan, data, language, impact, etc.) |
-| `oracle_extraction_guide` | Get extraction methodology |
-| `oracle_scan_status` | Graph state + onboarding detection |
-| `oracle_import_all` | Bulk import with validation |
-| `oracle_query_path` | Path between nodes |
-| `oracle_impact` | Blast radius analysis |
-| `oracle_define_term` | Domain language glossary |
-| `oracle_check_language` | Naming violation checker |
-| `oracle_report_discovery` | Self-learning — report findings |
-| `oracle_get_discoveries` | Read previous findings |
-| `oracle_admin_url` | Dashboard URL |
-
-## Testing
+## Quick Start
 
 ```bash
-# Unit + integration
-go test ./... -count=1
-
-# E2E with golden graph (Tom & Jerry 4-service fixture)
-go test ./e2e/ -v -run TestTJ
-
-# E2E with real Claude (requires claude CLI)
-./e2e/claude_agent_test.sh
+npm install -g @alexdx/depbot-oracle
+claude mcp add oracle -- oracle mcp serve --open
 ```
 
-### Test evolution (9 iterations)
+That's it. Open Claude Code in any project, say `oracle scan`. The dashboard opens in your browser, Oracle discovers your project structure and starts building the graph.
 
-```
-Run 1:  49n  62e    —  baseline
-Run 5:  56n  75e    —  auto-discoveries working
-Run 7:  62n  76e    —  efficiency metrics, 147KB payload
-Run 9:  62n  76e    —  streaming 2.5KB avg, domain language, 7 terms defined
+### Try It
+
+The repo includes a 4-service demo project (Tom & Jerry) you can scan immediately:
+
+```bash
+cd fixtures/tom-and-jerry
+claude   # opens Claude Code in the fixture directory
+# say: "oracle scan"
 ```
 
-## Project structure
+Four NestJS microservices — tom-api, jerry-api, arena-api, spectators-api — with Prisma models, HTTP cross-service calls, Kafka topics, guards, interceptors, gateways. A small but real graph that shows every layer Oracle can capture.
 
+Or if you already have the dashboard running — paste the path to `fixtures/tom-and-jerry` into the project switcher (top of the dashboard) and it loads the pre-built graph instantly. No restart needed.
+
+## Commands
+
+| Say this | What happens |
+|---|---|
+| `oracle scan` | Full project scan — models, code, endpoints, services |
+| `oracle impact X` | What breaks if I change X? |
+| `oracle deps X` | What depends on X? |
+| `oracle path A B` | How does A connect to B? |
+| `oracle data` | Analyze data models |
+| `oracle services` | Service architecture map |
+| `oracle language` | Domain glossary + violations |
+| `oracle status` | Dashboard URL + graph stats |
+
+## Development
+
+```bash
+air    # hot-reload: rebuilds Go + restarts dashboard on file changes
 ```
-cmd/oracle/                     CLI entrypoint
-internal/
-  admin/                        HTTP server + WebSocket + embedded SPA
-  cli/                          Cobra commands
-  graph/                        Path, impact, queries
-  mcp/                          MCP server, extraction guide, commands
-  registry/                     Type registry + traversal policy
-  store/                        SQLite (nodes, edges, evidence, discoveries, language)
-  validate/                     Key normalization + field validation
-fixtures/                       Test fixtures (orders-domain, tom-and-jerry)
-e2e/                            E2E tests + Claude agent test
-npm/                            npm package wrapper
-```
+
+The dashboard serves static files from disk in dev mode (`--dev` flag), so you can edit HTML/JS and refresh without rebuilding.
 
 ## Links
 
 - **npm**: [@alexdx/depbot-oracle](https://www.npmjs.com/package/@alexdx/depbot-oracle)
-- **GitLab**: [Alex_dx3/depbot](https://gitlab.com/Alex_dx3/depbot)
+- **Source**: [gitlab.com/Alex_dx3/depbot](https://gitlab.com/Alex_dx3/depbot)
 
 ## License
 
