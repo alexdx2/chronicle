@@ -83,7 +83,7 @@ Filter by node type, by repo. Hide a node type and Chronicle preserves logical c
 ## Quick Start
 
 ```bash
-npm install -g chronicle-mcp
+npm install -g @alexdx/chronicle-mcp
 claude mcp add chronicle -- chronicle mcp serve --open
 ```
 
@@ -126,7 +126,7 @@ The dashboard serves static files from disk in dev mode (`--dev` flag), so you c
 
 ## Links
 
-- **npm**: [chronicle-mcp](https://www.npmjs.com/package/chronicle-mcp)
+- **npm**: [@alexdx/chronicle-mcp](https://www.npmjs.com/package/@alexdx/chronicle-mcp)
 
 ## License
 

@@ -9,7 +9,7 @@ const binaryName = process.platform === 'win32' ? 'chronicle.exe' : 'chronicle';
 const binaryPath = path.join(binDir, binaryName);
 
 if (!fs.existsSync(binaryPath)) {
-  console.error('Chronicle binary not found. Run: npm rebuild chronicle-mcp');
+  console.error('Chronicle binary not found. Run: npm rebuild @alexdx/chronicle-mcp');
   console.error('Or install manually: https://github.com/alexdx2/chronicle/releases');
   process.exit(1);
 }

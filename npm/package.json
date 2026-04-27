@@ -1,5 +1,5 @@
 {
-  "name": "chronicle-mcp",
+  "name": "@alexdx/chronicle-mcp",
   "version": "0.1.0",
   "description": "Chronicle MCP — self-learning knowledge graph for code analysis. MCP server for Claude Code.",
   "bin": {

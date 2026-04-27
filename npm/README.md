@@ -9,7 +9,7 @@ Self-learning code analysis tool for Claude Code. Builds a knowledge graph of yo
 ## Install
 
 ```bash
-npm install -g chronicle-mcp
+npm install -g @alexdx/chronicle-mcp
 ```
 
 ## Setup with Claude Code
