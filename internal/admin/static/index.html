@@ -498,7 +498,7 @@ a{color:var(--primary);text-decoration:none}
 </div>
 
 <!-- Graph Tab -->
-<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='graph' || tab==='diagram'" x-cloak>
+<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='graph'" x-cloak>
   <div class="graph-container" :style="graphFullscreen ? 'height:calc(100vh - 100px)' : ''">
     <div class="graph-toolbar" style="flex-wrap:wrap;gap:6px">
       <!-- View toggle -->
@@ -554,40 +554,10 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </template>
 
-      <!-- Diagram title -->
-      <template x-if="tab==='diagram' && diagramData?.title">
-        <span style="font-size:13px;font-weight:600;color:var(--primary);margin-left:12px" x-text="diagramData.title"></span>
-      </template>
-
-      <!-- Diagram step navigation (when workspace shows diagram data) -->
-      <template x-if="tab==='diagram' && diagramData?.total_steps > 0">
-        <div style="display:flex;align-items:center;gap:10px;margin-left:16px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
-          <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:4px 10px;font-size:11px">Overview</button>
-          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
-          <span style="font-size:13px;min-width:120px;text-align:center">
-            <template x-if="diagramStep >= 0">
-              <span>
-                <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
-                <template x-if="diagramData.step_titles?.[diagramStep]">
-                  <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
-                </template>
-              </span>
-            </template>
-            <template x-if="diagramStep < 0">
-              <span style="color:var(--text-muted);font-size:12px">All nodes visible</span>
-            </template>
-          </span>
-          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:4px 10px;font-size:14px">▶</button>
-        </div>
-      </template>
-
       <!-- Right side controls -->
       <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-        <template x-if="graphMode==='workspace' && wsDataSource==='graph' && workspaceNodes.length > 0">
+        <template x-if="graphMode==='workspace' && workspaceNodes.length > 0">
           <button class="mode-btn" @click="workspaceNodes=[];workspacePaths=[];_wsPositionCache={};renderGraph()">← Overview</button>
-        </template>
-        <template x-if="tab==='diagram'">
-          <button class="mode-btn" @click="tab='graph';wsDataSource='graph';graphMode='workspace';history.pushState(null,'','/graph');$nextTick(()=>renderGraph())">← Graph</button>
         </template>
         <template x-if="graphMode==='tree' || graphMode==='explore'">
           <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
@@ -945,8 +915,36 @@ a{color:var(--primary);text-decoration:none}
       </div>
     </template>
 
-    <!-- Resizable step description panel (inside graph-container for flex layout) -->
-    <template x-if="tab==='diagram' && diagramData?.total_steps > 0">
+  </div>
+</div>
+
+<!-- Diagram Tab (completely separate from Graph) -->
+<div class="container fullscreen" x-show="tab==='diagram'" x-cloak>
+  <div class="graph-container" style="height:calc(100vh - 140px)">
+    <!-- Diagram toolbar: just step navigation -->
+    <div class="graph-toolbar" style="justify-content:center;gap:16px;padding:8px 16px">
+      <template x-if="diagramData?.title">
+        <span style="font-weight:700;font-size:15px;color:var(--primary)" x-text="diagramData.title"></span>
+      </template>
+      <template x-if="diagramData?.total_steps > 0">
+        <div style="display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
+          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
+          <span style="font-size:13px;min-width:120px;text-align:center">
+            <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
+            <template x-if="diagramData.step_titles?.[diagramStep]">
+              <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
+            </template>
+          </span>
+          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:4px 10px;font-size:14px">▶</button>
+        </div>
+      </template>
+    </div>
+
+    <!-- Diagram SVG canvas -->
+    <div id="diagram-canvas" style="flex:1;overflow:auto"></div>
+
+    <!-- Resizable description panel -->
+    <template x-if="diagramData?.total_steps > 0">
       <div style="flex-shrink:0">
         <div class="resize-handle" :class="{active: _resizing}"
              @mousedown.prevent="_resizing=true;_resizeStart=$event.clientY;_resizeInitH=descPanelHeight"
@@ -960,10 +958,10 @@ a{color:var(--primary);text-decoration:none}
               <span x-text="diagramData.step_descriptions[diagramStep]"></span>
             </div>
           </template>
-          <template x-if="diagramStep < 0">
+          <template x-if="diagramStep < 0 || !diagramData?.step_descriptions?.[diagramStep]">
             <div style="font-size:14px;color:var(--text-muted);line-height:1.6">
               <strong x-text="diagramData?.title || 'Diagram'"></strong>
-              <span x-text="' — ' + diagramData?.total_steps + ' steps. Click ▶ to start the walkthrough.'"></span>
+              <span x-text="' — ' + diagramData?.total_steps + ' steps'"></span>
             </div>
           </template>
         </div>
@@ -2960,7 +2958,7 @@ function dashboard() {
 
     // Update annotation visuals without re-rendering the entire diagram
     updateDiagramAnnotations() {
-      const container = document.getElementById('graph-canvas');
+      const container = document.getElementById('diagram-canvas') || document.getElementById('graph-canvas');
       if (!container) return;
       const svg = d3.select(container).select('svg');
       if (svg.empty()) return;
@@ -3008,7 +3006,7 @@ function dashboard() {
     },
 
     renderDiagram() {
-      const container = document.getElementById('graph-canvas');
+      const container = document.getElementById('diagram-canvas') || document.getElementById('graph-canvas');
       if (!container || !this.diagramData) return;
       container.innerHTML = '';
 
