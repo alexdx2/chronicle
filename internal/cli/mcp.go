@@ -62,7 +62,7 @@ func newMCPCmd() *cobra.Command {
 			mcpserver.SetAdminPort(adminPort)
 
 			if !noAdmin {
-				srv := admin.NewServer(g, g.Store(), adminPort, manifestPath, false)
+				srv := admin.NewServer(g, g.Store(), adminPort, manifestPath, false, projectPath)
 				go func() {
 					if err := srv.Start(); err != nil {
 						fmt.Fprintf(os.Stderr, "admin dashboard failed: %v\n", err)

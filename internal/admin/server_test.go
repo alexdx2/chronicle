@@ -24,7 +24,7 @@ func setupTestServer(t *testing.T) *Server {
 	g := graph.New(s, reg)
 	manifestPath := filepath.Join(dir, "chronicle.domain.yaml")
 	os.WriteFile(manifestPath, []byte("domain: test\nrepositories:\n  - name: test\n    path: .\n"), 0644)
-	return NewServer(g, s, 0, manifestPath, false)
+	return NewServer(g, s, 0, manifestPath, false, dir)
 }
 
 func TestHandleStats(t *testing.T) {

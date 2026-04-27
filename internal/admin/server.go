@@ -82,9 +82,13 @@ type Server struct {
 }
 
 // NewServer creates a new admin Server.
-func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool) *Server {
-	cwd, _ := os.Getwd()
-	srv := &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: cwd, originalPath: cwd, diagrams: make(map[string]*DiagramSession)}
+func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool, projectDir string) *Server {
+	if projectDir == "" {
+		projectDir, _ = os.Getwd()
+	} else {
+		projectDir, _ = filepath.Abs(projectDir)
+	}
+	srv := &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: projectDir, originalPath: projectDir, diagrams: make(map[string]*DiagramSession)}
 	srv.loadDiagramSessions()
 	return srv
 }

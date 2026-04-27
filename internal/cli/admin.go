@@ -13,7 +13,7 @@ func newAdminCmd() *cobra.Command {
 			g := openGraph()
 			port, _ := cmd.Flags().GetInt("port")
 			dev, _ := cmd.Flags().GetBool("dev")
-			srv := admin.NewServer(g, g.Store(), port, manifestPath, dev)
+			srv := admin.NewServer(g, g.Store(), port, manifestPath, dev, projectPath)
 			if err := srv.Start(); err != nil {
 				outputError(err)
 			}
