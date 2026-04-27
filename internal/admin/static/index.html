@@ -921,6 +921,31 @@ a{color:var(--primary);text-decoration:none}
 <!-- Diagram Tab (completely separate from Graph) -->
 <div class="container fullscreen" x-show="tab==='diagram'" x-cloak>
   <div style="display:flex;height:calc(100vh - 140px);gap:0">
+    <!-- Left: Entity palette (always visible) -->
+    <div class="ws-palette" style="width:220px;height:100%;border-right:1px solid var(--border)">
+      <input type="text" placeholder="Search entities..." x-model="diagramSearch">
+      <div style="flex:1;overflow-y:auto">
+        <template x-if="!graphData?.nodes?.length">
+          <div class="loader"><div class="spinner"></div> Loading...</div>
+        </template>
+        <template x-for="group in getDiagramPaletteGroups()" :key="group.type">
+          <div>
+            <div class="ws-group-label" x-text="group.type + ' (' + group.nodes.length + ')'"></div>
+            <template x-for="n in group.nodes" :key="n.node_id">
+              <div class="ws-item"
+                   :style="'border-left:3px solid '+layerColor(n.layer)"
+                   @click="addNodeToDiagram(n)"
+                   :class="{'opacity-50': (diagramData?.nodes||[]).some(d => d.node_id === n.node_id)}">
+                <span style="color:#999;font-size:9px">+</span>
+                <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
+                <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Main diagram area -->
     <div class="graph-container" style="flex:1;height:100%">
       <!-- Diagram toolbar: step navigation + filter toggle -->
@@ -972,71 +997,45 @@ a{color:var(--primary);text-decoration:none}
       </template>
     </div>
 
-    <!-- Diagram sidebar: entity palette + filters -->
+    <!-- Right sidebar: filters only -->
     <template x-if="diagramSidebarOpen">
-      <div style="width:240px;height:100%;display:flex;flex-direction:column;border-left:1px solid var(--border);background:var(--card);flex-shrink:0">
-        <!-- Entity search palette (same style as workspace) -->
-        <div class="ws-palette" style="width:100%;border-right:none;flex:1">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 8px 0">
-            <strong style="font-size:11px">Add Entity</strong>
+      <div class="filter-sidebar" style="width:200px;height:100%;border-left:1px solid var(--border);overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <strong>Filters</strong>
+          <div style="display:flex;gap:4px;align-items:center">
+            <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
             <button @click="diagramSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
-          </div>
-          <input type="text" placeholder="Search entities..." x-model="diagramSearch">
-          <div style="flex:1;overflow-y:auto">
-            <template x-for="group in getDiagramPaletteGroups()" :key="group.type">
-              <div>
-                <div class="ws-group-label" x-text="group.type + ' (' + group.nodes.length + ')'"></div>
-                <template x-for="n in group.nodes" :key="n.node_id">
-                  <div class="ws-item"
-                       :style="'border-left:3px solid '+layerColor(n.layer)"
-                       @click="addNodeToDiagram(n)"
-                       :class="{'opacity-50': (diagramData?.nodes||[]).some(d => d.node_id === n.node_id)}">
-                    <span style="color:#999;font-size:9px">+</span>
-                    <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
-                    <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
-                  </div>
-                </template>
-              </div>
-            </template>
           </div>
         </div>
 
-        <!-- Filters section -->
-        <div class="filter-sidebar" style="width:100%;border-left:none;border-top:1px solid var(--border);max-height:300px;overflow-y:auto">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <strong>Filters</strong>
-            <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
-          </div>
+        <div class="group">
+          <h4>Node Types</h4>
+          <template x-for="layer in getDiagramLayers()" :key="layer">
+            <div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
+              <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt">
+                <label>
+                  <input type="checkbox"
+                         :checked="!hiddenNodeTypes.includes(nt)"
+                         @change="toggleNodeType(nt);renderDiagram()">
+                  <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
+                </label>
+              </template>
+            </div>
+          </template>
+        </div>
 
-          <div class="group">
-            <h4>Node Types</h4>
-            <template x-for="layer in getDiagramLayers()" :key="layer">
-              <div>
-                <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
-                <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt">
-                  <label>
-                    <input type="checkbox"
-                           :checked="!hiddenNodeTypes.includes(nt)"
-                           @change="toggleNodeType(nt);renderDiagram()">
-                    <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
-                  </label>
-                </template>
-              </div>
-            </template>
-          </div>
-
-          <div class="group">
-            <h4>Edge Types</h4>
-            <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
-              <label>
-                <input type="checkbox"
-                       :checked="!hiddenEdgeTypes.includes(et.type)"
-                       @change="toggleEdgeType(et.type);renderDiagram()">
-                <span x-text="et.type"></span>
-                <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="et.count"></span>
-              </label>
-            </template>
-          </div>
+        <div class="group">
+          <h4>Edge Types</h4>
+          <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
+            <label>
+              <input type="checkbox"
+                     :checked="!hiddenEdgeTypes.includes(et.type)"
+                     @change="toggleEdgeType(et.type);renderDiagram()">
+              <span x-text="et.type"></span>
+              <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="et.count"></span>
+            </label>
+          </template>
         </div>
       </div>
     </template>
@@ -3053,7 +3052,7 @@ function dashboard() {
       }
     },
 
-    showDiagram() {
+    async showDiagram() {
       this.tab = 'diagram';
       this.graphMode = 'workspace';
       this.wsDataSource = 'diagram';
@@ -3062,9 +3061,9 @@ function dashboard() {
       if (this.diagramStep < 0 && this.diagramData?.total_steps > 0) {
         this.diagramStep = 0;
       }
-      // Fetch full graph data for entity search (if not loaded yet)
+      // Fetch full graph data for entity palette
       if (!this.graphData?.nodes?.length) {
-        this.fetchGraphData();
+        await this.fetchGraphData();
       }
       history.pushState(null, '', '/diagram');
       this.$nextTick(() => this.renderDiagram());
