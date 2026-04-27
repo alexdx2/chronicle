@@ -10,18 +10,18 @@ import (
 )
 
 func TestCLIWorkflow(t *testing.T) {
-	// Find the oracle binary — build it if needed
+	// Find the chronicle binary — build it if needed
 	binaryPath := findOrBuildBinary(t)
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	// Helper to run oracle commands
+	// Helper to run chronicle commands
 	run := func(args ...string) string {
 		fullArgs := append([]string{"--db", dbPath}, args...)
 		cmd := exec.Command(binaryPath, fullArgs...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("oracle %s failed: %v\nOutput: %s", strings.Join(args, " "), err, string(out))
+			t.Fatalf("chronicle %s failed: %v\nOutput: %s", strings.Join(args, " "), err, string(out))
 		}
 		return string(out)
 	}
@@ -133,18 +133,18 @@ func findOrBuildBinary(t *testing.T) string {
 
 	// Try to find existing binary
 	projectRoot, _ := filepath.Abs("..")
-	binaryPath := filepath.Join(projectRoot, "oracle")
+	binaryPath := filepath.Join(projectRoot, "chronicle")
 
 	if _, err := os.Stat(binaryPath); err == nil {
 		return binaryPath
 	}
 
 	// Build it
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/oracle")
+	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/chronicle")
 	cmd.Dir = projectRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("failed to build oracle: %v\n%s", err, out)
+		t.Fatalf("failed to build chronicle: %v\n%s", err, out)
 	}
 
 	return binaryPath

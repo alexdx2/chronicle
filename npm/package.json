@@ -1,9 +1,9 @@
 {
-  "name": "@alexdx/depbot-oracle",
+  "name": "@alexdx/chronicle-mcp",
   "version": "0.2.5",
-  "description": "Domain Oracle — self-learning knowledge graph for code analysis. MCP server for Claude Code.",
+  "description": "Chronicle MCP — self-learning knowledge graph for code analysis. MCP server for Claude Code.",
   "bin": {
-    "oracle": "bin/run.js"
+    "chronicle": "bin/run.js"
   },
   "scripts": {
     "postinstall": "node ./scripts/install.js"
@@ -20,7 +20,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://gitlab.com/Alex_dx3/depbot.git"
+    "url": "https://github.com/alexdx2/chronicle.git"
   },
   "os": [
     "darwin",

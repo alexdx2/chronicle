@@ -131,14 +131,14 @@ func (s *Server) persistDiagramSession(session *DiagramSession) {
 }
 
 // switchTo swaps the server's backing store/graph to a different project.
-// Creates .depbot/oracle.db if the directory exists but the DB doesn't.
+// Creates .depbot/chronicle.db if the directory exists but the DB doesn't.
 func (s *Server) switchTo(projectPath string) error {
 	if _, err := os.Stat(projectPath); err != nil {
 		return fmt.Errorf("directory not found: %s", projectPath)
 	}
 	dbDir := filepath.Join(projectPath, ".depbot")
 	os.MkdirAll(dbDir, 0755)
-	dbPath := filepath.Join(dbDir, "oracle.db")
+	dbPath := filepath.Join(dbDir, "chronicle.db")
 	newStore, err := store.Open(dbPath)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -147,9 +147,9 @@ func (s *Server) switchTo(projectPath string) error {
 	newGraph := graph.New(newStore, reg)
 
 	// Find manifest: prefer project root, fall back to .depbot/
-	manifestPath := filepath.Join(projectPath, "oracle.domain.yaml")
+	manifestPath := filepath.Join(projectPath, "chronicle.domain.yaml")
 	if _, err := os.Stat(manifestPath); err != nil {
-		manifestPath = filepath.Join(projectPath, ".depbot", "oracle.domain.yaml")
+		manifestPath = filepath.Join(projectPath, ".depbot", "chronicle.domain.yaml")
 	}
 
 	s.mu.Lock()
@@ -277,7 +277,7 @@ func (s *Server) Start() error {
 	go s.pollRequests()
 
 	addr := fmt.Sprintf("127.0.0.1:%d", s.port)
-	fmt.Fprintf(os.Stderr, "Oracle Admin: http://%s\n", addr)
+	fmt.Fprintf(os.Stderr, "Chronicle Admin: http://%s\n", addr)
 	return http.ListenAndServe(addr, mux)
 }
 

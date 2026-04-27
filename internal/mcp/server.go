@@ -25,7 +25,7 @@ func SetAdminPort(p int)       { adminPortValue = p }
 
 // NewServer creates a new MCP server exposing all graph operations as tools.
 func NewServer(g *graph.Graph) *server.MCPServer {
-	s := server.NewMCPServer("oracle", "0.1.0")
+	s := server.NewMCPServer("chronicle", "0.1.0")
 
 	s.AddTool(revisionCreateTool(), revisionCreateHandler(g))
 	s.AddTool(nodeUpsertTool(), nodeUpsertHandler(g))
@@ -102,11 +102,11 @@ func errorResult(err error) *mcp.CallToolResult {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_revision_create
+// chronicle_revision_create
 // ---------------------------------------------------------------------------
 
 func revisionCreateTool() mcp.Tool {
-	return mcp.NewTool("oracle_revision_create",
+	return mcp.NewTool("chronicle_revision_create",
 		mcp.WithDescription("Create a new graph revision to track a scan pass. Call this at the start of every scan. Use trigger='manual' for human-initiated scans. Mode is 'full' for complete rescan or 'incremental' for partial. Returns revision_id to use in subsequent import calls."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithString("after_sha", mcp.Required(), mcp.Description("Git after SHA")),
@@ -147,11 +147,11 @@ func revisionCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_node_upsert
+// chronicle_node_upsert
 // ---------------------------------------------------------------------------
 
 func nodeUpsertTool() mcp.Tool {
-	return mcp.NewTool("oracle_node_upsert",
+	return mcp.NewTool("chronicle_node_upsert",
 		mcp.WithDescription("Create or update a graph node. Upsert by node_key — if the key exists, mutable fields (name, file_path, confidence, metadata) are updated. Immutable fields (layer, node_type, domain) must match or the upsert is rejected. Key format: layer:type:domain:qualified_name (all lowercase)."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Node name")),
@@ -195,11 +195,11 @@ func nodeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_node_list
+// chronicle_node_list
 // ---------------------------------------------------------------------------
 
 func nodeListTool() mcp.Tool {
-	return mcp.NewTool("oracle_node_list",
+	return mcp.NewTool("chronicle_node_list",
 		mcp.WithDescription("List graph nodes with optional filters. Filter by layer (code/service/contract/etc), node_type, domain, or status (active/stale/deleted)."),
 		mcp.WithString("layer", mcp.Description("Filter by layer")),
 		mcp.WithString("node_type", mcp.Description("Filter by node type")),
@@ -226,11 +226,11 @@ func nodeListHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_node_get
+// chronicle_node_get
 // ---------------------------------------------------------------------------
 
 func nodeGetTool() mcp.Tool {
-	return mcp.NewTool("oracle_node_get",
+	return mcp.NewTool("chronicle_node_get",
 		mcp.WithDescription("Get a single node by key with all its evidence entries. Use to inspect a specific entity and see what evidence supports its existence in the graph."),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key")),
 	)
@@ -260,11 +260,11 @@ func nodeGetHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_edge_upsert
+// chronicle_edge_upsert
 // ---------------------------------------------------------------------------
 
 func edgeUpsertTool() mcp.Tool {
-	return mcp.NewTool("oracle_edge_upsert",
+	return mcp.NewTool("chronicle_edge_upsert",
 		mcp.WithDescription("Create or update a graph edge. Upsert by edge_key (auto-generated as from->to:type if not provided). The from/to nodes must already exist. Edge type and layers are validated against the type registry. Derivation: hard (AST-level), linked (convention-based), inferred (guessed), unknown."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
 		mcp.WithString("derivation_kind", mcp.Required(), mcp.Description("Derivation kind (hard, linked, inferred, unknown)")),
@@ -326,11 +326,11 @@ func edgeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_edge_list
+// chronicle_edge_list
 // ---------------------------------------------------------------------------
 
 func edgeListTool() mcp.Tool {
-	return mcp.NewTool("oracle_edge_list",
+	return mcp.NewTool("chronicle_edge_list",
 		mcp.WithDescription("List graph edges with optional filters. Filter by source node, target node, or edge type. Returns all matching edges with derivation kind and confidence."),
 		mcp.WithString("from_node_key", mcp.Description("Filter by from node key")),
 		mcp.WithString("to_node_key", mcp.Description("Filter by to node key")),
@@ -369,11 +369,11 @@ func edgeListHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_evidence_add
+// chronicle_evidence_add
 // ---------------------------------------------------------------------------
 
 func evidenceAddTool() mcp.Tool {
-	return mcp.NewTool("oracle_evidence_add",
+	return mcp.NewTool("chronicle_evidence_add",
 		mcp.WithDescription("Add provenance evidence for a node or edge. For code evidence: include file_path and line_start, source_kind='file'. For user corrections: use source_kind='user_feedback', polarity='negative', confidence=0.95, and include the user's reason in metadata. Negative evidence with high confidence contradicts the fact and effectively removes it from the graph. Extractor_id should be 'claude-code'."),
 		mcp.WithString("extractor_id", mcp.Required(), mcp.Description("Extractor ID")),
 		mcp.WithString("extractor_version", mcp.Required(), mcp.Description("Extractor version")),
@@ -446,11 +446,11 @@ func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_import_all
+// chronicle_import_all
 // ---------------------------------------------------------------------------
 
 func importAllTool() mcp.Tool {
-	return mcp.NewTool("oracle_import_all",
+	return mcp.NewTool("chronicle_import_all",
 		mcp.WithDescription("Import nodes, edges, evidence in a single transaction. KEEP PAYLOADS SMALL — max ~15 nodes per call. Read one file → extract → import → move to next file. Do NOT accumulate."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
 		mcp.WithString("payload", mcp.Required(), mcp.Description("JSON string containing nodes, edges, and evidence arrays")),
@@ -502,11 +502,11 @@ func importAllHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_query_deps
+// chronicle_query_deps
 // ---------------------------------------------------------------------------
 
 func queryDepsTool() mcp.Tool {
-	return mcp.NewTool("oracle_query_deps",
+	return mcp.NewTool("chronicle_query_deps",
 		mcp.WithDescription("Query forward dependencies of a node — what does this node depend on? BFS traversal of outgoing edges up to specified depth. Use --derivation to filter by confidence level."),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("Starting node key")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation kinds to follow")),
@@ -544,11 +544,11 @@ func queryDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_query_reverse_deps
+// chronicle_query_reverse_deps
 // ---------------------------------------------------------------------------
 
 func queryReverseDepsTool() mcp.Tool {
-	return mcp.NewTool("oracle_query_reverse_deps",
+	return mcp.NewTool("chronicle_query_reverse_deps",
 		mcp.WithDescription("Query reverse dependencies — who depends on this node? BFS traversal of incoming edges. Use to find all consumers of a service, endpoint, or topic."),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("Starting node key")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation kinds to follow")),
@@ -586,11 +586,11 @@ func queryReverseDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_query_stats
+// chronicle_query_stats
 // ---------------------------------------------------------------------------
 
 func queryStatsTool() mcp.Tool {
-	return mcp.NewTool("oracle_query_stats",
+	return mcp.NewTool("chronicle_query_stats",
 		mcp.WithDescription("Get aggregate graph statistics for a domain: node/edge counts, breakdown by layer, edge type, derivation kind, active vs stale. Use to verify scan completeness."),
 		mcp.WithString("domain", mcp.Description("Domain key (empty = all domains)")),
 	)
@@ -610,12 +610,12 @@ func queryStatsHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_snapshot_create
+// chronicle_snapshot_create
 // ---------------------------------------------------------------------------
 
 func snapshotCreateTool() mcp.Tool {
-	return mcp.NewTool("oracle_snapshot_create",
-		mcp.WithDescription("Record a point-in-time snapshot after a scan completes. Captures node and edge counts. Call after oracle_import_all and oracle_stale_mark to close the scan lifecycle."),
+	return mcp.NewTool("chronicle_snapshot_create",
+		mcp.WithDescription("Record a point-in-time snapshot after a scan completes. Captures node and edge counts. Call after chronicle_import_all and chronicle_stale_mark to close the scan lifecycle."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
 		mcp.WithNumber("node_count", mcp.Required(), mcp.Description("Node count")),
@@ -656,11 +656,11 @@ func snapshotCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_stale_mark
+// chronicle_stale_mark
 // ---------------------------------------------------------------------------
 
 func staleMarkTool() mcp.Tool {
-	return mcp.NewTool("oracle_stale_mark",
+	return mcp.NewTool("chronicle_stale_mark",
 		mcp.WithDescription("Mark nodes and edges not seen in the current revision as stale. Call after import to flag entities from previous scans that were not re-imported. Stale entities remain queryable but are flagged."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID threshold")),
@@ -695,11 +695,11 @@ func staleMarkHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_invalidate_changed
+// chronicle_invalidate_changed
 // ---------------------------------------------------------------------------
 
 func invalidateChangedTool() mcp.Tool {
-	return mcp.NewTool("oracle_invalidate_changed",
+	return mcp.NewTool("chronicle_invalidate_changed",
 		mcp.WithDescription("Mark evidence from changed files as stale and recalculate trust scores. Call during incremental scans after getting changed files from git diff. Returns list of files to rescan."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
@@ -737,11 +737,11 @@ func invalidateChangedHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_finalize_incremental_scan
+// chronicle_finalize_incremental_scan
 // ---------------------------------------------------------------------------
 
 func finalizeIncrementalScanTool() mcp.Tool {
-	return mcp.NewTool("oracle_finalize_incremental_scan",
+	return mcp.NewTool("chronicle_finalize_incremental_scan",
 		mcp.WithDescription("Complete an incremental scan. Counts revalidated/stale/contradicted evidence and recalculates trust scores. Stale evidence stays stale — only negative evidence causes invalidation."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
@@ -769,11 +769,11 @@ func finalizeIncrementalScanHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_query_path
+// chronicle_query_path
 // ---------------------------------------------------------------------------
 
 func queryPathTool() mcp.Tool {
-	return mcp.NewTool("oracle_query_path",
+	return mcp.NewTool("chronicle_query_path",
 		mcp.WithDescription("Find paths between two nodes. Default mode 'directed' follows edges in natural direction for dependency chains. Use 'connected' for undirected exploration. Structural edges (CONTAINS) excluded by default. Returns top-k paths ranked by path score."),
 		mcp.WithString("from_node_key", mcp.Required(), mcp.Description("Source node key")),
 		mcp.WithString("to_node_key", mcp.Required(), mcp.Description("Target node key")),
@@ -819,11 +819,11 @@ func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_impact
+// chronicle_impact
 // ---------------------------------------------------------------------------
 
 func impactTool() mcp.Tool {
-	return mcp.NewTool("oracle_impact",
+	return mcp.NewTool("chronicle_impact",
 		mcp.WithDescription("Analyze blast radius of a node change. Reverse dependency traversal respecting traversal policy — structural edges excluded, EXPOSES_ENDPOINT doesn't propagate reverse. Returns scored impact list. Use to answer 'what breaks if I change X?'"),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("Changed node key")),
 		mcp.WithNumber("depth", mcp.Description("Max depth (default 4)")),
@@ -865,11 +865,11 @@ func impactHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_extraction_guide
+// chronicle_extraction_guide
 // ---------------------------------------------------------------------------
 
 func extractionGuideTool() mcp.Tool {
-	return mcp.NewTool("oracle_extraction_guide",
+	return mcp.NewTool("chronicle_extraction_guide",
 		mcp.WithDescription("Get the extraction methodology guide. Call this before scanning a codebase to understand what entities and relationships to extract, how to structure the import payload, and the recommended workflow. Returns comprehensive JSON instructions for analyzing TypeScript/NestJS, OpenAPI, and other codebases."),
 		mcp.WithString("technology", mcp.Description("Filter guide to a specific technology: nestjs, openapi, or omit for full guide")),
 	)
@@ -884,13 +884,13 @@ func extractionGuideHandler() server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_scan_status
+// chronicle_scan_status
 // ---------------------------------------------------------------------------
 
 func scanStatusTool() mcp.Tool {
-	return mcp.NewTool("oracle_scan_status",
+	return mcp.NewTool("chronicle_scan_status",
 		mcp.WithDescription("Get the current graph state for a domain. Returns last revision, graph statistics (node/edge counts by layer and type), and last snapshot. Use this before scanning to decide whether to do a full or incremental scan."),
-		mcp.WithString("domain", mcp.Description("Domain key (from oracle.domain.yaml). If omitted, returns a message to check the manifest.")),
+		mcp.WithString("domain", mcp.Description("Domain key (from chronicle.domain.yaml). If omitted, returns a message to check the manifest.")),
 	)
 }
 
@@ -916,7 +916,7 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 				"is_first_run": true,
 				"message":      "This project has never been scanned. I recommend running an onboarding scan.",
 				"ask_user":     "Would you like me to scan this project and build a knowledge graph? I'll discover the project structure, extract data models, code dependencies, and API surface.",
-				"if_yes":       "Call oracle_command(command='scan') to start the full scan.",
+				"if_yes":       "Call chronicle_command(command='scan') to start the full scan.",
 			}
 			// Also include admin dashboard URL
 			port := adminPortValue
@@ -965,13 +965,13 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_save_manifest
+// chronicle_save_manifest
 // ---------------------------------------------------------------------------
 
 func saveManifestTool() mcp.Tool {
-	return mcp.NewTool("oracle_save_manifest",
-		mcp.WithDescription("Save the domain manifest (oracle.domain.yaml). Use after auto-discovering the project structure — identify repos, tech stack, and domain name, then save. Claude should auto-discover and never ask the user to manually edit this file."),
-		mcp.WithString("content", mcp.Required(), mcp.Description("Full YAML content for oracle.domain.yaml")),
+	return mcp.NewTool("chronicle_save_manifest",
+		mcp.WithDescription("Save the domain manifest (chronicle.domain.yaml). Use after auto-discovering the project structure — identify repos, tech stack, and domain name, then save. Claude should auto-discover and never ask the user to manually edit this file."),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Full YAML content for chronicle.domain.yaml")),
 	)
 }
 
@@ -983,7 +983,7 @@ func saveManifestHandler() server.ToolHandlerFunc {
 		}
 		path := manifestFilePath
 		if path == "" {
-			path = ".depbot/oracle.domain.yaml"
+			path = ".depbot/chronicle.domain.yaml"
 		}
 		os.MkdirAll(".depbot", 0755)
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -994,11 +994,11 @@ func saveManifestHandler() server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_reset_db
+// chronicle_reset_db
 // ---------------------------------------------------------------------------
 
 func resetDBTool() mcp.Tool {
-	return mcp.NewTool("oracle_reset_db",
+	return mcp.NewTool("chronicle_reset_db",
 		mcp.WithDescription("Reset the database — drops all tables and recreates the schema. Use when schema has changed or you want a clean re-scan. All existing graph data will be lost."),
 	)
 }
@@ -1013,11 +1013,11 @@ func resetDBHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_report_discovery
+// chronicle_report_discovery
 // ---------------------------------------------------------------------------
 
 func reportDiscoveryTool() mcp.Tool {
-	return mcp.NewTool("oracle_report_discovery",
+	return mcp.NewTool("chronicle_report_discovery",
 		mcp.WithDescription("Report a discovery about the codebase. Use this when you learn something new during analysis that should be remembered for future scans. Categories: 'pattern' (new code pattern), 'correction' (previous extraction was wrong), 'insight' (user told you something), 'missing_edge' (relationship exists but wasn't captured), 'unknown_pattern' (code pattern you don't know how to classify)."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithString("category", mcp.Required(), mcp.Description("pattern, correction, insight, missing_edge, unknown_pattern")),
@@ -1061,11 +1061,11 @@ func reportDiscoveryHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_get_discoveries
+// chronicle_get_discoveries
 // ---------------------------------------------------------------------------
 
 func getDiscoveriesTool() mcp.Tool {
-	return mcp.NewTool("oracle_get_discoveries",
+	return mcp.NewTool("chronicle_get_discoveries",
 		mcp.WithDescription("Get previous discoveries about this codebase. Call this before scanning to learn from past analysis sessions — corrections, patterns, insights from the user, and unknown patterns that need investigation."),
 		mcp.WithString("domain", mcp.Description("Domain key (optional, filters by domain)")),
 		mcp.WithString("category", mcp.Description("Filter by category: pattern, correction, insight, missing_edge, unknown_pattern")),
@@ -1084,11 +1084,11 @@ func getDiscoveriesHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_admin_url
+// chronicle_admin_url
 // ---------------------------------------------------------------------------
 
 func adminURLTool() mcp.Tool {
-	return mcp.NewTool("oracle_admin_url",
+	return mcp.NewTool("chronicle_admin_url",
 		mcp.WithDescription("Get the admin dashboard URL. The dashboard shows the knowledge graph, MCP request log, discoveries, and scan metrics in a web browser."),
 	)
 }
@@ -1109,11 +1109,11 @@ func adminURLHandler() server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_define_term
+// chronicle_define_term
 // ---------------------------------------------------------------------------
 
 func defineTermTool() mcp.Tool {
-	return mcp.NewTool("oracle_define_term",
+	return mcp.NewTool("chronicle_define_term",
 		mcp.WithDescription("Define or update a domain language term. Use this to build the project's ubiquitous language glossary. Include anti-patterns to detect naming violations in the codebase."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithString("term", mcp.Required(), mcp.Description("The canonical term (e.g. 'Order', 'Merchant', 'User')")),
@@ -1153,11 +1153,11 @@ func defineTermHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_get_glossary
+// chronicle_get_glossary
 // ---------------------------------------------------------------------------
 
 func getGlossaryTool() mcp.Tool {
-	return mcp.NewTool("oracle_get_glossary",
+	return mcp.NewTool("chronicle_get_glossary",
 		mcp.WithDescription("Get the domain language glossary. Returns all defined terms with their aliases, anti-patterns, and descriptions. Use this to understand the project's ubiquitous language."),
 		mcp.WithString("domain", mcp.Description("Domain key (optional)")),
 	)
@@ -1174,11 +1174,11 @@ func getGlossaryHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_check_language
+// chronicle_check_language
 // ---------------------------------------------------------------------------
 
 func checkLanguageTool() mcp.Tool {
-	return mcp.NewTool("oracle_check_language",
+	return mcp.NewTool("chronicle_check_language",
 		mcp.WithDescription("Check the knowledge graph for domain language violations. Scans all node names against anti-patterns defined in the glossary. Returns warnings for naming inconsistencies."),
 		mcp.WithString("domain", mcp.Description("Domain key (optional)")),
 	)
@@ -1202,12 +1202,12 @@ func checkLanguageHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_command — unified command executor
+// chronicle_command — unified command executor
 // ---------------------------------------------------------------------------
 
 func commandTool() mcp.Tool {
-	return mcp.NewTool("oracle_command",
-		mcp.WithDescription("Execute an Oracle command. Available commands: scan, data, language, impact, deps, path, services, status, help. The user may type '/oracle-scan' or 'oracle scan' — call this tool with the command name."),
+	return mcp.NewTool("chronicle_command",
+		mcp.WithDescription("Execute a Chronicle command. Available commands: scan, data, language, impact, deps, path, services, status, help. The user may type '/chronicle-scan' or 'chronicle scan' — call this tool with the command name."),
 		mcp.WithString("command", mcp.Required(), mcp.Description("Command name: scan, data, language, impact, deps, path, services, status, help")),
 	)
 }
@@ -1239,12 +1239,12 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_diagram_create
+// chronicle_diagram_create
 // ---------------------------------------------------------------------------
 
 func diagramCreateTool() mcp.Tool {
-	return mcp.NewTool("oracle_diagram_create",
-		mcp.WithDescription("Create a live diagram session. Returns a URL the user can open to see the diagram. Use oracle_diagram_update to push content."),
+	return mcp.NewTool("chronicle_diagram_create",
+		mcp.WithDescription("Create a live diagram session. Returns a URL the user can open to see the diagram. Use chronicle_diagram_update to push content."),
 		mcp.WithString("title", mcp.Description("Human-readable title for the diagram, e.g. 'Auth Flow' or 'Order Dependencies'")),
 	)
 }
@@ -1276,13 +1276,13 @@ func diagramCreateHandler() server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_diagram_update
+// chronicle_diagram_update
 // ---------------------------------------------------------------------------
 
 func diagramUpdateTool() mcp.Tool {
-	return mcp.NewTool("oracle_diagram_update",
-		mcp.WithDescription("Push graph data to a live diagram. The dashboard updates in real-time. Can be called repeatedly to evolve the diagram. Payload uses standard Oracle graph format: {nodes: [...], edges: [...]}"),
-		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from oracle_diagram_create")),
+	return mcp.NewTool("chronicle_diagram_update",
+		mcp.WithDescription("Push graph data to a live diagram. The dashboard updates in real-time. Can be called repeatedly to evolve the diagram. Payload uses standard Chronicle graph format: {nodes: [...], edges: [...]}"),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from chronicle_diagram_create")),
 		mcp.WithString("payload", mcp.Required(), mcp.Description("JSON string: {\"nodes\": [{\"node_id\": 1, \"node_key\": \"...\", \"name\": \"...\", \"layer\": \"...\", \"node_type\": \"...\"}], \"edges\": [{\"from_node_id\": 1, \"to_node_id\": 2, \"edge_type\": \"...\"}]}")),
 	)
 }
@@ -1316,13 +1316,13 @@ func diagramUpdateHandler() server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_diagram_annotate
+// chronicle_diagram_annotate
 // ---------------------------------------------------------------------------
 
 func diagramAnnotateTool() mcp.Tool {
-	return mcp.NewTool("oracle_diagram_annotate",
+	return mcp.NewTool("chronicle_diagram_annotate",
 		mcp.WithDescription("Add a highlight or text note to a node in a live diagram. The node gets a colored glow and/or a text label. Use 'step' to create presentation steps — user navigates with Next/Back buttons."),
-		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from oracle_diagram_create")),
+		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from chronicle_diagram_create")),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("node_key of the node to annotate")),
 		mcp.WithString("note", mcp.Description("Text note shown near the node, e.g. 'This is the bottleneck'")),
 		mcp.WithString("highlight", mcp.Description("Highlight color — name or hex, e.g. 'red', '#ff6600', 'green'")),

@@ -50,7 +50,7 @@ func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandler
 		logStore.LogRequest(entry) //nolint:errcheck
 
 		// Auto-discovery: after import_all, analyze for low-confidence edges and gaps
-		if toolName == "oracle_import_all" && err == nil && entry.ErrorMessage == "" {
+		if toolName == "chronicle_import_all" && err == nil && entry.ErrorMessage == "" {
 			go autoDiscover(logStore, entry.ResultJSON)
 		}
 
@@ -246,63 +246,63 @@ func makeSummary(toolName, resultJSON string) string {
 	}
 
 	switch toolName {
-	case "oracle_import_all":
+	case "chronicle_import_all":
 		n, _ := data["nodes_created"].(float64)
 		e, _ := data["edges_created"].(float64)
 		ev, _ := data["evidence_created"].(float64)
 		return fmt.Sprintf("%.0fn %.0fe %.0fev", n, e, ev)
-	case "oracle_revision_create":
+	case "chronicle_revision_create":
 		id, _ := data["revision_id"].(float64)
 		return fmt.Sprintf("rev #%.0f", id)
-	case "oracle_node_upsert":
+	case "chronicle_node_upsert":
 		id, _ := data["node_id"].(float64)
 		return fmt.Sprintf("node_id: %.0f", id)
-	case "oracle_edge_upsert":
+	case "chronicle_edge_upsert":
 		id, _ := data["edge_id"].(float64)
 		return fmt.Sprintf("edge_id: %.0f", id)
-	case "oracle_evidence_add":
+	case "chronicle_evidence_add":
 		id, _ := data["evidence_id"].(float64)
 		return fmt.Sprintf("evidence #%.0f", id)
-	case "oracle_snapshot_create":
+	case "chronicle_snapshot_create":
 		id, _ := data["snapshot_id"].(float64)
 		return fmt.Sprintf("snapshot #%.0f", id)
-	case "oracle_stale_mark":
+	case "chronicle_stale_mark":
 		n, _ := data["stale_nodes"].(float64)
 		e, _ := data["stale_edges"].(float64)
 		return fmt.Sprintf("%.0f nodes, %.0f edges stale", n, e)
-	case "oracle_query_path":
+	case "chronicle_query_path":
 		paths, _ := data["paths"].([]any)
 		if len(paths) == 0 {
 			return "0 paths"
 		}
 		return fmt.Sprintf("%d path(s)", len(paths))
-	case "oracle_impact":
+	case "chronicle_impact":
 		total, _ := data["total_impacted"].(float64)
 		return fmt.Sprintf("%.0f impacted", total)
-	case "oracle_query_stats":
+	case "chronicle_query_stats":
 		n, _ := data["node_count"].(float64)
 		e, _ := data["edge_count"].(float64)
 		return fmt.Sprintf("%.0fn %.0fe", n, e)
-	case "oracle_extraction_guide":
+	case "chronicle_extraction_guide":
 		return "guide returned"
-	case "oracle_scan_status":
+	case "chronicle_scan_status":
 		domain, _ := data["domain"].(string)
 		if domain != "" {
 			return "domain: " + domain
 		}
 		return "status"
-	case "oracle_node_get":
+	case "chronicle_node_get":
 		return "node details"
-	case "oracle_validate_graph":
+	case "chronicle_validate_graph":
 		if issues, ok := data["issues"].([]any); ok {
 			return fmt.Sprintf("%d issues", len(issues))
 		}
 		return "validated"
-	case "oracle_invalidate_changed":
+	case "chronicle_invalidate_changed":
 		stale, _ := data["stale_evidence"].(float64)
 		edges, _ := data["affected_edges"].(float64)
 		return fmt.Sprintf("%.0f stale, %.0f edges affected", stale, edges)
-	case "oracle_finalize_incremental_scan":
+	case "chronicle_finalize_incremental_scan":
 		reval, _ := data["revalidated"].(float64)
 		still, _ := data["still_stale"].(float64)
 		contra, _ := data["contradicted"].(float64)
@@ -321,7 +321,7 @@ func truncate(s string, max int) string {
 
 // NewServerWithLogging creates an MCP server with request logging to SQLite.
 func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServer {
-	s := server.NewMCPServer("oracle", "0.1.0")
+	s := server.NewMCPServer("chronicle", "0.1.0")
 
 	add := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {
 		s.AddTool(tool, loggingWrap(logStore, tool.Name, handler))

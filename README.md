@@ -1,11 +1,15 @@
-# Domain Oracle
+<p align="center">
+  <img src="assets/logo.png" alt="Chronicle MCP" width="180">
+</p>
 
-A knowledge graph for your codebase. Oracle maps the invisible structure — how models connect to services, services to endpoints, endpoints to the outside world — and gives Claude Code the ability to reason about it, query it, and explain it visually.
+# Chronicle MCP
+
+A knowledge graph for your codebase. Chronicle maps the invisible structure — how models connect to services, services to endpoints, endpoints to the outside world — and gives Claude Code the ability to reason about it, query it, and explain it visually.
 
 ```
 You: "What breaks if I change the User model?"
 
-Oracle:
+Chronicle:
   → UserService (depth 1) — USES_MODEL
   → AuthController (depth 2) — INJECTS
   → GET /auth/profile (depth 3) — EXPOSES_ENDPOINT
@@ -17,13 +21,13 @@ Oracle:
 
 You can grep a codebase. You can ask an AI to read files. But neither gives you the answer to "what happens downstream if I change this?" — because that answer lives in the connections between things, not in any single file.
 
-Oracle extracts those connections into a persistent graph: data models, services, controllers, endpoints, Kafka topics, cross-service calls. Every relationship has a derivation (hard from AST, or linked by convention) and evidence (file + line number). The graph survives between sessions. Claude doesn't re-read your entire codebase every time — it queries what Oracle already knows.
+Chronicle extracts those connections into a persistent graph: data models, services, controllers, endpoints, Kafka topics, cross-service calls. Every relationship has a derivation (hard from AST, or linked by convention) and evidence (file + line number). The graph survives between sessions. Claude doesn't re-read your entire codebase every time — it queries what Chronicle already knows.
 
 ## How It Works
 
-**Claude reads. Oracle remembers.**
+**Claude reads. Chronicle remembers.**
 
-When you say `oracle scan`, Claude reads your code file by file — Prisma schemas, NestJS modules, controllers, services — and extracts structured facts: "UserService injects PrismaService", "OrderController exposes POST /orders", "api-service calls payments-service via HTTP". Oracle validates each fact, normalizes keys, and stores it in SQLite.
+When you say `chronicle scan`, Claude reads your code file by file — Prisma schemas, NestJS modules, controllers, services — and extracts structured facts: "UserService injects PrismaService", "OrderController exposes POST /orders", "api-service calls payments-service via HTTP". Chronicle validates each fact, normalizes keys, and stores it in SQLite.
 
 The graph is layered:
 
@@ -37,15 +41,15 @@ CONTRACT     GET /users/:id, order-created topic (endpoints, Kafka topics)
 SERVICE      api-service ──→ payments-service    (deployable services)
 ```
 
-This means you can ask questions that cross layers: "how does the User model connect to the payments-service?" Oracle traces the path through code and contract layers to give you a real answer.
+This means you can ask questions that cross layers: "how does the User model connect to the payments-service?" Chronicle traces the path through code and contract layers to give you a real answer.
 
-**Self-learning.** After each import, Oracle auto-discovers gaps — missing endpoint extractions, nodes without evidence, orphan providers. Claude discovers too: uncertain relationships, unknown patterns, naming inconsistencies. All discoveries are stored and fed into the next scan. The graph gets more complete and more confident over time.
+**Self-learning.** After each import, Chronicle auto-discovers gaps — missing endpoint extractions, nodes without evidence, orphan providers. Claude discovers too: uncertain relationships, unknown patterns, naming inconsistencies. All discoveries are stored and fed into the next scan. The graph gets more complete and more confident over time.
 
-**Domain language.** Oracle tracks your project's vocabulary — define terms, aliases, anti-patterns. If someone names a service "PurchaseService" in a project where the correct term is "Order", Oracle flags it. The glossary lives in the dashboard and feeds into scan analysis.
+**Domain language.** Chronicle tracks your project's vocabulary — define terms, aliases, anti-patterns. If someone names a service "PurchaseService" in a project where the correct term is "Order", Chronicle flags it. The glossary lives in the dashboard and feeds into scan analysis.
 
 ## Live Diagrams
 
-Oracle doesn't just answer questions — it can show you.
+Chronicle doesn't just answer questions — it can show you.
 
 Claude creates a live diagram session, pushes nodes and edges to your browser in real-time, and annotates what it's explaining. You open a URL, and as Claude talks through the architecture, the diagram updates in front of you — nodes light up, annotations appear, the view evolves step by step.
 
@@ -70,20 +74,20 @@ The admin dashboard starts automatically with the MCP server. It's an embedded S
 - **Graph** — multiple exploration modes:
   - **Tree** — hierarchical drill-down by layer
   - **Explore** — breadcrumb navigation, layer by layer
-  - **Workspace** — drag entities from a search palette onto a canvas; drop two nodes and Oracle auto-finds the shortest path between them; expand neighbors incrementally
+  - **Workspace** — drag entities from a search palette onto a canvas; drop two nodes and Chronicle auto-finds the shortest path between them; expand neighbors incrementally
 - **Language** — domain glossary editor + violation checker
 - **Diagrams** — live sessions pushed by Claude, with annotations and step-through navigation
 
-Filter by node type, by repo. Hide a node type and Oracle preserves logical connections through it — transitive edges show "via POST /api" so you don't lose the story.
+Filter by node type, by repo. Hide a node type and Chronicle preserves logical connections through it — transitive edges show "via POST /api" so you don't lose the story.
 
 ## Quick Start
 
 ```bash
-npm install -g @alexdx/depbot-oracle
-claude mcp add oracle -- oracle mcp serve --open
+npm install -g @alexdx/chronicle-mcp
+claude mcp add chronicle -- chronicle mcp serve --open
 ```
 
-That's it. Open Claude Code in any project, say `oracle scan`. The dashboard opens in your browser, Oracle discovers your project structure and starts building the graph.
+That's it. Open Claude Code in any project, say `chronicle scan`. The dashboard opens in your browser, Chronicle discovers your project structure and starts building the graph.
 
 ### Try It
 
@@ -92,10 +96,10 @@ The repo includes a 4-service demo project (Tom & Jerry) you can scan immediatel
 ```bash
 cd fixtures/tom-and-jerry
 claude   # opens Claude Code in the fixture directory
-# say: "oracle scan"
+# say: "chronicle scan"
 ```
 
-Four NestJS microservices — tom-api, jerry-api, arena-api, spectators-api — with Prisma models, HTTP cross-service calls, Kafka topics, guards, interceptors, gateways. A small but real graph that shows every layer Oracle can capture.
+Four NestJS microservices — tom-api, jerry-api, arena-api, spectators-api — with Prisma models, HTTP cross-service calls, Kafka topics, guards, interceptors, gateways. A small but real graph that shows every layer Chronicle can capture.
 
 Or if you already have the dashboard running — paste the path to `fixtures/tom-and-jerry` into the project switcher (top of the dashboard) and it loads the pre-built graph instantly. No restart needed.
 
@@ -103,14 +107,14 @@ Or if you already have the dashboard running — paste the path to `fixtures/tom
 
 | Say this | What happens |
 |---|---|
-| `oracle scan` | Full project scan — models, code, endpoints, services |
-| `oracle impact X` | What breaks if I change X? |
-| `oracle deps X` | What depends on X? |
-| `oracle path A B` | How does A connect to B? |
-| `oracle data` | Analyze data models |
-| `oracle services` | Service architecture map |
-| `oracle language` | Domain glossary + violations |
-| `oracle status` | Dashboard URL + graph stats |
+| `chronicle scan` | Full project scan — models, code, endpoints, services |
+| `chronicle impact X` | What breaks if I change X? |
+| `chronicle deps X` | What depends on X? |
+| `chronicle path A B` | How does A connect to B? |
+| `chronicle data` | Analyze data models |
+| `chronicle services` | Service architecture map |
+| `chronicle language` | Domain glossary + violations |
+| `chronicle status` | Dashboard URL + graph stats |
 
 ## Development
 
@@ -122,8 +126,7 @@ The dashboard serves static files from disk in dev mode (`--dev` flag), so you c
 
 ## Links
 
-- **npm**: [@alexdx/depbot-oracle](https://www.npmjs.com/package/@alexdx/depbot-oracle)
-- **Source**: [gitlab.com/Alex_dx3/depbot](https://gitlab.com/Alex_dx3/depbot)
+- **npm**: [@alexdx/chronicle-mcp](https://www.npmjs.com/package/@alexdx/chronicle-mcp)
 
 ## License
 

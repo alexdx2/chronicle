@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Oracle Admin Dashboard</title>
+<title>Chronicle Admin Dashboard</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
@@ -176,7 +177,7 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Header -->
 <header class="header">
-  <h1>Oracle</h1>
+  <h1 style="display:flex;align-items:center;gap:8px"><img src="/logo.png" alt="Chronicle" style="width:32px;height:32px">Chronicle</h1>
   <div class="meta">
     <!-- Project name + switcher -->
     <span style="position:relative">
@@ -257,14 +258,14 @@ a{color:var(--primary);text-decoration:none}
       <div style="display:flex;align-items:start;gap:16px">
         <div style="font-size:32px">🔍</div>
         <div style="flex:1">
-          <h3 style="margin-bottom:8px;color:var(--primary)">Welcome to Oracle</h3>
+          <h3 style="margin-bottom:8px;color:var(--primary)">Welcome to Chronicle</h3>
           <p style="color:var(--text);margin-bottom:12px">This project hasn't been scanned yet. Tell Claude to scan it and build a knowledge graph.</p>
           <div style="background:#fff;border-radius:8px;padding:12px;border:1px solid #e0e0e0;margin-bottom:12px">
             <div style="font-size:10px;color:#999;margin-bottom:4px">Say this in Claude Code:</div>
-            <code style="font-size:13px;color:var(--primary);font-weight:500">oracle scan</code>
+            <code style="font-size:13px;color:var(--primary);font-weight:500">chronicle scan</code>
           </div>
           <div style="font-size:12px;color:var(--text-muted)">
-            <p style="margin-bottom:6px">Oracle will automatically:</p>
+            <p style="margin-bottom:6px">Chronicle will automatically:</p>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px">
               <span>✓ Discover project structure</span>
               <span>✓ Extract data models</span>
@@ -810,7 +811,7 @@ a{color:var(--primary);text-decoration:none}
         <template x-if="!glossary || glossary.length === 0">
           <div style="text-align:center;color:var(--text-muted);padding:20px">
             <p>No terms defined yet.</p>
-            <p style="font-size:11px;margin-top:8px">Click "+ Add Term" or ask Claude: "oracle language"</p>
+            <p style="font-size:11px;margin-top:8px">Click "+ Add Term" or ask Claude: "chronicle language"</p>
           </div>
         </template>
         <template x-for="t in glossary" :key="t.term_id">
@@ -926,7 +927,7 @@ a{color:var(--primary);text-decoration:none}
         <div @click="expandedPrompt = expandedPrompt === cmd ? null : cmd"
              style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f8f9fa;cursor:pointer;user-select:none">
           <div>
-            <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="'oracle ' + cmd"></code>
+            <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="'chronicle ' + cmd"></code>
             <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="promptDescriptions[cmd] || ''"></span>
           </div>
           <span style="color:#999;font-size:12px" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
@@ -1064,12 +1065,12 @@ function dashboard() {
       } catch(e) {}
 
       // Restore last selected project
-      const lastProject = localStorage.getItem('oracle_current_project');
+      const lastProject = localStorage.getItem('chronicle_current_project');
       if (lastProject) {
         try {
           const r = await fetch('/api/projects?path=' + encodeURIComponent(lastProject));
           const data = await r.json();
-          if (data.error) localStorage.removeItem('oracle_current_project');
+          if (data.error) localStorage.removeItem('chronicle_current_project');
         } catch(e) {}
       }
 
@@ -1199,7 +1200,7 @@ function dashboard() {
     },
 
     async resetToDefault() {
-      localStorage.removeItem('oracle_current_project');
+      localStorage.removeItem('chronicle_current_project');
       await this.switchProject(this.originalProject);
     },
 
@@ -1215,13 +1216,13 @@ function dashboard() {
           return;
         }
         // Save to localStorage — persist across reloads
-        localStorage.setItem('oracle_current_project', data.path);
-        const history = JSON.parse(localStorage.getItem('oracle_projects') || '[]');
+        localStorage.setItem('chronicle_current_project', data.path);
+        const history = JSON.parse(localStorage.getItem('chronicle_projects') || '[]');
         const existing = history.findIndex(p => p.path === data.path);
         if (existing >= 0) history.splice(existing, 1);
         history.unshift({ name: data.name, path: data.path });
         if (history.length > 10) history.pop();
-        localStorage.setItem('oracle_projects', JSON.stringify(history));
+        localStorage.setItem('chronicle_projects', JSON.stringify(history));
 
         // Reload — stats first, rest lazy
         this.domain = '';
@@ -1238,7 +1239,7 @@ function dashboard() {
     },
 
     getRecentProjects() {
-      return JSON.parse(localStorage.getItem('oracle_projects') || '[]');
+      return JSON.parse(localStorage.getItem('chronicle_projects') || '[]');
     },
 
     async fetchGlossary() {

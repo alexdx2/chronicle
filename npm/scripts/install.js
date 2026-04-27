@@ -7,15 +7,15 @@ const https = require('https');
 const http = require('http');
 
 const VERSION = require('../package.json').version;
-const PROJECT_ID = '81624373';
-const REGISTRY = `https://gitlab.com/api/v4/projects/${PROJECT_ID}/packages/generic/oracle`;
+const REPO = 'alexdx2/chronicle';
+const REGISTRY = `https://github.com/${REPO}/releases/download`;
 
 const PLATFORM_MAP = {
-  'darwin-x64': 'oracle-darwin-amd64',
-  'darwin-arm64': 'oracle-darwin-arm64',
-  'linux-x64': 'oracle-linux-amd64',
-  'linux-arm64': 'oracle-linux-arm64',
-  'win32-x64': 'oracle-windows-amd64.exe',
+  'darwin-x64': 'chronicle-darwin-amd64',
+  'darwin-arm64': 'chronicle-darwin-arm64',
+  'linux-x64': 'chronicle-linux-amd64',
+  'linux-arm64': 'chronicle-linux-arm64',
+  'win32-x64': 'chronicle-windows-amd64.exe',
 };
 
 const platform = `${process.platform}-${process.arch}`;
@@ -24,17 +24,17 @@ const binaryName = PLATFORM_MAP[platform];
 if (!binaryName) {
   console.error(`Unsupported platform: ${platform}`);
   console.error(`Supported: ${Object.keys(PLATFORM_MAP).join(', ')}`);
-  console.error('You can build from source: go build -o oracle ./cmd/oracle');
+  console.error('You can build from source: go build -o chronicle ./cmd/chronicle');
   process.exit(1);
 }
 
 const binDir = path.join(__dirname, '..', 'bin');
-const binaryPath = path.join(binDir, process.platform === 'win32' ? 'oracle.exe' : 'oracle');
+const binaryPath = path.join(binDir, process.platform === 'win32' ? 'chronicle.exe' : 'chronicle');
 
-// Download from GitLab generic package registry
+// Download from GitHub Releases
 const releaseURL = `${REGISTRY}/v${VERSION}/${binaryName}`;
 
-console.log(`Oracle MCP v${VERSION}`);
+console.log(`Chronicle MCP v${VERSION}`);
 console.log(`Platform: ${platform} → ${binaryName}`);
 console.log(`Downloading from: ${releaseURL}`);
 
@@ -46,7 +46,7 @@ function download(url, dest, redirects = 0) {
   }
 
   const client = url.startsWith('https') ? https : http;
-  client.get(url, { headers: { 'User-Agent': 'oracle-mcp-installer' } }, (res) => {
+  client.get(url, { headers: { 'User-Agent': 'chronicle-mcp-installer' } }, (res) => {
     if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
       download(res.headers.location, dest, redirects + 1);
       return;
@@ -65,7 +65,7 @@ function download(url, dest, redirects = 0) {
       if (process.platform !== 'win32') {
         fs.chmodSync(dest, 0o755);
       }
-      console.log(`✓ Oracle installed at ${dest}`);
+      console.log(`✓ Chronicle installed at ${dest}`);
     });
   }).on('error', (err) => {
     console.log(`Download error: ${err.message}. Building from source...`);
@@ -77,7 +77,7 @@ function fallbackToBuild() {
   try {
     // Check if Go is available
     execSync('go version', { stdio: 'pipe' });
-    console.log('Building Oracle from source...');
+    console.log('Building Chronicle from source...');
 
     const srcDir = path.join(__dirname, '..');
     const goSrcDir = path.join(srcDir, '.go-src');
@@ -85,24 +85,24 @@ function fallbackToBuild() {
     // Clone if needed
     if (!fs.existsSync(goSrcDir)) {
       console.log('Cloning repository...');
-      execSync(`git clone --depth 1 --branch v${VERSION} https://gitlab.com/Alex_dx3/depbot.git ${goSrcDir}`, { stdio: 'inherit' });
+      execSync(`git clone --depth 1 --branch v${VERSION} https://github.com/alexdx2/chronicle.git ${goSrcDir}`, { stdio: 'inherit' });
     }
 
     // Build
     console.log('Compiling...');
-    execSync(`go build -ldflags "-s -w" -o ${binaryPath} ./cmd/oracle`, { cwd: goSrcDir, stdio: 'inherit' });
+    execSync(`go build -ldflags "-s -w" -o ${binaryPath} ./cmd/chronicle`, { cwd: goSrcDir, stdio: 'inherit' });
 
     if (process.platform !== 'win32') {
       fs.chmodSync(binaryPath, 0o755);
     }
-    console.log(`✓ Oracle built at ${binaryPath}`);
+    console.log(`✓ Chronicle built at ${binaryPath}`);
   } catch (e) {
     console.error('');
-    console.error('Could not download or build Oracle.');
+    console.error('Could not download or build Chronicle.');
     console.error('');
     console.error('Manual install:');
-    console.error(`  1. Download from: ${REPO}/-/releases`);
-    console.error('  2. Or build from source: git clone ... && go build -o oracle ./cmd/oracle');
+    console.error(`  1. Download from: https://github.com/${REPO}/releases`);
+    console.error('  2. Or build from source: git clone ... && go build -o chronicle ./cmd/chronicle');
     console.error('');
     // Don't fail the install — the run.js wrapper will show an error if binary is missing
   }

@@ -33,7 +33,7 @@ func newInitCmd() *cobra.Command {
 
 			// Create manifest skeleton
 			if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-				skeleton := `# Domain Oracle Manifest — edit this file
+				skeleton := `# Chronicle Manifest — edit this file
 domain: my-domain
 description: ""
 repositories:

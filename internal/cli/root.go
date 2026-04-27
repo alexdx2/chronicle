@@ -23,13 +23,13 @@ const depbotDir = ".depbot"
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "oracle",
-		Short: "Domain Oracle — graph storage and query API",
+		Use:   "chronicle",
+		Short: "Chronicle MCP — knowledge graph for your codebase",
 	}
 
-	root.PersistentFlags().StringVar(&dbPath, "db", "", "Path to SQLite database (default: .depbot/oracle.db)")
-	root.PersistentFlags().StringVar(&registryPath, "registry", "", "Path to type registry (default: .depbot/oracle.types.yaml)")
-	root.PersistentFlags().StringVar(&manifestPath, "manifest", "", "Path to domain manifest (default: .depbot/oracle.domain.yaml)")
+	root.PersistentFlags().StringVar(&dbPath, "db", "", "Path to SQLite database (default: .depbot/chronicle.db)")
+	root.PersistentFlags().StringVar(&registryPath, "registry", "", "Path to type registry (default: .depbot/chronicle.types.yaml)")
+	root.PersistentFlags().StringVar(&manifestPath, "manifest", "", "Path to domain manifest (default: .depbot/chronicle.domain.yaml)")
 
 	root.AddCommand(
 		newVersionCmd(),
@@ -55,7 +55,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("oracle v0.1.0")
+			fmt.Println("chronicle v0.1.0")
 		},
 	}
 }
@@ -63,13 +63,13 @@ func newVersionCmd() *cobra.Command {
 // resolveDefaults sets default paths under .depbot/ if not explicitly provided.
 func resolveDefaults() {
 	if dbPath == "" {
-		dbPath = filepath.Join(depbotDir, "oracle.db")
+		dbPath = filepath.Join(depbotDir, "chronicle.db")
 	}
 	if registryPath == "" {
-		registryPath = filepath.Join(depbotDir, "oracle.types.yaml")
+		registryPath = filepath.Join(depbotDir, "chronicle.types.yaml")
 	}
 	if manifestPath == "" {
-		manifestPath = filepath.Join(depbotDir, "oracle.domain.yaml")
+		manifestPath = filepath.Join(depbotDir, "chronicle.domain.yaml")
 	}
 }
 
@@ -92,7 +92,7 @@ func openGraph() *graph.Graph {
 					fmt.Fprintf(os.Stderr, "error opening database after reset: %v\n", err)
 					os.Exit(1)
 				}
-				fmt.Fprintf(os.Stderr, "Database reset successfully. Run 'oracle scan' to rebuild the graph.\n")
+				fmt.Fprintf(os.Stderr, "Database reset successfully. Run 'chronicle scan' to rebuild the graph.\n")
 			} else {
 				fmt.Fprintf(os.Stderr, "Aborted. Database not modified.\n")
 				os.Exit(1)
@@ -126,38 +126,38 @@ func ensureDepbotDir() {
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
 
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-		skeleton := "# Domain Oracle Manifest — edit this file\ndomain: my-domain\ndescription: \"\"\nrepositories:\n  - name: my-repo\n    path: .\n    tags: []\nowner: my-team\n"
+		skeleton := "# Chronicle Manifest — edit this file\ndomain: my-domain\ndescription: \"\"\nrepositories:\n  - name: my-repo\n    path: .\n    tags: []\nowner: my-team\n"
 		os.WriteFile(manifestPath, []byte(skeleton), 0644)
 	}
 
 	// Create CLAUDE.md if not exists — enables slash commands
 	claudeMD := "CLAUDE.md"
 	if _, err := os.Stat(claudeMD); os.IsNotExist(err) {
-		content := `# Oracle Knowledge Graph
+		content := `# Chronicle Knowledge Graph
 
-This project uses Oracle for code analysis and knowledge management. Oracle MCP tools are available.
+This project uses Chronicle for code analysis and knowledge management. Chronicle MCP tools are available.
 
 ## Quick Commands
 
-When the user says any of these, call oracle_command with the command name and execute the instructions:
+When the user says any of these, call chronicle_command with the command name and execute the instructions:
 
 | User says | Command | What it does |
 |---|---|---|
-| "oracle scan" or "scan this project" | oracle_command(command='scan') | Full project scan |
-| "oracle data" or "analyze data models" | oracle_command(command='data') | Prisma/data model analysis |
-| "oracle language" or "define domain language" | oracle_command(command='language') | Domain glossary + violations |
-| "oracle impact X" or "what breaks if I change X" | oracle_command(command='impact') | Blast radius analysis |
-| "oracle deps X" or "what depends on X" | oracle_command(command='deps') | Dependency analysis |
-| "oracle path A B" or "how does A connect to B" | oracle_command(command='path') | Path between nodes |
-| "oracle services" or "show service architecture" | oracle_command(command='services') | Service dependency map |
-| "oracle status" or "oracle dashboard" | oracle_command(command='status') | Graph state + dashboard URL |
-| "oracle help" | oracle_command(command='help') | Show all commands |
+| "chronicle scan" or "scan this project" | chronicle_command(command='scan') | Full project scan |
+| "chronicle data" or "analyze data models" | chronicle_command(command='data') | Prisma/data model analysis |
+| "chronicle language" or "define domain language" | chronicle_command(command='language') | Domain glossary + violations |
+| "chronicle impact X" or "what breaks if I change X" | chronicle_command(command='impact') | Blast radius analysis |
+| "chronicle deps X" or "what depends on X" | chronicle_command(command='deps') | Dependency analysis |
+| "chronicle path A B" or "how does A connect to B" | chronicle_command(command='path') | Path between nodes |
+| "chronicle services" or "show service architecture" | chronicle_command(command='services') | Service dependency map |
+| "chronicle status" or "chronicle dashboard" | chronicle_command(command='status') | Graph state + dashboard URL |
+| "chronicle help" | chronicle_command(command='help') | Show all commands |
 
 ## How it works
 
-Oracle builds a knowledge graph of your codebase: data models, services, endpoints, dependencies.
-Call oracle_command to get step-by-step instructions for any analysis task.
-The admin dashboard shows the graph visually — get the URL via oracle_command(command='status').
+Chronicle builds a knowledge graph of your codebase: data models, services, endpoints, dependencies.
+Call chronicle_command to get step-by-step instructions for any analysis task.
+The admin dashboard shows the graph visually — get the URL via chronicle_command(command='status').
 `
 		os.WriteFile(claudeMD, []byte(content), 0644)
 	}

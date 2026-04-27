@@ -1,7 +1,7 @@
 services:
   admin:
     build: .
-    command: ["admin", "--port", "4200", "--db", "/data/oracle.db"]
+    command: ["admin", "--port", "4200", "--db", "/data/chronicle.db"]
     ports:
       - "4200:4200"
     volumes:

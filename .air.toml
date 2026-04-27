@@ -2,8 +2,8 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/oracle ./cmd/oracle"
-  bin = "./tmp/oracle"
+  cmd = "go build -o ./tmp/chronicle ./cmd/chronicle"
+  bin = "./tmp/chronicle"
   args_bin = ["admin", "--dev"]
   include_ext = ["go"]
   exclude_dir = ["tmp", "node_modules", ".git", ".depbot"]

@@ -5,11 +5,11 @@ const path = require('path');
 const fs = require('fs');
 
 const binDir = path.join(__dirname);
-const binaryName = process.platform === 'win32' ? 'oracle.exe' : 'oracle';
+const binaryName = process.platform === 'win32' ? 'chronicle.exe' : 'chronicle';
 const binaryPath = path.join(binDir, binaryName);
 
 if (!fs.existsSync(binaryPath)) {
-  console.error('Oracle binary not found. Run: npm rebuild @anthropics/oracle-mcp');
+  console.error('Chronicle binary not found. Run: npm rebuild @alexdx/chronicle-mcp');
   console.error('Or install manually: https://gitlab.com/Alex_dx3/depbot/-/releases');
   process.exit(1);
 }
@@ -22,7 +22,7 @@ const child = spawn(binaryPath, args, {
 });
 
 child.on('error', (err) => {
-  console.error(`Failed to start Oracle: ${err.message}`);
+  console.error(`Failed to start Chronicle: ${err.message}`);
   process.exit(1);
 });
 
