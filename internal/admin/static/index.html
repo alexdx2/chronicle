@@ -925,7 +925,7 @@ a{color:var(--primary);text-decoration:none}
     <div class="ws-palette" style="width:220px;height:100%;border-right:1px solid var(--border)">
       <input type="text" placeholder="Search entities..." x-model="diagramSearch">
       <div style="flex:1;overflow-y:auto">
-        <template x-if="!graphData?.nodes?.length">
+        <template x-if="!diagramGraphLoaded">
           <div class="loader"><div class="spinner"></div> Loading...</div>
         </template>
         <template x-for="group in getDiagramPaletteGroups()" :key="group.type">
@@ -1013,12 +1013,13 @@ a{color:var(--primary);text-decoration:none}
           <template x-for="layer in getDiagramLayers()" :key="layer">
             <div>
               <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
-              <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt">
+              <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt.type">
                 <label>
                   <input type="checkbox"
-                         :checked="!hiddenNodeTypes.includes(nt)"
-                         @change="toggleNodeType(nt);renderDiagram()">
-                  <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
+                         :checked="!hiddenNodeTypes.includes(nt.type)"
+                         @change="toggleNodeType(nt.type);renderDiagram()">
+                  <span :style="'color:'+layerColor(layer)" x-text="nt.type"></span>
+                  <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="nt.count"></span>
                 </label>
               </template>
             </div>
@@ -1121,6 +1122,7 @@ function dashboard() {
     diagramFlash: false,
     diagramSidebarOpen: false,
     diagramSearch: '',
+    diagramGraphLoaded: false,
     descPanelHeight: 140,
     _resizing: false,
     _resizeStart: 0,
@@ -2949,11 +2951,13 @@ function dashboard() {
 
     getDiagramNodeTypesForLayer(layer) {
       if (!this.diagramData) return [];
-      const types = new Set();
+      const types = {};
       (this.diagramData.nodes || []).forEach(n => {
-        if (n.layer === layer) types.add(n.node_type);
+        if (n.layer === layer) {
+          types[n.node_type] = (types[n.node_type] || 0) + 1;
+        }
       });
-      return [...types].sort();
+      return Object.entries(types).sort((a, b) => a[0].localeCompare(b[0])).map(([type, count]) => ({ type, count }));
     },
 
     getDiagramSearchResults() {
@@ -3062,8 +3066,9 @@ function dashboard() {
         this.diagramStep = 0;
       }
       // Fetch full graph data for entity palette
-      if (!this.graphData?.nodes?.length) {
+      if (!this.diagramGraphLoaded) {
         await this.fetchGraphData();
+        this.diagramGraphLoaded = true;
       }
       history.pushState(null, '', '/diagram');
       this.$nextTick(() => this.renderDiagram());
