@@ -106,20 +106,34 @@ Incremental scan (when user says "update the graph" or "rescan changes"):
 6. Summarize: nodes, edges, layers, last scan, discoveries, domain terms, dashboard URL`,
 
 	"diagram": `Live diagram for the user:
-1. Ask user: "Want me to show this as a diagram?"
-2. Call chronicle_diagram_create(title="descriptive name") — get session_id and URL
-3. Share URL with user: "Open {url} to see the diagram"
-4. Query the graph to build the payload:
-   - Dependency diagram: chronicle_query_deps(node_key, depth=2)
-   - Impact diagram: chronicle_impact(node_key)
-   - Path diagram: chronicle_query_path(from, to)
-   - Service map: chronicle_node_list(layer='service') + chronicle_edge_list
-   - Custom: invent nodes with layer for color (service=red, data=purple, code=blue)
-5. Build payload: {nodes: [{node_id: 1, node_key: "...", name: "...", layer: "...", node_type: "..."}, ...], edges: [{from_node_id: 1, to_node_id: 2, edge_type: "CALLS_SERVICE"}, ...]}
-6. Call chronicle_diagram_update(session_id, payload) — dashboard updates live
-7. Call chronicle_diagram_annotate(session_id, node_key, note="explanation", highlight="red") — highlight key nodes
-8. As conversation evolves, call chronicle_diagram_update again to add/remove/change nodes
-Diagram types: dependency, impact, path, service map, custom (explanatory)`,
+
+IMPORTANT — Node selection priority (less is more):
+  1. Services (layer=service) — ALWAYS start here. Show the big picture first.
+  2. Data models (layer=data) — add only if the question is about data flow or model relationships.
+  3. Controllers/providers (layer=code) — add only when drilling into a specific service's internals.
+  4. Endpoints (layer=contract) — add ONLY if the user specifically asks about API surface or a specific route.
+  Keep diagrams focused: 8-15 nodes is ideal. 20+ nodes becomes noise.
+  NEVER dump the entire graph into a diagram. Pick the nodes that tell the story.
+
+Steps:
+1. Call chronicle_diagram_create(title="descriptive name") — get session_id and URL
+2. Share URL with user: "Open {url} to see the diagram"
+3. Query the graph — pick the RIGHT query for the story:
+   - Service map: chronicle_node_list(layer='service') + chronicle_edge_list (start here!)
+   - Dependency: chronicle_query_deps(node_key, depth=2)
+   - Impact: chronicle_impact(node_key)
+   - Path: chronicle_query_path(from, to)
+4. Filter results — only include nodes that matter for THIS explanation
+5. Build payload: {nodes: [{node_id, node_key, name, layer, node_type}, ...], edges: [{from_node_id, to_node_id, edge_type}, ...]}
+6. Call chronicle_diagram_update(session_id, payload)
+7. Add step-through presentation with chronicle_diagram_annotate:
+   - Use "step" param (0, 1, 2...) to create a guided walkthrough
+   - Each step should highlight 1-3 nodes max with a clear story beat
+   - Include step_title (short) and step_description (1-2 sentences, conversational)
+   - Step descriptions are shown prominently below the diagram — make them count
+8. As conversation evolves, call chronicle_diagram_update again to refine
+
+Diagram types: service map, dependency, impact, path, custom (explanatory)`,
 
 	"help": `Show all available Chronicle commands:
 - /chronicle-scan — Full project scan

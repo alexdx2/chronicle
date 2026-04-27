@@ -549,31 +549,31 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </template>
 
+      <!-- Diagram title -->
+      <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.title">
+        <span style="font-size:13px;font-weight:600;color:var(--primary);margin-left:12px" x-text="diagramData.title"></span>
+      </template>
+
       <!-- Diagram step navigation (when workspace shows diagram data) -->
       <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.total_steps > 0">
-        <div style="display:flex;align-items:center;gap:6px;margin-left:8px">
-          <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:2px 8px;font-size:10px">Clean</button>
-          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:2px 8px">◀</button>
-          <span style="font-size:11px;min-width:80px;text-align:center">
+        <div style="display:flex;align-items:center;gap:10px;margin-left:16px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
+          <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:4px 10px;font-size:11px">Overview</button>
+          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
+          <span style="font-size:13px;min-width:120px;text-align:center">
             <template x-if="diagramStep >= 0">
               <span>
-                <strong x-text="'Step '+(diagramStep+1)+'/'+diagramData.total_steps"></strong>
+                <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
                 <template x-if="diagramData.step_titles?.[diagramStep]">
-                  <span style="color:var(--text-muted)" x-text="': '+diagramData.step_titles[diagramStep]"></span>
+                  <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
                 </template>
               </span>
             </template>
             <template x-if="diagramStep < 0">
-              <span style="color:var(--text-muted)">No highlights</span>
+              <span style="color:var(--text-muted);font-size:12px">All nodes visible</span>
             </template>
           </span>
-          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:2px 8px">▶</button>
+          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:4px 10px;font-size:14px">▶</button>
         </div>
-      </template>
-
-      <!-- Diagram title -->
-      <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.title">
-        <span style="font-size:11px;color:var(--primary);margin-left:8px" x-text="diagramData.title"></span>
       </template>
 
       <!-- Right side controls -->
@@ -944,7 +944,7 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Step description bar (shown below workspace when diagram has step descriptions) -->
 <template x-if="graphMode==='workspace' && wsDataSource==='diagram' && diagramData?.step_descriptions?.[diagramStep]">
-  <div style="padding:10px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--text);line-height:1.5;background:var(--primary-light);margin-top:-1px">
+  <div style="padding:16px 24px;border-top:2px solid var(--primary);font-size:15px;color:var(--text);line-height:1.7;background:var(--primary-light);margin-top:-1px;letter-spacing:0.01em">
     <span x-text="diagramData.step_descriptions[diagramStep]"></span>
   </div>
 </template>
