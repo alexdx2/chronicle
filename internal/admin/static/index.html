@@ -972,60 +972,71 @@ a{color:var(--primary);text-decoration:none}
       </template>
     </div>
 
-    <!-- Diagram sidebar: filters + entity search -->
+    <!-- Diagram sidebar: entity palette + filters -->
     <template x-if="diagramSidebarOpen">
-      <div class="filter-sidebar" style="width:220px;height:100%;display:flex;flex-direction:column">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <strong>Filters</strong>
-          <button @click="diagramSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
-        </div>
-
-        <!-- Search & add entities -->
-        <div class="group">
-          <h4>Add Entity</h4>
-          <input type="text" x-model="diagramSearch" placeholder="Search nodes..."
-                 style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;margin-bottom:4px">
-          <div style="max-height:150px;overflow-y:auto">
-            <template x-for="n in getDiagramSearchResults()" :key="n.node_key">
-              <div style="padding:3px 0;cursor:pointer;font-size:11px;display:flex;align-items:center;gap:4px"
-                   @click="addNodeToDiagram(n)">
-                <span style="width:6px;height:6px;border-radius:50%;flex-shrink:0" :style="'background:'+layerColor(n.layer)"></span>
-                <span x-text="n.name" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-                <span style="font-size:9px;color:var(--text-muted)" x-text="n.layer"></span>
+      <div style="width:240px;height:100%;display:flex;flex-direction:column;border-left:1px solid var(--border);background:var(--card);flex-shrink:0">
+        <!-- Entity search palette (same style as workspace) -->
+        <div class="ws-palette" style="width:100%;border-right:none;flex:1">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 8px 0">
+            <strong style="font-size:11px">Add Entity</strong>
+            <button @click="diagramSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+          </div>
+          <input type="text" placeholder="Search entities..." x-model="diagramSearch">
+          <div style="flex:1;overflow-y:auto">
+            <template x-for="group in getDiagramPaletteGroups()" :key="group.type">
+              <div>
+                <div class="ws-group-label" x-text="group.type + ' (' + group.nodes.length + ')'"></div>
+                <template x-for="n in group.nodes" :key="n.node_id">
+                  <div class="ws-item"
+                       :style="'border-left:3px solid '+layerColor(n.layer)"
+                       @click="addNodeToDiagram(n)"
+                       :class="{'opacity-50': (diagramData?.nodes||[]).some(d => d.node_id === n.node_id)}">
+                    <span style="color:#999;font-size:9px">+</span>
+                    <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
+                    <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
+                  </div>
+                </template>
               </div>
             </template>
           </div>
         </div>
 
-        <!-- Node type filter -->
-        <div class="group">
-          <h4>Node Types</h4>
-          <template x-for="layer in getDiagramLayers()" :key="layer">
-            <div>
-              <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
-              <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt">
-                <label>
-                  <input type="checkbox"
-                         :checked="!hiddenNodeTypes.includes(nt)"
-                         @change="toggleNodeType(nt);renderDiagram()">
-                  <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
-                </label>
-              </template>
-            </div>
-          </template>
-        </div>
+        <!-- Filters section -->
+        <div class="filter-sidebar" style="width:100%;border-left:none;border-top:1px solid var(--border);max-height:300px;overflow-y:auto">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <strong>Filters</strong>
+            <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
+          </div>
 
-        <!-- Edge type filter -->
-        <div class="group">
-          <h4>Edge Types</h4>
-          <template x-for="et in getDiagramEdgeTypes()" :key="et">
-            <label>
-              <input type="checkbox"
-                     :checked="!hiddenEdgeTypes.includes(et)"
-                     @change="toggleEdgeType(et);renderDiagram()">
-              <span x-text="et"></span>
-            </label>
-          </template>
+          <div class="group">
+            <h4>Node Types</h4>
+            <template x-for="layer in getDiagramLayers()" :key="layer">
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
+                <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt">
+                  <label>
+                    <input type="checkbox"
+                           :checked="!hiddenNodeTypes.includes(nt)"
+                           @change="toggleNodeType(nt);renderDiagram()">
+                    <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
+                  </label>
+                </template>
+              </div>
+            </template>
+          </div>
+
+          <div class="group">
+            <h4>Edge Types</h4>
+            <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
+              <label>
+                <input type="checkbox"
+                       :checked="!hiddenEdgeTypes.includes(et.type)"
+                       @change="toggleEdgeType(et.type);renderDiagram()">
+                <span x-text="et.type"></span>
+                <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="et.count"></span>
+              </label>
+            </template>
+          </div>
         </div>
       </div>
     </template>
@@ -2937,6 +2948,15 @@ function dashboard() {
       return [...layers].sort();
     },
 
+    getDiagramNodeTypesForLayer(layer) {
+      if (!this.diagramData) return [];
+      const types = new Set();
+      (this.diagramData.nodes || []).forEach(n => {
+        if (n.layer === layer) types.add(n.node_type);
+      });
+      return [...types].sort();
+    },
+
     getDiagramSearchResults() {
       if (!this.diagramSearch || this.diagramSearch.length < 2) return [];
       const q = this.diagramSearch.toLowerCase();
@@ -2944,6 +2964,19 @@ function dashboard() {
       return (this.graphData?.nodes || [])
         .filter(n => !existing.has(n.node_key) && (n.name.toLowerCase().includes(q) || n.node_key.toLowerCase().includes(q)))
         .slice(0, 20);
+    },
+
+    getDiagramPaletteGroups() {
+      const search = (this.diagramSearch || '').toLowerCase();
+      const allNodes = this.graphData?.nodes || [];
+      const groups = {};
+      allNodes.forEach(n => {
+        if (search && !n.name.toLowerCase().includes(search) && !n.node_key.toLowerCase().includes(search)) return;
+        const key = n.layer + ':' + n.node_type;
+        if (!groups[key]) groups[key] = { type: n.layer + ' / ' + n.node_type, layer: n.layer, nodes: [] };
+        groups[key].nodes.push(n);
+      });
+      return Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
     },
 
     addNodeToDiagram(node) {
