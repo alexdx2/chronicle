@@ -920,49 +920,111 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Diagram Tab (completely separate from Graph) -->
 <div class="container fullscreen" x-show="tab==='diagram'" x-cloak>
-  <div class="graph-container" style="height:calc(100vh - 140px)">
-    <!-- Diagram toolbar: just step navigation -->
-    <div class="graph-toolbar" style="justify-content:center;gap:16px;padding:8px 16px">
-      <template x-if="diagramData?.title">
-        <span style="font-weight:700;font-size:15px;color:var(--primary)" x-text="diagramData.title"></span>
-      </template>
+  <div style="display:flex;height:calc(100vh - 140px);gap:0">
+    <!-- Main diagram area -->
+    <div class="graph-container" style="flex:1;height:100%">
+      <!-- Diagram toolbar: step navigation + filter toggle -->
+      <div class="graph-toolbar" style="justify-content:space-between;gap:16px;padding:8px 16px">
+        <template x-if="diagramData?.title">
+          <span style="font-weight:700;font-size:15px;color:var(--primary)" x-text="diagramData.title"></span>
+        </template>
+        <template x-if="diagramData?.total_steps > 0">
+          <div style="display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
+            <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
+            <span style="font-size:13px;min-width:120px;text-align:center">
+              <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
+              <template x-if="diagramData.step_titles?.[diagramStep]">
+                <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
+              </template>
+            </span>
+            <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:4px 10px;font-size:14px">▶</button>
+          </div>
+        </template>
+        <button class="mode-btn" @click="diagramSidebarOpen=!diagramSidebarOpen" :class="{active:diagramSidebarOpen}" style="padding:4px 10px">☰ Filters</button>
+      </div>
+
+      <!-- Diagram SVG canvas -->
+      <div id="diagram-canvas" style="flex:1;overflow:auto"></div>
+
+      <!-- Resizable description panel -->
       <template x-if="diagramData?.total_steps > 0">
-        <div style="display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
-          <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
-          <span style="font-size:13px;min-width:120px;text-align:center">
-            <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
-            <template x-if="diagramData.step_titles?.[diagramStep]">
-              <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
+        <div style="flex-shrink:0">
+          <div class="resize-handle" :class="{active: _resizing}"
+               @mousedown.prevent="_resizing=true;_resizeStart=$event.clientY;_resizeInitH=descPanelHeight"
+               @touchstart.prevent="_resizing=true;_resizeStart=$event.touches[0].clientY;_resizeInitH=descPanelHeight"></div>
+          <div class="step-description-panel" :style="'height:'+descPanelHeight+'px;padding:20px 28px'">
+            <template x-if="diagramStep >= 0 && diagramData?.step_descriptions?.[diagramStep]">
+              <div style="font-size:16px;color:var(--text);line-height:1.8;letter-spacing:0.01em">
+                <template x-if="diagramData?.step_titles?.[diagramStep]">
+                  <div style="font-weight:700;font-size:18px;margin-bottom:8px;color:var(--primary)" x-text="diagramData.step_titles[diagramStep]"></div>
+                </template>
+                <span x-text="diagramData.step_descriptions[diagramStep]"></span>
+              </div>
             </template>
-          </span>
-          <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:4px 10px;font-size:14px">▶</button>
+            <template x-if="diagramStep < 0 || !diagramData?.step_descriptions?.[diagramStep]">
+              <div style="font-size:14px;color:var(--text-muted);line-height:1.6">
+                <strong x-text="diagramData?.title || 'Diagram'"></strong>
+                <span x-text="' — ' + diagramData?.total_steps + ' steps'"></span>
+              </div>
+            </template>
+          </div>
         </div>
       </template>
     </div>
 
-    <!-- Diagram SVG canvas -->
-    <div id="diagram-canvas" style="flex:1;overflow:auto"></div>
+    <!-- Diagram sidebar: filters + entity search -->
+    <template x-if="diagramSidebarOpen">
+      <div class="filter-sidebar" style="width:220px;height:100%;display:flex;flex-direction:column">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <strong>Filters</strong>
+          <button @click="diagramSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+        </div>
 
-    <!-- Resizable description panel -->
-    <template x-if="diagramData?.total_steps > 0">
-      <div style="flex-shrink:0">
-        <div class="resize-handle" :class="{active: _resizing}"
-             @mousedown.prevent="_resizing=true;_resizeStart=$event.clientY;_resizeInitH=descPanelHeight"
-             @touchstart.prevent="_resizing=true;_resizeStart=$event.touches[0].clientY;_resizeInitH=descPanelHeight"></div>
-        <div class="step-description-panel" :style="'height:'+descPanelHeight+'px;padding:20px 28px'">
-          <template x-if="diagramStep >= 0 && diagramData?.step_descriptions?.[diagramStep]">
-            <div style="font-size:16px;color:var(--text);line-height:1.8;letter-spacing:0.01em">
-              <template x-if="diagramData?.step_titles?.[diagramStep]">
-                <div style="font-weight:700;font-size:18px;margin-bottom:8px;color:var(--primary)" x-text="diagramData.step_titles[diagramStep]"></div>
+        <!-- Search & add entities -->
+        <div class="group">
+          <h4>Add Entity</h4>
+          <input type="text" x-model="diagramSearch" placeholder="Search nodes..."
+                 style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;margin-bottom:4px">
+          <div style="max-height:150px;overflow-y:auto">
+            <template x-for="n in getDiagramSearchResults()" :key="n.node_key">
+              <div style="padding:3px 0;cursor:pointer;font-size:11px;display:flex;align-items:center;gap:4px"
+                   @click="addNodeToDiagram(n)">
+                <span style="width:6px;height:6px;border-radius:50%;flex-shrink:0" :style="'background:'+layerColor(n.layer)"></span>
+                <span x-text="n.name" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+                <span style="font-size:9px;color:var(--text-muted)" x-text="n.layer"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Node type filter -->
+        <div class="group">
+          <h4>Node Types</h4>
+          <template x-for="layer in getDiagramLayers()" :key="layer">
+            <div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
+              <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt">
+                <label>
+                  <input type="checkbox"
+                         :checked="!hiddenNodeTypes.includes(nt)"
+                         @change="toggleNodeType(nt);renderDiagram()">
+                  <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
+                </label>
               </template>
-              <span x-text="diagramData.step_descriptions[diagramStep]"></span>
             </div>
           </template>
-          <template x-if="diagramStep < 0 || !diagramData?.step_descriptions?.[diagramStep]">
-            <div style="font-size:14px;color:var(--text-muted);line-height:1.6">
-              <strong x-text="diagramData?.title || 'Diagram'"></strong>
-              <span x-text="' — ' + diagramData?.total_steps + ' steps'"></span>
-            </div>
+        </div>
+
+        <!-- Edge type filter -->
+        <div class="group">
+          <h4>Edge Types</h4>
+          <template x-for="et in getDiagramEdgeTypes()" :key="et">
+            <label>
+              <input type="checkbox"
+                     :checked="!hiddenEdgeTypes.includes(et)"
+                     @change="toggleEdgeType(et);renderDiagram()">
+              <span x-text="et"></span>
+            </label>
           </template>
         </div>
       </div>
@@ -1047,6 +1109,8 @@ function dashboard() {
     diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
     diagramStep: -1,    // -1 = clean (no highlights), 0+ = step index
     diagramFlash: false,
+    diagramSidebarOpen: false,
+    diagramSearch: '',
     descPanelHeight: 140,
     _resizing: false,
     _resizeStart: 0,
@@ -2866,6 +2930,51 @@ function dashboard() {
       return Object.values(types).sort((a, b) => a.type.localeCompare(b.type));
     },
 
+    getDiagramLayers() {
+      if (!this.diagramData) return [];
+      const layers = new Set();
+      (this.diagramData.nodes || []).forEach(n => layers.add(n.layer));
+      return [...layers].sort();
+    },
+
+    getDiagramSearchResults() {
+      if (!this.diagramSearch || this.diagramSearch.length < 2) return [];
+      const q = this.diagramSearch.toLowerCase();
+      const existing = new Set((this.diagramData?.nodes || []).map(n => n.node_key));
+      return (this.graphData?.nodes || [])
+        .filter(n => !existing.has(n.node_key) && (n.name.toLowerCase().includes(q) || n.node_key.toLowerCase().includes(q)))
+        .slice(0, 20);
+    },
+
+    addNodeToDiagram(node) {
+      if (!this.diagramData) return;
+      this.diagramData.nodes.push({
+        node_id: node.node_id,
+        node_key: node.node_key,
+        name: node.name,
+        layer: node.layer,
+        node_type: node.node_type
+      });
+      // Also add edges that connect to existing nodes
+      const nodeKeys = new Set(this.diagramData.nodes.map(n => n.node_id));
+      (this.graphData?.edges || []).forEach(e => {
+        if ((e.from_node_id === node.node_id && nodeKeys.has(e.to_node_id)) ||
+            (e.to_node_id === node.node_id && nodeKeys.has(e.from_node_id))) {
+          const exists = this.diagramData.edges.some(de =>
+            de.from_node_id === e.from_node_id && de.to_node_id === e.to_node_id);
+          if (!exists) {
+            this.diagramData.edges.push({
+              from_node_id: e.from_node_id,
+              to_node_id: e.to_node_id,
+              edge_type: e.edge_type
+            });
+          }
+        }
+      });
+      this.diagramSearch = '';
+      this.renderDiagram();
+    },
+
     getDiagramEdgeTypes() {
       if (!this.diagramData) return [];
       const types = {};
@@ -2919,6 +3028,10 @@ function dashboard() {
       this.loaded.graph = true;
       if (this.diagramStep < 0 && this.diagramData?.total_steps > 0) {
         this.diagramStep = 0;
+      }
+      // Fetch full graph data for entity search (if not loaded yet)
+      if (!this.graphData?.nodes?.length) {
+        this.fetchGraphData();
       }
       history.pushState(null, '', '/diagram');
       this.$nextTick(() => this.renderDiagram());
