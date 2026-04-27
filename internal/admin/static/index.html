@@ -944,11 +944,10 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </div>
     </template>
-  </div>
 
-    <!-- Resizable step description panel -->
+    <!-- Resizable step description panel (inside graph-container for flex layout) -->
     <template x-if="tab==='diagram' && diagramData?.total_steps > 0">
-      <div>
+      <div style="flex-shrink:0">
         <div class="resize-handle" :class="{active: _resizing}"
              @mousedown.prevent="_resizing=true;_resizeStart=$event.clientY;_resizeInitH=descPanelHeight"
              @touchstart.prevent="_resizing=true;_resizeStart=$event.touches[0].clientY;_resizeInitH=descPanelHeight"></div>
@@ -970,6 +969,7 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </div>
     </template>
+  </div>
 </div>
 
 <script>
