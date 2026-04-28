@@ -67,6 +67,99 @@ type DiagramNote struct {
 	Highlight string `json:"highlight,omitempty"`
 }
 
+// EdgeCategory defines visual encoding for a group of edge types.
+type EdgeCategory struct {
+	Color string            `json:"color"`
+	Types map[string]string `json:"types"` // edge_type → short label
+}
+
+// DefaultEdgeCategories is the built-in category map for edge visual encoding.
+var DefaultEdgeCategories = map[string]EdgeCategory{
+	"code": {
+		Color: "#6b9bd2",
+		Types: map[string]string{
+			"IMPORTS":      "imp",
+			"EXPORTS":      "exp",
+			"CALLS_SYMBOL": "call",
+			"DECLARES":     "decl",
+			"INJECTS":      "inj",
+		},
+	},
+	"service": {
+		Color: "#7db87d",
+		Types: map[string]string{
+			"CALLS_ENDPOINT":    "calls",
+			"CALLS_SERVICE":     "calls",
+			"EXPOSES_ENDPOINT":  "exposes",
+			"HANDLES_OPERATION": "handles",
+		},
+	},
+	"async": {
+		Color: "#d4915e",
+		Types: map[string]string{
+			"PUBLISHES_TOPIC": "pub",
+			"CONSUMES_TOPIC":  "sub",
+			"USES_QUEUE":      "queue",
+		},
+	},
+	"data": {
+		Color: "#a87dc2",
+		Types: map[string]string{
+			"READS_DB":          "reads",
+			"WRITES_DB":         "writes",
+			"USES_SCHEMA":       "schema",
+			"RETURNS_TYPE":      "returns",
+			"REGISTERS_SUBJECT": "reg",
+		},
+	},
+	"structural": {
+		Color: "#b8a898",
+		Types: map[string]string{
+			"CONTAINS":          "contains",
+			"DEPLOYS_AS":        "deploys",
+			"OWNED_BY":          "owns",
+			"MAINTAINED_BY":     "maintains",
+			"PART_OF_FLOW":      "flow",
+			"SELECTS_PODS":      "selects",
+			"BUILDS_ARTIFACT":   "builds",
+			"DEPLOYS_RESOURCE":  "deploys",
+			"DEPENDS_ON_DOMAIN": "dep",
+			"PRECEDES":          "precedes",
+			"EMITS_AFTER":       "emits",
+			"REQUIRES":          "requires",
+			"TRIGGERS_ANALYSIS": "triggers",
+			"READS_OUTPUT":      "reads",
+			"ROUTES_TO":         "routes",
+			"TARGETS_SERVICE":   "targets",
+		},
+	},
+}
+
+// mergedEdgeCategories returns DefaultEdgeCategories merged with project overrides.
+func (s *Server) mergedEdgeCategories() map[string]EdgeCategory {
+	result := make(map[string]EdgeCategory, len(DefaultEdgeCategories))
+	for k, v := range DefaultEdgeCategories {
+		copyTypes := make(map[string]string, len(v.Types))
+		for tk, tv := range v.Types {
+			copyTypes[tk] = tv
+		}
+		result[k] = EdgeCategory{Color: v.Color, Types: copyTypes}
+	}
+
+	raw, err := s.getStore().GetSetting("edge_categories")
+	if err != nil || raw == "" {
+		return result
+	}
+	var overrides map[string]EdgeCategory
+	if err := json.Unmarshal([]byte(raw), &overrides); err != nil {
+		return result
+	}
+	for k, v := range overrides {
+		result[k] = v
+	}
+	return result
+}
+
 // Server is the admin dashboard HTTP server.
 type Server struct {
 	mu           sync.RWMutex
@@ -234,6 +327,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/manifest", s.handleManifest)
 	mux.HandleFunc("/api/settings/prompt", s.handlePromptSetting)
 	mux.HandleFunc("/api/settings/default-guide", s.handleDefaultGuide)
+	mux.HandleFunc("/api/settings/edge-categories", s.handleEdgeCategorySettings)
 	mux.HandleFunc("/api/discoveries", s.handleDiscoveries)
 	mux.HandleFunc("/api/glossary", s.handleGlossary)
 	mux.HandleFunc("/api/language-check", s.handleLanguageCheck)
@@ -478,7 +572,31 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList})
+	httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories()})
+}
+
+func (s *Server) handleEdgeCategorySettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		httpJSON(w, s.mergedEdgeCategories())
+		return
+	}
+	if r.Method == "PUT" || r.Method == "POST" {
+		var cats map[string]EdgeCategory
+		if err := json.NewDecoder(r.Body).Decode(&cats); err != nil {
+			httpError(w, err, 400)
+			return
+		}
+		data, _ := json.Marshal(cats)
+		s.getStore().SetSetting("edge_categories", string(data))
+		httpJSON(w, s.mergedEdgeCategories())
+		return
+	}
+	if r.Method == "DELETE" {
+		s.getStore().SetSetting("edge_categories", "")
+		httpJSON(w, s.mergedEdgeCategories())
+		return
+	}
+	http.Error(w, "method not allowed", 405)
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -800,7 +918,9 @@ func (s *Server) handleDiagramUpdate(w http.ResponseWriter, r *http.Request, id 
 	s.mu.Unlock()
 	s.persistDiagramSession(session)
 	s.hub.Send("diagram_update", map[string]any{
-		"session_id": id, "nodes": session.Nodes, "edges": session.Edges, "annotations": session.Annotations,
+		"session_id": id, "title": session.Title, "nodes": session.Nodes, "edges": session.Edges,
+		"annotations": session.Annotations, "steps": session.Steps,
+		"step_titles": session.StepTitles, "step_descriptions": session.StepDescriptions, "total_steps": session.TotalSteps,
 	})
 	httpJSON(w, map[string]any{"status": "ok", "node_count": len(body.Nodes), "edge_count": len(body.Edges)})
 }

@@ -3,8 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Chronicle Admin Dashboard</title>
+<title>Chronicle</title>
 <link rel="icon" type="image/png" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
@@ -14,24 +17,32 @@
 .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .6s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 :root{
-  --bg:#f0f1f3;--card:#fff;--border:#e0e2e6;--text:#1a1a2e;--text-muted:#6b7280;
-  --primary:#4361ee;--primary-light:#e8ecfd;--success:#2ecc71;--warning:#f39c12;
-  --error:#e74c3c;--error-light:#fdecea;--code:#3b82f6;--contract:#10b981;
-  --service:#ef4444;--flow:#8b5cf6;--ownership:#f59e0b;--infra:#6366f1;--ci:#ec4899;
-  --radius:8px;--shadow:0 1px 3px rgba(0,0,0,.08);
+  --bg:#faf6ef;--card:#fff;--card-alt:#f0e9dd;--border:#d9cbb5;--text:#3b2f20;--text-muted:#a08b6e;--text-secondary:#5c4e3c;
+  --primary:#6b4423;--primary-light:#f0e9dd;--success:#2d6a30;--warning:#b8963e;
+  --error:#9e2b2b;--error-light:#fbe0e0;--code:#8b5a2b;--contract:#1a7a2e;
+  --service:#c23030;--flow:#b85c2e;--ownership:#c4880a;--infra:#2e5f8a;--ci:#a83262;
+  --radius:8px;--shadow:0 1px 3px rgba(59,47,32,.06);
+  --font-serif:'Lora',Georgia,serif;--font-mono:'JetBrains Mono','Source Code Pro',monospace;
 }
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+body{font-family:var(--font-serif);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;background-image:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(139,115,85,0.02) 3px,rgba(139,115,85,0.02) 6px)}
 a{color:var(--primary);text-decoration:none}
 
 /* Header */
-.header{background:var(--card);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:20px;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
-.header h1{font-size:18px;font-weight:700;color:var(--primary);white-space:nowrap}
+.header{background:var(--card);border-bottom:2px solid var(--text);padding:6px 24px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
+.header .logo-group{display:flex;align-items:center;gap:12px;white-space:nowrap}
+.header .logo-group img{width:72px;height:72px;border-radius:6px}
+.header .logo-group .logo-text{display:flex;flex-direction:column}
+.header .logo-group .logo-text h1{font-size:22px;font-weight:700;color:var(--text);font-family:var(--font-serif);line-height:1.1}
+.header .logo-group .logo-text .logo-subtitle{font-size:10px;color:var(--text-muted);letter-spacing:1.5px;text-transform:uppercase;font-family:var(--font-serif)}
 .header .meta{font-size:12px;color:var(--text-muted);display:flex;gap:16px}
 .header .meta span{display:flex;align-items:center;gap:4px}
 .tab-bar{display:flex;gap:4px;margin-left:auto}
-.tab-btn{padding:6px 16px;border:none;background:transparent;color:var(--text-muted);font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--radius);transition:all .15s}
-.tab-btn.active{background:var(--primary);color:#fff}
+.tab-btn{padding:6px 16px;border:none;background:transparent;color:var(--text-muted);font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--radius);transition:all .15s;font-family:var(--font-serif)}
+.tab-btn.active{background:var(--card-alt);color:var(--text)}
 .tab-btn:hover:not(.active){background:var(--primary-light);color:var(--primary)}
+.tab-btn.live-session{background:linear-gradient(135deg,#3b2f20,#6b4423);color:#faf6ef;font-weight:600;position:relative;box-shadow:0 2px 8px rgba(59,47,32,0.3)}
+.tab-btn.live-session .pulse-dot{position:absolute;top:4px;right:4px;width:6px;height:6px;background:#4ade80;border-radius:50%;box-shadow:0 0 6px #4ade8088;animation:pulse-glow 2s ease-in-out infinite}
+@keyframes pulse-glow{0%,100%{box-shadow:0 0 4px #4ade8066}50%{box-shadow:0 0 10px #4ade80cc}}
 
 /* Layout */
 .container{max-width:1400px;margin:0 auto;padding:20px 24px}
@@ -43,13 +54,13 @@ a{color:var(--primary);text-decoration:none}
 /* Cards */
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
 .card-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.card-header h3{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted)}
+.card-header h3{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);font-family:var(--font-serif)}
 .card-body{padding:16px}
 
 /* Stat cards */
 .stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);text-align:center}
-.stat-card .value{font-size:28px;font-weight:700;color:var(--text)}
-.stat-card .label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-top:4px}
+.stat-card .value{font-size:28px;font-weight:700;color:var(--text);font-family:var(--font-serif)}
+.stat-card .label{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);margin-top:4px;font-family:var(--font-serif)}
 .stat-card.primary .value{color:var(--primary)}
 .stat-card.success .value{color:var(--success)}
 .stat-card.warning .value{color:var(--warning)}
@@ -63,20 +74,20 @@ a{color:var(--primary);text-decoration:none}
 .req-row{display:grid;grid-template-columns:130px 1fr 70px 60px;gap:8px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background .1s;cursor:pointer}
 .req-row:hover{background:var(--bg)}
 .req-row.error-row{border-left:3px solid var(--error)}
-.req-row .ts{color:var(--text-muted);font-family:monospace;font-size:11px}
+.req-row .ts{color:var(--text-muted);font-family:var(--font-mono);font-size:11px}
 .req-row .tool{font-weight:500}
-.req-row .dur{text-align:right;color:var(--text-muted);font-family:monospace}
-.req-detail{grid-column:1/-1;background:var(--bg);border-radius:6px;padding:12px;margin-top:4px;font-size:11px;font-family:monospace;overflow-x:auto}
+.req-row .dur{text-align:right;color:var(--text-muted);font-family:var(--font-mono)}
+.req-detail{grid-column:1/-1;background:var(--card-alt);border-radius:6px;padding:12px;margin-top:4px;font-size:11px;font-family:var(--font-mono);overflow-x:auto}
 .req-detail pre{margin:0;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto}
-.req-detail-label{font-weight:600;color:var(--accent);margin-bottom:4px;font-family:var(--font)}
+.req-detail-label{font-weight:600;color:var(--primary);margin-bottom:4px;font-family:var(--font-serif)}
 .req-detail-section{margin-bottom:8px}
 .req-detail-section:last-child{margin-bottom:0}
-.load-more-btn{display:block;width:100%;padding:10px;text-align:center;background:none;border:none;border-top:1px solid var(--border);color:var(--accent);cursor:pointer;font-size:12px;font-weight:500}
+.load-more-btn{display:block;width:100%;padding:10px;text-align:center;background:none;border:none;border-top:1px solid var(--border);color:var(--primary);cursor:pointer;font-size:12px;font-weight:500}
 .load-more-btn:hover{background:var(--bg)}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase}
-.badge.ok{background:#d1fae5;color:#065f46}
+.badge.ok{background:#dcf5dd;color:#2d6a30}
 .badge.err{background:var(--error-light);color:var(--error)}
-.badge.empty{background:#fef3c7;color:#92400e}
+.badge.empty{background:#fdf0d0;color:#8a6b3e}
 
 /* Breakdown table */
 .breakdown-list{list-style:none}
@@ -102,12 +113,12 @@ a{color:var(--primary);text-decoration:none}
 .btn-sm{padding:4px 10px;font-size:11px}
 
 /* Graph tab */
-.graph-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 140px)}
+.graph-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 110px)}
 #graph-canvas{flex:1;min-height:200px;overflow:auto}
 .resize-handle{height:6px;background:var(--border);cursor:ns-resize;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background .15s}
 .resize-handle:hover,.resize-handle.active{background:var(--primary);opacity:0.6}
 .resize-handle::after{content:'';width:32px;height:2px;border-radius:1px;background:var(--text-muted);opacity:0.5}
-.step-description-panel{overflow-y:auto;flex-shrink:0;background:var(--primary-light);border-top:2px solid var(--primary)}
+.step-description-panel{overflow-y:auto;flex-shrink:0;background:var(--card-alt);border-top:2px solid var(--primary)}
 .graph-toolbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
 .graph-toolbar .mode-toggle{display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 .graph-toolbar .mode-btn{padding:4px 12px;border:none;background:transparent;font-size:12px;cursor:pointer;transition:all .15s}
@@ -115,14 +126,14 @@ a{color:var(--primary);text-decoration:none}
 .chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--card);transition:all .15s;user-select:none}
 .chip.active{border-color:var(--primary);background:var(--primary-light);color:var(--primary)}
 .chip:hover{border-color:var(--primary)}
-.graph-svg{width:100%;background:#fafbfc}
+.graph-svg{width:100%;background:#faf6ef}
 .node-detail{padding:16px;border-top:1px solid var(--border);background:var(--bg);font-size:13px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
 .node-detail dt{font-weight:600;color:var(--text-muted);font-size:11px;text-transform:uppercase}
 .node-detail dd{margin:0 0 8px}
 
 /* Graph SVG styles */
-.graph-svg text{font-family:inherit;font-size:11px;fill:var(--text)}
-.graph-svg .edge-line{stroke:#94a3b8;stroke-width:1.5;fill:none}
+.graph-svg text{font-family:var(--font-serif);font-size:11px;fill:var(--text)}
+.graph-svg .edge-line{stroke:#b8a898;stroke-width:1.5;fill:none}
 .graph-svg .edge-line.dashed{stroke-dasharray:5,3}
 .graph-svg .edge-line.low-conf{stroke:var(--warning);stroke-width:2}
 .graph-svg .node-rect{rx:6;ry:6;stroke-width:1.5;cursor:pointer;transition:opacity .2s,stroke-width .2s}
@@ -133,11 +144,11 @@ a{color:var(--primary);text-decoration:none}
 .graph-svg.has-highlight .node-g.dimmed,.graph-svg.has-highlight .node-rect.dimmed{opacity:.15}
 .graph-svg.has-highlight .edge-line.dimmed{opacity:.06}
 .graph-svg.has-highlight .edge-line.highlighted{stroke:var(--primary);stroke-width:2.5;opacity:1}
-.graph-svg .edge-label{font-size:9px;fill:#4361ee;font-weight:600;display:none}
+.graph-svg .edge-label{font-size:9px;fill:var(--primary);font-weight:600;display:none}
 .graph-svg.has-highlight .edge-label.highlighted{display:block}
-.graph-svg .layer-band{fill:#f8f9fa;stroke:var(--border);stroke-dasharray:4,2}
+.graph-svg .layer-band{fill:#f5f0e8;stroke:var(--border);stroke-dasharray:4,2}
 .graph-svg .layer-label{font-size:12px;font-weight:600;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1px}
-.graph-svg .arrow-head{fill:#94a3b8}
+.graph-svg .arrow-head{fill:#b8a898}
 /* Filter sidebar */
 .filter-sidebar{width:200px;background:var(--card);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;font-size:11px;padding:10px}
 .filter-sidebar h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:10px 0 4px}
@@ -145,12 +156,16 @@ a{color:var(--primary);text-decoration:none}
 .filter-sidebar label input[type=checkbox]{margin:0}
 .filter-sidebar .group{margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px}
 /* Transitive edges */
-.graph-svg .edge-line.transitive{stroke:#f59e0b;stroke-dasharray:6,3;stroke-width:1.5}
-.graph-svg .via-label{font-size:8px;fill:#f59e0b;font-weight:500}
-.graph-svg .via-pill{fill:#fef3c7;stroke:#f59e0b;stroke-width:0.5;rx:4}
+.graph-svg .edge-line.transitive{stroke:#b8963e;stroke-dasharray:6,3;stroke-width:1.5}
+.graph-svg .via-label{font-size:8px;fill:#b8963e;font-weight:500}
+.graph-svg .via-pill{fill:#fdf0d0;stroke:#b8963e;stroke-width:0.5;rx:4}
+.graph-svg .edge-short-label { font-size:8px; fill:#b8a898; pointer-events:none; text-anchor:middle; }
+.graph-svg.hide-edge-labels .edge-short-label { display:none; }
+.graph-svg.has-highlight .edge-short-label.dimmed { display:none; }
+.graph-svg.has-highlight .edge-short-label.highlighted { display:block; font-size:10px; font-weight:600; }
 /* Domain boxes (Architecture mode) */
-.graph-svg .domain-box{fill:none;stroke:#3b82f6;stroke-width:2;rx:10;opacity:.7}
-.graph-svg .domain-label{font-size:11px;fill:#3b82f6;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+.graph-svg .domain-box{fill:none;stroke:#6b4423;stroke-width:2;rx:10;opacity:.7}
+.graph-svg .domain-label{font-size:11px;fill:#6b4423;font-weight:700;text-transform:uppercase;letter-spacing:1px}
 /* Workspace palette */
 .ws-palette{width:220px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .ws-palette input[type=text]{width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;margin:8px;width:calc(100% - 16px)}
@@ -158,13 +173,13 @@ a{color:var(--primary);text-decoration:none}
 .ws-palette .ws-item:hover{background:var(--primary-light)}
 .ws-palette .ws-group-label{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);padding:6px 8px 2px}
 /* Workspace canvas indicators */
-.graph-svg .manual-dot{fill:#3b82f6}
-.graph-svg .auto-badge{fill:#f59e0b;rx:3}
+.graph-svg .manual-dot{fill:#6b4423}
+.graph-svg .auto-badge{fill:#b8963e;rx:3}
 .graph-svg .auto-badge-text{fill:#fff;font-size:7px;font-weight:700}
 .graph-svg .expand-badge{fill:var(--card);stroke:var(--border);stroke-width:1;cursor:pointer}
 .graph-svg .expand-badge:hover{fill:var(--primary-light);stroke:var(--primary)}
 .graph-svg .expand-text{font-size:11px;fill:var(--text);cursor:pointer;font-weight:600}
-.graph-svg .path-edge{stroke:#f59e0b;stroke-width:2.5}
+.graph-svg .path-edge{stroke:#b8963e;stroke-width:2.5}
 .graph-svg .neighbor-node{opacity:.55}
 .opacity-50{opacity:.5}
 
@@ -181,7 +196,13 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Header -->
 <header class="header">
-  <h1 style="display:flex;align-items:center;gap:8px"><img src="/logo.png" alt="" style="width:32px;height:32px">Chronicle</h1>
+  <div class="logo-group">
+    <img src="/logo.png" alt="Chronicle">
+    <div class="logo-text">
+      <h1>Chronicle</h1>
+      <span class="logo-subtitle">Knowledge Graph</span>
+    </div>
+  </div>
   <div class="meta">
     <!-- Project name + switcher -->
     <span style="position:relative">
@@ -195,10 +216,10 @@ a{color:var(--primary);text-decoration:none}
         <template x-if="originalProject">
           <div style="margin-bottom:8px">
             <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Default project:</div>
-            <div @click="resetToDefault()" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;border:1px solid var(--accent);cursor:pointer;background:var(--accent)08"
-               @mouseenter="$el.style.background='#f0f5ff'" @mouseleave="$el.style.background='var(--accent)08'">
+            <div @click="resetToDefault()" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;border:1px solid var(--primary);cursor:pointer;background:var(--primary)08"
+               @mouseenter="$el.style.background='#f5f0e8'" @mouseleave="$el.style.background='var(--primary)08'">
               <span style="font-weight:500" x-text="originalProject.split('/').pop()"></span>
-              <span style="color:var(--text-muted);font-size:10px;font-family:monospace" x-text="originalProject"></span>
+              <span style="color:var(--text-muted);font-size:10px;font-family:var(--font-mono)" x-text="originalProject"></span>
             </div>
           </div>
         </template>
@@ -208,10 +229,10 @@ a{color:var(--primary);text-decoration:none}
           <div style="margin-bottom:8px">
             <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Recent projects:</div>
             <template x-for="p in getRecentProjects()" :key="p.path">
-              <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;margin-bottom:2px;border:1px solid #f0f0f0;cursor:pointer"
-                 @mouseenter="$el.style.background='#f5f7ff'" @mouseleave="$el.style.background=''">
+              <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;margin-bottom:2px;border:1px solid #f0e9dd;cursor:pointer"
+                 @mouseenter="$el.style.background='#f5f0e8'" @mouseleave="$el.style.background=''">
                 <span x-text="p.name" style="font-weight:500"></span>
-                <span style="color:var(--text-muted);font-size:10px;font-family:monospace" x-text="p.path"></span>
+                <span style="color:var(--text-muted);font-size:10px;font-family:var(--font-mono)" x-text="p.path"></span>
               </div>
             </template>
           </div>
@@ -221,12 +242,12 @@ a{color:var(--primary);text-decoration:none}
         <div style="display:flex;gap:6px">
           <input x-model="switchPath" placeholder="/home/user/my-project"
                  @keydown.enter="switchProject()"
-                 style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace">
+                 style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:var(--font-mono)">
           <button @click="switchProject()" class="btn btn-primary btn-sm">Open</button>
         </div>
         <div x-show="switchError" style="color:var(--error);font-size:11px;margin-top:6px" x-text="switchError"></div>
         <template x-if="switchResult && switchResult.url">
-          <div style="margin-top:8px;padding:8px;background:#f0f5ff;border-radius:6px;font-size:11px">
+          <div style="margin-top:8px;padding:8px;background:#f5f0e8;border-radius:6px;font-size:11px">
             <div style="margin-bottom:4px"><strong x-text="switchResult.name"></strong> — <span x-text="switchResult.node_count + ' nodes'"></span></div>
             <a :href="switchResult.url" target="_blank" style="color:var(--primary);font-weight:500">Open dashboard →</a>
             <span style="font-size:10px;color:var(--text-muted);margin-left:4px" x-text="switchResult.url"></span>
@@ -243,13 +264,14 @@ a{color:var(--primary);text-decoration:none}
   </div>
   <div class="tab-bar">
     <button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button>
-    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph'); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button>
+    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button>
     <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button>
     <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button>
     <template x-if="diagramData">
-      <button class="tab-btn" :class="{active: tab==='diagram'}" @click="showDiagram()" style="position:relative">
-        Diagram
-        <span x-show="diagramFlash" x-transition style="position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--primary)"></span>
+      <button class="tab-btn" :class="{'live-session': true, active: tab==='diagram'}" @click="showDiagram()" style="position:relative">
+        Live Session
+        <span class="pulse-dot"></span>
+        <span x-show="diagramFlash" x-transition style="position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:var(--warning);box-shadow:0 0 8px var(--warning)"></span>
       </button>
     </template>
   </div>
@@ -259,14 +281,14 @@ a{color:var(--primary);text-decoration:none}
 <div class="container" x-show="tab==='overview'" x-cloak>
   <!-- Onboarding banner for new projects -->
   <template x-if="(stats.graph?.node_count ?? 0) === 0">
-    <div style="background:linear-gradient(135deg,#4361ee15,#2ecc7115);border:1px solid #4361ee30;border-radius:12px;padding:24px;margin-bottom:16px">
+    <div style="background:linear-gradient(135deg,#f5f0e8,#f0e9dd);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:16px">
       <div style="display:flex;align-items:start;gap:16px">
-        <div style="font-size:32px">🔍</div>
+        <img src="/logo.png" alt="" style="width:80px;height:80px">
         <div style="flex:1">
           <h3 style="margin-bottom:8px;color:var(--primary)">Welcome to Chronicle</h3>
           <p style="color:var(--text);margin-bottom:12px">This project hasn't been scanned yet. Tell Claude to scan it and build a knowledge graph.</p>
-          <div style="background:#fff;border-radius:8px;padding:12px;border:1px solid #e0e0e0;margin-bottom:12px">
-            <div style="font-size:10px;color:#999;margin-bottom:4px">Say this in Claude Code:</div>
+          <div style="background:#fff;border-radius:8px;padding:12px;border:1px solid var(--border);margin-bottom:12px">
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Say this in Claude Code:</div>
             <code style="font-size:13px;color:var(--primary);font-weight:500">chronicle scan</code>
           </div>
           <div style="font-size:12px;color:var(--text-muted)">
@@ -462,11 +484,11 @@ a{color:var(--primary);text-decoration:none}
       <div class="card-body" style="max-height:220px;overflow-y:auto">
         <template x-for="d in discoveries" :key="d.discovery_id">
           <div style="padding:6px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid"
-               :style="{borderColor: d.category === 'missing_edge' ? 'var(--warning)' : d.category === 'correction' ? 'var(--error)' : d.category === 'insight' ? 'var(--primary)' : '#94a3b8'}">
+               :style="{borderColor: d.category === 'missing_edge' ? 'var(--warning)' : d.category === 'correction' ? 'var(--error)' : d.category === 'insight' ? 'var(--primary)' : '#b8a898'}">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <div>
                 <span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:500;margin-right:6px"
-                      :style="{background: d.category === 'missing_edge' ? 'var(--warning-light)' : d.category === 'pattern' ? '#f0f1f3' : d.category === 'insight' ? '#eef0ff' : '#fef2f2',
+                      :style="{background: d.category === 'missing_edge' ? 'var(--warning-light)' : d.category === 'pattern' ? '#f0e9dd' : d.category === 'insight' ? '#f0e9dd' : '#fbe0e0',
                                color: d.category === 'missing_edge' ? 'var(--warning)' : d.category === 'pattern' ? '#666' : d.category === 'insight' ? 'var(--primary)' : 'var(--error)'}"
                       x-text="d.category"></span>
                 <span style="font-size:12px;font-weight:500;color:var(--text)" x-text="d.title"></span>
@@ -503,9 +525,9 @@ a{color:var(--primary);text-decoration:none}
     <div class="graph-toolbar" style="flex-wrap:wrap;gap:6px">
       <!-- View toggle -->
       <div class="mode-toggle">
-        <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';renderGraph()">Tree</button>
-        <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';renderGraph()">Explore</button>
-        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;history.pushState(null,'','/workspace');renderGraph()">Workspace</button>
+        <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree</button>
+        <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';history.pushState(null,'','/graph/explore');renderGraph()">Explore</button>
+        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;history.pushState(null,'','/graph/workspace');renderGraph()">Workspace</button>
       </div>
 
       <!-- Workspace layout toggle (always available, including diagram mode) -->
@@ -531,8 +553,8 @@ a{color:var(--primary);text-decoration:none}
       <!-- Repo filter (Tree + Explore only) -->
       <template x-if="(graphMode==='tree' || graphMode==='explore') && allRepos.length > 1">
         <div style="display:flex;gap:4px;align-items:center">
-          <span style="font-size:10px;color:#999">Repo:</span>
-          <select @change="graphRepoFilter=$event.target.value;renderGraph()" style="font-size:10px;padding:2px 6px;border:1px solid #ddd;border-radius:4px">
+          <span style="font-size:10px;color:var(--text-muted)">Repo:</span>
+          <select @change="graphRepoFilter=$event.target.value;renderGraph()" style="font-size:10px;padding:2px 6px;border:1px solid var(--border);border-radius:4px">
             <option value="">All repos</option>
             <template x-for="r in allRepos" :key="r">
               <option :value="r" x-text="r"></option>
@@ -547,8 +569,8 @@ a{color:var(--primary);text-decoration:none}
           <button class="mode-btn" @click="exploreBack()" style="font-size:10px;padding:2px 6px">← Back</button>
           <template x-for="(crumb,i) in explorePath" :key="i">
             <span>
-              <span style="color:#ccc">/</span>
-              <span style="color:#4361ee;cursor:pointer" @click="exploreNavigate(i)" x-text="crumb.name"></span>
+              <span style="color:var(--border)">/</span>
+              <span style="color:#6b4423;cursor:pointer" @click="exploreNavigate(i)" x-text="crumb.name"></span>
             </span>
           </template>
         </div>
@@ -588,7 +610,7 @@ a{color:var(--primary);text-decoration:none}
                        draggable="true"
                        @dragstart="$event.dataTransfer.setData('text/plain', n.node_id); $event.dataTransfer.effectAllowed='copy'"
                        :class="{'opacity-50': workspaceNodes.some(w => w.node_id === n.node_id)}">
-                    <span style="color:#999;font-size:9px">⠿</span>
+                    <span style="color:var(--text-muted);font-size:9px">⠿</span>
                     <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
                     <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
                   </div>
@@ -606,39 +628,39 @@ a{color:var(--primary);text-decoration:none}
       </div>
       <!-- Side panel for selected node (Tree + Explore + Architecture mode) -->
       <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='workspace')" x-cloak
-           style="width:320px;border-left:1px solid var(--border);overflow-y:auto;background:#fafbfc;flex-shrink:0">
+           style="width:320px;border-left:1px solid var(--border);overflow-y:auto;background:#faf6ef;flex-shrink:0">
         <template x-if="selectedNode">
           <div style="padding:12px;font-size:11px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
               <strong style="font-size:13px;color:var(--text)" x-text="selectedNode.name"></strong>
-              <button @click="selectedNode=null" style="border:none;background:none;cursor:pointer;color:#999;font-size:16px">&times;</button>
+              <button @click="selectedNode=null" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:16px">&times;</button>
             </div>
             <div style="margin-bottom:8px">
               <span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:500"
                     :style="{background: layerColor(selectedNode.layer)+'15', color: layerColor(selectedNode.layer)}"
                     x-text="selectedNode.node_type"></span>
-              <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0f0f0;color:#666;margin-left:4px" x-text="selectedNode.layer"></span>
+              <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0e9dd;color:var(--text-secondary);margin-left:4px" x-text="selectedNode.layer"></span>
             </div>
-            <div style="font-family:monospace;font-size:9px;color:#999;word-break:break-all;margin-bottom:8px" x-text="selectedNode.node_key"></div>
+            <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);word-break:break-all;margin-bottom:8px" x-text="selectedNode.node_key"></div>
             <template x-if="selectedNode.file_path">
-              <div style="color:#666;margin-bottom:8px;font-size:10px" x-text="(selectedNode.repo_name ? selectedNode.repo_name+'/' : '') + selectedNode.file_path"></div>
+              <div style="color:var(--text-secondary);margin-bottom:8px;font-size:10px" x-text="(selectedNode.repo_name ? selectedNode.repo_name+'/' : '') + selectedNode.file_path"></div>
             </template>
 
             <!-- Outgoing edges -->
             <div style="margin-bottom:12px">
-              <div style="color:#999;font-weight:600;margin-bottom:4px">Dependencies</div>
+              <div style="color:var(--text-muted);font-weight:600;margin-bottom:4px">Dependencies</div>
               <template x-if="getNodeEdges(selectedNode, 'out').length === 0">
-                <div style="color:#ccc">none</div>
+                <div style="color:var(--border)">none</div>
               </template>
               <template x-for="e in getNodeEdges(selectedNode, 'out')" :key="e.edge_key || (e.from_node_id+'-'+e.to_node_id)">
                 <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.target_key)">
-                  <span style="color:#4361ee">→</span>
+                  <span style="color:#6b4423">→</span>
                   <span x-text="e.target_name"></span>
                   <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
-                        :style="{color: e.derivation==='hard' ? '#2ecc71' : '#f39c12'}"
+                        :style="{color: e.derivation==='hard' ? '#2d6a30' : '#b8963e'}"
                         x-text="e.edge_type"></span>
                   <span x-show="e.target_layer && e.target_layer !== selectedNode?.layer"
-                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0f1f3;color:#999;margin-left:2px"
+                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0e9dd;color:var(--text-muted);margin-left:2px"
                         x-text="e.target_layer"></span>
                 </div>
               </template>
@@ -646,19 +668,19 @@ a{color:var(--primary);text-decoration:none}
 
             <!-- Incoming edges -->
             <div>
-              <div style="color:#999;font-weight:600;margin-bottom:4px">Dependents</div>
+              <div style="color:var(--text-muted);font-weight:600;margin-bottom:4px">Dependents</div>
               <template x-if="getNodeEdges(selectedNode, 'in').length === 0">
-                <div style="color:#ccc">none</div>
+                <div style="color:var(--border)">none</div>
               </template>
               <template x-for="e in getNodeEdges(selectedNode, 'in')" :key="e.edge_key || (e.from_node_id+'-'+e.to_node_id)">
                 <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.source_key)">
-                  <span style="color:#f39c12">←</span>
+                  <span style="color:#b8963e">←</span>
                   <span x-text="e.source_name"></span>
                   <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
-                        :style="{color: e.derivation==='hard' ? '#2ecc71' : '#f39c12'}"
+                        :style="{color: e.derivation==='hard' ? '#2d6a30' : '#b8963e'}"
                         x-text="e.edge_type"></span>
                   <span x-show="e.source_layer && e.source_layer !== selectedNode?.layer"
-                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0f1f3;color:#999;margin-left:2px"
+                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0e9dd;color:var(--text-muted);margin-left:2px"
                         x-text="e.source_layer"></span>
                 </div>
               </template>
@@ -764,19 +786,19 @@ a{color:var(--primary);text-decoration:none}
 
       <!-- Edit/Add form -->
       <template x-if="editingTerm">
-        <div style="padding:12px;border-bottom:1px solid var(--border);background:#fafbfc">
+        <div style="padding:12px;border-bottom:1px solid var(--border);background:#faf6ef">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-            <input x-model="editingTerm.term" placeholder="Term (e.g. Order)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px">
-            <input x-model="editingTerm.context" placeholder="Context (e.g. ordering)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+            <input x-model="editingTerm.term" placeholder="Term (e.g. Order)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+            <input x-model="editingTerm.context" placeholder="Context (e.g. ordering)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px">
           </div>
-          <textarea x-model="editingTerm.description" placeholder="What this term means in the domain..." rows="2" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;resize:vertical;margin-bottom:8px"></textarea>
+          <textarea x-model="editingTerm.description" placeholder="What this term means in the domain..." rows="2" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;resize:vertical;margin-bottom:8px"></textarea>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-            <input x-model="editingTerm.aliases" placeholder="Aliases (comma-separated)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:11px">
-            <input x-model="editingTerm.anti_patterns" placeholder="Don't use (comma-separated)" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:11px">
+            <input x-model="editingTerm.aliases" placeholder="Aliases (comma-separated)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:11px">
+            <input x-model="editingTerm.anti_patterns" placeholder="Don't use (comma-separated)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:11px">
           </div>
-          <input x-model="editingTerm.examples" placeholder="Usage examples (comma-separated)" style="width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:11px;margin-bottom:8px">
+          <input x-model="editingTerm.examples" placeholder="Usage examples (comma-separated)" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:11px;margin-bottom:8px">
           <div style="display:flex;gap:8px;justify-content:flex-end">
-            <button @click="editingTerm=null" style="padding:4px 12px;border:1px solid #ddd;background:#fff;border-radius:6px;cursor:pointer;font-size:11px">Cancel</button>
+            <button @click="editingTerm=null" style="padding:4px 12px;border:1px solid var(--border);background:#fff;border-radius:6px;cursor:pointer;font-size:11px">Cancel</button>
             <button @click="saveTerm()" class="btn btn-primary btn-sm">Save</button>
           </div>
         </div>
@@ -794,28 +816,28 @@ a{color:var(--primary);text-decoration:none}
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
               <strong style="font-size:14px;color:var(--primary)" x-text="t.term"></strong>
               <div style="display:flex;gap:4px;align-items:center">
-                <span x-show="t.context" style="font-size:9px;padding:1px 8px;border-radius:10px;background:#f0f1f3;color:#666" x-text="t.context"></span>
-                <button @click="editTerm(t)" style="border:none;background:none;color:#999;cursor:pointer;font-size:11px" title="Edit">✎</button>
-                <button @click="deleteTerm(t.term)" style="border:none;background:none;color:#ccc;cursor:pointer;font-size:14px" title="Delete">&times;</button>
+                <span x-show="t.context" style="font-size:9px;padding:1px 8px;border-radius:10px;background:#f0e9dd;color:var(--text-secondary)" x-text="t.context"></span>
+                <button @click="editTerm(t)" style="border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:11px" title="Edit">✎</button>
+                <button @click="deleteTerm(t.term)" style="border:none;background:none;color:var(--border);cursor:pointer;font-size:14px" title="Delete">&times;</button>
               </div>
             </div>
             <p style="font-size:12px;color:var(--text);margin-bottom:6px" x-text="t.description"></p>
             <div x-show="t.aliases && t.aliases.length" style="font-size:10px;margin-bottom:4px">
-              <span style="color:#999">Also known as:</span>
+              <span style="color:var(--text-muted)">Also known as:</span>
               <template x-for="a in t.aliases" :key="a">
-                <span style="background:#eef0ff;color:var(--primary);padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="a"></span>
+                <span style="background:#f0e9dd;color:var(--primary);padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="a"></span>
               </template>
             </div>
             <div x-show="t.anti_patterns && t.anti_patterns.length" style="font-size:10px;margin-bottom:4px">
-              <span style="color:#999">Don't use:</span>
+              <span style="color:var(--text-muted)">Don't use:</span>
               <template x-for="a in t.anti_patterns" :key="a">
                 <span style="background:var(--error-light);color:var(--error);padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px;text-decoration:line-through" x-text="a"></span>
               </template>
             </div>
             <div x-show="t.examples && t.examples.length" style="font-size:10px">
-              <span style="color:#999">Examples:</span>
+              <span style="color:var(--text-muted)">Examples:</span>
               <template x-for="e in t.examples" :key="e">
-                <span style="font-family:monospace;background:#f0fdf4;color:#2ecc71;padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="e"></span>
+                <span style="font-family:var(--font-mono);background:#f0eed8;color:#2d6a30;padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="e"></span>
               </template>
             </div>
           </div>
@@ -842,22 +864,22 @@ a{color:var(--primary);text-decoration:none}
           </div>
         </template>
         <template x-for="v in languageViolations" :key="v.node_key + v.matched_anti_pattern">
-          <div style="padding:8px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid var(--warning);background:#fffbf0">
+          <div style="padding:8px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid var(--warning);background:#fdf8ef">
             <div style="font-size:12px">
               <strong x-text="v.node_name"></strong>
               <span style="font-size:10px;color:var(--text-muted)" x-text="'(' + v.node_type + ')'"></span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px">
-              <div style="font-size:11px;color:#666">
+              <div style="font-size:11px;color:var(--text-secondary)">
                 Uses "<span style="color:var(--error);text-decoration:line-through" x-text="v.matched_anti_pattern"></span>"
                 → should use "<span style="color:var(--primary);font-weight:500" x-text="v.suggested_term"></span>"
-                <span x-show="v.term_context" style="color:#999" x-text="'(context: ' + v.term_context + ')'"></span>
+                <span x-show="v.term_context" style="color:var(--text-muted)" x-text="'(context: ' + v.term_context + ')'"></span>
               </div>
               <button @click="dismissViolation(v.suggested_term, v.matched_anti_pattern)"
-                      style="border:1px solid #ddd;background:#fff;color:#999;cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;flex-shrink:0"
+                      style="border:1px solid var(--border);background:#fff;color:var(--text-muted);cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;flex-shrink:0"
                       title="This is not a real violation — remove this anti-pattern">Dismiss</button>
             </div>
-            <div style="font-size:9px;font-family:monospace;color:#999;margin-top:2px" x-text="v.node_key"></div>
+            <div style="font-size:9px;font-family:var(--font-mono);color:var(--text-muted);margin-top:2px" x-text="v.node_key"></div>
           </div>
         </template>
       </div>
@@ -867,49 +889,49 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Settings Tab -->
 <div class="container" x-show="tab==='settings'" x-cloak>
-  <div class="card" style="max-width:800px">
+  <div class="card" style="width:100%">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <h3 style="margin:0;color:#4361ee">Domain Manifest</h3>
+      <h3 style="margin:0;color:#6b4423">Domain Manifest</h3>
       <div style="display:flex;gap:8px;align-items:center">
-        <span x-show="manifestSaved" x-transition style="color:#2ecc71;font-size:12px">Saved!</span>
-        <button @click="saveManifest()" style="background:#4361ee;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
+        <span x-show="manifestSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
+        <button @click="saveManifest()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
       </div>
     </div>
-    <p style="color:#999;font-size:12px;margin-bottom:12px">
-      Edit <code x-text="manifestPath" style="background:#f0f1f3;padding:2px 6px;border-radius:3px"></code> — defines which repositories belong to this domain.
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+      Edit <code x-text="manifestPath" style="background:#f0e9dd;padding:2px 6px;border-radius:3px"></code> — defines which repositories belong to this domain.
     </p>
     <textarea x-model="manifestContent"
-      style="width:100%;min-height:300px;font-family:monospace;font-size:13px;line-height:1.6;padding:12px;border:1px solid #e0e0e0;border-radius:6px;background:#fafbfc;resize:vertical;color:#333"
+      style="width:100%;min-height:300px;font-family:var(--font-mono);font-size:13px;line-height:1.6;padding:12px;border:1px solid var(--border);border-radius:6px;background:#faf6ef;resize:vertical;color:var(--text)"
       spellcheck="false"></textarea>
-    <p x-show="manifestError" style="color:#e74c3c;font-size:12px;margin-top:8px" x-text="manifestError"></p>
+    <p x-show="manifestError" style="color:#9e2b2b;font-size:12px;margin-top:8px" x-text="manifestError"></p>
   </div>
 
   <!-- Command Prompts -->
-  <div class="card" style="max-width:800px;margin-top:16px">
+  <div class="card" style="width:100%;margin-top:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h3 style="margin:0;color:#4361ee">Command Prompts</h3>
+      <h3 style="margin:0;color:#6b4423">Command Prompts</h3>
       <div style="display:flex;gap:8px;align-items:center">
-        <span x-show="promptSaved" x-transition style="color:#2ecc71;font-size:12px">Saved!</span>
-        <button @click="saveAllPrompts()" style="background:#4361ee;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
+        <span x-show="promptSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
+        <button @click="saveAllPrompts()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
       </div>
     </div>
-    <p style="color:#999;font-size:12px;margin-bottom:12px">
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
       These are the instructions Claude follows for each command. Edit any prompt to customize for this project.
     </p>
 
     <template x-for="cmd in promptOrder" :key="cmd">
       <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
         <div @click="expandedPrompt = expandedPrompt === cmd ? null : cmd"
-             style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f8f9fa;cursor:pointer;user-select:none">
+             style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
           <div>
             <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="'chronicle ' + cmd"></code>
             <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="promptDescriptions[cmd] || ''"></span>
           </div>
-          <span style="color:#999;font-size:12px" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
+          <span style="color:var(--text-muted);font-size:12px" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
         </div>
         <div x-show="expandedPrompt === cmd" x-cloak>
           <textarea x-model="commandPrompts[cmd]" @input="promptSaved=false"
-            style="width:100%;min-height:120px;font-family:monospace;font-size:11px;line-height:1.6;padding:10px;border:none;border-top:1px solid var(--border);background:#fff;resize:vertical;color:#333"
+            style="width:100%;min-height:120px;font-family:var(--font-mono);font-size:11px;line-height:1.6;padding:10px;border:none;border-top:1px solid var(--border);background:#fff;resize:vertical;color:var(--text)"
             spellcheck="false"></textarea>
         </div>
       </div>
@@ -920,7 +942,7 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Diagram Tab (completely separate from Graph) -->
 <div class="container fullscreen" x-show="tab==='diagram'" x-cloak>
-  <div style="display:flex;height:calc(100vh - 140px);gap:0">
+  <div style="display:flex;height:calc(100vh - 110px);gap:0">
     <!-- Left: Entity palette (always visible) -->
     <div class="ws-palette" style="width:220px;height:100%;border-right:1px solid var(--border)">
       <input type="text" placeholder="Search entities..." x-model="diagramSearch">
@@ -938,7 +960,7 @@ a{color:var(--primary);text-decoration:none}
                    draggable="true"
                    @dragstart="$event.dataTransfer.setData('text/plain', JSON.stringify(n)); $event.dataTransfer.effectAllowed='copy'"
                    :class="{'opacity-50': (diagramData?.nodes||[]).some(d => d.node_id === n.node_id)}">
-                <span style="color:#999;font-size:9px;cursor:grab">⠿</span>
+                <span style="color:var(--text-muted);font-size:9px;cursor:grab">⠿</span>
                 <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
                 <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
               </div>
@@ -1059,6 +1081,61 @@ a{color:var(--primary);text-decoration:none}
             </label>
           </template>
         </div>
+
+        <div class="group">
+          <h4>Display</h4>
+          <label>
+            <input type="checkbox"
+                   :checked="showEdgeLabels"
+                   @change="showEdgeLabels=!showEdgeLabels;renderDiagram()">
+            <span>Edge labels</span>
+          </label>
+        </div>
+
+        <div class="group">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <h4>Edge Categories</h4>
+            <div style="display:flex;gap:4px">
+              <button @click="addCustomCategory()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px">+ Add</button>
+              <button @click="resetEdgeCategories()" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:10px">Reset</button>
+            </div>
+          </div>
+
+          <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
+            <div>
+              <!-- Category header row -->
+              <div @click="editingCategory === cat ? cancelEditCategory() : startEditCategory(cat)"
+                   style="display:flex;align-items:center;gap:6px;margin-bottom:2px;font-size:11px;cursor:pointer;padding:2px 0">
+                <input type="color" :value="def.color"
+                       @click.stop
+                       @change="edgeCategories[cat].color = $event.target.value; saveEdgeCategories()"
+                       style="width:16px;height:16px;border:none;padding:0;cursor:pointer;background:none">
+                <span x-text="cat" style="text-transform:capitalize;flex:1"></span>
+                <span style="font-size:9px;color:var(--text-muted)" x-text="Object.keys(def.types||{}).length + ' types'"></span>
+              </div>
+
+              <!-- Expanded editor -->
+              <template x-if="editingCategory === cat">
+                <div style="margin-left:22px;margin-bottom:6px;font-size:10px">
+                  <template x-for="[etype, label] in Object.entries(editCategoryData.types || {})" :key="etype">
+                    <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
+                      <span style="color:var(--text-muted);flex:1" x-text="etype"></span>
+                      <input type="text" :value="label"
+                             @change="editCategoryData.types[etype] = $event.target.value"
+                             style="width:40px;font-size:10px;padding:1px 3px;border:1px solid var(--border);border-radius:2px;background:var(--bg);color:var(--text)">
+                      <button @click="delete editCategoryData.types[etype]"
+                              style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:10px">&times;</button>
+                    </div>
+                  </template>
+                  <div style="display:flex;gap:4px;margin-top:4px">
+                    <button @click="saveEditCategory()" style="font-size:10px;padding:2px 6px;border:1px solid var(--primary);background:var(--primary);color:white;border-radius:3px;cursor:pointer">Save</button>
+                    <button @click="cancelEditCategory()" style="font-size:10px;padding:2px 6px;border:1px solid var(--border);background:none;color:var(--text-muted);border-radius:3px;cursor:pointer">Cancel</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
       </div>
     </template>
   </div>
@@ -1128,6 +1205,11 @@ function dashboard() {
     filterSidebarOpen: false,
     hiddenNodeTypes: [],      // string[] of node_type values
     hiddenEdgeTypes: [],      // string[] of edge_type values
+    edgeCategories: {},       // category_name → {color, types: {EDGE_TYPE: shortLabel}}
+    edgeCategoryLookup: {},   // EDGE_TYPE → {category, color, shortLabel}
+    editingCategory: null,    // category name being edited, or null
+    editCategoryData: null,   // temp copy of the category being edited
+    showEdgeLabels: true,     // global toggle for short labels
     hiddenDomains: [],        // string[] of domain_key values
     minConfidence: 0,
     // Only these types produce transitive edges when hidden; others just disappear
@@ -1175,10 +1257,17 @@ function dashboard() {
         this.graphMode = 'workspace';
         this.wsDataSource = 'diagram';
         this.filterSidebarOpen = true;
-      } else if (path === '/workspace') {
+      } else if (path === '/workspace' || path === '/graph/workspace') {
         this.tab = 'graph';
         this.graphMode = 'workspace';
-      } else if (path === '/graph') {
+        this.filterSidebarOpen = true;
+      } else if (path === '/graph/explore') {
+        this.tab = 'graph';
+        this.graphMode = 'explore';
+      } else if (path === '/graph/tree') {
+        this.tab = 'graph';
+        this.graphMode = 'tree';
+      } else if (path === '/graph' || path.startsWith('/graph')) {
         this.tab = 'graph';
       } else if (path === '/language') {
         this.tab = 'language';
@@ -1462,6 +1551,10 @@ function dashboard() {
       try {
         const r = await fetch('/api/graph' + (this.domain ? '?domain=' + this.domain : ''));
         this.graphData = await r.json();
+        if (this.graphData.edgeCategories) {
+          this.edgeCategories = this.graphData.edgeCategories;
+          this.buildEdgeCategoryLookup();
+        }
         // Extract unique repos for filter dropdown
         const repos = new Set();
         (this.graphData.nodes || []).forEach(n => { if (n.repo_name) repos.add(n.repo_name); });
@@ -1502,7 +1595,7 @@ function dashboard() {
             this.diagramSessionId = msg.data?.session_id;
             this.diagramData = {
               id: msg.data.session_id,
-              title: this.diagramData?.title || msg.data.title || '',
+              title: msg.data.title || this.diagramData?.title || '',
               nodes: msg.data.nodes || [],
               edges: msg.data.edges || [],
               annotations: msg.data.annotations || {},
@@ -1534,8 +1627,8 @@ function dashboard() {
     },
 
     layerColor(layer) {
-      const colors = {code:'#3b82f6',contract:'#10b981',service:'#ef4444',data:'#8b5cf6',flow:'#a855f7',ownership:'#f59e0b',infra:'#6366f1',ci:'#ec4899'};
-      return colors[layer] || '#94a3b8';
+      const colors = {code:'#8b5a2b',contract:'#1a7a2e',service:'#c23030',data:'#6a3d9a',flow:'#b85c2e',ownership:'#c4880a',infra:'#2e5f8a',ci:'#a83262'};
+      return colors[layer] || '#b8a898';
     },
 
     toggleLayer(l) {
@@ -1820,6 +1913,12 @@ function dashboard() {
         svg.classed('has-highlight', false);
         svg.selectAll('.dimmed').classed('dimmed', false);
         svg.selectAll('.highlighted').classed('highlighted', false);
+        svg.selectAll('.edge-short-label').classed('dimmed', false).classed('highlighted', false)
+          .each(function() {
+            const d = d3.select(this).datum?.();
+            const info = d ? (window._edgeCategoryLookup || {})[d.edge_type] : null;
+            d3.select(this).text(info ? info.shortLabel : '');
+          });
         return;
       }
 
@@ -1865,6 +1964,22 @@ function dashboard() {
         const key = fromId + '->' + toId;
         el.classed('dimmed', !connectedEdgeKeys.has(key));
         el.classed('highlighted', connectedEdgeKeys.has(key));
+      });
+
+      // Update short labels: dim non-connected, highlight+expand connected
+      svg.selectAll('.edge-short-label').each(function() {
+        const el = d3.select(this);
+        const d = el.datum?.();
+        const fromId = d ? (d.source?.id || d.source || d.from_node_id) : null;
+        const toId   = d ? (d.target?.id || d.target || d.to_node_id)   : null;
+        const key = fromId + '->' + toId;
+        const connected = connectedEdgeKeys.has(key);
+        el.classed('dimmed', !connected);
+        el.classed('highlighted', connected);
+        if (connected && d) {
+          // Show full edge type instead of short label
+          el.text(d.edge_type ? d.edge_type.toLowerCase().replace(/_/g, ' ') : '');
+        }
       });
     },
 
@@ -1941,7 +2056,7 @@ function dashboard() {
       }
 
       if (visibleNodes.length === 0) {
-        container.innerHTML = '<div style="padding:40px;text-align:center;color:#999">No children to display</div>';
+        container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">No children to display</div>';
         return;
       }
 
@@ -2058,14 +2173,14 @@ function dashboard() {
         .attr('id', 'explore-arrow')
         .attr('viewBox', '0 0 10 10').attr('refX', 10).attr('refY', 5)
         .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto-start-reverse')
-        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#94a3b8');
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#b8a898');
 
       // Draw group backgrounds
       sortedGroupKeys.forEach(gk => {
         const gp = groupPositions[gk];
         rootG.append('rect')
           .attr('x', gp.x).attr('y', gp.y).attr('width', gp.w).attr('height', gp.h)
-          .attr('rx', 10).attr('fill', '#f8f9fb').attr('stroke', '#e2e5ea').attr('stroke-width', 1);
+          .attr('rx', 10).attr('fill', '#f5f0e8').attr('stroke', '#d9cbb5').attr('stroke-width', 1);
         rootG.append('text')
           .attr('x', gp.x + 12).attr('y', gp.y + 16)
           .attr('font-size', '10px').attr('fill', '#999').attr('text-transform', 'uppercase').attr('letter-spacing', '1px')
@@ -2076,7 +2191,7 @@ function dashboard() {
       if (extNodes.length > 0) {
         rootG.append('text')
           .attr('x', cursorX + 20).attr('y', 66)
-          .attr('font-size', '10px').attr('fill', '#f39c12').attr('letter-spacing', '1px')
+          .attr('font-size', '10px').attr('fill', '#b8963e').attr('letter-spacing', '1px')
           .text('EXTERNAL (' + extNodes.length + ')');
       }
 
@@ -2097,7 +2212,7 @@ function dashboard() {
           .attr('class', 'edge-line' + (isExternal ? ' dashed' : ''))
           .attr('d', `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`)
           .attr('fill', 'none')
-          .attr('stroke', isExternal ? '#f39c12' : '#94a3b8')
+          .attr('stroke', isExternal ? '#b8963e' : '#b8a898')
           .attr('stroke-width', 1.5)
           .attr('marker-end', 'url(#explore-arrow)');
 
@@ -2118,8 +2233,8 @@ function dashboard() {
 
         g.append('rect').attr('class', 'node-rect' + (self.selectedNode?.node_id === n.node_id ? ' selected' : ''))
           .attr('width', nodeW).attr('height', nodeH)
-          .attr('fill', external ? '#fffbf0' : '#fff')
-          .attr('stroke', external ? '#f39c12' : self.layerColor(n.layer))
+          .attr('fill', external ? '#fdf8ef' : '#fff')
+          .attr('stroke', external ? '#b8963e' : self.layerColor(n.layer))
           .attr('stroke-width', hasChildren ? 2 : 1.5)
           .attr('stroke-dasharray', external ? '4,2' : 'none');
 
@@ -2132,7 +2247,7 @@ function dashboard() {
         if (hasChildren) {
           const count = childrenOf[n.node_id].length;
           g.append('rect').attr('x', nodeW - 30).attr('y', 7).attr('width', 22).attr('height', 18)
-            .attr('rx', 9).attr('fill', self.layerColor(n.layer)).attr('opacity', 0.15);
+            .attr('rx', 9).attr('fill', self.layerColor(n.layer)).attr('opacity', 0.35);
           g.append('text').attr('x', nodeW - 19).attr('y', 20)
             .attr('text-anchor', 'middle').attr('font-size', '9px').attr('fill', self.layerColor(n.layer)).attr('font-weight', '600')
             .text(count);
@@ -2170,25 +2285,25 @@ function dashboard() {
         detail.innerHTML = `
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div>
-              <strong style="color:#333;font-size:13px">${n.name}</strong>
-              <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${self.layerColor(n.layer)}15;color:${self.layerColor(n.layer)};margin-left:6px">${n.node_type}</span>
-              ${hasKids ? `<button onclick="document.querySelector('[x-data]').__x.$data.exploreDrillDown(${n.node_id},'${n.name.replace(/'/g,"\\'")}')" style="margin-left:8px;font-size:10px;padding:2px 10px;background:#4361ee;color:#fff;border:none;border-radius:4px;cursor:pointer">Explore ${childrenOf[n.node_id].length} children →</button>` : ''}
+              <strong style="color:var(--text);font-size:13px">${n.name}</strong>
+              <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${self.layerColor(n.layer)}35;color:${self.layerColor(n.layer)};margin-left:6px">${n.node_type}</span>
+              ${hasKids ? `<button onclick="document.querySelector('[x-data]').__x.$data.exploreDrillDown(${n.node_id},'${n.name.replace(/'/g,"\\'")}')" style="margin-left:8px;font-size:10px;padding:2px 10px;background:#6b4423;color:#fff;border:none;border-radius:4px;cursor:pointer">Explore ${childrenOf[n.node_id].length} children →</button>` : ''}
             </div>
-            <span style="font-size:10px;color:#999;font-family:monospace">${n.node_key}</span>
+            <span style="font-size:10px;color:var(--text-muted);font-family:var(--font-mono)">${n.node_key}</span>
           </div>
-          ${n.file_path ? `<div style="color:#666;margin-bottom:8px">${n.repo_name ? n.repo_name + '/' : ''}${n.file_path}</div>` : ''}
+          ${n.file_path ? `<div style="color:var(--text-secondary);margin-bottom:8px">${n.repo_name ? n.repo_name + '/' : ''}${n.file_path}</div>` : ''}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
             <div>
-              <div style="color:#999;margin-bottom:4px;font-weight:600">Dependencies (${outgoing.length})</div>
-              ${outgoing.length === 0 ? '<div style="color:#ccc">none</div>' : outgoing.slice(0,10).map(e =>
-                `<div style="padding:2px 0">→ ${e.targetName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
-              ).join('') + (outgoing.length > 10 ? `<div style="color:#999">+${outgoing.length-10} more</div>` : '')}
+              <div style="color:var(--text-muted);margin-bottom:4px;font-weight:600">Dependencies (${outgoing.length})</div>
+              ${outgoing.length === 0 ? '<div style="color:var(--border)">none</div>' : outgoing.slice(0,10).map(e =>
+                `<div style="padding:2px 0">→ ${e.targetName} <span style="color:${e.derivation==='hard'?'#2d6a30':'#b8963e'};font-size:10px">${e.edge_type}</span></div>`
+              ).join('') + (outgoing.length > 10 ? `<div style="color:var(--text-muted)">+${outgoing.length-10} more</div>` : '')}
             </div>
             <div>
-              <div style="color:#999;margin-bottom:4px;font-weight:600">Dependents (${incoming.length})</div>
-              ${incoming.length === 0 ? '<div style="color:#ccc">none</div>' : incoming.slice(0,10).map(e =>
-                `<div style="padding:2px 0">← ${e.sourceName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
-              ).join('') + (incoming.length > 10 ? `<div style="color:#999">+${incoming.length-10} more</div>` : '')}
+              <div style="color:var(--text-muted);margin-bottom:4px;font-weight:600">Dependents (${incoming.length})</div>
+              ${incoming.length === 0 ? '<div style="color:var(--border)">none</div>' : incoming.slice(0,10).map(e =>
+                `<div style="padding:2px 0">← ${e.sourceName} <span style="color:${e.derivation==='hard'?'#2d6a30':'#b8963e'};font-size:10px">${e.edge_type}</span></div>`
+              ).join('') + (incoming.length > 10 ? `<div style="color:var(--text-muted)">+${incoming.length-10} more</div>` : '')}
             </div>
           </div>
         `;
@@ -2235,7 +2350,7 @@ function dashboard() {
         const layerDiv = document.createElement('div');
         layerDiv.style.cssText = 'margin-bottom:16px;';
         const layerHeader = document.createElement('div');
-        layerHeader.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:2px;color:#999;margin-bottom:8px;padding:4px 8px;background:#f8f9fa;border-radius:4px;';
+        layerHeader.style.cssText = 'font-size:10px;text-transform:uppercase;letter-spacing:2px;color:var(--text-muted);margin-bottom:8px;padding:4px 8px;background:#f5f0e8;border-radius:4px;';
         layerHeader.textContent = layer + ' (' + layerNodes.length + ' nodes)';
         layerDiv.appendChild(layerHeader);
 
@@ -2259,7 +2374,7 @@ function dashboard() {
 
           // Highlight selected
           if (self.selectedNode?.node_id === node.node_id) {
-            row.style.background = '#e8efff';
+            row.style.background = '#f0e9dd';
             row.style.fontWeight = '600';
           }
 
@@ -2267,7 +2382,7 @@ function dashboard() {
           if (hasChildren) {
             const toggle = document.createElement('span');
             toggle.textContent = isExpanded ? '▼' : '▶';
-            toggle.style.cssText = 'font-size:9px;color:#999;width:12px;flex-shrink:0;';
+            toggle.style.cssText = 'font-size:9px;color:var(--text-muted);width:12px;flex-shrink:0;';
             row.appendChild(toggle);
           } else {
             const spacer = document.createElement('span');
@@ -2280,27 +2395,27 @@ function dashboard() {
           // Type badge
           const badge = document.createElement('span');
           badge.textContent = node.node_type;
-          badge.style.cssText = `font-size:9px;padding:1px 6px;border-radius:8px;background:${self.layerColor(node.layer)}15;color:${self.layerColor(node.layer)};font-weight:500;flex-shrink:0;`;
+          badge.style.cssText = `font-size:9px;padding:1px 6px;border-radius:8px;background:${self.layerColor(node.layer)}35;color:${self.layerColor(node.layer)};font-weight:500;flex-shrink:0;`;
           row.appendChild(badge);
 
           // Name
           const name = document.createElement('span');
           name.textContent = node.name;
-          name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#333;';
+          name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);';
           row.appendChild(name);
 
           // Children count
           if (hasChildren) {
             const count = document.createElement('span');
             count.textContent = children.length;
-            count.style.cssText = 'font-size:10px;color:#aaa;background:#f0f0f0;padding:0 6px;border-radius:8px;flex-shrink:0;';
+            count.style.cssText = 'font-size:10px;color:#aaa;background:#f0e9dd;padding:0 6px;border-radius:8px;flex-shrink:0;';
             row.appendChild(count);
           }
 
           // Dep indicators
           if (outDeps > 0 || inDeps > 0) {
             const deps = document.createElement('span');
-            deps.style.cssText = 'font-size:9px;color:#999;flex-shrink:0;';
+            deps.style.cssText = 'font-size:9px;color:var(--text-muted);flex-shrink:0;';
             const parts = [];
             if (outDeps > 0) parts.push('→' + outDeps);
             if (inDeps > 0) parts.push('←' + inDeps);
@@ -2324,7 +2439,7 @@ function dashboard() {
           });
 
           // Hover
-          row.addEventListener('mouseenter', () => { if (self.selectedNode?.node_id !== node.node_id) row.style.background = '#f5f7ff'; });
+          row.addEventListener('mouseenter', () => { if (self.selectedNode?.node_id !== node.node_id) row.style.background = '#f5f0e8'; });
           row.addEventListener('mouseleave', () => { if (self.selectedNode?.node_id !== node.node_id) row.style.background = ''; });
 
           layerDiv.appendChild(row);
@@ -2356,7 +2471,7 @@ function dashboard() {
       // Selected node detail panel
       if (self.selectedNode) {
         const detail = document.createElement('div');
-        detail.style.cssText = 'margin-top:16px;padding:12px;background:#f8f9fa;border-radius:8px;border:1px solid #e0e0e0;';
+        detail.style.cssText = 'margin-top:16px;padding:12px;background:#f5f0e8;border-radius:8px;border:1px solid var(--border);';
 
         const n = self.selectedNode;
         const outgoing = depEdges.filter(e => e.from_node_id === n.node_id).map(e => ({...e, targetName: nodeById[e.to_node_id]?.name || '?'}));
@@ -2365,23 +2480,23 @@ function dashboard() {
         detail.innerHTML = `
           <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
             <div>
-              <strong style="color:#333">${n.name}</strong>
-              <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${self.layerColor(n.layer)}15;color:${self.layerColor(n.layer)};margin-left:6px">${n.node_type}</span>
+              <strong style="color:var(--text)">${n.name}</strong>
+              <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:${self.layerColor(n.layer)}35;color:${self.layerColor(n.layer)};margin-left:6px">${n.node_type}</span>
             </div>
-            <span style="font-size:10px;color:#999;font-family:monospace">${n.node_key}</span>
+            <span style="font-size:10px;color:var(--text-muted);font-family:var(--font-mono)">${n.node_key}</span>
           </div>
-          ${n.file_path ? `<div style="font-size:11px;color:#666;margin-bottom:8px">📁 ${n.repo_name ? n.repo_name + '/' : ''}${n.file_path}</div>` : ''}
+          ${n.file_path ? `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px">📁 ${n.repo_name ? n.repo_name + '/' : ''}${n.file_path}</div>` : ''}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px">
             <div>
-              <div style="color:#999;margin-bottom:4px;font-weight:600">Outgoing (${outgoing.length})</div>
-              ${outgoing.length === 0 ? '<div style="color:#ccc">none</div>' : outgoing.map(e =>
-                `<div style="color:#555;padding:2px 0">→ ${e.targetName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
+              <div style="color:var(--text-muted);margin-bottom:4px;font-weight:600">Outgoing (${outgoing.length})</div>
+              ${outgoing.length === 0 ? '<div style="color:var(--border)">none</div>' : outgoing.map(e =>
+                `<div style="color:var(--text-secondary);padding:2px 0">→ ${e.targetName} <span style="color:${e.derivation==='hard'?'#2d6a30':'#b8963e'};font-size:10px">${e.edge_type}</span></div>`
               ).join('')}
             </div>
             <div>
-              <div style="color:#999;margin-bottom:4px;font-weight:600">Incoming (${incoming.length})</div>
-              ${incoming.length === 0 ? '<div style="color:#ccc">none</div>' : incoming.map(e =>
-                `<div style="color:#555;padding:2px 0">← ${e.sourceName} <span style="color:${e.derivation==='hard'?'#2ecc71':'#f39c12'};font-size:10px">${e.edge_type}</span></div>`
+              <div style="color:var(--text-muted);margin-bottom:4px;font-weight:600">Incoming (${incoming.length})</div>
+              ${incoming.length === 0 ? '<div style="color:var(--border)">none</div>' : incoming.map(e =>
+                `<div style="color:var(--text-secondary);padding:2px 0">← ${e.sourceName} <span style="color:${e.derivation==='hard'?'#2d6a30':'#b8963e'};font-size:10px">${e.edge_type}</span></div>`
               ).join('')}
             </div>
           </div>
@@ -2608,7 +2723,14 @@ function dashboard() {
       defs.append('marker').attr('id', 'ws-arrow-path').attr('viewBox', '0 0 10 10')
         .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6)
         .attr('orient', 'auto-start-reverse')
-        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#f59e0b');
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#b8963e');
+      // Per-category arrows
+      for (const [cat, def] of Object.entries(this.edgeCategories)) {
+        defs.append('marker').attr('id', 'ws-arrow-' + cat)
+          .attr('viewBox', '0 0 10 10').attr('refX', 22).attr('refY', 5)
+          .attr('markerWidth', 6).attr('markerHeight', 6).attr('orient', 'auto-start-reverse')
+          .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', def.color);
+      }
 
       const gRoot = svg.append('g');
       svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
@@ -2618,17 +2740,29 @@ function dashboard() {
       // Group bounding boxes (behind everything)
       const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
 
-      // Edges
+      // Edges (use <path> so dagre can use curved routes via 'd' attr)
       const link = gRoot.selectAll('.edge-line')
-        .data(simEdges).join('line')
+        .data(simEdges).join('path')
+        .attr('fill', 'none')
         .attr('class', d => {
           let cls = 'edge-line';
           if (d._isPath) cls += ' path-edge';
           else if (d._transitive) cls += ' transitive';
-          else if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
+          else if (d.derivation !== 'hard' && d.derivation !== 'linked') cls += ' dashed';
           return cls;
         })
-        .attr('marker-end', d => d._isPath ? 'url(#ws-arrow-path)' : 'url(#ws-arrow)');
+        .attr('stroke', d => {
+          if (d._isPath) return null; // path edges keep amber via CSS
+          if (d._transitive) return null; // transitive keep amber via CSS
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? info.color : null;
+        })
+        .attr('marker-end', d => {
+          if (d._isPath) return 'url(#ws-arrow-path)';
+          if (d._transitive) return 'url(#ws-arrow-path)';
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? 'url(#ws-arrow-' + info.category + ')' : 'url(#ws-arrow)';
+        });
 
       // Via labels for transitive edges
       const viaLabels = gRoot.selectAll('.via-label')
@@ -2669,7 +2803,7 @@ function dashboard() {
       node.append('rect')
         .attr('class', 'node-rect')
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
-        .attr('fill', d => self.layerColor(d.layer) + '20')
+        .attr('fill', d => self.layerColor(d.layer) + '40')
         .attr('stroke', d => self.layerColor(d.layer));
       node.append('text')
         .attr('text-anchor', 'middle').attr('dy', -2).attr('font-size', '10px')
@@ -2715,9 +2849,9 @@ function dashboard() {
       }).on('mouseleave', () => { if (!self.selectedNode) self.highlightNode(null); });
       svg.on('click', () => { self.selectedNode = null; self.highlightNode(null); });
 
-      // --- Layout: Grid (fixed boxes) or Force (floating) ---
-      const useGrid = !isInvestigating && self.wsLayout === 'grid' && groupKeys.length > 0;
-      const useWsDagre = !isInvestigating && self.wsLayout === 'dagre' && typeof dagre !== 'undefined';
+      // --- Layout: Grid (fixed boxes), Dagre (hierarchical) or Force (floating) ---
+      const useGrid = self.wsLayout === 'grid' && groupKeys.length > 0;
+      const useWsDagre = self.wsLayout === 'dagre' && typeof dagre !== 'undefined';
 
       if (useGrid) {
         // GRID LAYOUT: pre-compute fixed box rects, place nodes inside, constrained sim
@@ -2764,7 +2898,7 @@ function dashboard() {
         });
 
         // Draw fixed boxes immediately (draggable — moves all member nodes)
-        const boxColor = groupField === 'layer' ? null : '#3b82f6';
+        const boxColor = groupField === 'layer' ? null : '#6b4423';
         const boxElements = {};
         groupKeys.forEach(gk => {
           const bp = boxPositions[gk];
@@ -2825,10 +2959,11 @@ function dashboard() {
         });
 
         // Static layout — just place everything, no simulation needed
-        link.attr('x1', d => simNodeMap[d.source.id || d.source]?.x || 0)
-          .attr('y1', d => simNodeMap[d.source.id || d.source]?.y || 0)
-          .attr('x2', d => simNodeMap[d.target.id || d.target]?.x || 0)
-          .attr('y2', d => simNodeMap[d.target.id || d.target]?.y || 0);
+        link.attr('d', d => {
+          const sx = simNodeMap[d.source.id || d.source]?.x || 0, sy = simNodeMap[d.source.id || d.source]?.y || 0;
+          const tx = simNodeMap[d.target.id || d.target]?.x || 0, ty = simNodeMap[d.target.id || d.target]?.y || 0;
+          return `M${sx},${sy}L${tx},${ty}`;
+        });
         viaLabels.attr('x', d => {
           const sx = simNodeMap[d.source.id || d.source]?.x || 0;
           const tx = simNodeMap[d.target.id || d.target]?.x || 0;
@@ -2846,8 +2981,7 @@ function dashboard() {
           if (typeof e.source !== 'object') e.source = simNodeMap[e.source] || { x: 0, y: 0 };
           if (typeof e.target !== 'object') e.target = simNodeMap[e.target] || { x: 0, y: 0 };
         });
-        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        link.attr('d', d => `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
         viaLabels
           .attr('x', d => (d.source.x + d.target.x) / 2)
           .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
@@ -2881,10 +3015,10 @@ function dashboard() {
           const bg = boxGroup.append('g').attr('class', 'domain-g');
           bg.append('rect').attr('class', 'domain-box')
             .attr('x', gn.x - gn.width / 2).attr('y', gn.y - gn.height / 2).attr('width', gn.width).attr('height', gn.height)
-            .attr('stroke', groupField === 'layer' ? self.layerColor(gk) : '#3b82f6');
+            .attr('stroke', groupField === 'layer' ? self.layerColor(gk) : '#6b4423');
           bg.append('text').attr('class', 'domain-label')
             .attr('x', gn.x - gn.width / 2 + 10).attr('y', gn.y - gn.height / 2 + 16)
-            .attr('fill', groupField === 'layer' ? self.layerColor(gk) : '#3b82f6')
+            .attr('fill', groupField === 'layer' ? self.layerColor(gk) : '#6b4423')
             .text(gk.toUpperCase());
         });
         // Resolve edge source/target objects and get dagre points
@@ -2917,8 +3051,7 @@ function dashboard() {
 
         sim.on('tick', () => {
           link
-            .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+            .attr('d', d => `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
           viaLabels
             .attr('x', d => (d.source.x + d.target.x) / 2)
             .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
@@ -2928,7 +3061,7 @@ function dashboard() {
           if (groupKeys.length > 0) {
             const padding = 25;
             const labelH2 = 16;
-            const boxColor = groupField === 'layer' ? null : '#3b82f6';
+            const boxColor = groupField === 'layer' ? null : '#6b4423';
             const boxData = groupKeys.map(gk => {
               const members = (groupMap[gk] || []).filter(n => simNodeMap[n.id]);
               if (members.length === 0) return null;
@@ -3012,7 +3145,19 @@ function dashboard() {
     handleDiagramDrop(event) {
       try {
         const node = JSON.parse(event.dataTransfer.getData('text/plain'));
-        if (node && node.node_id) this.addNodeToDiagram(node);
+        if (!node || !node.node_id) return;
+        // Convert drop coordinates to SVG coordinates (accounting for zoom/pan)
+        const container = document.getElementById('diagram-canvas');
+        const svg = container?.querySelector('svg');
+        const gRoot = svg?.querySelector('g');
+        if (svg && gRoot) {
+          const pt = svg.createSVGPoint();
+          pt.x = event.clientX;
+          pt.y = event.clientY;
+          const svgPt = pt.matrixTransform(gRoot.getScreenCTM().inverse());
+          this._diagramPositions[node.node_id] = { x: svgPt.x, y: svgPt.y };
+        }
+        this.addNodeToDiagram(node);
       } catch(e) {}
     },
 
@@ -3043,6 +3188,56 @@ function dashboard() {
       });
       this.diagramSearch = '';
       this.renderDiagram();
+    },
+
+    async saveEdgeCategories() {
+      await fetch('/api/settings/edge-categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.edgeCategories),
+      });
+      this.buildEdgeCategoryLookup();
+      this.renderDiagram();
+    },
+    async resetEdgeCategories() {
+      await fetch('/api/settings/edge-categories', { method: 'DELETE' });
+      const r = await fetch('/api/settings/edge-categories');
+      this.edgeCategories = await r.json();
+      this.buildEdgeCategoryLookup();
+      this.renderDiagram();
+    },
+    startEditCategory(cat) {
+      this.editingCategory = cat;
+      this.editCategoryData = JSON.parse(JSON.stringify(this.edgeCategories[cat]));
+    },
+    saveEditCategory() {
+      if (this.editingCategory && this.editCategoryData) {
+        this.edgeCategories[this.editingCategory] = this.editCategoryData;
+        this.saveEdgeCategories();
+      }
+      this.editingCategory = null;
+      this.editCategoryData = null;
+    },
+    cancelEditCategory() {
+      this.editingCategory = null;
+      this.editCategoryData = null;
+    },
+    addCustomCategory() {
+      const name = prompt('Category name:');
+      if (!name || this.edgeCategories[name]) return;
+      this.edgeCategories[name] = { color: '#888888', types: {} };
+      this.saveEdgeCategories();
+    },
+
+    buildEdgeCategoryLookup() {
+      const lookup = {};
+      for (const [cat, def] of Object.entries(this.edgeCategories)) {
+        for (const [edgeType, shortLabel] of Object.entries(def.types || {})) {
+          lookup[edgeType] = { category: cat, color: def.color, shortLabel };
+        }
+      }
+      this.edgeCategoryLookup = lookup;
+      window._edgeCategoryLookup = this.edgeCategoryLookup;
     },
 
     getDiagramEdgeTypes() {
@@ -3160,7 +3355,7 @@ function dashboard() {
           .attr('stroke', ann?.highlight || self.layerColor(d.layer))
           .attr('stroke-width', ann?.highlight ? 3 : 1.5)
           .style('filter', ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none')
-          .attr('fill', dimmed ? '#f0f0f0' : (self.layerColor(d.layer) + '20'))
+          .attr('fill', dimmed ? '#f0e9dd' : (self.layerColor(d.layer) + '40'))
           .style('opacity', dimmed ? 0.3 : 1);
 
         // Dim text too
@@ -3186,6 +3381,11 @@ function dashboard() {
       svg.selectAll('.edge-line').style('opacity', function(d) {
         if (!hasAny) return 0.6;
         return (highlightedIds.has(d.source.id || d.source) || highlightedIds.has(d.target.id || d.target)) ? 0.8 : 0.1;
+      });
+      svg.selectAll('.edge-short-label').style('opacity', function(d) {
+        if (!hasAny) return 0.8;
+        return (highlightedIds.has(d.source?.id || d.source || d.from_node_id) ||
+                highlightedIds.has(d.target?.id || d.target || d.to_node_id)) ? 0.8 : 0.05;
       });
     },
 
@@ -3254,15 +3454,25 @@ function dashboard() {
       const svg = d3.select(container).append('svg')
         .attr('class', 'graph-svg')
         .style('width', '100%').style('height', '100%');
+      svg.classed('hide-edge-labels', !this.showEdgeLabels);
       const defs = svg.append('defs');
+      // Default gray arrow (fallback for unknown types)
       defs.append('marker').attr('id', 'dia-arrow').attr('viewBox', '0 0 10 10')
         .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
         .attr('orient', 'auto')
         .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
+      // Transitive arrow (amber)
       defs.append('marker').attr('id', 'dia-arrow-transitive').attr('viewBox', '0 0 10 10')
         .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
         .attr('orient', 'auto')
-        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#f59e0b');
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#b8963e');
+      // Per-category arrows
+      for (const [cat, def] of Object.entries(this.edgeCategories)) {
+        defs.append('marker').attr('id', 'dia-arrow-' + cat)
+          .attr('viewBox', '0 0 10 10').attr('refX', 10).attr('refY', 5)
+          .attr('markerWidth', 8).attr('markerHeight', 8).attr('orient', 'auto')
+          .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', def.color);
+      }
 
       const gRoot = svg.append('g');
       svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
@@ -3275,11 +3485,20 @@ function dashboard() {
         .attr('class', d => {
           let cls = 'edge-line';
           if (d._transitive) cls += ' transitive';
-          else if (d.derivation === 'linked' || d.derivation === 'inferred') cls += ' dashed';
+          else if (d.derivation !== 'hard' && d.derivation !== 'linked') cls += ' dashed';
           return cls;
         })
         .attr('fill', 'none')
-        .attr('marker-end', d => d._transitive ? 'url(#dia-arrow-transitive)' : 'url(#dia-arrow)');
+        .attr('stroke', d => {
+          if (d._transitive) return null; // CSS handles transitive color
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? info.color : null; // null falls back to CSS default
+        })
+        .attr('marker-end', d => {
+          if (d._transitive) return 'url(#dia-arrow-transitive)';
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? 'url(#dia-arrow-' + info.category + ')' : 'url(#dia-arrow)';
+        });
 
       // Via labels
       const viaLabels = gRoot.selectAll('.via-label')
@@ -3287,23 +3506,41 @@ function dashboard() {
         .attr('class', 'via-label').attr('text-anchor', 'middle')
         .text(d => d._viaLabel || '');
 
-      // Position edges
+      const shortLabels = gRoot.selectAll('.edge-short-label')
+        .data(simEdges.filter(e => !e._transitive)).join('text')
+        .attr('class', d => {
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return 'edge-short-label';
+        })
+        .attr('fill', d => {
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? info.color : '#b8a898';
+        })
+        .text(d => {
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? info.shortLabel : '';
+        });
+
+      // Position edges: dagre-routed in strict, arc curves in free
       const lineGen = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
       function edgePath(d) {
-        // Use dagre waypoints if available (strict mode)
         if (d._points && d._points.length > 1) return lineGen(d._points);
-        // Free mode: route through a midpoint offset perpendicular to the line
-        const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
-        const mx = (sx + tx) / 2, my = (sy + ty) / 2;
-        const dx = tx - sx, dy = ty - sy;
-        const len = Math.sqrt(dx * dx + dy * dy) || 1;
-        // Offset perpendicular, proportional to distance
-        const off = Math.min(30, len * 0.15);
-        const cx = mx + (-dy / len) * off, cy = my + (dx / len) * off;
-        return lineGen([{x: sx, y: sy}, {x: cx, y: cy}, {x: tx, y: ty}]);
+        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+        const dr = Math.sqrt(dx * dx + dy * dy) * 1.5;
+        return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
       }
       link.attr('d', edgePath);
       viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+
+      // Position short labels at midpoint of each edge path
+      shortLabels.each(function(d) {
+        const pathEl = link.filter(e => e === d).node();
+        if (pathEl) {
+          const len = pathEl.getTotalLength();
+          const mid = pathEl.getPointAtLength(len / 2);
+          d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
+        }
+      });
 
       // Nodes (on top)
       const node = gRoot.selectAll('.node-g')
@@ -3324,6 +3561,14 @@ function dashboard() {
               .attr('d', edgePath);
             viaLabels.filter(e => e.source.id === d.id || e.target.id === d.id)
               .attr('x', e => (e.source.x + e.target.x) / 2).attr('y', e => (e.source.y + e.target.y) / 2 - 6);
+            shortLabels.filter(e => e.source.id === d.id || e.target.id === d.id).each(function(e) {
+              const pathEl = link.filter(p => p === e).node();
+              if (pathEl) {
+                const len = pathEl.getTotalLength();
+                const mid = pathEl.getPointAtLength(len / 2);
+                d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
+              }
+            });
           })
           .on('end', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grab'); })
         );
@@ -3336,7 +3581,7 @@ function dashboard() {
       node.append('rect')
         .attr('class', 'node-rect')
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
-        .attr('fill', d => self.layerColor(d.layer) + '15')
+        .attr('fill', d => self.layerColor(d.layer) + '40')
         .attr('stroke', d => (annotations[d.node_key]?.highlight || self.layerColor(d.layer)))
         .attr('stroke-width', d => annotations[d.node_key]?.highlight ? 3 : 1.5)
         .style('filter', d => annotations[d.node_key]?.highlight ? 'drop-shadow(0 0 8px ' + annotations[d.node_key].highlight + ')' : 'none');
@@ -3353,8 +3598,13 @@ function dashboard() {
         .attr('font-style', 'italic')
         .text(d => { const n = annotations[d.node_key].note; return n.length > 30 ? n.slice(0, 29) + '\u2026' : n; });
 
-      node.on('click', (event, d) => { event.stopPropagation(); self.selectedNode = d; });
-      svg.on('click', () => { self.selectedNode = null; });
+      node.on('click', (event, d) => {
+        event.stopPropagation();
+        const isAlready = d3.select(event.currentTarget).classed('highlighted');
+        self.selectedNode = isAlready ? null : d;
+        self.highlightNode(isAlready ? null : d.id, simEdges);
+      });
+      gRoot.on('click', () => { self.selectedNode = null; self.highlightNode(null, simEdges); });
 
       // Re-apply step annotations after render
       this.$nextTick(() => this.updateDiagramAnnotations());

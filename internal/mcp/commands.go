@@ -105,35 +105,97 @@ Incremental scan (when user says "update the graph" or "rescan changes"):
 5. Call chronicle_admin_url
 6. Summarize: nodes, edges, layers, last scan, discoveries, domain terms, dashboard URL`,
 
-	"diagram": `Live diagram for the user:
+	"diagram": `Live diagram for the user. Use the Diagram Type Catalog below to construct proper diagrams.
 
-IMPORTANT — Node selection priority (less is more):
-  1. Services (layer=service) — ALWAYS start here. Show the big picture first.
-  2. Data models (layer=data) — add only if the question is about data flow or model relationships.
-  3. Controllers/providers (layer=code) — add only when drilling into a specific service's internals.
-  4. Endpoints (layer=contract) — add ONLY if the user specifically asks about API surface or a specific route.
-  Keep diagrams focused: 8-15 nodes is ideal. 20+ nodes becomes noise.
-  NEVER dump the entire graph into a diagram. Pick the nodes that tell the story.
+## How to Create a Diagram
 
-Steps:
-1. Call chronicle_diagram_create(title="descriptive name") — get session_id and URL
-2. Share URL with user: "Open {url} to see the diagram"
-3. Query the graph — pick the RIGHT query for the story:
-   - Service map: chronicle_node_list(layer='service') + chronicle_edge_list (start here!)
-   - Dependency: chronicle_query_deps(node_key, depth=2)
-   - Impact: chronicle_impact(node_key)
-   - Path: chronicle_query_path(from, to)
-4. Filter results — only include nodes that matter for THIS explanation
-5. Build payload: {nodes: [{node_id, node_key, name, layer, node_type}, ...], edges: [{from_node_id, to_node_id, edge_type}, ...]}
-6. Call chronicle_diagram_update(session_id, payload)
-7. Add step-through presentation with chronicle_diagram_annotate:
-   - Use "step" param (0, 1, 2...) to create a guided walkthrough
-   - Each step should highlight 1-3 nodes max with a clear story beat
-   - Include step_title (short) and step_description (1-2 sentences, conversational)
-   - Step descriptions are shown prominently below the diagram — make them count
+1. Identify the diagram type from the user's question (see catalog below)
+2. Call chronicle_diagram_create(title="{Type}: {subject}") — get session_id and URL
+3. Share URL with user: "Open {url} to see the diagram"
+4. Query the graph using the right tool for the diagram type:
+   - System Overview: chronicle_node_list(layer='service') + chronicle_edge_list()
+   - Request Flow: chronicle_query_path(from, to)
+   - Impact Analysis: chronicle_impact(node_key)
+   - Dependency Map: chronicle_query_deps(node_key, depth=1)
+   - Domain Model: chronicle_node_list(layer='data') + chronicle_edge_list(edge_type='REFERENCES_MODEL')
+5. Filter results — only include nodes/edges specified by the diagram type rules
+6. Build payload and call chronicle_diagram_update(session_id, payload)
+7. Add annotations with chronicle_diagram_annotate (see step rules per type)
 8. As conversation evolves, call chronicle_diagram_update again to refine
 
-Diagram types: service map, dependency, impact, path, custom (explanatory)`,
+## Diagram Type Catalog
+
+### Type 1: System Overview
+Trigger: "show architecture", "show services", "how does the system work"
+Nodes: All service-layer nodes + contract:topic nodes (async channels only, NO endpoints)
+Edges: CALLS_SERVICE, PUBLISHES_TOPIC, CONSUMES_TOPIC
+Styling: Layer-level — services (#ef4444), topics (#10b981)
+Steps: Single step (total_steps=1). Annotate the central orchestrating service.
+Title: "Overview: {project name} Architecture"
+Description: Summarize how many services and communication patterns (sync/async).
+Node cap: 5-10. If >10 services, show only primary ones.
+
+### Type 2: Request Flow
+Trigger: "how does X flow to Y", "trace a request", "explain how X calls Y"
+Nodes: Only nodes on the request path — controllers, providers, endpoints, services crossed.
+  Optional: include data models if a provider on the path uses one (USES_MODEL).
+Edges: INJECTS, CALLS_SERVICE, CALLS_ENDPOINT, EXPOSES_ENDPOINT, USES_MODEL (optional)
+Styling: Node-type-level — controllers/providers (#3b82f6), endpoints (#10b981), services (#ef4444), models (#8b5cf6)
+Steps: Multi-step walkthrough. Each step advances one hop:
+  - Step 0: Entry point (endpoint + controller). Highlight: #f59e0b. Dim all others.
+  - Step 1..N-1: Each injection or cross-service call. Highlight active nodes, dim inactive.
+  - Step N: Arrival at destination.
+  step_title: short imperative ("Entry Point", "Cross-Service Call", "Arrival")
+  step_description: explain what happens at this hop and why
+Title: "Flow: {entry} -> {destination}"
+Node cap: 8-12. Only the direct path, no tangential deps.
+
+### Type 3: Impact Analysis
+Trigger: "what breaks if I change X", "blast radius of X"
+Nodes: Start from changed node, traverse INCOMING edges transitively. Stop at 3 hops or 15 nodes.
+Edges: USES_MODEL, INJECTS, EXPOSES_ENDPOINT, REFERENCES_MODEL — anything pointing TO the changed node.
+Styling: Heat map by distance from change:
+  - Distance 0 (changed): highlight="#ef4444"
+  - Distance 1 (direct): highlight="#f59e0b"
+  - Distance 2+ (ripple): highlight="#eab308"
+Steps: Multi-step, one per distance level:
+  - Step 0 "The Change": highlight changed node + co-affected (e.g. referenced models). Dim all others.
+  - Step 1 "Direct Impact": reveal distance-1 nodes, explain WHY each is affected.
+  - Step 2 "Ripple Effect": reveal distance-2 nodes, show full blast radius.
+  step_description: explain WHY each layer is affected, not just that it is.
+Title: "Impact: Changing {node name}"
+Node cap: 12-15.
+
+### Type 4: Dependency Map
+Trigger: "what does X depend on", "dependencies of X"
+Nodes: Subject node + all nodes reachable via outgoing edges (1 hop). Include called endpoints.
+Edges: CALLS_SERVICE, CALLS_ENDPOINT, USES_MODEL, PUBLISHES_TOPIC, CONSUMES_TOPIC, INJECTS (if code-level subject)
+Styling: Node-type-level — services (#ef4444), models (#8b5cf6), topics (#10b981), endpoints (#10b981)
+Steps: Single step. Annotate the subject node with its role.
+Title: "Dependencies: {node name}"
+Description: Summarize dependency profile — how many services, models, async channels.
+Node cap: 10-15. If many endpoints, show only the ones actually called.
+
+### Type 5: Domain Model
+Trigger: "show data models", "show entities", "show schema"
+Nodes: All data:model nodes. Enums are LOW PRIORITY — only include if user asks or total <10 nodes.
+Edges: REFERENCES_MODEL only.
+Styling: Node-type-level — models (#8b5cf6), enums (#8b5cf6 with note "enum")
+Steps: Single step. Annotate models that span service boundaries.
+Title: "Domain: {project name} Data Models"
+Description: Summarize count of models and which services own what.
+Node cap: All data models (typically <20).
+
+## Cross-cutting Rules (apply to ALL types)
+
+- NEVER exceed 15 nodes. Filter aggressively — prioritize nodes that answer the question.
+- Every diagram MUST annotate the focal node(s) explaining WHY they matter.
+- Only include edge types specified by the diagram type. No CONTAINS in flow diagrams, no INJECTS in overviews.
+- For multi-step: all nodes present from start but dimmed. Steps reveal progressively.
+- Step descriptions: write as if narrating to someone unfamiliar with the codebase.
+- Node payload must include: node_id, node_key, name, layer, node_type.
+- Highlight colors must match the diagram type visual language.
+- When in doubt, use single step. Multi-step only when there's a clear sequential narrative.`,
 
 	"help": `Show all available Chronicle commands:
 - /chronicle-scan — Full project scan
