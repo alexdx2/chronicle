@@ -2859,14 +2859,16 @@ function dashboard() {
             d.x = event.x; d.y = event.y;
             d.fx = event.x; d.fy = event.y;
             if (d._manual) { const w = self.workspaceNodes.find(w2 => w2.node_id === d.id); if (w) { w.x = d.x; w.y = d.y; } }
-            // In grid mode (no sim), update positions directly
+            // In grid/dagre mode (no sim), update positions directly
             if (!sim) {
               d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
-              link.attr('x1', e => e.source.x).attr('y1', e => e.source.y)
-                .attr('x2', e => e.target.x).attr('y2', e => e.target.y);
+              // Recalculate edge paths — dagre waypoints are stale after drag, use straight lines
+              link.filter(e => (e.source.id || e.source) === d.id || (e.target.id || e.target) === d.id)
+                .attr('d', e => `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`);
               viaLabels.attr('x', e => (e.source.x + e.target.x) / 2)
                 .attr('y', e => (e.source.y + e.target.y) / 2 - 6);
-              shortLabels.attr('x', e => (e.source.x + e.target.x) / 2)
+              shortLabels.filter(e => (e.source.id || e.source) === d.id || (e.target.id || e.target) === d.id)
+                .attr('x', e => (e.source.x + e.target.x) / 2)
                 .attr('y', e => (e.source.y + e.target.y) / 2 - 4);
             }
           })
