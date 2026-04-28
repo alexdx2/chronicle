@@ -535,7 +535,9 @@ a{color:var(--primary);text-decoration:none}
         <div class="mode-toggle">
           <button class="mode-btn" :class="{active:wsLayout==='strict'}" @click="wsLayout='strict';_wsPositionCache={};renderWorkspace()" title="Dagre recomputes layout each render">Strict</button>
           <button class="mode-btn" :class="{active:wsLayout==='free'}" @click="wsLayout='free';renderWorkspace()" title="Positions persist between renders">Free</button>
-          <button class="mode-btn" @click="_wsPositionCache={};renderWorkspace()" title="Re-run dagre layout">Layout</button>
+          <template x-if="wsLayout==='free'">
+            <button class="mode-btn" @click="_wsPositionCache={};renderWorkspace()" title="Re-run dagre layout" style="font-size:14px;padding:4px 6px">&#x21bb;</button>
+          </template>
         </div>
       </template>
 
@@ -783,6 +785,12 @@ a{color:var(--primary);text-decoration:none}
                      :checked="showEdgeLabels"
                      @change="showEdgeLabels=!showEdgeLabels;renderGraph()">
               <span>Edge labels</span>
+            </label>
+            <label>
+              <input type="checkbox"
+                     :checked="wsShowNeighbors"
+                     @change="wsShowNeighbors=!wsShowNeighbors;renderGraph()">
+              <span>Show linked nodes</span>
             </label>
           </div>
 
@@ -1276,6 +1284,7 @@ function dashboard() {
     editingCategory: null,    // category name being edited, or null
     editCategoryData: null,   // temp copy of the category being edited
     showEdgeLabels: true,     // global toggle for short labels
+    wsShowNeighbors: true,    // show grayed linked nodes in workspace
     hiddenDomains: [],        // string[] of domain_key values
     minConfidence: 0,
     // Only these types produce transitive edges when hidden; others just disappear
@@ -2694,13 +2703,15 @@ function dashboard() {
             pathEdgeKeys.add(p.path[i + 1] + '->' + p.path[i]);
           }
         });
-        this.workspaceNodes.filter(w => w.manual).forEach(w => {
-          filtered.edges.forEach(e => {
-            if (e.from_node_id === w.node_id && !canvasNodeIds.has(e.to_node_id)) neighborIds.add(e.to_node_id);
-            if (e.to_node_id === w.node_id && !canvasNodeIds.has(e.from_node_id)) neighborIds.add(e.from_node_id);
+        if (this.wsShowNeighbors) {
+          this.workspaceNodes.filter(w => w.manual).forEach(w => {
+            filtered.edges.forEach(e => {
+              if (e.from_node_id === w.node_id && !canvasNodeIds.has(e.to_node_id)) neighborIds.add(e.to_node_id);
+              if (e.to_node_id === w.node_id && !canvasNodeIds.has(e.from_node_id)) neighborIds.add(e.from_node_id);
+            });
           });
-        });
-        neighborIds.forEach(nId => canvasNodeIds.add(nId));
+          neighborIds.forEach(nId => canvasNodeIds.add(nId));
+        }
 
         graphNodes = [...canvasNodeIds].map(nId => {
           const n = nodeById[nId];
