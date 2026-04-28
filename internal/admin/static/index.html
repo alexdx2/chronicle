@@ -533,9 +533,8 @@ a{color:var(--primary);text-decoration:none}
       <!-- Workspace layout toggle (always available, including diagram mode) -->
       <template x-if="graphMode==='workspace'">
         <div class="mode-toggle">
-          <button class="mode-btn" :class="{active:wsLayout==='grid'}" @click="wsLayout='grid';renderWorkspace()">Grid</button>
-          <button class="mode-btn" :class="{active:wsLayout==='dagre'}" @click="wsLayout='dagre';renderWorkspace()">Dagre</button>
-          <button class="mode-btn" :class="{active:wsLayout==='force'}" @click="wsLayout='force';renderWorkspace()">Force</button>
+          <button class="mode-btn" :class="{active:wsLayout==='strict'}" @click="wsLayout='strict';_wsPositionCache={};renderWorkspace()">Strict</button>
+          <button class="mode-btn" :class="{active:wsLayout==='free'}" @click="wsLayout='free';renderWorkspace()">Free</button>
         </div>
       </template>
 
@@ -1259,7 +1258,7 @@ function dashboard() {
     hideStructural: false,
     // Workspace
     groupByField: 'domain_key',
-    wsLayout: 'dagre',  // 'grid', 'dagre', or 'force'
+    wsLayout: 'strict',  // 'strict' or 'free'
     wsDataSource: 'graph', // 'graph' or 'diagram'
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
     filterSidebarOpen: false,
