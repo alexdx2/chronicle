@@ -30,6 +30,8 @@ type EvidenceRow struct {
 	Confidence       float64 `json:"confidence"`
 	EvidenceStatus   string  `json:"evidence_status"`
 	EvidencePolarity string  `json:"evidence_polarity"`
+	EvidenceUID              string `json:"evidence_uid,omitempty"`
+	ContextID                int64  `json:"context_id,omitempty"`
 	ValidFromRevisionID      int64  `json:"valid_from_revision_id,omitempty"`
 	ValidToRevisionID        int64  `json:"valid_to_revision_id,omitempty"`
 	LastVerifiedRevisionID   int64  `json:"last_verified_revision_id,omitempty"`
@@ -120,8 +122,9 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		   extractor_id, extractor_version, ast_rule, snippet_hash, commit_sha,
 		   confidence, evidence_status, evidence_polarity,
 		   valid_from_revision_id, last_verified_revision_id,
+		   context_id, evidence_uid,
 		   metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`
 	res, err := s.db.Exec(insQ,
 		e.TargetKind, nodeID, edgeID,
@@ -134,6 +137,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		nullableStr(e.ASTRule), nullableStr(e.SnippetHash), nullableStr(e.CommitSHA),
 		e.Confidence, status, polarity,
 		nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ValidFromRevisionID),
+		nullableInt64(e.ContextID), nullableStr(e.EvidenceUID),
 		e.Metadata,
 	)
 	if err != nil {
@@ -301,6 +305,159 @@ func (s *Store) StaleFilePaths() ([]string, error) {
 		out = append(out, fp)
 	}
 	return out, rows.Err()
+}
+
+// MarkEvidenceStaleByFilesVersioned is the immutable version of MarkEvidenceStaleByFiles.
+// Instead of updating evidence status in place, it closes old evidence rows (sets valid_to_revision_id)
+// and inserts new rows with 'stale' status.
+func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID, contextID int64) (staleCount int64, affectedNodeIDs, affectedEdgeIDs []int64, err error) {
+	if len(filePaths) == 0 {
+		return 0, nil, nil, nil
+	}
+
+	// Build placeholders.
+	placeholders := ""
+	args := make([]any, len(filePaths))
+	for i, fp := range filePaths {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args[i] = fp
+	}
+
+	// SELECT all current valid evidence rows from those files.
+	selQ := `SELECT evidence_id, target_kind,
+	         COALESCE(node_id,0), COALESCE(edge_id,0),
+	         source_kind,
+	         COALESCE(repo_name,''), COALESCE(file_path,''),
+	         COALESCE(line_start,0), COALESCE(line_end,0),
+	         COALESCE(column_start,0), COALESCE(column_end,0),
+	         COALESCE(locator,''),
+	         extractor_id, extractor_version,
+	         COALESCE(ast_rule,''), COALESCE(snippet_hash,''), COALESCE(commit_sha,''),
+	         confidence, evidence_polarity,
+	         COALESCE(evidence_uid,''),
+	         COALESCE(metadata,'{}')
+	    FROM graph_evidence
+	    WHERE file_path IN (` + placeholders + `)
+	      AND evidence_status IN ('valid','revalidated')
+	      AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)`
+
+	rows, err := s.db.Query(selQ, args...)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned select: %w", err)
+	}
+	defer rows.Close()
+
+	type evidenceInfo struct {
+		id               int64
+		targetKind       string
+		nodeID, edgeID   int64
+		sourceKind       string
+		repoName         string
+		filePath         string
+		lineStart        int
+		lineEnd          int
+		columnStart      int
+		columnEnd        int
+		locator          string
+		extractorID      string
+		extractorVersion string
+		astRule          string
+		snippetHash      string
+		commitSHA        string
+		confidence       float64
+		polarity         string
+		evidenceUID      string
+		metadata         string
+	}
+
+	var found []evidenceInfo
+	for rows.Next() {
+		var e evidenceInfo
+		if err := rows.Scan(
+			&e.id, &e.targetKind, &e.nodeID, &e.edgeID,
+			&e.sourceKind, &e.repoName, &e.filePath,
+			&e.lineStart, &e.lineEnd, &e.columnStart, &e.columnEnd,
+			&e.locator, &e.extractorID, &e.extractorVersion,
+			&e.astRule, &e.snippetHash, &e.commitSHA,
+			&e.confidence, &e.polarity, &e.evidenceUID,
+			&e.metadata,
+		); err != nil {
+			return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned scan: %w", err)
+		}
+		found = append(found, e)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned rows: %w", err)
+	}
+
+	nodeSet := map[int64]bool{}
+	edgeSet := map[int64]bool{}
+
+	for _, e := range found {
+		// Close old row.
+		_, err := s.db.Exec(`UPDATE graph_evidence SET valid_to_revision_id = ? WHERE evidence_id = ?`,
+			revisionID, e.id)
+		if err != nil {
+			return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned close: %w", err)
+		}
+
+		// Insert new stale version.
+		var nodeID, edgeID *int64
+		if e.targetKind == "node" && e.nodeID != 0 {
+			nodeID = &e.nodeID
+		}
+		if e.targetKind == "edge" && e.edgeID != 0 {
+			edgeID = &e.edgeID
+		}
+
+		const insQ = `
+			INSERT INTO graph_evidence
+			  (target_kind, node_id, edge_id, source_kind, repo_name, file_path,
+			   line_start, line_end, column_start, column_end, locator,
+			   extractor_id, extractor_version, ast_rule, snippet_hash, commit_sha,
+			   confidence, evidence_status, evidence_polarity, evidence_uid,
+			   valid_from_revision_id, context_id,
+			   metadata)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		`
+		_, err = s.db.Exec(insQ,
+			e.targetKind, nodeID, edgeID,
+			e.sourceKind,
+			nullableStr(e.repoName), nullableStr(e.filePath),
+			nullableInt(e.lineStart), nullableInt(e.lineEnd),
+			nullableInt(e.columnStart), nullableInt(e.columnEnd),
+			nullableStr(e.locator),
+			e.extractorID, e.extractorVersion,
+			nullableStr(e.astRule), nullableStr(e.snippetHash), nullableStr(e.commitSHA),
+			e.confidence, "stale", e.polarity, nullableStr(e.evidenceUID),
+			revisionID, nullableInt64(contextID),
+			e.metadata,
+		)
+		if err != nil {
+			return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned insert: %w", err)
+		}
+
+		staleCount++
+
+		if e.nodeID != 0 {
+			nodeSet[e.nodeID] = true
+		}
+		if e.edgeID != 0 {
+			edgeSet[e.edgeID] = true
+		}
+	}
+
+	for id := range nodeSet {
+		affectedNodeIDs = append(affectedNodeIDs, id)
+	}
+	for id := range edgeSet {
+		affectedEdgeIDs = append(affectedEdgeIDs, id)
+	}
+
+	return staleCount, affectedNodeIDs, affectedEdgeIDs, nil
 }
 
 // nullableInt returns nil for zero ints so they're stored as NULL.
