@@ -3041,14 +3041,6 @@ function dashboard() {
           });
         }
 
-        // Store dagre group positions for box rendering
-        if (useCompound) {
-          config._dagreGroups = {};
-          groups.keys.forEach(gk => {
-            const gn = gDag.node('group_' + gk);
-            if (gn) config._dagreGroups[gk] = gn;
-          });
-        }
       }
 
       // Build sim edges
@@ -3092,23 +3084,39 @@ function dashboard() {
       });
       svg.call(zoomBehavior);
 
-      // --- Group bounding boxes (behind everything) ---
+      // --- Group bounding boxes (behind everything, computed from node positions) ---
       const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
-      if (config._dagreGroups && groups.keys.length > 0) {
-        groups.keys.forEach(gk => {
-          const gn = config._dagreGroups[gk];
-          if (!gn) return;
+      function updateGroupBoxes() {
+        if (groups.keys.length === 0) return;
+        const padding = 25;
+        const labelH = 18;
+        const boxData = groups.keys.map(gk => {
+          const members = (groups.map[gk] || []).map(n => simNodeMap[n.node_id]).filter(Boolean);
+          if (members.length === 0) return null;
+          const minX = d3.min(members, d => d.x) - 50 - padding;
+          const maxX = d3.max(members, d => d.x) + 50 + padding;
+          const minY = d3.min(members, d => d.y) - 20 - padding - labelH;
+          const maxY = d3.max(members, d => d.y) + 20 + padding;
           const color = groups.field === 'layer' ? self.layerColor(gk) : '#6b4423';
-          const bg = boxGroup.append('g').attr('class', 'domain-g');
-          bg.append('rect').attr('class', 'domain-box')
-            .attr('x', gn.x - gn.width / 2).attr('y', gn.y - gn.height / 2)
-            .attr('width', gn.width).attr('height', gn.height)
-            .attr('stroke', color);
-          bg.append('text').attr('class', 'domain-label')
-            .attr('x', gn.x - gn.width / 2 + 10).attr('y', gn.y - gn.height / 2 + 16)
-            .attr('fill', color).text(gk.toUpperCase());
-        });
+          return { gk, x: minX, y: minY, w: maxX - minX, h: maxY - minY, color };
+        }).filter(Boolean);
+
+        const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
+        const enter = boxes.enter().append('g').attr('class', 'domain-g');
+        enter.append('rect').attr('class', 'domain-box');
+        enter.append('text').attr('class', 'domain-label');
+        const merged = enter.merge(boxes);
+        merged.select('.domain-box')
+          .attr('x', d => d.x).attr('y', d => d.y)
+          .attr('width', d => d.w).attr('height', d => d.h)
+          .attr('stroke', d => d.color);
+        merged.select('.domain-label')
+          .attr('x', d => d.x + 10).attr('y', d => d.y + 14)
+          .attr('fill', d => d.color)
+          .text(d => d.gk.toUpperCase());
+        boxes.exit().remove();
       }
+      updateGroupBoxes();
 
       // --- Edges ---
       const link = gRoot.selectAll('.edge-line')
@@ -3259,6 +3267,7 @@ function dashboard() {
               d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
             }
           });
+          updateGroupBoxes();
         })
         .on('end', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grab'); })
       );
@@ -3278,18 +3287,7 @@ function dashboard() {
         if (config.callbacks?.onBackgroundClick) config.callbacks.onBackgroundClick(simEdges);
       });
 
-      // Auto-fit: zoom to show all content with padding
-      const bbox = gRoot.node().getBBox();
-      if (bbox.width > 0 && bbox.height > 0) {
-        const pad = 40;
-        const svgEl = svg.node();
-        const svgW = svgEl.clientWidth || width;
-        const svgH = svgEl.clientHeight || height;
-        const scale = Math.min(svgW / (bbox.width + pad * 2), svgH / (bbox.height + pad * 2), 1.5);
-        const tx = svgW / 2 - (bbox.x + bbox.width / 2) * scale;
-        const ty = svgH / 2 - (bbox.y + bbox.height / 2) * scale;
-        svg.call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
-      }
+      // No auto-fit — keep camera stable
 
       return { svg, gRoot, link, node, shortLabels, viaLabels, simEdges, simNodes, simNodeMap };
     },
