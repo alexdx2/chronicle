@@ -23,7 +23,8 @@ var CommandInstructions = map[string]string{
 1. Call chronicle_get_discoveries to learn from previous scans
 2. Call chronicle_extraction_guide for methodology
 3. Auto-discover project, save manifest
-4. Create revision
+3.5. Call chronicle_resolve_context(domain) — if no context exists, it auto-creates "main"
+4. Create revision (include context_id)
 5. Scan in passes: data models → code structure → contracts/endpoints → cross-service edges
 6. For each file: read → extract → chronicle_import_all immediately (max 10-15 nodes per call)
 7. Snapshot + stale mark
@@ -213,18 +214,19 @@ Context management tools (called directly, not via commands):
 
 	"update": `Incremental graph update — rescan only files changed since the last scan:
 
-1. Call chronicle_scan_status to get the current domain and latest revision info
-2. Get the last scan's git SHA:
-   - If a previous revision exists, use its git_after_sha as before_sha
-   - If no previous revision, tell the user to run "chronicle scan" first (a full scan is needed as baseline)
+1. Call chronicle_resolve_context(domain) to get current context
+   - If no context and on a non-main branch, call chronicle_context_create to create one
+   - If no context and no previous scan, tell user to run "chronicle scan" first
+2. Get last revision in current context → before_sha (from context's head_commit_sha)
 3. Get current HEAD: run git rev-parse HEAD → this is after_sha
 4. If before_sha == after_sha, tell the user "Graph is up to date — no changes since last scan" and stop
 5. Run git diff --name-only {before_sha} {after_sha} to get the list of changed files
    - If no files changed, tell the user and stop
 6. Create an incremental revision:
-   chronicle_revision_create(domain, mode="incremental", before_sha, after_sha, trigger_kind="manual")
+   chronicle_revision_create(domain, context_id, mode="incremental", before_sha, after_sha, trigger_kind="manual")
 7. Invalidate changed files:
    chronicle_invalidate_changed(domain, revision_id, changed_files as JSON array)
+   → closes old evidence validity, inserts stale versions, writes changelog
    → returns stale_evidence count and files_to_rescan
 8. Read ONLY the files listed in files_to_rescan (skip deleted files)
 9. For each file: extract nodes/edges following chronicle_extraction_guide methodology

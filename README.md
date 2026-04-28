@@ -25,6 +25,8 @@ AI coding assistants are stateless. Every conversation starts from zero — Clau
 
 **Incremental updates via git diff.** After the first full scan, Chronicle tracks what changed. Say `chronicle scan` again and it runs an incremental update: `git diff` to find changed files, invalidate stale evidence, re-scan only what moved. The graph stays fresh with minimal work — every commit makes it smarter, not slower.
 
+**Branch-aware.** Chronicle tracks knowledge per git branch. Scan on `feature/payments` and the knowledge stays isolated from `main`. Switch branches and queries automatically show the right context — no manual configuration. When the branch merges, a simple `chronicle update` on main picks up the changes.
+
 **Evidence-backed trust.** Every fact in the graph has provenance — file path, line number, confidence score, derivation kind (hard from AST, linked by convention, inferred). When code changes, evidence gets re-evaluated. Stale facts lose trust. Fresh scans add new evidence. The graph doesn't just remember — it knows how much to trust what it remembers.
 
 ## How It Works
@@ -118,12 +120,15 @@ Or if you already have the dashboard running — paste the path to `fixtures/tom
 | Say this | What happens |
 |---|---|
 | `chronicle scan` | Full project scan — models, code, endpoints, services |
+| `chronicle update` | Incremental update — rescan only files changed since last scan via git diff |
 | `chronicle impact X` | What breaks if I change X? |
 | `chronicle deps X` | What depends on X? |
 | `chronicle path A B` | How does A connect to B? |
 | `chronicle data` | Analyze data models |
+| `chronicle flows` | Business use case analysis — end-to-end processes |
 | `chronicle services` | Service architecture map |
 | `chronicle language` | Domain glossary + violations |
+| `chronicle diagram` | Live architecture diagram in the browser |
 | `chronicle status` | Dashboard URL + graph stats |
 
 Full CLI reference with all subcommands, flags, and data model: **[docs/cli.md](docs/cli.md)**
