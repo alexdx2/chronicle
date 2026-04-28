@@ -3114,7 +3114,16 @@ function dashboard() {
         });
         link.attr('d', d => d._points?.length > 1 ? dagreLineGen(d._points) : `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
         viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
-        shortLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 4);
+        shortLabels.each(function(d) {
+          const pathEl = link.filter(e => e === d).node();
+          if (pathEl) {
+            const len = pathEl.getTotalLength();
+            const mid = pathEl.getPointAtLength(len / 2);
+            d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
+          } else {
+            d3.select(this).attr('x', (d.source.x + d.target.x) / 2).attr('y', (d.source.y + d.target.y) / 2 - 4);
+          }
+        });
         node.attr('transform', d => `translate(${d.x},${d.y})`);
 
       } else {
