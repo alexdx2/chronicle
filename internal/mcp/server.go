@@ -58,6 +58,11 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(diagramCreateTool(), diagramCreateHandler())
 	s.AddTool(diagramUpdateTool(), diagramUpdateHandler())
 	s.AddTool(diagramAnnotateTool(), diagramAnnotateHandler())
+	s.AddTool(resolveContextTool(), resolveContextHandler(g))
+	s.AddTool(contextListTool(), contextListHandler(g))
+	s.AddTool(contextCreateTool(), contextCreateHandler(g))
+	s.AddTool(contextArchiveTool(), contextArchiveHandler(g))
+	s.AddTool(changelogQueryTool(), changelogQueryHandler(g))
 
 	return s
 }
@@ -1380,5 +1385,171 @@ func diagramAnnotateHandler() server.ToolHandlerFunc {
 		var result map[string]any
 		json.NewDecoder(resp.Body).Decode(&result)
 		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_resolve_context
+// ---------------------------------------------------------------------------
+
+func resolveContextTool() mcp.Tool {
+	return mcp.NewTool("chronicle_resolve_context",
+		mcp.WithDescription("Resolve the main knowledge context for a domain. Call this at the start of a conversation to determine which context to use for queries. Returns the context matching the 'main' git ref."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func resolveContextHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+
+		c, err := g.Store().GetContextByRef(domain, "main")
+		if err != nil {
+			return jsonResult(map[string]any{
+				"context": nil,
+				"message": "No context found. Run chronicle scan first.",
+			}), nil
+		}
+		return jsonResult(map[string]any{
+			"context_id":       c.ContextID,
+			"context_name":     c.Name,
+			"head_revision_id": c.HeadRevisionID,
+			"head_commit_sha":  c.HeadCommitSHA,
+			"status":           c.Status,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_context_list
+// ---------------------------------------------------------------------------
+
+func contextListTool() mcp.Tool {
+	return mcp.NewTool("chronicle_context_list",
+		mcp.WithDescription("List all knowledge contexts for a domain. Returns contexts with their status, head revision, and git ref."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func contextListHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+
+		contexts, err := g.Store().ListContexts(domain)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(contexts), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_context_create
+// ---------------------------------------------------------------------------
+
+func contextCreateTool() mcp.Tool {
+	return mcp.NewTool("chronicle_context_create",
+		mcp.WithDescription("Create a new knowledge context for a domain. Use this to create branch-specific contexts for isolated graph work. Optionally fork from an existing context by providing base_context_id and base_revision_id."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Context name (e.g. 'main', 'feature/auth-refactor')")),
+		mcp.WithString("git_ref", mcp.Required(), mcp.Description("Git ref this context tracks (e.g. 'main', 'feature/auth')")),
+		mcp.WithNumber("base_context_id", mcp.Description("Context ID to fork from (optional)")),
+		mcp.WithNumber("base_revision_id", mcp.Description("Revision ID to fork from (optional)")),
+	)
+}
+
+func contextCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		name := strParam(args, "name")
+		gitRef := strParam(args, "git_ref")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		if name == "" {
+			return errorResult(fmt.Errorf("name is required")), nil
+		}
+		if gitRef == "" {
+			return errorResult(fmt.Errorf("git_ref is required")), nil
+		}
+
+		baseContextID := int64Param(args, "base_context_id")
+		baseRevisionID := int64Param(args, "base_revision_id")
+
+		id, err := g.Store().CreateContext(domain, name, gitRef, baseContextID, baseRevisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"context_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_context_archive
+// ---------------------------------------------------------------------------
+
+func contextArchiveTool() mcp.Tool {
+	return mcp.NewTool("chronicle_context_archive",
+		mcp.WithDescription("Archive a knowledge context. Archived contexts are no longer active but their data is preserved. Use when a branch is merged or abandoned."),
+		mcp.WithNumber("context_id", mcp.Required(), mcp.Description("Context ID to archive")),
+	)
+}
+
+func contextArchiveHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		contextID := int64Param(args, "context_id")
+		if contextID == 0 {
+			return errorResult(fmt.Errorf("context_id is required")), nil
+		}
+
+		err := g.Store().ArchiveContext(contextID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"archived": true}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_changelog_query
+// ---------------------------------------------------------------------------
+
+func changelogQueryTool() mcp.Tool {
+	return mcp.NewTool("chronicle_changelog_query",
+		mcp.WithDescription("Query the changelog for a context. Returns a list of changes (node/edge creates, updates, deletes) with optional filters on entity key and revision range. Use to see what changed between revisions."),
+		mcp.WithNumber("context_id", mcp.Required(), mcp.Description("Context ID to query changelog for")),
+		mcp.WithString("entity_key", mcp.Description("Filter by entity key (node_key or edge_key)")),
+		mcp.WithNumber("from_revision", mcp.Description("Include only changes from this revision onward")),
+		mcp.WithNumber("to_revision", mcp.Description("Include only changes up to this revision")),
+	)
+}
+
+func changelogQueryHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		contextID := int64Param(args, "context_id")
+		if contextID == 0 {
+			return errorResult(fmt.Errorf("context_id is required")), nil
+		}
+
+		entityKey := strParam(args, "entity_key")
+		fromRevision := int64Param(args, "from_revision")
+		toRevision := int64Param(args, "to_revision")
+
+		entries, err := g.Store().QueryChangelog(contextID, entityKey, fromRevision, toRevision)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(entries), nil
 	}
 }

@@ -13,6 +13,7 @@ var UserCommands = map[string]string{
 	"flows":    "Analyze business use cases — what the system does, end-to-end processes",
 	"services": "Analyze service architecture — cross-service deps, API surface",
 	"status":   "Show current graph state — nodes, edges, layers, last scan",
+	"update":  "Incremental update — rescan only changed files since last scan via git diff",
 	"help":    "Show available Chronicle commands",
 	"diagram": "Show a live diagram to explain architecture",
 }
@@ -30,15 +31,7 @@ var CommandInstructions = map[string]string{
 9. Report discoveries
 
 Incremental scan (when user says "update the graph" or "rescan changes"):
-1. git diff to find changed files
-2. chronicle_revision_create(mode="incremental", before_sha, after_sha)
-3. chronicle_invalidate_changed(domain, revision_id, changed_files as JSON array)
-   → returns stale_evidence count and files_to_rescan
-4. Read ONLY the files listed in files_to_rescan
-5. chronicle_import_all for re-extracted facts (positive evidence)
-6. For facts confirmed removed: create negative evidence via chronicle_evidence_add(polarity="negative")
-7. chronicle_finalize_incremental_scan(domain, revision_id)
-8. chronicle_snapshot_create`,
+→ Use the "update" command instead.`,
 
 	"data": `Analyze data models:
 1. Call chronicle_extraction_guide(technology='prisma')
@@ -204,7 +197,41 @@ Node cap: All data models (typically <20).
 - /chronicle-impact — Change impact analysis
 - /chronicle-deps — Dependency analysis
 - /chronicle-path — Find paths between nodes
+- /chronicle-flows — Business use case analysis
 - /chronicle-services — Service architecture
+- /chronicle-update — Incremental update (changed files only)
+- /chronicle-diagram — Live architecture diagram
 - /chronicle-status — Current graph state
-- /chronicle-help — This help`,
+- /chronicle-help — This help
+
+Context management tools (called directly, not via commands):
+- chronicle_resolve_context — Resolve the main context for a domain
+- chronicle_context_list — List all contexts for a domain
+- chronicle_context_create — Create a new branch context
+- chronicle_context_archive — Archive a context
+- chronicle_changelog_query — Query changelog for a context`,
+
+	"update": `Incremental graph update — rescan only files changed since the last scan:
+
+1. Call chronicle_scan_status to get the current domain and latest revision info
+2. Get the last scan's git SHA:
+   - If a previous revision exists, use its git_after_sha as before_sha
+   - If no previous revision, tell the user to run "chronicle scan" first (a full scan is needed as baseline)
+3. Get current HEAD: run git rev-parse HEAD → this is after_sha
+4. If before_sha == after_sha, tell the user "Graph is up to date — no changes since last scan" and stop
+5. Run git diff --name-only {before_sha} {after_sha} to get the list of changed files
+   - If no files changed, tell the user and stop
+6. Create an incremental revision:
+   chronicle_revision_create(domain, mode="incremental", before_sha, after_sha, trigger_kind="manual")
+7. Invalidate changed files:
+   chronicle_invalidate_changed(domain, revision_id, changed_files as JSON array)
+   → returns stale_evidence count and files_to_rescan
+8. Read ONLY the files listed in files_to_rescan (skip deleted files)
+9. For each file: extract nodes/edges following chronicle_extraction_guide methodology
+   → chronicle_import_all for re-extracted facts (positive evidence, max 10-15 nodes per call)
+10. For relationships confirmed removed (e.g. deleted imports, removed dependencies):
+    create negative evidence via chronicle_evidence_add(polarity="negative")
+11. Finalize: chronicle_finalize_incremental_scan(domain, revision_id)
+12. Snapshot: chronicle_snapshot_create(domain, revision_id)
+13. Report summary: files scanned, nodes/edges updated, evidence revalidated vs still stale`,
 }
