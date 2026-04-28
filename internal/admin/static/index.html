@@ -3087,6 +3087,10 @@ function dashboard() {
       }
 
       const gRoot = svg.append('g');
+      const zoomBehavior = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
+        gRoot.attr('transform', event.transform);
+      });
+      svg.call(zoomBehavior);
 
       // --- Group bounding boxes (behind everything) ---
       const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
@@ -3284,10 +3288,6 @@ function dashboard() {
         const scale = Math.min(svgW / (bbox.width + pad * 2), svgH / (bbox.height + pad * 2), 1.5);
         const tx = svgW / 2 - (bbox.x + bbox.width / 2) * scale;
         const ty = svgH / 2 - (bbox.y + bbox.height / 2) * scale;
-        const zoomBehavior = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
-          gRoot.attr('transform', event.transform);
-        });
-        svg.call(zoomBehavior);
         svg.call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
       }
 
