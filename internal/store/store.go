@@ -120,7 +120,80 @@ func (s *Store) migrate() error {
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_evidence_uid ON graph_evidence(evidence_uid)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_from_node_key ON graph_edges(from_node_key)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_to_node_key ON graph_edges(to_node_key)`)
+	s.backfillContexts()
 	return nil
+}
+
+// backfillContexts creates a "main" knowledge context for any domain that has
+// revisions but no context yet, and populates the new temporal columns on
+// existing rows. This is idempotent: the UNIQUE(domain_key, name) constraint
+// plus the NOT EXISTS check prevent duplicate contexts.
+func (s *Store) backfillContexts() {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT r.domain_key FROM graph_revisions r
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_contexts c WHERE c.domain_key = r.domain_key
+		)
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var domains []string
+	for rows.Next() {
+		var d string
+		rows.Scan(&d)
+		domains = append(domains, d)
+	}
+
+	for _, dom := range domains {
+		res, err := s.db.Exec(`
+			INSERT INTO knowledge_contexts (domain_key, name, git_ref, status)
+			VALUES (?, 'main', 'main', 'active')
+		`, dom)
+		if err != nil {
+			continue
+		}
+		ctxID, _ := res.LastInsertId()
+
+		// Backfill context_id on revisions
+		s.db.Exec(`UPDATE graph_revisions SET context_id = ? WHERE domain_key = ? AND context_id IS NULL`, ctxID, dom)
+
+		// Backfill context_id + valid_from on nodes
+		s.db.Exec(`UPDATE graph_nodes SET context_id = ?, valid_from_revision_id = first_seen_revision_id WHERE domain_key = ? AND context_id IS NULL`, ctxID, dom)
+
+		// Backfill context_id + valid_from on edges (via from_node's domain)
+		s.db.Exec(`
+			UPDATE graph_edges SET context_id = ?, valid_from_revision_id = first_seen_revision_id
+			WHERE context_id IS NULL AND from_node_id IN (SELECT node_id FROM graph_nodes WHERE domain_key = ?)
+		`, ctxID, dom)
+
+		// Backfill from_node_key, to_node_key on edges
+		s.db.Exec(`
+			UPDATE graph_edges SET
+				from_node_key = (SELECT node_key FROM graph_nodes WHERE node_id = graph_edges.from_node_id),
+				to_node_key = (SELECT node_key FROM graph_nodes WHERE node_id = graph_edges.to_node_id)
+			WHERE from_node_key IS NULL
+		`)
+
+		// Backfill evidence context_id
+		s.db.Exec(`
+			UPDATE graph_evidence SET context_id = ?
+			WHERE context_id IS NULL AND (
+				node_id IN (SELECT node_id FROM graph_nodes WHERE domain_key = ?)
+				OR edge_id IN (SELECT edge_id FROM graph_edges WHERE from_node_id IN (SELECT node_id FROM graph_nodes WHERE domain_key = ?))
+			)
+		`, ctxID, dom, dom)
+
+		// Update context head to latest revision
+		var latestRevID int64
+		var latestSHA string
+		s.db.QueryRow(`SELECT revision_id, git_after_sha FROM graph_revisions WHERE domain_key = ? ORDER BY revision_id DESC LIMIT 1`, dom).Scan(&latestRevID, &latestSHA)
+		if latestRevID > 0 {
+			s.db.Exec(`UPDATE knowledge_contexts SET head_revision_id = ?, head_commit_sha = ? WHERE context_id = ?`, latestRevID, latestSHA, ctxID)
+		}
+	}
 }
 
 // ResetDB drops all data and recreates the schema. Use when schema changes.
