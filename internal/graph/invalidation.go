@@ -16,13 +16,32 @@ type FinalizeResult struct {
 	EdgesStatusChanged int `json:"edges_status_changed"`
 }
 
-// InvalidateChanged marks evidence from changed files as stale and recalculates trust.
+// InvalidateChanged marks evidence from changed files as stale (legacy, non-versioned).
 func (g *Graph) InvalidateChanged(domainKey string, revisionID int64, changedFiles []string) (*InvalidateResult, error) {
+	return g.InvalidateChangedInContext(domainKey, revisionID, changedFiles, 0)
+}
+
+// InvalidateChangedInContext marks evidence from changed files as stale.
+// When contextID > 0, uses versioned mutations (close old, insert stale).
+// When contextID == 0, uses legacy in-place mutations.
+func (g *Graph) InvalidateChangedInContext(domainKey string, revisionID int64, changedFiles []string, contextID int64) (*InvalidateResult, error) {
 	if len(changedFiles) == 0 {
 		return &InvalidateResult{}, nil
 	}
 
-	staleCount, affectedEdgeIDs, affectedNodeIDs, err := g.store.MarkEvidenceStaleByFiles(changedFiles)
+	var staleCount int64
+	var affectedEdgeIDs, affectedNodeIDs []int64
+	var err error
+
+	if contextID > 0 {
+		// Note: MarkEvidenceStaleByFilesVersioned returns (staleCount, affectedNodeIDs, affectedEdgeIDs, err)
+		var nodeIDs, edgeIDs []int64
+		staleCount, nodeIDs, edgeIDs, err = g.store.MarkEvidenceStaleByFilesVersioned(changedFiles, revisionID, contextID)
+		affectedNodeIDs = nodeIDs
+		affectedEdgeIDs = edgeIDs
+	} else {
+		staleCount, affectedEdgeIDs, affectedNodeIDs, err = g.store.MarkEvidenceStaleByFiles(changedFiles)
+	}
 	if err != nil {
 		return nil, err
 	}
