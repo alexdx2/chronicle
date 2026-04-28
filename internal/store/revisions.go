@@ -38,6 +38,19 @@ func (s *Store) CreateRevision(domainKey, beforeSHA, afterSHA, triggerKind, mode
 	return id, nil
 }
 
+// CreateRevisionWithContext inserts a new revision linked to a knowledge context and returns the revision_id.
+func (s *Store) CreateRevisionWithContext(domainKey, beforeSHA, afterSHA, triggerKind, mode, metadata string, contextID int64) (int64, error) {
+	res, err := s.db.Exec(`
+		INSERT INTO graph_revisions (domain_key, git_before_sha, git_after_sha, trigger_kind, mode, metadata, context_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, domainKey, beforeSHA, afterSHA, triggerKind, mode, metadata, contextID)
+	if err != nil {
+		return 0, fmt.Errorf("CreateRevisionWithContext: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return id, nil
+}
+
 // GetLatestRevision returns the most recent revision for a domain.
 func (s *Store) GetLatestRevision(domainKey string) (*Revision, error) {
 	const q = `
