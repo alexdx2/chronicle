@@ -4,20 +4,78 @@ import (
 	"github.com/anthropics/depbot/internal/store"
 )
 
-// DerivationConfidence maps derivation_kind to a fixed confidence value.
+// DerivationConfidence maps derivation_kind to a base confidence value.
+// This is now the starting point, not the final confidence —
+// evidence accumulation and caps determine the actual score.
 var DerivationConfidence = map[string]float64{
-	"hard":     0.95,
-	"linked":   0.80,
-	"inferred": 0.60,
-	"unknown":  0.40,
+	"hard":     0.50,
+	"linked":   0.40,
+	"inferred": 0.30,
+	"unknown":  0.15,
 }
 
-// ConfidenceFromDerivation returns the confidence for a derivation kind.
+// Evidence source kinds grouped by quality tier for confidence capping.
+var (
+	// Runtime/data evidence: DB queries, HTTP calls, message bus
+	runtimeSourceKinds = map[string]bool{
+		"runtime": true, "prisma": true,
+	}
+	// Code evidence: file-level AST, imports, structure
+	codeSourceKinds = map[string]bool{
+		"file": true, "openapi": true, "graphql": true, "asyncapi": true,
+		"avro": true, "proto": true, "schema_registry": true,
+		"terraform": true, "k8s": true, "git": true, "ci": true,
+	}
+	// LLM/weak evidence
+	llmSourceKinds = map[string]bool{
+		"webhook": true, // convention-based, not structural
+	}
+)
+
+// ConfidenceCap returns the maximum confidence allowed given the evidence source kinds present.
+// Better evidence sources unlock higher caps.
+func ConfidenceCap(evidence []store.EvidenceRow) float64 {
+	hasRuntime := false
+	hasCode := false
+	hasManual := false
+
+	for _, e := range evidence {
+		if e.EvidencePolarity != "positive" {
+			continue
+		}
+		if e.EvidenceStatus != "valid" && e.EvidenceStatus != "revalidated" {
+			continue
+		}
+		if runtimeSourceKinds[e.SourceKind] {
+			hasRuntime = true
+		}
+		if codeSourceKinds[e.SourceKind] {
+			hasCode = true
+		}
+		if e.SourceKind == "user_feedback" && e.EvidencePolarity == "positive" {
+			hasManual = true
+		}
+	}
+
+	switch {
+	case hasManual:
+		return 0.95
+	case hasRuntime:
+		return 0.92
+	case hasCode:
+		return 0.85
+	default:
+		// LLM-only or no evidence — capped low
+		return 0.65
+	}
+}
+
+// ConfidenceFromDerivation returns the base confidence for a derivation kind.
 func ConfidenceFromDerivation(kind string) float64 {
 	if c, ok := DerivationConfidence[kind]; ok {
 		return c
 	}
-	return 0.40
+	return 0.15
 }
 
 // CombineConfidence combines independent confidence values: 1 - Π(1 - ci).
@@ -153,6 +211,7 @@ func ComputeEdgeStatus(evidence []store.EvidenceRow) string {
 }
 
 // ComputeTrust calculates all trust metrics from evidence for an edge or node.
+// Confidence is capped based on the quality tier of available evidence.
 func ComputeTrust(evidence []store.EvidenceRow) (confidence, freshness, trustScore float64, status string) {
 	pos := PositiveConfidence(evidence)
 	neg := NegativeConfidence(evidence)
@@ -162,6 +221,12 @@ func ComputeTrust(evidence []store.EvidenceRow) (confidence, freshness, trustSco
 	// If strong negative evidence, trust near 0.
 	if neg >= 0.8 {
 		fresh = 0.0
+	}
+
+	// Apply evidence-quality cap.
+	cap := ConfidenceCap(evidence)
+	if base > cap {
+		base = cap
 	}
 
 	trust := TrustScore(base, fresh)

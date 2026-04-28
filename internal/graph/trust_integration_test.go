@@ -49,13 +49,13 @@ func TestTrustLifecycle(t *testing.T) {
 		t.Fatalf("ImportAll: %v", err)
 	}
 
-	// Verify: edge trust = 0.95 (hard derivation), not 1.0
+	// Verify: edge trust = 0.85 (code evidence cap), not 0.95
 	edge, err := s.GetEdgeByKey("code:provider:orders:ordersservice->code:provider:orders:paymentsservice:INJECTS")
 	if err != nil {
 		t.Fatalf("GetEdge: %v", err)
 	}
-	if math.Abs(edge.TrustScore-0.95) > 0.01 {
-		t.Errorf("Phase 1: edge trust = %v, want ~0.95", edge.TrustScore)
+	if math.Abs(edge.TrustScore-0.85) > 0.01 {
+		t.Errorf("Phase 1: edge trust = %v, want ~0.85 (code evidence cap)", edge.TrustScore)
 	}
 	if math.Abs(edge.Freshness-1.0) > 0.01 {
 		t.Errorf("Phase 1: edge freshness = %v, want 1.0", edge.Freshness)
@@ -98,10 +98,10 @@ func TestTrustLifecycle(t *testing.T) {
 		t.Fatalf("AddEdgeEvidence: %v", err)
 	}
 
-	// Verify: edge trust restored
+	// Verify: edge trust restored (capped at 0.85 by code evidence)
 	edge, _ = s.GetEdgeByKey("code:provider:orders:ordersservice->code:provider:orders:paymentsservice:INJECTS")
-	if math.Abs(edge.TrustScore-0.95) > 0.01 {
-		t.Errorf("Phase 3: edge trust = %v, want ~0.95 (restored)", edge.TrustScore)
+	if math.Abs(edge.TrustScore-0.85) > 0.01 {
+		t.Errorf("Phase 3: edge trust = %v, want ~0.85 (restored, code evidence cap)", edge.TrustScore)
 	}
 
 	// Check evidence status is revalidated

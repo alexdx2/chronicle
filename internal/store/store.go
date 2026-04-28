@@ -104,6 +104,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE graph_edges ADD COLUMN context_id INTEGER`,
 		`ALTER TABLE graph_edges ADD COLUMN from_node_key TEXT`,
 		`ALTER TABLE graph_edges ADD COLUMN to_node_key TEXT`,
+		`ALTER TABLE graph_edges ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'unverified'`,
 		// Evidence gets stable identity + context
 		`ALTER TABLE graph_evidence ADD COLUMN evidence_uid TEXT`,
 		`ALTER TABLE graph_evidence ADD COLUMN context_id INTEGER`,

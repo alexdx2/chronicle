@@ -14,6 +14,7 @@ var UserCommands = map[string]string{
 	"services": "Analyze service architecture — cross-service deps, API surface",
 	"status":   "Show current graph state — nodes, edges, layers, last scan",
 	"update":  "Incremental update — rescan only changed files since last scan via git diff",
+	"verify":  "Verify low-confidence edges — find code evidence to confirm or reject inferred relationships",
 	"help":    "Show available Chronicle commands",
 	"diagram": "Show a live diagram to explain architecture",
 }
@@ -201,6 +202,7 @@ Node cap: All data models (typically <20).
 - /chronicle-flows — Business use case analysis
 - /chronicle-services — Service architecture
 - /chronicle-update — Incremental update (changed files only)
+- /chronicle-verify — Verify low-confidence edges with code evidence
 - /chronicle-diagram — Live architecture diagram
 - /chronicle-status — Current graph state
 - /chronicle-help — This help
@@ -236,4 +238,44 @@ Context management tools (called directly, not via commands):
 11. Finalize: chronicle_finalize_incremental_scan(domain, revision_id)
 12. Snapshot: chronicle_snapshot_create(domain, revision_id)
 13. Report summary: files scanned, nodes/edges updated, evidence revalidated vs still stale`,
+
+	"verify": `Verify low-confidence edges — find concrete code evidence for inferred relationships:
+
+IMPORTANT: Do NOT increase confidence directly. Your job is to collect proof. The system recalculates confidence deterministically from evidence.
+
+1. Call chronicle_edge_list to find edges with low confidence (trust_score < 0.75)
+   - Focus on edges with derivation_kind = 'inferred' first
+2. For each low-confidence edge (A → B):
+   a. Identify the source files for both nodes
+   b. Read those files and search for concrete evidence that A depends on B:
+      - Import statements (A imports B)
+      - Constructor injection (A receives B as parameter)
+      - Function calls (A calls methods on B)
+      - DB queries (A queries B's model/table)
+      - Type references (A uses B as return type or parameter type)
+      - Test assertions (tests verify A-B interaction)
+      - HTTP/message calls (A calls B's endpoint or publishes to B's topic)
+   c. For each piece of evidence found, call chronicle_evidence_add:
+      {
+        "target_kind": "edge",
+        "edge_key": "<the edge key>",
+        "source_kind": "file",
+        "file_path": "<path where evidence found>",
+        "line_start": <line number>,
+        "line_end": <line number>,
+        "extractor_id": "claude-code",
+        "extractor_version": "1.0",
+        "confidence": 0.95,
+        "polarity": "positive"
+      }
+   d. If you confirm the relationship does NOT exist (e.g. no imports, no calls, no references):
+      Add negative evidence with polarity="negative" and confidence=0.90
+3. After adding evidence, confidence is automatically recalculated by the system
+4. Report: which edges were verified, evidence found, new confidence scores
+
+Evidence quality tiers (the system caps confidence based on best evidence available):
+- Runtime/DB evidence (prisma, runtime): unlocks up to 92%
+- Code evidence (file, openapi, graphql, etc.): unlocks up to 85%
+- LLM inference only: capped at 65%
+- Manual confirmation (user_feedback): unlocks up to 95%`,
 }

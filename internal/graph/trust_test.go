@@ -12,11 +12,11 @@ func TestConfidenceFromDerivation(t *testing.T) {
 		kind string
 		want float64
 	}{
-		{"hard", 0.95},
-		{"linked", 0.80},
-		{"inferred", 0.60},
-		{"unknown", 0.40},
-		{"bogus", 0.40},
+		{"hard", 0.50},
+		{"linked", 0.40},
+		{"inferred", 0.30},
+		{"unknown", 0.15},
+		{"bogus", 0.15},
 	}
 	for _, tt := range tests {
 		got := ConfidenceFromDerivation(tt.kind)
@@ -169,20 +169,52 @@ func TestComputeEdgeStatus(t *testing.T) {
 	}
 }
 
+func TestConfidenceCap(t *testing.T) {
+	tests := []struct {
+		name     string
+		evidence []store.EvidenceRow
+		wantCap  float64
+	}{
+		{"no evidence", nil, 0.65},
+		{"LLM-only (webhook source)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "webhook", Confidence: 0.5},
+		}, 0.65},
+		{"code evidence (file source)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", Confidence: 0.9},
+		}, 0.85},
+		{"runtime evidence (prisma)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "prisma", Confidence: 0.95},
+		}, 0.92},
+		{"stale evidence ignored for cap", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "stale", SourceKind: "file", Confidence: 0.9},
+		}, 0.65},
+		{"negative evidence ignored for cap", []store.EvidenceRow{
+			{EvidencePolarity: "negative", EvidenceStatus: "valid", SourceKind: "file", Confidence: 0.9},
+		}, 0.65},
+	}
+	for _, tt := range tests {
+		got := ConfidenceCap(tt.evidence)
+		if math.Abs(got-tt.wantCap) > 0.001 {
+			t.Errorf("ConfidenceCap(%s) = %v, want %v", tt.name, got, tt.wantCap)
+		}
+	}
+}
+
 func TestComputeTrust(t *testing.T) {
-	t.Run("healthy edge", func(t *testing.T) {
+	t.Run("healthy edge with code evidence", func(t *testing.T) {
 		evidence := []store.EvidenceRow{
-			{EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.95},
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.95, SourceKind: "file"},
 		}
 		conf, fresh, trust, status := ComputeTrust(evidence)
-		if math.Abs(conf-0.95) > 0.001 {
-			t.Errorf("confidence = %v, want 0.95", conf)
+		// 0.95 capped at 0.85 (code evidence cap)
+		if math.Abs(conf-0.85) > 0.001 {
+			t.Errorf("confidence = %v, want 0.85 (capped)", conf)
 		}
 		if math.Abs(fresh-1.0) > 0.001 {
 			t.Errorf("freshness = %v, want 1.0", fresh)
 		}
-		if math.Abs(trust-0.95) > 0.001 {
-			t.Errorf("trust = %v, want 0.95", trust)
+		if math.Abs(trust-0.85) > 0.001 {
+			t.Errorf("trust = %v, want 0.85", trust)
 		}
 		if status != "active" {
 			t.Errorf("status = %q, want active", status)

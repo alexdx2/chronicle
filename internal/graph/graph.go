@@ -14,6 +14,16 @@ type Graph struct {
 	reg   *registry.Registry
 }
 
+// defaultEvidenceConfidence returns the confidence for an evidence row.
+// If the caller provided an explicit confidence, use it. Otherwise default to 0.95
+// (high confidence — the evidence exists, it's the derivation that's uncertain).
+func defaultEvidenceConfidence(explicit float64) float64 {
+	if explicit > 0 {
+		return explicit
+	}
+	return 0.95
+}
+
 // New creates a new Graph.
 func New(s *store.Store, r *registry.Registry) *Graph {
 	return &Graph{store: s, reg: r}
@@ -108,10 +118,7 @@ func (g *Graph) AddNodeEvidence(nodeKey string, input validate.EvidenceInput) (i
 		return 0, fmt.Errorf("AddNodeEvidence: %w", err)
 	}
 
-	confidence := input.Confidence
-	if confidence == 0 {
-		confidence = 0.95
-	}
+	confidence := defaultEvidenceConfidence(input.Confidence)
 	metadata := input.Metadata
 	if metadata == "" {
 		metadata = "{}"
@@ -164,10 +171,7 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 		return 0, fmt.Errorf("AddEdgeEvidence: %w", err)
 	}
 
-	confidence := ConfidenceFromDerivation(edge.DerivationKind)
-	if input.Confidence > 0 {
-		confidence = input.Confidence
-	}
+	confidence := defaultEvidenceConfidence(input.Confidence)
 	metadata := input.Metadata
 	if metadata == "" {
 		metadata = "{}"
