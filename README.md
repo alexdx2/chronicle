@@ -121,6 +121,7 @@ Or if you already have the dashboard running — paste the path to `fixtures/tom
 |---|---|
 | `chronicle scan` | Full project scan — models, code, endpoints, services |
 | `chronicle update` | Incremental update — rescan only files changed since last scan via git diff |
+| `chronicle verify` | Verify low-confidence edges — find code evidence to confirm or reject |
 | `chronicle impact X` | What breaks if I change X? |
 | `chronicle deps X` | What depends on X? |
 | `chronicle path A B` | How does A connect to B? |
