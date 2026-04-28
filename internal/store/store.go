@@ -92,6 +92,21 @@ func (s *Store) migrate() error {
 		`ALTER TABLE graph_edges ADD COLUMN trust_score REAL NOT NULL DEFAULT 1.0`,
 		`ALTER TABLE graph_nodes ADD COLUMN freshness REAL NOT NULL DEFAULT 1.0`,
 		`ALTER TABLE graph_nodes ADD COLUMN trust_score REAL NOT NULL DEFAULT 1.0`,
+		// Revisions get context
+		`ALTER TABLE graph_revisions ADD COLUMN context_id INTEGER REFERENCES knowledge_contexts(context_id)`,
+		// Nodes get temporal versioning
+		`ALTER TABLE graph_nodes ADD COLUMN valid_from_revision_id INTEGER`,
+		`ALTER TABLE graph_nodes ADD COLUMN valid_to_revision_id INTEGER`,
+		`ALTER TABLE graph_nodes ADD COLUMN context_id INTEGER`,
+		// Edges get temporal versioning + stable node_key FKs
+		`ALTER TABLE graph_edges ADD COLUMN valid_from_revision_id INTEGER`,
+		`ALTER TABLE graph_edges ADD COLUMN valid_to_revision_id INTEGER`,
+		`ALTER TABLE graph_edges ADD COLUMN context_id INTEGER`,
+		`ALTER TABLE graph_edges ADD COLUMN from_node_key TEXT`,
+		`ALTER TABLE graph_edges ADD COLUMN to_node_key TEXT`,
+		// Evidence gets stable identity + context
+		`ALTER TABLE graph_evidence ADD COLUMN evidence_uid TEXT`,
+		`ALTER TABLE graph_evidence ADD COLUMN context_id INTEGER`,
 	}
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
@@ -99,12 +114,18 @@ func (s *Store) migrate() error {
 	// Ensure indexes exist (idempotent).
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_status ON graph_evidence(evidence_status)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_file_status ON graph_evidence(file_path, evidence_status)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_valid_to ON graph_nodes(valid_to_revision_id)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_valid_to ON graph_edges(valid_to_revision_id)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_evidence_valid_to ON graph_evidence(valid_to_revision_id)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_evidence_uid ON graph_evidence(evidence_uid)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_from_node_key ON graph_edges(from_node_key)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_to_node_key ON graph_edges(to_node_key)`)
 	return nil
 }
 
 // ResetDB drops all data and recreates the schema. Use when schema changes.
 func (s *Store) ResetDB() error {
-	tables := []string{"mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions"}
+	tables := []string{"graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts"}
 	for _, t := range tables {
 		s.db.Exec("DROP TABLE IF EXISTS " + t)
 	}
@@ -306,6 +327,38 @@ CREATE TABLE IF NOT EXISTS diagram_sessions (
   created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+CREATE TABLE IF NOT EXISTS knowledge_contexts (
+    context_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain_key        TEXT NOT NULL,
+    name              TEXT NOT NULL,
+    git_ref           TEXT,
+    base_context_id   INTEGER REFERENCES knowledge_contexts(context_id),
+    base_revision_id  INTEGER REFERENCES graph_revisions(revision_id),
+    head_revision_id  INTEGER REFERENCES graph_revisions(revision_id),
+    head_commit_sha   TEXT,
+    status            TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active','merged','archived')),
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (domain_key, name)
+);
+
+CREATE TABLE IF NOT EXISTS graph_changelog (
+    changelog_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id   INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
+    context_id    INTEGER NOT NULL REFERENCES knowledge_contexts(context_id),
+    entity_type   TEXT NOT NULL CHECK (entity_type IN ('node','edge','evidence')),
+    entity_key    TEXT NOT NULL,
+    entity_id     INTEGER,
+    change_type   TEXT NOT NULL
+                    CHECK (change_type IN ('created','updated','stale','invalidated','revalidated','deleted')),
+    field_changes TEXT,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_changelog_revision ON graph_changelog(revision_id);
+CREATE INDEX IF NOT EXISTS idx_changelog_context ON graph_changelog(context_id);
+CREATE INDEX IF NOT EXISTS idx_changelog_entity ON graph_changelog(entity_type, entity_key);
 `
 
 // SaveDiagramSession upserts a diagram session as a JSON blob.
