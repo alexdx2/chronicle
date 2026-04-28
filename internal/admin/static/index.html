@@ -1149,6 +1149,12 @@ a{color:var(--primary);text-decoration:none}
                    @change="showEdgeLabels=!showEdgeLabels;renderDiagram()">
             <span>Edge labels</span>
           </label>
+          <label>
+            <input type="checkbox"
+                   :checked="diagramShowNeighbors"
+                   @change="diagramShowNeighbors=!diagramShowNeighbors;renderDiagram()">
+            <span>Show linked nodes</span>
+          </label>
         </div>
 
         <div class="group">
@@ -1286,6 +1292,7 @@ function dashboard() {
     diagramSearch: '',
     diagramGraphLoaded: false,
     diagramMode: 'strict', // 'strict' (dagre every render) or 'free' (cached positions + drag)
+    diagramShowNeighbors: true, // show grayed neighbor nodes in diagram
     _diagramPositions: {},  // node_id → {x, y} — persists across re-renders in free mode
     descPanelHeight: 140,
     _resizing: false,
@@ -3372,6 +3379,35 @@ function dashboard() {
       if (!container || !this.diagramData) return;
 
       const filtered = this._filterDiagramData();
+
+      // Expand with linked neighbor nodes (grayed out)
+      if (this.diagramShowNeighbors && this.graphData) {
+        const diagramNodeIds = new Set(filtered.nodes.map(n => n.node_id));
+        const allEdges = this.graphData.edges || [];
+        const allNodes = {};
+        (this.graphData.nodes || []).forEach(n => { allNodes[n.node_id] = n; });
+
+        const neighborNodes = [];
+        const addedIds = new Set();
+        allEdges.forEach(e => {
+          if (diagramNodeIds.has(e.from_node_id) && !diagramNodeIds.has(e.to_node_id) && allNodes[e.to_node_id] && !addedIds.has(e.to_node_id)) {
+            neighborNodes.push({ ...allNodes[e.to_node_id], _neighbor: true, _manual: false, _path: false });
+            addedIds.add(e.to_node_id);
+          }
+          if (diagramNodeIds.has(e.to_node_id) && !diagramNodeIds.has(e.from_node_id) && allNodes[e.from_node_id] && !addedIds.has(e.from_node_id)) {
+            neighborNodes.push({ ...allNodes[e.from_node_id], _neighbor: true, _manual: false, _path: false });
+            addedIds.add(e.from_node_id);
+          }
+        });
+
+        if (neighborNodes.length > 0) {
+          filtered.nodes = filtered.nodes.concat(neighborNodes);
+          // Include edges between the expanded node set
+          const expandedIds = new Set(filtered.nodes.map(n => n.node_id));
+          filtered.edges = allEdges.filter(e => expandedIds.has(e.from_node_id) && expandedIds.has(e.to_node_id));
+        }
+      }
+
       if (filtered.nodes.length === 0) { container.innerHTML = ''; return; }
 
       const annotations = this._getDiagramAnnotations();
