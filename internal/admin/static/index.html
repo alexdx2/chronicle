@@ -169,7 +169,7 @@ a{color:var(--primary);text-decoration:none}
 /* Workspace palette */
 .ws-palette{width:220px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .ws-palette input[type=text]{width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;margin:8px;width:calc(100% - 16px)}
-.ws-palette .ws-item{display:flex;align-items:center;gap:6px;padding:5px 8px;margin:2px 8px;border:1px solid var(--border);border-radius:4px;cursor:grab;font-size:11px}
+.ws-palette .ws-item{display:flex;align-items:center;gap:6px;padding:5px 8px;margin:2px 8px;border:1px solid var(--border);border-radius:4px;cursor:grab;font-size:11px;user-select:none;-webkit-user-select:none}
 .ws-palette .ws-item:hover{background:var(--primary-light)}
 .ws-palette .ws-group-label{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);padding:6px 8px 2px}
 /* Workspace canvas indicators */
@@ -197,7 +197,7 @@ a{color:var(--primary);text-decoration:none}
 <!-- Header -->
 <header class="header">
   <div class="logo-group">
-    <img src="/logo.png" alt="Chronicle">
+    <img src="/logo-128.png" alt="Chronicle">
     <div class="logo-text">
       <h1>Chronicle</h1>
       <span class="logo-subtitle">Knowledge Graph</span>
@@ -283,7 +283,7 @@ a{color:var(--primary);text-decoration:none}
   <template x-if="(stats.graph?.node_count ?? 0) === 0">
     <div style="background:linear-gradient(135deg,#f5f0e8,#f0e9dd);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:16px">
       <div style="display:flex;align-items:start;gap:16px">
-        <img src="/logo.png" alt="" style="width:80px;height:80px">
+        <img src="/logo-128.png" alt="" style="width:80px;height:80px">
         <div style="flex:1">
           <h3 style="margin-bottom:8px;color:var(--primary)">Welcome to Chronicle</h3>
           <p style="color:var(--text);margin-bottom:12px">This project hasn't been scanned yet. Tell Claude to scan it and build a knowledge graph.</p>
@@ -600,6 +600,13 @@ a{color:var(--primary);text-decoration:none}
       <template x-if="graphMode==='workspace'">
         <div class="ws-palette">
           <input type="text" placeholder="Search entities..." x-model="workspaceSearch">
+          <template x-if="workspaceNodes.length > 0">
+            <button @click="workspaceNodes=[];workspacePaths=[];_wsPositionCache={};renderGraph()"
+                    style="margin:0 8px;padding:3px 8px;font-size:10px;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;color:var(--text-muted);white-space:nowrap"
+                    @mouseenter="$el.style.background='var(--danger, #e74c3c)';$el.style.color='white';$el.style.borderColor='var(--danger, #e74c3c)'"
+                    @mouseleave="$el.style.background='var(--bg)';$el.style.color='var(--text-muted)';$el.style.borderColor='var(--border)'"
+                    x-text="'Clear canvas (' + workspaceNodes.filter(w=>w.manual).length + ')'"></button>
+          </template>
           <div style="flex:1;overflow-y:auto">
             <template x-for="group in getWorkspacePaletteGroups()" :key="group.type">
               <div>
@@ -766,6 +773,59 @@ a{color:var(--primary);text-decoration:none}
                      style="flex:1">
               <span style="font-size:10px;min-width:28px" x-text="minConfidence.toFixed(2)"></span>
             </div>
+          </div>
+
+          <!-- Display toggle -->
+          <div class="group">
+            <h4>Display</h4>
+            <label>
+              <input type="checkbox"
+                     :checked="showEdgeLabels"
+                     @change="showEdgeLabels=!showEdgeLabels;renderGraph()">
+              <span>Edge labels</span>
+            </label>
+          </div>
+
+          <!-- Edge Categories -->
+          <div class="group">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <h4>Edge Categories</h4>
+              <div style="display:flex;gap:4px">
+                <button @click="addCustomCategory()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px">+ Add</button>
+                <button @click="resetEdgeCategories()" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:10px">Reset</button>
+              </div>
+            </div>
+            <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
+              <div>
+                <div @click="editingCategory === cat ? cancelEditCategory() : startEditCategory(cat)"
+                     style="display:flex;align-items:center;gap:6px;margin-bottom:2px;font-size:11px;cursor:pointer;padding:2px 0">
+                  <input type="color" :value="def.color"
+                         @click.stop
+                         @change="edgeCategories[cat].color = $event.target.value; saveEdgeCategories()"
+                         style="width:16px;height:16px;border:none;padding:0;cursor:pointer;background:none">
+                  <span x-text="cat" style="text-transform:capitalize;flex:1"></span>
+                  <span style="font-size:9px;color:var(--text-muted)" x-text="Object.keys(def.types||{}).length + ' types'"></span>
+                </div>
+                <template x-if="editingCategory === cat">
+                  <div style="margin-left:22px;margin-bottom:6px;font-size:10px">
+                    <template x-for="[etype, label] in Object.entries(editCategoryData.types || {})" :key="etype">
+                      <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
+                        <span style="color:var(--text-muted);flex:1" x-text="etype"></span>
+                        <input type="text" :value="label"
+                               @change="editCategoryData.types[etype] = $event.target.value"
+                               style="width:40px;font-size:10px;padding:1px 3px;border:1px solid var(--border);border-radius:2px;background:var(--bg);color:var(--text)">
+                        <button @click="delete editCategoryData.types[etype]"
+                                style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:10px">&times;</button>
+                      </div>
+                    </template>
+                    <div style="display:flex;gap:4px;margin-top:4px">
+                      <button @click="saveEditCategory()" style="font-size:10px;padding:2px 6px;border:1px solid var(--primary);background:var(--primary);color:white;border-radius:3px;cursor:pointer">Save</button>
+                      <button @click="cancelEditCategory()" style="font-size:10px;padding:2px 6px;border:1px solid var(--border);background:none;color:var(--text-muted);border-radius:3px;cursor:pointer">Cancel</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
           </div>
         </div>
       </template>
@@ -2733,6 +2793,7 @@ function dashboard() {
       }
 
       const gRoot = svg.append('g');
+      svg.classed('hide-edge-labels', !this.showEdgeLabels);
       svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
         gRoot.attr('transform', event.transform);
       }));
@@ -2770,6 +2831,19 @@ function dashboard() {
         .attr('class', 'via-label').attr('text-anchor', 'middle')
         .text(d => d._viaLabel || '');
 
+      // Short labels for non-transitive edges
+      const shortLabels = gRoot.selectAll('.edge-short-label')
+        .data(simEdges.filter(e => !e._transitive)).join('text')
+        .attr('class', 'edge-short-label')
+        .attr('fill', d => {
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? info.color : '#b8a898';
+        })
+        .text(d => {
+          const info = self.edgeCategoryLookup[d.edge_type];
+          return info ? info.shortLabel : '';
+        });
+
       // Nodes
       // sim is declared here so drag handlers can reference it; assigned later in force mode
       let sim = null;
@@ -2792,6 +2866,8 @@ function dashboard() {
                 .attr('x2', e => e.target.x).attr('y2', e => e.target.y);
               viaLabels.attr('x', e => (e.source.x + e.target.x) / 2)
                 .attr('y', e => (e.source.y + e.target.y) / 2 - 6);
+              shortLabels.attr('x', e => (e.source.x + e.target.x) / 2)
+                .attr('y', e => (e.source.y + e.target.y) / 2 - 4);
             }
           })
           .on('end', (event, d) => {
@@ -2985,6 +3061,9 @@ function dashboard() {
         viaLabels
           .attr('x', d => (d.source.x + d.target.x) / 2)
           .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+        shortLabels
+          .attr('x', d => (d.source.x + d.target.x) / 2)
+          .attr('y', d => (d.source.y + d.target.y) / 2 - 4);
 
       } else if (useWsDagre) {
         // DAGRE LAYOUT for workspace overview
@@ -3035,6 +3114,7 @@ function dashboard() {
         });
         link.attr('d', d => d._points?.length > 1 ? dagreLineGen(d._points) : `M${d.source.x},${d.source.y}L${d.target.x},${d.target.y}`);
         viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+        shortLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 4);
         node.attr('transform', d => `translate(${d.x},${d.y})`);
 
       } else {
@@ -3055,6 +3135,9 @@ function dashboard() {
           viaLabels
             .attr('x', d => (d.source.x + d.target.x) / 2)
             .attr('y', d => (d.source.y + d.target.y) / 2 - 6);
+          shortLabels
+            .attr('x', d => (d.source.x + d.target.x) / 2)
+            .attr('y', d => (d.source.y + d.target.y) / 2 - 4);
           node.attr('transform', d => `translate(${d.x},${d.y})`);
 
           // Floating group bounding boxes
