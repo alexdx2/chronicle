@@ -530,11 +530,12 @@ a{color:var(--primary);text-decoration:none}
         <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;history.pushState(null,'','/graph/workspace');renderGraph()">Workspace</button>
       </div>
 
-      <!-- Workspace layout toggle (always available, including diagram mode) -->
+      <!-- Workspace layout toggle -->
       <template x-if="graphMode==='workspace'">
         <div class="mode-toggle">
-          <button class="mode-btn" :class="{active:wsLayout==='strict'}" @click="wsLayout='strict';_wsPositionCache={};renderWorkspace()">Strict</button>
-          <button class="mode-btn" :class="{active:wsLayout==='free'}" @click="wsLayout='free';renderWorkspace()">Free</button>
+          <button class="mode-btn" :class="{active:wsLayout==='strict'}" @click="wsLayout='strict';_wsPositionCache={};renderWorkspace()" title="Dagre recomputes layout each render">Strict</button>
+          <button class="mode-btn" :class="{active:wsLayout==='free'}" @click="wsLayout='free';renderWorkspace()" title="Positions persist between renders">Free</button>
+          <button class="mode-btn" @click="_wsPositionCache={};renderWorkspace()" title="Re-run dagre layout">Layout</button>
         </div>
       </template>
 
@@ -3233,30 +3234,30 @@ function dashboard() {
 
       // --- Drag (free mode only) ---
       if (!isStrict) {
-        node.style('cursor', 'grab');
-        node.call(d3.drag()
-          .on('start', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grabbing'); })
-          .on('drag', (event, d) => {
-            d.x = event.x; d.y = event.y;
-            if (config.callbacks?.onDrag) config.callbacks.onDrag(d.id, d.x, d.y);
-            d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
-            // Recalculate connected edges — clear stale dagre points, use arcs
-            link.filter(e => e.source.id === d.id || e.target.id === d.id)
-              .each(function(e) { e._points = null; })
-              .attr('d', edgePath);
-            viaLabels.filter(e => e.source.id === d.id || e.target.id === d.id)
-              .attr('x', e => (e.source.x + e.target.x) / 2).attr('y', e => (e.source.y + e.target.y) / 2 - 6);
-            shortLabels.filter(e => e.source.id === d.id || e.target.id === d.id).each(function(e) {
-              const pathEl = link.filter(p => p === e).node();
-              if (pathEl) {
-                const len = pathEl.getTotalLength();
-                const mid = pathEl.getPointAtLength(len / 2);
-                d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
-              }
-            });
-          })
-          .on('end', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grab'); })
-        );
+      node.style('cursor', 'grab');
+      node.call(d3.drag()
+        .on('start', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grabbing'); })
+        .on('drag', (event, d) => {
+          d.x = event.x; d.y = event.y;
+          if (config.callbacks?.onDrag) config.callbacks.onDrag(d.id, d.x, d.y);
+          d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
+          // Recalculate connected edges — clear stale dagre points, use arcs
+          link.filter(e => e.source.id === d.id || e.target.id === d.id)
+            .each(function(e) { e._points = null; })
+            .attr('d', edgePath);
+          viaLabels.filter(e => e.source.id === d.id || e.target.id === d.id)
+            .attr('x', e => (e.source.x + e.target.x) / 2).attr('y', e => (e.source.y + e.target.y) / 2 - 6);
+          shortLabels.filter(e => e.source.id === d.id || e.target.id === d.id).each(function(e) {
+            const pathEl = link.filter(p => p === e).node();
+            if (pathEl) {
+              const len = pathEl.getTotalLength();
+              const mid = pathEl.getPointAtLength(len / 2);
+              d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
+            }
+          });
+        })
+        .on('end', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grab'); })
+      );
       }
 
       // --- Click handlers ---
