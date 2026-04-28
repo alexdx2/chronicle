@@ -3801,219 +3801,36 @@ function dashboard() {
     renderDiagram() {
       const container = document.getElementById('diagram-canvas') || document.getElementById('graph-canvas');
       if (!container || !this.diagramData) return;
-      container.innerHTML = '';
 
       const filtered = this._filterDiagramData();
-      const nodes = filtered.nodes;
-      const edges = filtered.edges;
+      if (filtered.nodes.length === 0) { container.innerHTML = ''; return; }
+
       const annotations = this._getDiagramAnnotations();
-      if (nodes.length === 0) return;
-
       const self = this;
-      const width = Math.max(900, container.clientWidth || 900);
-      const height = Math.max(600, container.clientHeight || 600);
-      const isStrict = self.diagramMode === 'strict';
-      const posCache = self._diagramPositions;
 
-      let simNodes = [], simNodeMap = {}, simEdges = [], dagreEdgePoints = {};
-
-      // Always run dagre for layout computation
-      if (typeof dagre !== 'undefined') {
-        const gDag = new dagre.graphlib.Graph();
-        gDag.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 20, marginx: 30, marginy: 30 });
-        gDag.setDefaultEdgeLabel(() => ({}));
-        nodes.forEach(n => gDag.setNode(String(n.node_id), { label: n.name, width: 110, height: 44 }));
-        edges.forEach(e => {
-          const from = String(e.from_node_id), to = String(e.to_node_id);
-          if (gDag.hasNode(from) && gDag.hasNode(to)) gDag.setEdge(from, to, { _edge: e });
-        });
-        dagre.layout(gDag);
-
-        nodes.forEach(n => {
-          const pos = gDag.node(String(n.node_id));
-          if (!pos) return;
-          let x, y;
-          if (isStrict) {
-            x = pos.x; y = pos.y;
-          } else {
-            // Free mode: use cache, fallback to dagre
-            const cached = posCache[n.node_id];
-            x = cached ? cached.x : pos.x;
-            y = cached ? cached.y : pos.y;
-            posCache[n.node_id] = { x, y };
-          }
-          const sn = { ...n, id: n.node_id, x, y };
-          simNodes.push(sn); simNodeMap[sn.id] = sn;
-        });
-
-        // In strict mode, use dagre's routed edge points
-        if (isStrict) {
-          gDag.edges().forEach(e => {
-            const ed = gDag.edge(e);
-            if (ed && ed.points) dagreEdgePoints[e.v + '->' + e.w] = ed.points;
-          });
-        }
-      }
-
-      simEdges = edges.filter(e => simNodeMap[e.from_node_id] && simNodeMap[e.to_node_id])
-        .map(e => ({ ...e, source: simNodeMap[e.from_node_id], target: simNodeMap[e.to_node_id],
-          _points: dagreEdgePoints[e.from_node_id + '->' + e.to_node_id] || null }));
-
-      // SVG setup
-      const svg = d3.select(container).append('svg')
-        .attr('class', 'graph-svg')
-        .style('width', '100%').style('height', '100%');
-      svg.classed('hide-edge-labels', !this.showEdgeLabels);
-      const defs = svg.append('defs');
-      // Default gray arrow (fallback for unknown types)
-      defs.append('marker').attr('id', 'dia-arrow').attr('viewBox', '0 0 10 10')
-        .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
-        .attr('orient', 'auto')
-        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
-      // Transitive arrow (amber)
-      defs.append('marker').attr('id', 'dia-arrow-transitive').attr('viewBox', '0 0 10 10')
-        .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
-        .attr('orient', 'auto')
-        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#b8963e');
-      // Per-category arrows
-      for (const [cat, def] of Object.entries(this.edgeCategories)) {
-        defs.append('marker').attr('id', 'dia-arrow-' + cat)
-          .attr('viewBox', '0 0 10 10').attr('refX', 10).attr('refY', 5)
-          .attr('markerWidth', 8).attr('markerHeight', 8).attr('orient', 'auto')
-          .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', def.color);
-      }
-
-      const gRoot = svg.append('g');
-      svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
-        gRoot.attr('transform', event.transform);
-      }));
-
-      // Edges
-      const link = gRoot.selectAll('.edge-path')
-        .data(simEdges).join('path')
-        .attr('class', d => {
-          let cls = 'edge-line';
-          if (d._transitive) cls += ' transitive';
-          else if (d.derivation !== 'hard' && d.derivation !== 'linked') cls += ' dashed';
-          return cls;
-        })
-        .attr('fill', 'none')
-        .attr('stroke', d => {
-          if (d._transitive) return null; // CSS handles transitive color
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? info.color : null; // null falls back to CSS default
-        })
-        .attr('marker-end', d => {
-          if (d._transitive) return 'url(#dia-arrow-transitive)';
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? 'url(#dia-arrow-' + info.category + ')' : 'url(#dia-arrow)';
-        });
-
-      // Via labels
-      const viaLabels = gRoot.selectAll('.via-label')
-        .data(simEdges.filter(e => e._transitive)).join('text')
-        .attr('class', 'via-label').attr('text-anchor', 'middle')
-        .text(d => d._viaLabel || '');
-
-      const shortLabels = gRoot.selectAll('.edge-short-label')
-        .data(simEdges.filter(e => !e._transitive)).join('text')
-        .attr('class', d => {
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return 'edge-short-label';
-        })
-        .attr('fill', d => {
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? info.color : '#b8a898';
-        })
-        .text(d => {
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? info.shortLabel : '';
-        });
-
-      // Position edges: dagre-routed in strict, arc curves in free
-      const lineGen = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
-      function edgePath(d) {
-        if (d._points && d._points.length > 1) return lineGen(d._points);
-        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
-        const dr = Math.sqrt(dx * dx + dy * dy) * 1.5;
-        return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
-      }
-      link.attr('d', edgePath);
-      viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
-
-      // Position short labels at midpoint of each edge path
-      shortLabels.each(function(d) {
-        const pathEl = link.filter(e => e === d).node();
-        if (pathEl) {
-          const len = pathEl.getTotalLength();
-          const mid = pathEl.getPointAtLength(len / 2);
-          d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
+      const result = this._renderGraphSVG({
+        container,
+        nodes: filtered.nodes,
+        edges: filtered.edges,
+        mode: this.diagramMode,
+        positionCache: this._diagramPositions,
+        groups: { keys: [], map: {}, field: '' },
+        features: { annotations },
+        callbacks: {
+          onNodeClick(d, simEdges) {
+            const isAlready = self.selectedNode && self.selectedNode.id === d.id;
+            self.selectedNode = isAlready ? null : d;
+            self.highlightNode(isAlready ? null : d.id, simEdges);
+          },
+          onBackgroundClick(simEdges) {
+            self.selectedNode = null;
+            self.highlightNode(null, simEdges);
+          },
+          onDrag(id, x, y) {
+            self._diagramPositions[id] = { x, y };
+          },
         }
       });
-
-      // Nodes (on top)
-      const node = gRoot.selectAll('.node-g')
-        .data(simNodes).join('g')
-        .attr('class', 'node-g')
-        .attr('transform', d => `translate(${d.x},${d.y})`);
-
-      // Drag — only in free mode
-      if (!isStrict) {
-        node.style('cursor', 'grab');
-        node.call(d3.drag()
-          .on('start', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grabbing'); })
-          .on('drag', (event, d) => {
-            d.x = event.x; d.y = event.y;
-            self._diagramPositions[d.id] = { x: d.x, y: d.y };
-            d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
-            link.filter(e => e.source.id === d.id || e.target.id === d.id)
-              .attr('d', edgePath);
-            viaLabels.filter(e => e.source.id === d.id || e.target.id === d.id)
-              .attr('x', e => (e.source.x + e.target.x) / 2).attr('y', e => (e.source.y + e.target.y) / 2 - 6);
-            shortLabels.filter(e => e.source.id === d.id || e.target.id === d.id).each(function(e) {
-              const pathEl = link.filter(p => p === e).node();
-              if (pathEl) {
-                const len = pathEl.getTotalLength();
-                const mid = pathEl.getPointAtLength(len / 2);
-                d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
-              }
-            });
-          })
-          .on('end', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grab'); })
-        );
-      }
-
-      // Node rendering
-      node.append('rect')
-        .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
-        .attr('fill', '#fff').attr('rx', 6).attr('ry', 6);
-      node.append('rect')
-        .attr('class', 'node-rect')
-        .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
-        .attr('fill', d => self.layerColor(d.layer) + '40')
-        .attr('stroke', d => (annotations[d.node_key]?.highlight || self.layerColor(d.layer)))
-        .attr('stroke-width', d => annotations[d.node_key]?.highlight ? 3 : 1.5)
-        .style('filter', d => annotations[d.node_key]?.highlight ? 'drop-shadow(0 0 8px ' + annotations[d.node_key].highlight + ')' : 'none');
-      node.append('text')
-        .attr('text-anchor', 'middle').attr('dy', -2).attr('font-size', '10px')
-        .text(d => d.name.length > 14 ? d.name.slice(0, 13) + '\u2026' : d.name);
-      node.append('text')
-        .attr('text-anchor', 'middle').attr('dy', 12).attr('font-size', '7px').attr('fill', 'var(--text-muted)')
-        .text(d => d.node_type);
-      node.filter(d => annotations[d.node_key]?.note).append('text')
-        .attr('class', 'ann-note')
-        .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
-        .attr('fill', d => annotations[d.node_key]?.highlight || 'var(--primary)')
-        .attr('font-style', 'italic')
-        .text(d => { const n = annotations[d.node_key].note; return n.length > 30 ? n.slice(0, 29) + '\u2026' : n; });
-
-      node.on('click', (event, d) => {
-        event.stopPropagation();
-        const isAlready = d3.select(event.currentTarget).classed('highlighted');
-        self.selectedNode = isAlready ? null : d;
-        self.highlightNode(isAlready ? null : d.id, simEdges);
-      });
-      gRoot.on('click', () => { self.selectedNode = null; self.highlightNode(null, simEdges); });
 
       // Re-apply step annotations after render
       this.$nextTick(() => this.updateDiagramAnnotations());
