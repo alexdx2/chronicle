@@ -2738,8 +2738,7 @@ function dashboard() {
         if (w.x != null && w.y != null) this._wsPositionCache[w.node_id] = { x: w.x, y: w.y };
       });
 
-      // Investigation mode always uses free (so dropped nodes stay where placed)
-      const wsMode = isInvestigating ? 'free' : (this.wsLayout === 'free' ? 'free' : 'strict');
+      const wsMode = this.wsLayout === 'free' ? 'free' : 'strict';
 
       const result = this._renderGraphSVG({
         container,
