@@ -111,6 +111,13 @@ func (s *Store) migrate() error {
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
 	}
+	// Drop the old UNIQUE index on node_key (allow multiple versions per key).
+	// SQLite auto-generated unique index name is sqlite_autoindex_graph_nodes_1.
+	s.db.Exec(`DROP INDEX IF EXISTS sqlite_autoindex_graph_nodes_1`)
+	// Also drop if there was a named unique index.
+	s.db.Exec(`DROP INDEX IF EXISTS idx_graph_nodes_node_key_unique`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_nodes_node_key ON graph_nodes(node_key)`)
+
 	// Ensure indexes exist (idempotent).
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_status ON graph_evidence(evidence_status)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_file_status ON graph_evidence(file_path, evidence_status)`)
@@ -227,7 +234,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_graph_revisions_domain_after
 
 CREATE TABLE IF NOT EXISTS graph_nodes (
   node_id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  node_key               TEXT NOT NULL UNIQUE,
+  node_key               TEXT NOT NULL,
   layer                  TEXT NOT NULL,
   node_type              TEXT NOT NULL,
   domain_key             TEXT NOT NULL,
@@ -252,6 +259,7 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
   metadata               TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_node_key ON graph_nodes(node_key);
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_layer_type ON graph_nodes(layer, node_type);
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_domain ON graph_nodes(domain_key);
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_repo_path ON graph_nodes(repo_name, file_path);

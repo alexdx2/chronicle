@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // NodeRow represents a row in graph_nodes.
@@ -29,6 +28,9 @@ type NodeRow struct {
 	Freshness           float64 `json:"freshness"`
 	TrustScore          float64 `json:"trust_score"`
 	Metadata            string  `json:"metadata"`
+	ValidFromRevisionID int64   `json:"valid_from_revision_id,omitempty"`
+	ValidToRevisionID   int64   `json:"valid_to_revision_id,omitempty"`
+	ContextID           int64   `json:"context_id,omitempty"`
 }
 
 // NodeFilter holds optional filters for ListNodes.
@@ -42,10 +44,14 @@ type NodeFilter struct {
 
 // UpsertNode inserts or updates a node by node_key.
 // If the key already exists, immutable fields (layer, node_type, domain_key) must match.
+// When ValidFromRevisionID > 0 (versioned mode): closes old version and inserts new.
+// When ValidFromRevisionID == 0 (legacy mode): updates in place (backward compatible).
 // Returns the node_id.
 func (s *Store) UpsertNode(n NodeRow) (int64, error) {
-	// Check if node already exists.
-	const selQ = `SELECT node_id, layer, node_type, domain_key FROM graph_nodes WHERE node_key = ?`
+	// Look up the current version of this node (one where valid_to is NULL or 0).
+	const selQ = `SELECT node_id, layer, node_type, domain_key FROM graph_nodes
+		WHERE node_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		ORDER BY node_id DESC LIMIT 1`
 	row := s.db.QueryRow(selQ, n.NodeKey)
 	var existingID int64
 	var existingLayer, existingType, existingDomain string
@@ -55,26 +61,8 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 	}
 
 	if errors.Is(err, sql.ErrNoRows) {
-		// Insert.
-		const insQ = `
-			INSERT INTO graph_nodes
-			  (node_key, layer, node_type, domain_key, name, qualified_name, repo_name,
-			   file_path, lang, owner_key, environment, visibility, status,
-			   first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		`
-		res, err := s.db.Exec(insQ,
-			n.NodeKey, n.Layer, n.NodeType, n.DomainKey, n.Name,
-			nullableStr(n.QualifiedName), nullableStr(n.RepoName), nullableStr(n.FilePath),
-			nullableStr(n.Lang), nullableStr(n.OwnerKey), nullableStr(n.Environment),
-			nullableStr(n.Visibility), n.Status,
-			n.FirstSeenRevisionID, n.LastSeenRevisionID, n.Confidence, n.Freshness, n.TrustScore, n.Metadata,
-		)
-		if err != nil {
-			return 0, fmt.Errorf("UpsertNode insert: %w", err)
-		}
-		id, _ := res.LastInsertId()
-		return id, nil
+		// No existing current version — insert new.
+		return s.insertNodeVersion(n)
 	}
 
 	// Existing: check immutable fields.
@@ -83,24 +71,59 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 			n.NodeKey, existingLayer, n.Layer, existingType, n.NodeType, existingDomain, n.DomainKey)
 	}
 
-	// Update mutable fields.
+	if n.ValidFromRevisionID > 0 {
+		// Versioned mode: close old version, insert new.
+		_, err = s.db.Exec(`UPDATE graph_nodes SET valid_to_revision_id = ? WHERE node_id = ?`,
+			n.ValidFromRevisionID, existingID)
+		if err != nil {
+			return 0, fmt.Errorf("UpsertNode close old version: %w", err)
+		}
+		return s.insertNodeVersion(n)
+	}
+
+	// Legacy mode: update in place.
 	const updQ = `
 		UPDATE graph_nodes
 		SET name=?, qualified_name=?, repo_name=?, file_path=?, lang=?, owner_key=?,
 		    environment=?, visibility=?, status=?, last_seen_revision_id=?,
 		    confidence=?, freshness=?, trust_score=?, metadata=?
-		WHERE node_key=?
+		WHERE node_id=?
 	`
 	_, err = s.db.Exec(updQ,
 		n.Name, nullableStr(n.QualifiedName), nullableStr(n.RepoName), nullableStr(n.FilePath),
 		nullableStr(n.Lang), nullableStr(n.OwnerKey), nullableStr(n.Environment),
 		nullableStr(n.Visibility), n.Status, n.LastSeenRevisionID, n.Confidence, n.Freshness, n.TrustScore, n.Metadata,
-		n.NodeKey,
+		existingID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("UpsertNode update: %w", err)
 	}
 	return existingID, nil
+}
+
+// insertNodeVersion inserts a new node row including versioning columns.
+func (s *Store) insertNodeVersion(n NodeRow) (int64, error) {
+	const insQ = `
+		INSERT INTO graph_nodes
+		  (node_key, layer, node_type, domain_key, name, qualified_name, repo_name,
+		   file_path, lang, owner_key, environment, visibility, status,
+		   first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
+		   valid_from_revision_id, valid_to_revision_id, context_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	`
+	res, err := s.db.Exec(insQ,
+		n.NodeKey, n.Layer, n.NodeType, n.DomainKey, n.Name,
+		nullableStr(n.QualifiedName), nullableStr(n.RepoName), nullableStr(n.FilePath),
+		nullableStr(n.Lang), nullableStr(n.OwnerKey), nullableStr(n.Environment),
+		nullableStr(n.Visibility), n.Status,
+		n.FirstSeenRevisionID, n.LastSeenRevisionID, n.Confidence, n.Freshness, n.TrustScore, n.Metadata,
+		nullableInt64(n.ValidFromRevisionID), nullableInt64(n.ValidToRevisionID), nullableInt64(n.ContextID),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("UpsertNode insert: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return id, nil
 }
 
 // GetNodeByKey returns the node with the given node_key.
@@ -111,7 +134,8 @@ func (s *Store) GetNodeByKey(key string) (*NodeRow, error) {
 		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
 		       COALESCE(visibility,''), status,
 		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
-		FROM graph_nodes WHERE node_key = ?
+		FROM graph_nodes WHERE node_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		ORDER BY node_id DESC LIMIT 1
 	`
 	r := &NodeRow{}
 	err := s.db.QueryRow(q, key).Scan(
@@ -176,32 +200,28 @@ func (s *Store) ListNodes(f NodeFilter) ([]NodeRow, error) {
 		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
 		       COALESCE(visibility,''), status,
 		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
-		FROM graph_nodes
+		FROM graph_nodes WHERE (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
 	`
-	var conds []string
 	var args []any
 	if f.Layer != "" {
-		conds = append(conds, "layer = ?")
+		base += " AND layer = ?"
 		args = append(args, f.Layer)
 	}
 	if f.NodeType != "" {
-		conds = append(conds, "node_type = ?")
+		base += " AND node_type = ?"
 		args = append(args, f.NodeType)
 	}
 	if f.Domain != "" {
-		conds = append(conds, "domain_key = ?")
+		base += " AND domain_key = ?"
 		args = append(args, f.Domain)
 	}
 	if f.RepoName != "" {
-		conds = append(conds, "repo_name = ?")
+		base += " AND repo_name = ?"
 		args = append(args, f.RepoName)
 	}
 	if f.Status != "" {
-		conds = append(conds, "status = ?")
+		base += " AND status = ?"
 		args = append(args, f.Status)
-	}
-	if len(conds) > 0 {
-		base += " WHERE " + strings.Join(conds, " AND ")
 	}
 	base += " ORDER BY node_key"
 
