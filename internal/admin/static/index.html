@@ -1302,7 +1302,7 @@ function dashboard() {
     diagramSearch: '',
     diagramGraphLoaded: false,
     diagramMode: 'strict', // 'strict' (dagre every render) or 'free' (cached positions + drag)
-    diagramShowNeighbors: true, // show grayed neighbor nodes in diagram
+    diagramShowNeighbors: false, // show grayed neighbor nodes in diagram
     _diagramPositions: {},  // node_id → {x, y} — persists across re-renders in free mode
     descPanelHeight: 140,
     _resizing: false,
