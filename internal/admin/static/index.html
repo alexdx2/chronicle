@@ -2731,12 +2731,21 @@ function dashboard() {
       });
       const groupKeys = Object.keys(groupMap).sort();
 
+      // Seed position cache from workspace drop positions
+      if (!this._wsPositionCache) this._wsPositionCache = {};
+      this.workspaceNodes.forEach(w => {
+        if (w.x != null && w.y != null) this._wsPositionCache[w.node_id] = { x: w.x, y: w.y };
+      });
+
+      // Investigation mode always uses free (so dropped nodes stay where placed)
+      const wsMode = isInvestigating ? 'free' : (this.wsLayout === 'free' ? 'free' : 'strict');
+
       const result = this._renderGraphSVG({
         container,
         nodes: graphNodes,
         edges: graphEdges,
-        mode: this.wsLayout === 'free' ? 'free' : 'strict',
-        positionCache: this._wsPositionCache || (this._wsPositionCache = {}),
+        mode: wsMode,
+        positionCache: this._wsPositionCache,
         groups: { keys: groupKeys, map: groupMap, field: groupField },
         features: { investigation: isInvestigating },
         callbacks: {
@@ -3077,9 +3086,6 @@ function dashboard() {
       }
 
       const gRoot = svg.append('g');
-      svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
-        gRoot.attr('transform', event.transform);
-      }));
 
       // --- Group bounding boxes (behind everything) ---
       const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
@@ -3266,6 +3272,23 @@ function dashboard() {
       gRoot.on('click', () => {
         if (config.callbacks?.onBackgroundClick) config.callbacks.onBackgroundClick(simEdges);
       });
+
+      // Auto-fit: zoom to show all content with padding
+      const bbox = gRoot.node().getBBox();
+      if (bbox.width > 0 && bbox.height > 0) {
+        const pad = 40;
+        const svgEl = svg.node();
+        const svgW = svgEl.clientWidth || width;
+        const svgH = svgEl.clientHeight || height;
+        const scale = Math.min(svgW / (bbox.width + pad * 2), svgH / (bbox.height + pad * 2), 1.5);
+        const tx = svgW / 2 - (bbox.x + bbox.width / 2) * scale;
+        const ty = svgH / 2 - (bbox.y + bbox.height / 2) * scale;
+        const zoomBehavior = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
+          gRoot.attr('transform', event.transform);
+        });
+        svg.call(zoomBehavior);
+        svg.call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+      }
 
       return { svg, gRoot, link, node, shortLabels, viaLabels, simEdges, simNodes, simNodeMap };
     },
