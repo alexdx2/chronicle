@@ -198,6 +198,9 @@ a{color:var(--primary);text-decoration:none}
 .growth-tooltip .tt-title{font-weight:600;color:var(--text);margin-bottom:2px}
 .growth-tooltip .tt-nodes{color:#6b8f71}
 .growth-tooltip .tt-edges{color:#b8860b}
+.chart-toggle{display:flex;gap:2px;background:var(--card-alt);border-radius:var(--radius);padding:2px}
+.chart-toggle button{border:none;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--font-serif);font-size:11px;color:var(--text-muted);background:transparent;transition:all .15s}
+.chart-toggle button.active{background:var(--card);color:var(--text);box-shadow:var(--shadow)}
 
 /* Responsive */
 @media(max-width:1024px){.stat-grid{grid-template-columns:repeat(3,1fr)}.content-grid{grid-template-columns:1fr}}
@@ -468,9 +471,9 @@ a{color:var(--primary);text-decoration:none}
       <div class="card">
         <div class="card-header">
           <h3>Knowledge Growth</h3>
-          <div style="display:flex;gap:2px;font-size:11px;background:var(--card-alt);border-radius:var(--radius);padding:2px">
-            <button @click="chartMode='timeline'" :style="chartMode==='timeline'?'background:var(--card);box-shadow:var(--shadow)':''" style="border:none;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--font-serif);font-size:11px;color:var(--text);background:transparent">Timeline</button>
-            <button @click="chartMode='even'" :style="chartMode==='even'?'background:var(--card);box-shadow:var(--shadow)':''" style="border:none;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--font-serif);font-size:11px;color:var(--text);background:transparent">Even</button>
+          <div class="chart-toggle">
+            <button @click="chartMode='timeline'" :class="chartMode==='timeline'?'active':''">Timeline</button>
+            <button @click="chartMode='even'" :class="chartMode==='even'?'active':''">Even</button>
           </div>
         </div>
         <div class="card-body" style="padding:12px">
