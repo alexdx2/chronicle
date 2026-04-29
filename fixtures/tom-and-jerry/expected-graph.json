@@ -147,5 +147,12 @@
     {"target_kind": "node", "node_key": "contract:topic:tomandjerry:battle-results", "source_kind": "file", "repo_name": "arena-api", "file_path": "src/arena/battle-result.producer.ts", "line_start": 3, "line_end": 3, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95},
     {"target_kind": "node", "node_key": "contract:endpoint:tomandjerry:get:/tom/status", "source_kind": "file", "repo_name": "tom-api", "file_path": "src/tom/tom.controller.ts", "line_start": 8, "line_end": 11, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95},
     {"target_kind": "node", "node_key": "contract:endpoint:tomandjerry:post:/arena/attack", "source_kind": "file", "repo_name": "arena-api", "file_path": "src/arena/arena.controller.ts", "line_start": 8, "line_end": 11, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95}
+  ],
+  "aliases": [
+    {"node_key": "contract:topic:tomandjerry:battle-results", "alias": "battle-results", "alias_kind": "kafka_topic", "confidence": 0.95},
+    {"node_key": "service:service:tomandjerry:spectators-api", "alias": "spectators-api.internal", "alias_kind": "dns", "confidence": 0.9},
+    {"node_key": "service:service:tomandjerry:tom-api", "alias": "tom-api.internal", "alias_kind": "dns", "confidence": 0.9},
+    {"node_key": "service:service:tomandjerry:jerry-api", "alias": "jerry-api.internal", "alias_kind": "dns", "confidence": 0.9},
+    {"node_key": "service:service:tomandjerry:arena-api", "alias": "arena-api.internal", "alias_kind": "dns", "confidence": 0.9}
   ]
 }

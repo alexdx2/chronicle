@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anthropics/depbot/internal/registry"
-	"github.com/anthropics/depbot/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/registry"
+	"github.com/alexdx2/chronicle-core/internal/store"
 	"github.com/spf13/cobra"
 )
 

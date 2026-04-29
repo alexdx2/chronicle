@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropics/depbot/internal/graph"
-	"github.com/anthropics/depbot/internal/registry"
-	"github.com/anthropics/depbot/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/graph"
+	"github.com/alexdx2/chronicle-core/internal/registry"
+	"github.com/alexdx2/chronicle-core/internal/store"
 )
 
 func setupContextTest(t *testing.T) (*graph.Graph, *store.Store) {

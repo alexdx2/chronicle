@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anthropics/depbot/internal/graph"
-	"github.com/anthropics/depbot/internal/registry"
-	"github.com/anthropics/depbot/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/graph"
+	"github.com/alexdx2/chronicle-core/internal/registry"
+	"github.com/alexdx2/chronicle-core/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -47,6 +47,7 @@ func NewRootCmd() *cobra.Command {
 		newMCPCmd(),
 		newImpactCmd(),
 		newAdminCmd(),
+		newAliasCmd(),
 	)
 
 	return root

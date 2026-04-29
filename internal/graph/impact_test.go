@@ -3,7 +3,7 @@ package graph
 import (
 	"testing"
 
-	"github.com/anthropics/depbot/internal/validate"
+	"github.com/alexdx2/chronicle-core/internal/validate"
 )
 
 func seedImpactGraph(t *testing.T) *Graph {

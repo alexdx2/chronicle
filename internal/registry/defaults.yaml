@@ -228,6 +228,7 @@ node_statuses:
   - stale
   - deleted
   - unknown
+  - external
 
 trigger_kinds:
   - full_scan

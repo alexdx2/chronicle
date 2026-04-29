@@ -46,5 +46,10 @@
     {"target_kind": "node", "node_key": "code:controller:orders:paymentscontroller", "source_kind": "file", "repo_name": "payments-api", "file_path": "src/payments/payments.controller.ts", "line_start": 4, "line_end": 18, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99},
     {"target_kind": "node", "node_key": "contract:endpoint:orders:post:/orders", "source_kind": "openapi", "repo_name": "orders-api", "file_path": "openapi.yaml", "line_start": 10, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95},
     {"target_kind": "node", "node_key": "contract:endpoint:orders:post:/payments/charge", "source_kind": "openapi", "repo_name": "payments-api", "file_path": "openapi.yaml", "line_start": 5, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95}
+  ],
+  "aliases": [
+    {"node_key": "contract:topic:orders:order-created", "alias": "order-created", "alias_kind": "kafka_topic", "confidence": 0.95},
+    {"node_key": "service:service:orders:orders-api", "alias": "orders-api.internal", "alias_kind": "dns", "confidence": 0.9},
+    {"node_key": "service:service:orders:payments-api", "alias": "payments-api.internal", "alias_kind": "dns", "confidence": 0.9}
   ]
 }

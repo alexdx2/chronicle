@@ -5,7 +5,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/anthropics/depbot/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/store"
 )
 
 // ImpactOptions controls the impact query behavior.

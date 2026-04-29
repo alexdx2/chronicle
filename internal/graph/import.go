@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anthropics/depbot/internal/store"
-	"github.com/anthropics/depbot/internal/validate"
+	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/validate"
 )
 
 // ImportNode describes a node to import.
@@ -92,11 +92,20 @@ type ImportEvidence struct {
 	Metadata         string  `json:"metadata,omitempty"`
 }
 
+// ImportAlias describes an alias to import for a node.
+type ImportAlias struct {
+	NodeKey    string  `json:"node_key"`
+	Alias      string  `json:"alias"`
+	AliasKind  string  `json:"alias_kind"`
+	Confidence float64 `json:"confidence,omitempty"`
+}
+
 // ImportPayload is the full bulk-import payload.
 type ImportPayload struct {
 	Nodes    []ImportNode     `json:"nodes"`
 	Edges    []ImportEdge     `json:"edges"`
 	Evidence []ImportEvidence `json:"evidence"`
+	Aliases  []ImportAlias    `json:"aliases,omitempty"`
 }
 
 // ImportResult holds the result counts after a successful import.
@@ -104,6 +113,7 @@ type ImportResult struct {
 	NodesCreated    int `json:"nodes_created"`
 	EdgesCreated    int `json:"edges_created"`
 	EvidenceCreated int `json:"evidence_created"`
+	AliasesCreated  int `json:"aliases_created"`
 }
 
 // ImportAll imports nodes, edges, and evidence in a single transaction.
@@ -201,6 +211,26 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				continue // skip unknown target_kind
 			}
 			result.EvidenceCreated++
+		}
+
+		// Import aliases.
+		for _, a := range payload.Aliases {
+			if a.NodeKey == "" || a.Alias == "" {
+				continue
+			}
+			nodeID, err := tx.GetNodeIDByKey(a.NodeKey)
+			if err != nil {
+				continue // skip if node doesn't exist
+			}
+			if _, err := tx.AddAlias(store.AliasRow{
+				NodeID:     nodeID,
+				Alias:      a.Alias,
+				AliasKind:  a.AliasKind,
+				Confidence: a.Confidence,
+			}); err != nil {
+				continue // skip duplicates
+			}
+			result.AliasesCreated++
 		}
 
 		return nil

@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/anthropics/depbot/internal/registry"
-	"github.com/anthropics/depbot/internal/store"
-	"github.com/anthropics/depbot/internal/validate"
+	"github.com/alexdx2/chronicle-core/internal/registry"
+	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/validate"
 )
 
 func TestTrustLifecycle(t *testing.T) {

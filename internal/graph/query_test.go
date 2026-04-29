@@ -3,7 +3,7 @@ package graph
 import (
 	"testing"
 
-	"github.com/anthropics/depbot/internal/validate"
+	"github.com/alexdx2/chronicle-core/internal/validate"
 )
 
 // seedABC seeds nodes A -> B -> C using INJECTS edges (code->code).

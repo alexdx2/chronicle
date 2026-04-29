@@ -3,7 +3,7 @@ package graph
 import (
 	"testing"
 
-	"github.com/anthropics/depbot/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/store"
 )
 
 func basePayload() ImportPayload {

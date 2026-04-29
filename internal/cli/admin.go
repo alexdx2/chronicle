@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/anthropics/depbot/internal/admin"
+	"github.com/alexdx2/chronicle-core/internal/admin"
 	"github.com/spf13/cobra"
 )
 

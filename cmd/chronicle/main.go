@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/anthropics/depbot/internal/cli"
+	"github.com/alexdx2/chronicle-core/internal/cli"
 )
 
 func main() {

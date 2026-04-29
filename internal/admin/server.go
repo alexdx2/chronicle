@@ -16,11 +16,11 @@ import (
 
 	"sync"
 
-	"github.com/anthropics/depbot/internal/graph"
-	"github.com/anthropics/depbot/internal/mcp"
-	"github.com/anthropics/depbot/internal/registry"
-	"github.com/anthropics/depbot/internal/store"
-	"github.com/anthropics/depbot/internal/validate"
+	"github.com/alexdx2/chronicle-core/internal/graph"
+	"github.com/alexdx2/chronicle-core/internal/mcp"
+	"github.com/alexdx2/chronicle-core/internal/registry"
+	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/validate"
 )
 
 // findModuleRoot walks up from the current executable (or working dir) to find go.mod.

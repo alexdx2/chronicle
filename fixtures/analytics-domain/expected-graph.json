@@ -1,0 +1,49 @@
+{
+  "nodes": [
+    {"node_key": "code:repository:analytics:analytics-api", "layer": "code", "node_type": "repository", "domain_key": "analytics", "name": "analytics-api"},
+    {"node_key": "code:module:analytics:analyticsmodule", "layer": "code", "node_type": "module", "domain_key": "analytics", "name": "AnalyticsModule", "repo_name": "analytics-api", "file_path": "src/analytics/analytics.module.ts"},
+    {"node_key": "code:controller:analytics:dashboardcontroller", "layer": "code", "node_type": "controller", "domain_key": "analytics", "name": "DashboardController", "repo_name": "analytics-api", "file_path": "src/analytics/dashboard.controller.ts"},
+    {"node_key": "code:provider:analytics:analyticsservice", "layer": "code", "node_type": "provider", "domain_key": "analytics", "name": "AnalyticsService", "repo_name": "analytics-api", "file_path": "src/analytics/analytics.service.ts"},
+    {"node_key": "code:provider:analytics:battlestatsconsumer", "layer": "code", "node_type": "provider", "domain_key": "analytics", "name": "BattleStatsConsumer", "repo_name": "analytics-api", "file_path": "src/analytics/battle-stats.consumer.ts"},
+    {"node_key": "code:provider:analytics:leaderboardclient", "layer": "code", "node_type": "provider", "domain_key": "analytics", "name": "LeaderboardClient", "repo_name": "analytics-api", "file_path": "src/analytics/leaderboard.client.ts"},
+    {"node_key": "code:provider:analytics:orderstreamconsumer", "layer": "code", "node_type": "provider", "domain_key": "analytics", "name": "OrderStreamConsumer", "repo_name": "analytics-api", "file_path": "src/analytics/order-stream.consumer.ts"},
+
+    {"node_key": "service:service:analytics:analytics-api", "layer": "service", "node_type": "service", "domain_key": "analytics", "name": "analytics-api"},
+
+    {"node_key": "contract:endpoint:analytics:get:/dashboard/overview", "layer": "contract", "node_type": "endpoint", "domain_key": "analytics", "name": "GET /dashboard/overview", "repo_name": "analytics-api"},
+    {"node_key": "contract:endpoint:analytics:get:/dashboard/battles", "layer": "contract", "node_type": "endpoint", "domain_key": "analytics", "name": "GET /dashboard/battles", "repo_name": "analytics-api"},
+
+    {"node_key": "contract:topic:tomandjerry:battle-results", "layer": "contract", "node_type": "topic", "domain_key": "tomandjerry", "name": "battle-results", "status": "external"},
+    {"node_key": "service:service:tomandjerry:spectators-api", "layer": "service", "node_type": "service", "domain_key": "tomandjerry", "name": "spectators-api", "status": "external"},
+    {"node_key": "contract:topic:orders:order-created", "layer": "contract", "node_type": "topic", "domain_key": "orders", "name": "order-created", "status": "external"}
+  ],
+  "edges": [
+    {"from_node_key": "code:repository:analytics:analytics-api", "to_node_key": "code:module:analytics:analyticsmodule", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:analytics:analyticsmodule", "to_node_key": "code:controller:analytics:dashboardcontroller", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:analytics:analyticsmodule", "to_node_key": "code:provider:analytics:analyticsservice", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:analytics:analyticsmodule", "to_node_key": "code:provider:analytics:battlestatsconsumer", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:analytics:analyticsmodule", "to_node_key": "code:provider:analytics:leaderboardclient", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:module:analytics:analyticsmodule", "to_node_key": "code:provider:analytics:orderstreamconsumer", "edge_type": "CONTAINS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+
+    {"from_node_key": "code:controller:analytics:dashboardcontroller", "to_node_key": "code:provider:analytics:analyticsservice", "edge_type": "INJECTS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:provider:analytics:analyticsservice", "to_node_key": "code:provider:analytics:battlestatsconsumer", "edge_type": "INJECTS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+    {"from_node_key": "code:provider:analytics:analyticsservice", "to_node_key": "code:provider:analytics:leaderboardclient", "edge_type": "INJECTS", "derivation_kind": "hard", "from_layer": "code", "to_layer": "code"},
+
+    {"from_node_key": "code:controller:analytics:dashboardcontroller", "to_node_key": "contract:endpoint:analytics:get:/dashboard/overview", "edge_type": "EXPOSES_ENDPOINT", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"},
+    {"from_node_key": "code:controller:analytics:dashboardcontroller", "to_node_key": "contract:endpoint:analytics:get:/dashboard/battles", "edge_type": "EXPOSES_ENDPOINT", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"},
+
+    {"from_node_key": "code:provider:analytics:battlestatsconsumer", "to_node_key": "contract:topic:tomandjerry:battle-results", "edge_type": "CONSUMES_TOPIC", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"},
+    {"from_node_key": "code:provider:analytics:leaderboardclient", "to_node_key": "service:service:tomandjerry:spectators-api", "edge_type": "CALLS_SERVICE", "derivation_kind": "linked", "from_layer": "code", "to_layer": "service"},
+    {"from_node_key": "code:provider:analytics:orderstreamconsumer", "to_node_key": "contract:topic:orders:order-created", "edge_type": "CONSUMES_TOPIC", "derivation_kind": "hard", "from_layer": "code", "to_layer": "contract"}
+  ],
+  "evidence": [
+    {"target_kind": "node", "node_key": "code:provider:analytics:battlestatsconsumer", "source_kind": "file", "repo_name": "analytics-api", "file_path": "src/analytics/battle-stats.consumer.ts", "line_start": 5, "line_end": 15, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99},
+    {"target_kind": "node", "node_key": "code:provider:analytics:leaderboardclient", "source_kind": "file", "repo_name": "analytics-api", "file_path": "src/analytics/leaderboard.client.ts", "line_start": 3, "line_end": 12, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.95},
+    {"target_kind": "node", "node_key": "code:provider:analytics:orderstreamconsumer", "source_kind": "file", "repo_name": "analytics-api", "file_path": "src/analytics/order-stream.consumer.ts", "line_start": 3, "line_end": 10, "extractor_id": "claude-code", "extractor_version": "1.0", "confidence": 0.99}
+  ],
+  "aliases": [
+    {"node_key": "contract:topic:tomandjerry:battle-results", "alias": "battle-results", "alias_kind": "kafka_topic", "confidence": 0.9},
+    {"node_key": "service:service:tomandjerry:spectators-api", "alias": "spectators-api.internal", "alias_kind": "dns", "confidence": 0.85},
+    {"node_key": "contract:topic:orders:order-created", "alias": "order-created", "alias_kind": "kafka_topic", "confidence": 0.9}
+  ]
+}

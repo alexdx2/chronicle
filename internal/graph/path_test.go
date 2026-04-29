@@ -3,7 +3,7 @@ package graph
 import (
 	"testing"
 
-	"github.com/anthropics/depbot/internal/validate"
+	"github.com/alexdx2/chronicle-core/internal/validate"
 )
 
 // seedPathGraph creates: A -INJECTS-> B -INJECTS-> C -CALLS_SERVICE(linked)-> D

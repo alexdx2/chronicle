@@ -3,19 +3,26 @@ package graph
 import (
 	"fmt"
 
-	"github.com/anthropics/depbot/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/store"
 )
 
 // DepNode is a node in the dependency traversal result.
 type DepNode struct {
-	NodeKey    string  `json:"node_key"`
-	Name       string  `json:"name"`
-	Layer      string  `json:"layer"`
-	NodeType   string  `json:"node_type"`
-	Depth      int     `json:"depth"`
-	TrustScore float64 `json:"trust_score"`
-	Freshness  float64 `json:"freshness"`
-	Status     string  `json:"status"`
+	NodeKey             string         `json:"node_key"`
+	Name                string         `json:"name"`
+	Layer               string         `json:"layer"`
+	NodeType            string         `json:"node_type"`
+	Depth               int            `json:"depth"`
+	TrustScore          float64        `json:"trust_score"`
+	Freshness           float64        `json:"freshness"`
+	Status              string         `json:"status"`
+	SourceRepo          string         `json:"source_repo,omitempty"`
+	ResolvedRepo        string         `json:"resolved_repo,omitempty"`
+	ResolutionStatus    string         `json:"resolution_status,omitempty"`
+	ResolutionMethod    string         `json:"resolution_method,omitempty"`
+	ResolutionAliasKind string         `json:"resolution_alias_kind,omitempty"`
+	ResolutionAlias     string         `json:"resolution_alias,omitempty"`
+	AmbiguousCandidates []AmbiguousRef `json:"ambiguous_candidates,omitempty"`
 }
 
 // Stats holds aggregate counts for a domain.

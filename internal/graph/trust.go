@@ -1,7 +1,7 @@
 package graph
 
 import (
-	"github.com/anthropics/depbot/internal/store"
+	"github.com/alexdx2/chronicle-core/internal/store"
 )
 
 // DerivationConfidence maps derivation_kind to a base confidence value.

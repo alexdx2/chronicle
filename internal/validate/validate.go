@@ -3,7 +3,7 @@ package validate
 import (
 	"fmt"
 
-	"github.com/anthropics/depbot/internal/registry"
+	"github.com/alexdx2/chronicle-core/internal/registry"
 )
 
 type NodeInput struct {

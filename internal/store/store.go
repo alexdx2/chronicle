@@ -206,7 +206,7 @@ func (s *Store) backfillContexts() {
 
 // ResetDB drops all data and recreates the schema. Use when schema changes.
 func (s *Store) ResetDB() error {
-	tables := []string{"graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts"}
+	tables := []string{"node_aliases", "graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts"}
 	for _, t := range tables {
 		s.db.Exec("DROP TABLE IF EXISTS " + t)
 	}
@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
   environment            TEXT,
   visibility             TEXT,
   status                 TEXT NOT NULL DEFAULT 'active'
-                           CHECK (status IN ('active','stale','deleted','unknown','contradicted')),
+                           CHECK (status IN ('active','stale','deleted','unknown','contradicted','external')),
   first_seen_revision_id INTEGER REFERENCES graph_revisions(revision_id),
   last_seen_revision_id  INTEGER REFERENCES graph_revisions(revision_id),
   confidence             REAL NOT NULL DEFAULT 1.0
@@ -441,6 +441,19 @@ CREATE TABLE IF NOT EXISTS graph_changelog (
 CREATE INDEX IF NOT EXISTS idx_changelog_revision ON graph_changelog(revision_id);
 CREATE INDEX IF NOT EXISTS idx_changelog_context ON graph_changelog(context_id);
 CREATE INDEX IF NOT EXISTS idx_changelog_entity ON graph_changelog(entity_type, entity_key);
+
+CREATE TABLE IF NOT EXISTS node_aliases (
+    alias_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id          INTEGER NOT NULL REFERENCES graph_nodes(node_id),
+    alias            TEXT    NOT NULL,
+    normalized_alias TEXT    NOT NULL,
+    alias_kind       TEXT    NOT NULL,
+    confidence       REAL    NOT NULL DEFAULT 0.8,
+    UNIQUE(node_id, normalized_alias, alias_kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_aliases_normalized ON node_aliases(normalized_alias, alias_kind);
+CREATE INDEX IF NOT EXISTS idx_node_aliases_node_id ON node_aliases(node_id);
 `
 
 // SaveDiagramSession upserts a diagram session as a JSON blob.

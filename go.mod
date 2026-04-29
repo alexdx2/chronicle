@@ -1,4 +1,4 @@
-module github.com/anthropics/depbot
+module github.com/alexdx2/chronicle-core
 
 go 1.25.5
 

@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/anthropics/depbot/internal/admin"
-	mcpserver "github.com/anthropics/depbot/internal/mcp"
+	"github.com/alexdx2/chronicle-core/internal/admin"
+	mcpserver "github.com/alexdx2/chronicle-core/internal/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 )

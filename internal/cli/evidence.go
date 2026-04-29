@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/anthropics/depbot/internal/validate"
+	"github.com/alexdx2/chronicle-core/internal/validate"
 	"github.com/spf13/cobra"
 )
 
