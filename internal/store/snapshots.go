@@ -20,6 +20,7 @@ type SnapshotRow struct {
 	ChangedEdgeCount  int    `json:"changed_edge_count"`
 	ImpactedNodeCount int    `json:"impacted_node_count"`
 	Summary           string `json:"summary"`
+	ContextName       string `json:"context_name,omitempty"`
 }
 
 // CreateSnapshot inserts a new snapshot row and returns the snapshot_id.
@@ -50,15 +51,19 @@ func (s *Store) CreateSnapshot(snap SnapshotRow) (int64, error) {
 }
 
 // ListSnapshots returns snapshots for a domain, ordered newest first.
+// Each snapshot is enriched with the knowledge context name (if any) via the revision.
 func (s *Store) ListSnapshots(domainKey string) ([]SnapshotRow, error) {
 	const q = `
-		SELECT snapshot_id, revision_id, domain_key, snapshot_kind, created_at,
-		       node_count, edge_count,
-		       changed_file_count, changed_node_count, changed_edge_count, impacted_node_count,
-		       summary
-		FROM graph_snapshots
-		WHERE domain_key = ?
-		ORDER BY created_at DESC
+		SELECT s.snapshot_id, s.revision_id, s.domain_key, s.snapshot_kind, s.created_at,
+		       s.node_count, s.edge_count,
+		       s.changed_file_count, s.changed_node_count, s.changed_edge_count, s.impacted_node_count,
+		       s.summary,
+		       COALESCE(kc.name, '')
+		FROM graph_snapshots s
+		LEFT JOIN graph_revisions r ON s.revision_id = r.revision_id
+		LEFT JOIN knowledge_contexts kc ON r.context_id = kc.context_id
+		WHERE s.domain_key = ?
+		ORDER BY s.created_at DESC
 	`
 	rows, err := s.db.Query(q, domainKey)
 	if err != nil {
@@ -73,7 +78,7 @@ func (s *Store) ListSnapshots(domainKey string) ([]SnapshotRow, error) {
 			&r.SnapshotID, &r.RevisionID, &r.DomainKey, &r.Kind, &r.CreatedAt,
 			&r.NodeCount, &r.EdgeCount,
 			&r.ChangedFileCount, &r.ChangedNodeCount, &r.ChangedEdgeCount, &r.ImpactedNodeCount,
-			&r.Summary,
+			&r.Summary, &r.ContextName,
 		); err != nil {
 			return nil, fmt.Errorf("ListSnapshots scan: %w", err)
 		}

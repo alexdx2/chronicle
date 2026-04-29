@@ -3621,7 +3621,8 @@ function renderGrowthChart(el, scans, mode) {
     const dt = d._date;
     const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric'})
       + ' ' + dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:false});
-    tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id} \u00b7 ${dateStr}</div>`
+    const ctx = d.context_name ? ` \u00b7 ${d.context_name}` : '';
+    tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id}${ctx} \u00b7 ${dateStr}</div>`
       + `<div class="tt-nodes">${d.node_count} nodes</div>`
       + `<div class="tt-edges">${d.edge_count} edges</div>`
       + `<div style="color:var(--text-muted)">${d.snapshot_kind}</div>`;
