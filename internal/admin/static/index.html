@@ -3468,6 +3468,176 @@ function dashboard() {
     },
   };
 }
+
+function renderGrowthChart(el, scans) {
+  if (!el || !scans || scans.length < 2) return;
+
+  // Reverse to oldest-first, dedupe by revision_id
+  const seen = new Set();
+  const data = scans.slice().reverse().filter(s => {
+    if (seen.has(s.revision_id)) return false;
+    seen.add(s.revision_id);
+    return true;
+  });
+
+  // Clear previous render
+  el.innerHTML = '';
+
+  const margin = {top: 20, right: 16, bottom: 28, left: 40};
+  const width = el.clientWidth - margin.left - margin.right;
+  const height = 200 - margin.top - margin.bottom;
+
+  if (width <= 0) return;
+
+  const svg = d3.select(el)
+    .append('svg')
+    .attr('width', el.clientWidth)
+    .attr('height', 200)
+    .attr('class', 'growth-chart')
+    .append('g')
+    .attr('transform', `translate(${margin.left},${margin.top})`);
+
+  // Scales
+  const x = d3.scaleLinear()
+    .domain([0, data.length - 1])
+    .range([0, width]);
+
+  const maxVal = d3.max(data, d => Math.max(d.node_count, d.edge_count)) || 10;
+  const y = d3.scaleLinear()
+    .domain([0, maxVal * 1.1])
+    .range([height, 0]);
+
+  // Grid lines
+  const ticks = y.ticks(4);
+  svg.selectAll('.grid-line')
+    .data(ticks.slice(1))
+    .join('line')
+    .attr('class', 'grid-line')
+    .attr('x1', 0).attr('x2', width)
+    .attr('y1', d => y(d)).attr('y2', d => y(d));
+
+  // Y axis (counts)
+  const yAxis = d3.axisLeft(y).ticks(4).tickSize(0).tickPadding(6);
+  svg.append('g').attr('class', 'axis').call(yAxis).select('.domain').remove();
+
+  // X axis (dates) — show a few labels
+  const labelCount = Math.min(data.length, 5);
+  const labelIndices = [];
+  for (let i = 0; i < labelCount; i++) {
+    labelIndices.push(Math.round(i * (data.length - 1) / (labelCount - 1)));
+  }
+
+  const xAxisG = svg.append('g')
+    .attr('class', 'axis')
+    .attr('transform', `translate(0,${height})`);
+
+  xAxisG.selectAll('text')
+    .data(labelIndices)
+    .join('text')
+    .attr('x', i => x(i))
+    .attr('y', 16)
+    .attr('text-anchor', 'middle')
+    .text(i => {
+      const d = new Date(data[i].created_at);
+      return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+    });
+
+  xAxisG.append('line')
+    .attr('x1', 0).attr('x2', width)
+    .attr('y1', 0).attr('y2', 0)
+    .attr('stroke', 'var(--border)');
+
+  // Area + line generators
+  const areaGen = (key) => d3.area()
+    .x((d, i) => x(i))
+    .y0(height)
+    .y1(d => y(d[key]));
+
+  const lineGen = (key) => d3.line()
+    .x((d, i) => x(i))
+    .y(d => y(d[key]));
+
+  // Draw areas
+  svg.append('path').datum(data).attr('class', 'area-nodes').attr('d', areaGen('node_count'));
+  svg.append('path').datum(data).attr('class', 'area-edges').attr('d', areaGen('edge_count'));
+
+  // Draw lines
+  svg.append('path').datum(data).attr('class', 'line-nodes').attr('d', lineGen('node_count'));
+  svg.append('path').datum(data).attr('class', 'line-edges').attr('d', lineGen('edge_count'));
+
+  // Legend
+  const legend = svg.append('g').attr('transform', `translate(${width - 100}, -8)`);
+  legend.append('rect').attr('width', 8).attr('height', 8).attr('rx', 2).attr('fill', '#6b8f71');
+  legend.append('text').attr('class', 'legend').attr('x', 12).attr('y', 8).text('Nodes');
+  legend.append('rect').attr('x', 55).attr('width', 8).attr('height', 8).attr('rx', 2).attr('fill', '#b8860b');
+  legend.append('text').attr('class', 'legend').attr('x', 67).attr('y', 8).text('Edges');
+
+  // Tooltip
+  let tooltip = el.querySelector('.growth-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.className = 'growth-tooltip';
+    tooltip.style.display = 'none';
+    el.style.position = 'relative';
+    el.appendChild(tooltip);
+  }
+
+  // Dots for nodes
+  svg.selectAll('.dot-nodes')
+    .data(data)
+    .join('circle')
+    .attr('class', 'dot-nodes')
+    .attr('cx', (d, i) => x(i))
+    .attr('cy', d => y(d.node_count))
+    .attr('r', 3)
+    .on('mouseenter', function(event, d) {
+      d3.select(this).attr('r', 5);
+      const dt = new Date(d.created_at);
+      const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric'})
+        + ' ' + dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:false});
+      tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id} \u00b7 ${dateStr}</div>`
+        + `<div class="tt-nodes">${d.node_count} nodes</div>`
+        + `<div class="tt-edges">${d.edge_count} edges</div>`
+        + `<div style="color:var(--text-muted)">${d.snapshot_kind}</div>`;
+      tooltip.style.display = 'block';
+      const rect = el.getBoundingClientRect();
+      const cx = event.clientX - rect.left;
+      tooltip.style.left = (cx + 12) + 'px';
+      tooltip.style.top = '8px';
+    })
+    .on('mouseleave', function() {
+      d3.select(this).attr('r', 3);
+      tooltip.style.display = 'none';
+    });
+
+  // Dots for edges
+  svg.selectAll('.dot-edges')
+    .data(data)
+    .join('circle')
+    .attr('class', 'dot-edges')
+    .attr('cx', (d, i) => x(i))
+    .attr('cy', d => y(d.edge_count))
+    .attr('r', 3)
+    .on('mouseenter', function(event, d) {
+      d3.select(this).attr('r', 5);
+      const dt = new Date(d.created_at);
+      const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric'})
+        + ' ' + dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:false});
+      tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id} \u00b7 ${dateStr}</div>`
+        + `<div class="tt-nodes">${d.node_count} nodes</div>`
+        + `<div class="tt-edges">${d.edge_count} edges</div>`
+        + `<div style="color:var(--text-muted)">${d.snapshot_kind}</div>`;
+      tooltip.style.display = 'block';
+      const rect = el.getBoundingClientRect();
+      const cx = event.clientX - rect.left;
+      tooltip.style.left = (cx + 12) + 'px';
+      tooltip.style.top = '8px';
+    })
+    .on('mouseleave', function() {
+      d3.select(this).attr('r', 3);
+      tooltip.style.display = 'none';
+    });
+}
 </script>
 </body>
 </html>
