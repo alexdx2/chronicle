@@ -183,9 +183,21 @@ a{color:var(--primary);text-decoration:none}
 .graph-svg .neighbor-node{opacity:.55}
 .opacity-50{opacity:.5}
 
-/* Scan history */
-.scan-row{display:grid;grid-template-columns:1fr 60px 60px auto;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;align-items:center}
-.scan-row:last-child{border:none}
+/* Knowledge growth chart */
+.growth-chart .area-nodes{fill:#6b8f71;fill-opacity:.2}
+.growth-chart .area-edges{fill:#b8860b;fill-opacity:.15}
+.growth-chart .line-nodes{fill:none;stroke:#6b8f71;stroke-width:2}
+.growth-chart .line-edges{fill:none;stroke:#b8860b;stroke-width:2}
+.growth-chart .dot-nodes{fill:#6b8f71}
+.growth-chart .dot-edges{fill:#b8860b}
+.growth-chart .grid-line{stroke:var(--border);stroke-width:0.5;stroke-dasharray:4}
+.growth-chart .axis text{font-size:10px;fill:var(--text-muted);font-family:var(--font-mono)}
+.growth-chart .axis line,.growth-chart .axis path{stroke:var(--border)}
+.growth-chart .legend{font-size:11px;fill:var(--text-muted)}
+.growth-tooltip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;font-size:11px;line-height:1.5;box-shadow:var(--shadow);white-space:nowrap;z-index:10}
+.growth-tooltip .tt-title{font-weight:600;color:var(--text);margin-bottom:2px}
+.growth-tooltip .tt-nodes{color:#6b8f71}
+.growth-tooltip .tt-edges{color:#b8860b}
 
 /* Responsive */
 @media(max-width:1024px){.stat-grid{grid-template-columns:repeat(3,1fr)}.content-grid{grid-template-columns:1fr}}
