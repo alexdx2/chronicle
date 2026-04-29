@@ -466,7 +466,13 @@ a{color:var(--primary);text-decoration:none}
 
       <!-- Knowledge Growth -->
       <div class="card">
-        <div class="card-header"><h3>Knowledge Growth</h3></div>
+        <div class="card-header">
+          <h3>Knowledge Growth</h3>
+          <div style="display:flex;gap:2px;font-size:11px;background:var(--card-alt);border-radius:var(--radius);padding:2px">
+            <button @click="chartMode='timeline'" :style="chartMode==='timeline'?'background:var(--card);box-shadow:var(--shadow)':''" style="border:none;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--font-serif);font-size:11px;color:var(--text);background:transparent">Timeline</button>
+            <button @click="chartMode='even'" :style="chartMode==='even'?'background:var(--card);box-shadow:var(--shadow)':''" style="border:none;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--font-serif);font-size:11px;color:var(--text);background:transparent">Even</button>
+          </div>
+        </div>
         <div class="card-body" style="padding:12px">
           <template x-if="loading.scans">
             <div class="loader"><div class="spinner"></div></div>
@@ -475,7 +481,7 @@ a{color:var(--primary);text-decoration:none}
             <div style="text-align:center;color:var(--text-muted);padding:12px">Not enough scans to chart</div>
           </template>
           <template x-if="!loading.scans && scans && scans.length >= 2">
-            <div x-effect="renderGrowthChart($el, scans)" style="width:100%;height:200px"></div>
+            <div x-effect="renderGrowthChart($el, scans, chartMode)" style="width:100%;height:200px"></div>
           </template>
         </div>
       </div>
@@ -1224,6 +1230,7 @@ function dashboard() {
     loadingMore: false,
     lowConf: [],
     scans: [],
+    chartMode: 'timeline',
     validation: {},
     discoveries: [],
     glossary: [],
@@ -3469,8 +3476,9 @@ function dashboard() {
   };
 }
 
-function renderGrowthChart(el, scans) {
+function renderGrowthChart(el, scans, mode) {
   if (!el || !scans || scans.length < 2) return;
+  mode = mode || 'timeline';
 
   // Reverse to oldest-first, dedupe by revision_id, parse dates
   const seen = new Set();
@@ -3478,7 +3486,7 @@ function renderGrowthChart(el, scans) {
     if (seen.has(s.revision_id)) return false;
     seen.add(s.revision_id);
     return true;
-  }).map(s => ({ ...s, _date: new Date(s.created_at) }));
+  }).map((s, i) => ({ ...s, _date: new Date(s.created_at), _idx: i }));
 
   // Clear previous render
   el.innerHTML = '';
@@ -3497,10 +3505,19 @@ function renderGrowthChart(el, scans) {
     .append('g')
     .attr('transform', `translate(${margin.left},${margin.top})`);
 
-  // Time scale: first scan → today
-  const x = d3.scaleTime()
-    .domain([data[0]._date, new Date()])
-    .range([0, width]);
+  // X scale: timeline (real dates) or even (equally spaced)
+  let x, xPos;
+  if (mode === 'timeline') {
+    x = d3.scaleTime()
+      .domain([data[0]._date, new Date()])
+      .range([0, width]);
+    xPos = d => x(d._date);
+  } else {
+    x = d3.scaleLinear()
+      .domain([0, data.length - 1])
+      .range([0, width]);
+    xPos = d => x(d._idx);
+  }
 
   const maxVal = d3.max(data, d => Math.max(d.node_count, d.edge_count)) || 10;
   const y = d3.scaleLinear()
@@ -3520,35 +3537,55 @@ function renderGrowthChart(el, scans) {
   const yAxis = d3.axisLeft(y).ticks(4).tickSize(0).tickPadding(6);
   svg.append('g').attr('class', 'axis').call(yAxis).select('.domain').remove();
 
-  // X axis (time)
-  const xAxis = d3.axisBottom(x).ticks(5).tickSize(0).tickPadding(8)
-    .tickFormat(d3.timeFormat('%b %d'));
-  svg.append('g')
+  // X axis
+  const xAxisG = svg.append('g')
     .attr('class', 'axis')
-    .attr('transform', `translate(0,${height})`)
-    .call(xAxis)
-    .select('.domain').attr('stroke', 'var(--border)');
+    .attr('transform', `translate(0,${height})`);
+
+  if (mode === 'timeline') {
+    const xAxis = d3.axisBottom(x).ticks(5).tickSize(0).tickPadding(8)
+      .tickFormat(d3.timeFormat('%b %d'));
+    xAxisG.call(xAxis).select('.domain').attr('stroke', 'var(--border)');
+  } else {
+    // Even mode: label each point with its date
+    const labelCount = Math.min(data.length, 6);
+    const labelIndices = [];
+    for (let i = 0; i < labelCount; i++) {
+      labelIndices.push(Math.round(i * (data.length - 1) / (labelCount - 1)));
+    }
+    xAxisG.selectAll('text')
+      .data(labelIndices)
+      .join('text')
+      .attr('x', i => x(i))
+      .attr('y', 16)
+      .attr('text-anchor', 'middle')
+      .text(i => data[i]._date.toLocaleDateString('en-US', {month:'short', day:'numeric'}));
+    xAxisG.append('line')
+      .attr('x1', 0).attr('x2', width)
+      .attr('y1', 0).attr('y2', 0)
+      .attr('stroke', 'var(--border)');
+  }
 
   // Vertical scan marker lines
   svg.selectAll('.scan-marker')
     .data(data)
     .join('line')
     .attr('class', 'scan-marker')
-    .attr('x1', d => x(d._date)).attr('x2', d => x(d._date))
+    .attr('x1', d => xPos(d)).attr('x2', d => xPos(d))
     .attr('y1', 0).attr('y2', height)
     .attr('stroke', 'var(--border)')
     .attr('stroke-width', 1)
     .attr('stroke-dasharray', '3,3')
     .attr('opacity', 0.5);
 
-  // Area + line generators (time-based)
+  // Area + line generators
   const areaGen = (key) => d3.area()
-    .x(d => x(d._date))
+    .x(d => xPos(d))
     .y0(height)
     .y1(d => y(d[key]));
 
   const lineGen = (key) => d3.line()
-    .x(d => x(d._date))
+    .x(d => xPos(d))
     .y(d => y(d[key]));
 
   // Draw areas
@@ -3602,7 +3639,7 @@ function renderGrowthChart(el, scans) {
     .data(data)
     .join('circle')
     .attr('class', 'dot-nodes')
-    .attr('cx', d => x(d._date))
+    .attr('cx', d => xPos(d))
     .attr('cy', d => y(d.node_count))
     .attr('r', 3)
     .on('mouseenter', showTooltip)
@@ -3613,7 +3650,7 @@ function renderGrowthChart(el, scans) {
     .data(data)
     .join('circle')
     .attr('class', 'dot-edges')
-    .attr('cx', d => x(d._date))
+    .attr('cx', d => xPos(d))
     .attr('cy', d => y(d.edge_count))
     .attr('r', 3)
     .on('mouseenter', showTooltip)
