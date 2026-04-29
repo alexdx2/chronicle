@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/alexdx2/chronicle-core/internal/graph"
-	"github.com/alexdx2/chronicle-core/internal/registry"
-	"github.com/alexdx2/chronicle-core/internal/store"
-	"github.com/alexdx2/chronicle-core/internal/validate"
+	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 )
 
 func loadGoldenPayload(t *testing.T) graph.ImportPayload {

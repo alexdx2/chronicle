@@ -3,7 +3,7 @@ package cli
 import (
 	"strings"
 
-	"github.com/alexdx2/chronicle-core/internal/graph"
+	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/spf13/cobra"
 )
 

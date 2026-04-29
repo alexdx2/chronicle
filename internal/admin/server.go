@@ -16,11 +16,11 @@ import (
 
 	"sync"
 
-	"github.com/alexdx2/chronicle-core/internal/graph"
+	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/internal/mcp"
-	"github.com/alexdx2/chronicle-core/internal/registry"
-	"github.com/alexdx2/chronicle-core/internal/store"
-	"github.com/alexdx2/chronicle-core/internal/validate"
+	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 )
 
 // findModuleRoot walks up from the current executable (or working dir) to find go.mod.

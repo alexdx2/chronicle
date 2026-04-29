@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alexdx2/chronicle-core/internal/graph"
-	"github.com/alexdx2/chronicle-core/internal/store"
-	"github.com/alexdx2/chronicle-core/internal/validate"
+	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )

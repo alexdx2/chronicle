@@ -1,0 +1,257 @@
+version: "1"
+
+layers:
+  - code
+  - service
+  - contract
+  - data
+  - flow
+  - ownership
+  - infra
+  - ci
+
+node_types:
+  code:
+    - repository
+    - package
+    - module
+    - file
+    - symbol
+    - controller
+    - provider
+    - resolver
+  service:
+    - service
+    - worker
+    - job
+    - deployment
+    - external_system
+  contract:
+    - http_api
+    - endpoint
+    - graphql_schema
+    - graphql_operation
+    - graphql_type
+    - topic
+    - async_channel
+    - schema_subject
+    - schema_version
+  data:
+    - model
+    - entity
+    - field
+    - enum
+    - relation
+    - database
+    - table
+  flow:
+    - flow
+    - flow_step
+    - use_case
+    - usecase
+    - state_transition
+    - invariant
+    - trigger
+    - outcome
+  ownership:
+    - domain
+    - team
+    - owner
+  infra:
+    - terraform_module
+    - k8s_object
+    - k8s_service
+    - k8s_deployment
+  ci:
+    - workflow
+    - pipeline
+    - release
+
+edge_types:
+  CONTAINS:
+    from_layers: [code, service, contract, data, flow, ownership, infra, ci]
+    to_layers: [code, service, contract, data, flow, ownership, infra, ci]
+  IMPORTS:
+    from_layers: [code]
+    to_layers: [code]
+  EXPORTS:
+    from_layers: [code]
+    to_layers: [code]
+  DECLARES:
+    from_layers: [code]
+    to_layers: [code]
+  INJECTS:
+    from_layers: [code]
+    to_layers: [code]
+  CALLS_SYMBOL:
+    from_layers: [code]
+    to_layers: [code]
+  EXPOSES_ENDPOINT:
+    from_layers: [code, service]
+    to_layers: [contract]
+  HANDLES_OPERATION:
+    from_layers: [code]
+    to_layers: [contract]
+  RETURNS_TYPE:
+    from_layers: [contract]
+    to_layers: [contract]
+  CALLS_ENDPOINT:
+    from_layers: [code, service]
+    to_layers: [contract]
+  CALLS_SERVICE:
+    from_layers: [code, service]
+    to_layers: [service]
+  PUBLISHES_TOPIC:
+    from_layers: [code, service]
+    to_layers: [contract]
+  CONSUMES_TOPIC:
+    from_layers: [code, service]
+    to_layers: [contract]
+  USES_SCHEMA:
+    from_layers: [contract]
+    to_layers: [contract]
+  REGISTERS_SUBJECT:
+    from_layers: [contract]
+    to_layers: [contract]
+  DEPLOYS_AS:
+    from_layers: [service]
+    to_layers: [infra]
+  TARGETS_SERVICE:
+    from_layers: [infra, ci]
+    to_layers: [service]
+  SELECTS_PODS:
+    from_layers: [infra]
+    to_layers: [infra]
+  ROUTES_TO:
+    from_layers: [infra]
+    to_layers: [infra, service]
+  READS_DB:
+    from_layers: [service]
+    to_layers: [service, infra]
+  WRITES_DB:
+    from_layers: [service]
+    to_layers: [service, infra]
+  HAS_FIELD:
+    from_layers: [data]
+    to_layers: [data]
+  REFERENCES_MODEL:
+    from_layers: [data]
+    to_layers: [data]
+  USES_MODEL:
+    from_layers: [code]
+    to_layers: [data]
+  DEFINES_MODEL:
+    from_layers: [code]
+    to_layers: [data]
+  STORED_IN:
+    from_layers: [data]
+    to_layers: [data, infra]
+  USES_ENUM:
+    from_layers: [data]
+    to_layers: [data]
+  USES_QUEUE:
+    from_layers: [service]
+    to_layers: [service, contract]
+  OWNED_BY:
+    from_layers: [code, service, contract, flow]
+    to_layers: [ownership]
+  MAINTAINED_BY:
+    from_layers: [code, service]
+    to_layers: [ownership]
+  DEPENDS_ON_DOMAIN:
+    from_layers: [ownership]
+    to_layers: [ownership]
+  PART_OF_FLOW:
+    from_layers: [flow]
+    to_layers: [flow]
+  PRECEDES:
+    from_layers: [flow]
+    to_layers: [flow]
+  EMITS_AFTER:
+    from_layers: [flow]
+    to_layers: [contract]
+  REQUIRES:
+    from_layers: [flow, code]
+    to_layers: [code, service, contract, data]
+  TRIGGERS_FLOW:
+    from_layers: [contract, code, service]
+    to_layers: [flow]
+  PRODUCES_OUTCOME:
+    from_layers: [flow]
+    to_layers: [contract, data, flow]
+  TRANSITIONS_TO:
+    from_layers: [flow]
+    to_layers: [flow]
+  INVOKES:
+    from_layers: [flow, code]
+    to_layers: [code, service, flow]
+  DEPENDS_ON:
+    from_layers: [flow, code]
+    to_layers: [code, service, data, contract]
+  TRIGGERS_ANALYSIS:
+    from_layers: [ci]
+    to_layers: [service, contract]
+  BUILDS_ARTIFACT:
+    from_layers: [ci]
+    to_layers: [service]
+  DEPLOYS_RESOURCE:
+    from_layers: [infra]
+    to_layers: [infra, service]
+  READS_OUTPUT:
+    from_layers: [infra]
+    to_layers: [infra]
+
+derivation_kinds:
+  - hard
+  - linked
+  - inferred
+  - unknown
+
+source_kinds:
+  - file
+  - openapi
+  - graphql
+  - prisma
+  - asyncapi
+  - avro
+  - proto
+  - schema_registry
+  - terraform
+  - k8s
+  - git
+  - ci
+  - webhook
+  - runtime
+
+node_statuses:
+  - active
+  - stale
+  - deleted
+  - unknown
+  - external
+
+trigger_kinds:
+  - full_scan
+  - manual
+  - git_hook
+  - push_webhook
+  - release_webhook
+  - ci_pipeline
+
+traversal_policy:
+  structural_edge_types:
+    - CONTAINS
+    - HAS_FIELD
+    - DEPLOYS_AS
+    - SELECTS_PODS
+    - OWNED_BY
+    - MAINTAINED_BY
+    - DEPENDS_ON_DOMAIN
+    - PART_OF_FLOW
+    - BUILDS_ARTIFACT
+    - DEPLOYS_RESOURCE
+  no_reverse_impact:
+    - EXPOSES_ENDPOINT
+    - PUBLISHES_TOPIC
+    - TRIGGERS_ANALYSIS
+    - EMITS_AFTER

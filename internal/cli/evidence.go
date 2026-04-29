@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/alexdx2/chronicle-core/internal/validate"
+	"github.com/alexdx2/chronicle-core/validate"
 	"github.com/spf13/cobra"
 )
 

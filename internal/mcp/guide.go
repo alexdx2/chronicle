@@ -3,7 +3,7 @@ package mcp
 import (
 	"encoding/json"
 
-	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/store"
 )
 
 // customGuideStore is set by the MCP server to allow reading custom prompts.

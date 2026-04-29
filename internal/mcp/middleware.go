@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/alexdx2/chronicle-core/internal/graph"
-	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/store"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )

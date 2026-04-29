@@ -1,0 +1,10 @@
+domain: orders
+description: Order processing and payment domain
+repositories:
+  - name: orders-api
+    path: ./orders-api
+    tags: [nestjs, rest, kafka-producer]
+  - name: payments-api
+    path: ./payments-api
+    tags: [nestjs, rest]
+owner: checkout-team

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/alexdx2/chronicle-core/internal/graph"
-	"github.com/alexdx2/chronicle-core/internal/registry"
-	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/store"
 )
 
 // setupTJIncremental sets up a full scan baseline and returns the graph ready for incremental testing.

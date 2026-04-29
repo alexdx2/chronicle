@@ -3,7 +3,7 @@ package cli
 import (
 	"strings"
 
-	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
 )
 

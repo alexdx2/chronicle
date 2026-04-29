@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alexdx2/chronicle-core/internal/graph"
-	"github.com/alexdx2/chronicle-core/internal/registry"
-	"github.com/alexdx2/chronicle-core/internal/store"
+	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
 )
 
