@@ -943,105 +943,110 @@ a{color:var(--primary);text-decoration:none}
 <!-- Settings Tab -->
 <div class="container" x-show="tab==='settings'" x-cloak>
   <div class="card" style="width:100%">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <h3 style="margin:0;color:#6b4423">Domain Manifest</h3>
+    <div class="card-header">
+      <h3>Domain Manifest</h3>
       <div style="display:flex;gap:8px;align-items:center">
         <span x-show="manifestSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
         <button @click="saveManifest()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
       </div>
     </div>
-    <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
-      Edit <code x-text="manifestPath" style="background:#f0e9dd;padding:2px 6px;border-radius:3px"></code> — defines which repositories belong to this domain.
-    </p>
-    <textarea x-model="manifestContent"
-      style="width:100%;min-height:300px;font-family:var(--font-mono);font-size:13px;line-height:1.6;padding:12px;border:1px solid var(--border);border-radius:6px;background:#faf6ef;resize:vertical;color:var(--text)"
-      spellcheck="false"></textarea>
-    <p x-show="manifestError" style="color:#9e2b2b;font-size:12px;margin-top:8px" x-text="manifestError"></p>
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+        Edit <code x-text="manifestPath" style="background:#f0e9dd;padding:2px 6px;border-radius:3px"></code> — defines which repositories belong to this domain.
+      </p>
+      <textarea x-model="manifestContent"
+        style="width:100%;min-height:300px;font-family:var(--font-mono);font-size:13px;line-height:1.6;padding:12px;border:1px solid var(--border);border-radius:6px;background:#faf6ef;resize:vertical;color:var(--text);box-sizing:border-box"
+        spellcheck="false"></textarea>
+      <p x-show="manifestError" style="color:#9e2b2b;font-size:12px;margin-top:8px" x-text="manifestError"></p>
+    </div>
   </div>
 
   <!-- Command Prompts -->
   <div class="card" style="width:100%;margin-top:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h3 style="margin:0;color:#6b4423">Command Prompts</h3>
+    <div class="card-header">
+      <h3>Command Prompts</h3>
       <div style="display:flex;gap:8px;align-items:center">
         <span x-show="promptSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
         <button @click="saveAllPrompts()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
       </div>
     </div>
-    <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
-      These are the instructions Claude follows for each command. Edit any prompt to customize for this project.
-    </p>
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+        These are the instructions Claude follows for each command. Edit any prompt to customize for this project.
+      </p>
 
-    <template x-for="cmd in promptOrder" :key="cmd">
-      <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        <div @click="expandedPrompt = expandedPrompt === cmd ? null : cmd"
-             style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
-          <div>
-            <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="'chronicle ' + cmd"></code>
-            <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="promptDescriptions[cmd] || ''"></span>
+      <template x-for="cmd in promptOrder" :key="cmd">
+        <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <div @click="expandedPrompt = expandedPrompt === cmd ? null : cmd"
+               style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
+            <div>
+              <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="'chronicle ' + cmd"></code>
+              <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="promptDescriptions[cmd] || ''"></span>
+            </div>
+            <span style="color:var(--text-muted);font-size:12px" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
           </div>
-          <span style="color:var(--text-muted);font-size:12px" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
+          <div x-show="expandedPrompt === cmd" x-cloak>
+            <textarea x-model="commandPrompts[cmd]" @input="promptSaved=false"
+              style="width:100%;min-height:120px;font-family:var(--font-mono);font-size:11px;line-height:1.6;padding:10px;border:none;border-top:1px solid var(--border);background:#fff;resize:vertical;color:var(--text)"
+              spellcheck="false"></textarea>
+          </div>
         </div>
-        <div x-show="expandedPrompt === cmd" x-cloak>
-          <textarea x-model="commandPrompts[cmd]" @input="promptSaved=false"
-            style="width:100%;min-height:120px;font-family:var(--font-mono);font-size:11px;line-height:1.6;padding:10px;border:none;border-top:1px solid var(--border);background:#fff;resize:vertical;color:var(--text)"
-            spellcheck="false"></textarea>
-        </div>
-      </div>
-    </template>
-
+      </template>
+    </div>
   </div>
 
   <!-- Edge Categories -->
   <div class="card" style="width:100%;margin-top:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h3 style="margin:0;color:#6b4423">Edge Categories</h3>
+    <div class="card-header">
+      <h3>Edge Categories</h3>
       <div style="display:flex;gap:8px;align-items:center">
         <button @click="addCustomCategory()" style="background:none;border:1px solid var(--border);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--text)">+ Add Category</button>
         <button @click="resetEdgeCategories()" style="background:none;border:1px solid var(--border);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--text-muted)">Reset Defaults</button>
       </div>
     </div>
-    <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
-      Configure how edge types are visually grouped. Each category has a color and maps edge types to short labels shown on diagram arrows.
-    </p>
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+        Configure how edge types are visually grouped. Each category has a color and maps edge types to short labels shown on diagram arrows.
+      </p>
 
-    <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
-      <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
-        <div @click="editingCategory === cat ? cancelEditCategory() : startEditCategory(cat)"
-             style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
-          <div style="display:flex;align-items:center;gap:8px">
-            <input type="color" :value="def.color"
-                   @click.stop
-                   @change="edgeCategories[cat].color = $event.target.value; saveEdgeCategories()"
-                   style="width:20px;height:20px;border:none;padding:0;cursor:pointer;background:none">
-            <span style="font-weight:600;font-size:13px;text-transform:capitalize" x-text="cat"></span>
-            <span style="color:var(--text-muted);font-size:11px" x-text="Object.keys(def.types||{}).length + ' edge types'"></span>
+      <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
+        <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <div @click="editingCategory === cat ? cancelEditCategory() : startEditCategory(cat)"
+               style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="color" :value="def.color"
+                     @click.stop
+                     @change="edgeCategories[cat].color = $event.target.value; saveEdgeCategories()"
+                     style="width:20px;height:20px;border:none;padding:0;cursor:pointer;background:none">
+              <span style="font-weight:600;font-size:13px;text-transform:capitalize" x-text="cat"></span>
+              <span style="color:var(--text-muted);font-size:11px" x-text="Object.keys(def.types||{}).length + ' edge types'"></span>
+            </div>
+            <span style="color:var(--text-muted);font-size:12px" x-text="editingCategory === cat ? '▼' : '▶'"></span>
           </div>
-          <span style="color:var(--text-muted);font-size:12px" x-text="editingCategory === cat ? '▼' : '▶'"></span>
-        </div>
-        <div x-show="editingCategory === cat" x-cloak style="padding:12px;background:#fff">
-          <div style="display:grid;grid-template-columns:1fr 80px 30px;gap:4px;align-items:center;font-size:11px;margin-bottom:8px">
-            <span style="font-weight:600;color:var(--text-muted)">Edge Type</span>
-            <span style="font-weight:600;color:var(--text-muted)">Label</span>
-            <span></span>
-            <template x-for="[etype, label] in Object.entries(editCategoryData?.types || {})" :key="etype">
-              <template x-fragment>
-                <span style="font-family:var(--font-mono);font-size:10px;color:var(--text)" x-text="etype"></span>
-                <input type="text" :value="label"
-                       @change="editCategoryData.types[etype] = $event.target.value"
-                       style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
-                <button @click="delete editCategoryData.types[etype]"
-                        style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+          <div x-show="editingCategory === cat" x-cloak style="padding:12px;background:#fff">
+            <div style="display:grid;grid-template-columns:1fr 80px 30px;gap:4px;align-items:center;font-size:11px;margin-bottom:8px">
+              <span style="font-weight:600;color:var(--text-muted)">Edge Type</span>
+              <span style="font-weight:600;color:var(--text-muted)">Label</span>
+              <span></span>
+              <template x-for="[etype, label] in Object.entries(editCategoryData?.types || {})" :key="etype">
+                <template x-fragment>
+                  <span style="font-family:var(--font-mono);font-size:10px;color:var(--text)" x-text="etype"></span>
+                  <input type="text" :value="label"
+                         @change="editCategoryData.types[etype] = $event.target.value"
+                         style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text)">
+                  <button @click="delete editCategoryData.types[etype]"
+                          style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
+                </template>
               </template>
-            </template>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <button @click="saveEditCategory()" style="font-size:12px;padding:4px 12px;border:1px solid var(--primary);background:var(--primary);color:white;border-radius:4px;cursor:pointer">Save</button>
-            <button @click="cancelEditCategory()" style="font-size:12px;padding:4px 12px;border:1px solid var(--border);background:none;color:var(--text-muted);border-radius:4px;cursor:pointer">Cancel</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button @click="saveEditCategory()" style="font-size:12px;padding:4px 12px;border:1px solid var(--primary);background:var(--primary);color:white;border-radius:4px;cursor:pointer">Save</button>
+              <button @click="cancelEditCategory()" style="font-size:12px;padding:4px 12px;border:1px solid var(--border);background:none;color:var(--text-muted);border-radius:4px;cursor:pointer">Cancel</button>
+            </div>
           </div>
         </div>
-      </div>
-    </template>
+      </template>
+    </div>
   </div>
 </div>
 
