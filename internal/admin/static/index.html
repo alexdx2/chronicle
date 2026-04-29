@@ -3629,7 +3629,12 @@ function renderGrowthChart(el, scans, mode) {
     tooltip.style.display = 'block';
     const rect = el.getBoundingClientRect();
     const cx = event.clientX - rect.left;
-    tooltip.style.left = (cx + 12) + 'px';
+    const tw = tooltip.offsetWidth;
+    if (cx + tw + 16 > rect.width) {
+      tooltip.style.left = (cx - tw - 12) + 'px';
+    } else {
+      tooltip.style.left = (cx + 12) + 'px';
+    }
     tooltip.style.top = '8px';
   }
 
