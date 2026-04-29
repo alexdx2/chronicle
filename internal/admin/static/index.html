@@ -3472,13 +3472,13 @@ function dashboard() {
 function renderGrowthChart(el, scans) {
   if (!el || !scans || scans.length < 2) return;
 
-  // Reverse to oldest-first, dedupe by revision_id
+  // Reverse to oldest-first, dedupe by revision_id, parse dates
   const seen = new Set();
   const data = scans.slice().reverse().filter(s => {
     if (seen.has(s.revision_id)) return false;
     seen.add(s.revision_id);
     return true;
-  });
+  }).map(s => ({ ...s, _date: new Date(s.created_at) }));
 
   // Clear previous render
   el.innerHTML = '';
@@ -3497,9 +3497,9 @@ function renderGrowthChart(el, scans) {
     .append('g')
     .attr('transform', `translate(${margin.left},${margin.top})`);
 
-  // Scales
-  const x = d3.scaleLinear()
-    .domain([0, data.length - 1])
+  // Time scale: first scan → today
+  const x = d3.scaleTime()
+    .domain([data[0]._date, new Date()])
     .range([0, width]);
 
   const maxVal = d3.max(data, d => Math.max(d.node_count, d.edge_count)) || 10;
@@ -3520,41 +3520,35 @@ function renderGrowthChart(el, scans) {
   const yAxis = d3.axisLeft(y).ticks(4).tickSize(0).tickPadding(6);
   svg.append('g').attr('class', 'axis').call(yAxis).select('.domain').remove();
 
-  // X axis (dates) — show a few labels
-  const labelCount = Math.min(data.length, 5);
-  const labelIndices = [];
-  for (let i = 0; i < labelCount; i++) {
-    labelIndices.push(Math.round(i * (data.length - 1) / (labelCount - 1)));
-  }
-
-  const xAxisG = svg.append('g')
+  // X axis (time)
+  const xAxis = d3.axisBottom(x).ticks(5).tickSize(0).tickPadding(8)
+    .tickFormat(d3.timeFormat('%b %d'));
+  svg.append('g')
     .attr('class', 'axis')
-    .attr('transform', `translate(0,${height})`);
+    .attr('transform', `translate(0,${height})`)
+    .call(xAxis)
+    .select('.domain').attr('stroke', 'var(--border)');
 
-  xAxisG.selectAll('text')
-    .data(labelIndices)
-    .join('text')
-    .attr('x', i => x(i))
-    .attr('y', 16)
-    .attr('text-anchor', 'middle')
-    .text(i => {
-      const d = new Date(data[i].created_at);
-      return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
-    });
+  // Vertical scan marker lines
+  svg.selectAll('.scan-marker')
+    .data(data)
+    .join('line')
+    .attr('class', 'scan-marker')
+    .attr('x1', d => x(d._date)).attr('x2', d => x(d._date))
+    .attr('y1', 0).attr('y2', height)
+    .attr('stroke', 'var(--border)')
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '3,3')
+    .attr('opacity', 0.5);
 
-  xAxisG.append('line')
-    .attr('x1', 0).attr('x2', width)
-    .attr('y1', 0).attr('y2', 0)
-    .attr('stroke', 'var(--border)');
-
-  // Area + line generators
+  // Area + line generators (time-based)
   const areaGen = (key) => d3.area()
-    .x((d, i) => x(i))
+    .x(d => x(d._date))
     .y0(height)
     .y1(d => y(d[key]));
 
   const lineGen = (key) => d3.line()
-    .x((d, i) => x(i))
+    .x(d => x(d._date))
     .y(d => y(d[key]));
 
   // Draw areas
@@ -3582,61 +3576,48 @@ function renderGrowthChart(el, scans) {
     el.appendChild(tooltip);
   }
 
+  function showTooltip(event, d) {
+    d3.select(this).attr('r', 5);
+    const dt = d._date;
+    const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric'})
+      + ' ' + dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:false});
+    tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id} \u00b7 ${dateStr}</div>`
+      + `<div class="tt-nodes">${d.node_count} nodes</div>`
+      + `<div class="tt-edges">${d.edge_count} edges</div>`
+      + `<div style="color:var(--text-muted)">${d.snapshot_kind}</div>`;
+    tooltip.style.display = 'block';
+    const rect = el.getBoundingClientRect();
+    const cx = event.clientX - rect.left;
+    tooltip.style.left = (cx + 12) + 'px';
+    tooltip.style.top = '8px';
+  }
+
+  function hideTooltip() {
+    d3.select(this).attr('r', 3);
+    tooltip.style.display = 'none';
+  }
+
   // Dots for nodes
   svg.selectAll('.dot-nodes')
     .data(data)
     .join('circle')
     .attr('class', 'dot-nodes')
-    .attr('cx', (d, i) => x(i))
+    .attr('cx', d => x(d._date))
     .attr('cy', d => y(d.node_count))
     .attr('r', 3)
-    .on('mouseenter', function(event, d) {
-      d3.select(this).attr('r', 5);
-      const dt = new Date(d.created_at);
-      const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric'})
-        + ' ' + dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:false});
-      tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id} \u00b7 ${dateStr}</div>`
-        + `<div class="tt-nodes">${d.node_count} nodes</div>`
-        + `<div class="tt-edges">${d.edge_count} edges</div>`
-        + `<div style="color:var(--text-muted)">${d.snapshot_kind}</div>`;
-      tooltip.style.display = 'block';
-      const rect = el.getBoundingClientRect();
-      const cx = event.clientX - rect.left;
-      tooltip.style.left = (cx + 12) + 'px';
-      tooltip.style.top = '8px';
-    })
-    .on('mouseleave', function() {
-      d3.select(this).attr('r', 3);
-      tooltip.style.display = 'none';
-    });
+    .on('mouseenter', showTooltip)
+    .on('mouseleave', hideTooltip);
 
   // Dots for edges
   svg.selectAll('.dot-edges')
     .data(data)
     .join('circle')
     .attr('class', 'dot-edges')
-    .attr('cx', (d, i) => x(i))
+    .attr('cx', d => x(d._date))
     .attr('cy', d => y(d.edge_count))
     .attr('r', 3)
-    .on('mouseenter', function(event, d) {
-      d3.select(this).attr('r', 5);
-      const dt = new Date(d.created_at);
-      const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric'})
-        + ' ' + dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:false});
-      tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id} \u00b7 ${dateStr}</div>`
-        + `<div class="tt-nodes">${d.node_count} nodes</div>`
-        + `<div class="tt-edges">${d.edge_count} edges</div>`
-        + `<div style="color:var(--text-muted)">${d.snapshot_kind}</div>`;
-      tooltip.style.display = 'block';
-      const rect = el.getBoundingClientRect();
-      const cx = event.clientX - rect.left;
-      tooltip.style.left = (cx + 12) + 'px';
-      tooltip.style.top = '8px';
-    })
-    .on('mouseleave', function() {
-      d3.select(this).attr('r', 3);
-      tooltip.style.display = 'none';
-    });
+    .on('mouseenter', showTooltip)
+    .on('mouseleave', hideTooltip);
 }
 </script>
 </body>
