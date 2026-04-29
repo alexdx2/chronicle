@@ -222,6 +222,7 @@ source_kinds:
   - ci
   - webhook
   - runtime
+  - manual_resolution
 
 node_statuses:
   - active
