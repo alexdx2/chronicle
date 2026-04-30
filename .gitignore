@@ -1,15 +1,31 @@
-chronicle.db
-chronicle.db-journal
-chronicle.db-wal
+# Databases
+*.db
+*.db-journal
+*.db-wal
+!fixtures/**/*.db
+
+# Binaries
 /chronicle
+/oracle
 *.exe
+tmp/
 dist/
+
+# Config directories
 .chronicle/
 .depbot/
 !fixtures/tom-and-jerry/.depbot/
 !fixtures/tom-and-jerry/.depbot/**
+
+# Superpowers brainstorm artifacts
 .superpowers/
+
+# Auto-generated project files
 chronicle.domain.yaml
 chronicle.types.yaml
+oracle.domain.yaml
+oracle.types.yaml
 CLAUDE.md
+
+# Test output
 e2e/results/
