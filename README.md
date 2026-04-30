@@ -134,6 +134,46 @@ Or if you already have the dashboard running — paste the path to `fixtures/tom
 
 Full CLI reference with all subcommands, flags, and data model: **[docs/cli.md](docs/cli.md)**
 
+## How Claude Uses Chronicle (MCP Tool Flow)
+
+When you ask Claude to analyze or change something, it calls Chronicle MCP tools in a specific sequence. Here's what happens under the hood:
+
+### "What breaks if I change tom-api?"
+
+```
+Claude                              Chronicle MCP
+  │                                      │
+  ├─ chronicle_impact(node_key,depth=4) ─→  BFS reverse traversal
+  │                                      │  Returns: impacted nodes + scores + paths
+  │                                      │
+  │  "TomClient is at risk (score 95)"   │
+  │  "ArenaService transitively (45)"    │
+  │                                      │
+  ├─ chronicle_node_get("tomclient") ───→  Returns node + evidence[]
+  │                                      │  file_path, line_start, confidence
+  │                                      │
+  ├─ chronicle_query_deps(node_key) ────→  What tom-api depends on
+  ├─ chronicle_query_reverse_deps() ────→  Who depends on tom-api
+  │                                      │
+  └─ "3 services affected, here's why…" │
+```
+
+### Key design decisions
+
+- **Impact/deps responses don't include evidence.** Blast radius can touch 50 nodes — fetching evidence for all would be too heavy. Claude requests evidence per node when it needs to explain *why*.
+- **Evidence is the source of trust.** Every node and edge has provenance: file path, line number, extractor, confidence. When code changes, evidence gets invalidated. Trust scores recalculate automatically.
+- **Claude follows instructions in `CommandInstructions`.** Each command (`scan`, `impact`, `deps`, etc.) has a step-by-step prompt telling Claude which tools to call and in what order. You can customize these in the dashboard Settings tab.
+
+### Tool categories
+
+| Category | Tools | Purpose |
+|----------|-------|---------|
+| **Read** | `chronicle_impact`, `query_deps`, `query_reverse_deps`, `query_path`, `query_stats`, `node_get`, `edge_list` | Query the graph |
+| **Write** | `revision_create`, `import_all`, `node_upsert`, `edge_upsert`, `evidence_add` | Build/update the graph |
+| **Lifecycle** | `invalidate_changed`, `finalize_incremental_scan`, `snapshot_create`, `stale_mark` | Manage scan lifecycle |
+| **Meta** | `extraction_guide`, `scan_status`, `command`, `define_term`, `check_language` | Guidance and domain language |
+| **Visual** | `diagram_create`, `diagram_update`, `diagram_annotate` | Live diagrams |
+
 ## Development
 
 ```bash
