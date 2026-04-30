@@ -8,6 +8,47 @@ Two repos:
 - **chronicle-core** (this repo) — single-repo graph engine, CLI, MCP server, dashboard
 - **chronicle-pro** (`../chronicle-pro`) — multi-repo federation, extends core
 
+## OSS vs Pro — what goes where
+
+This repo is the open-source core. Chronicle Pro is a separate private repo that imports core as a dependency.
+
+**Rule of thumb:** if it works with one `.depbot/` database, it belongs in core. If it needs multiple databases or cross-repo awareness, it belongs in pro.
+
+### Core (this repo) — OSS
+
+| Feature | Why it's here |
+|---------|---------------|
+| Graph engine (`graph/`) | Single-repo BFS, impact, path queries |
+| Store (`store/`) | SQLite schema, node/edge/evidence/alias CRUD |
+| Registry (`registry/`) | Type system — layers, node types, edge types, derivation kinds |
+| Validation (`validate/`) | Key normalization, input validation |
+| CLI (`internal/cli/`) | `chronicle scan`, `import`, `query`, `alias`, etc. |
+| MCP server (`internal/mcp/`) | 25+ tools for Claude (import, query, evidence, diagrams) |
+| Admin dashboard (`internal/admin/`) | Overview, graph explorer, language, settings, diagrams |
+| `external` node status | Boundary marker — node exists but is defined elsewhere |
+| `node_aliases` table | Name/DNS/topic aliases for resolution |
+| `GraphQuerier` interface | Abstraction that pro implements for federation |
+| `GraphDiscoverer` interface | Abstraction for finding `.depbot/` dirs |
+| `manual_resolution` source kind | General evidence kind, not enterprise-specific |
+
+### Pro (`../chronicle-pro`) — private
+
+| Feature | Why it's there |
+|---------|----------------|
+| `FederatedGraph` | Cross-repo BFS — resolves external nodes, continues traversal into other repos |
+| `MultiRepoDiscoverer` | Scans a workspace directory for multiple `.depbot/` dirs |
+| Federated MCP server | Same tools as core but backed by FederatedGraph |
+| Federated admin dashboard | Core dashboard + federation bar, federation tab, repo selector, resolve UI |
+| Manual resolution flow | Writes alias on target node (target repo) + evidence on external (source repo) |
+| Cross-repo impact analysis | Impact traversal that crosses repo boundaries via external node resolution |
+
+### Boundary decisions
+
+- **Interfaces in core, implementations split.** `GraphQuerier` is in core (both `Graph` and `FederatedGraph` implement it). `GraphDiscoverer` is in core (`SingleRepoDiscoverer` in core, `MultiRepoDiscoverer` in pro).
+- **External nodes in core.** The `external` status and `node_aliases` table are core features. A single repo can have external nodes without federation — they just won't resolve until pro connects the dots.
+- **Resolution logic in pro.** The `ResolveExternal()` method that matches external nodes against aliases across repos is pro-only. Core stores the data, pro does the matching.
+- **Dashboard: pro is MVP copy.** Pro copies core's `index.html` and adds federation UI. This will drift. Long-term: core should expose plugin hooks.
+
 ## Architecture
 
 ```
@@ -16,13 +57,13 @@ graph/                  Graph engine (public — imported by pro)
 store/                  SQLite storage (public)
 registry/               Type registry + defaults.yaml (public)
 validate/               Key normalization + validation (public)
-internal/cli/           CLI commands (internal)
+internal/cli/           CLI commands (internal — not importable by pro)
 internal/admin/         Dashboard server + embedded static/ (internal)
 internal/mcp/           MCP server + tools (internal)
 internal/manifest/      Domain manifest parsing (internal)
 ```
 
-Public packages (`graph/`, `store/`, `registry/`, `validate/`) are importable by chronicle-pro. Internal packages are only used by this binary.
+Public packages (`graph/`, `store/`, `registry/`, `validate/`) are importable by chronicle-pro. Internal packages are only used by this binary. This is enforced by Go's `internal/` convention.
 
 ## Build and test
 
