@@ -56,6 +56,32 @@ The dashboard opens in your browser. Chronicle discovers your project structure 
 | `chronicle diagram` | Live architecture diagram in the browser |
 | `chronicle status` | Dashboard URL + graph stats |
 
+## Keeping the graph fresh
+
+The graph is a snapshot — it stays accurate until code changes. Chronicle tracks freshness automatically:
+
+```
+You: "chronicle status"
+
+Chronicle:
+  freshness: stale
+  commits_behind: 4
+  files_changed: 17
+  suggestion: "Run chronicle update to rescan 4 commits (17 files changed)."
+```
+
+**Options for staying current:**
+
+| Method | When |
+|--------|------|
+| `chronicle update` | Manual, when you notice staleness |
+| `chronicle status` | Session start — shows if graph is behind |
+| CI action on push | Automatic on push to main |
+
+For most projects: run `chronicle update` when you start working on something and the status shows stale. The graph only re-scans changed files — not the whole project.
+
+**Agent mode recommended.** Scanning requires an LLM to read and interpret code. The MCP server detects staleness on its own and suggests an update when you call `chronicle status`.
+
 ## Why Chronicle exists
 
 AI coding assistants are powerful, but they are stateless.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -961,6 +962,10 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 				result["last_revision"] = nil
 			} else {
 				result["last_revision"] = rev
+				// Git freshness check — compare last scan SHA with current HEAD.
+				if freshness := checkGitFreshness(rev.GitAfterSHA); freshness != nil {
+					result["freshness"] = freshness
+				}
 			}
 
 			stats, err := g.QueryStats(domain)
@@ -989,6 +994,60 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 		result["admin_dashboard"] = fmt.Sprintf("http://localhost:%d", port)
 
 		return jsonResult(result), nil
+	}
+}
+
+// checkGitFreshness compares a stored SHA with current HEAD.
+// Returns nil if up-to-date or git unavailable.
+func checkGitFreshness(lastSHA string) map[string]any {
+	if lastSHA == "" {
+		return map[string]any{
+			"status":  "unknown",
+			"message": "No SHA recorded in last revision. Run chronicle update to establish baseline.",
+		}
+	}
+
+	// Get current HEAD
+	head, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return nil // not a git repo or git not available — skip
+	}
+	currentSHA := strings.TrimSpace(string(head))
+
+	if currentSHA == lastSHA {
+		return map[string]any{
+			"status":  "fresh",
+			"message": "Graph is up to date with HEAD.",
+		}
+	}
+
+	// Count commits between last scan and HEAD
+	countOut, err := exec.Command("git", "rev-list", "--count", lastSHA+".."+currentSHA).Output()
+	if err != nil {
+		// lastSHA may not exist (rebased, shallow clone)
+		return map[string]any{
+			"status":     "stale",
+			"message":    "Graph is behind HEAD. Last scan SHA not found in history.",
+			"suggestion": "Run chronicle update to rescan changed files.",
+		}
+	}
+	count := strings.TrimSpace(string(countOut))
+
+	// Get changed files count
+	filesOut, _ := exec.Command("git", "diff", "--name-only", lastSHA+".."+currentSHA).Output()
+	files := strings.Split(strings.TrimSpace(string(filesOut)), "\n")
+	fileCount := 0
+	if len(files) > 0 && files[0] != "" {
+		fileCount = len(files)
+	}
+
+	return map[string]any{
+		"status":        "stale",
+		"commits_behind": count,
+		"files_changed": fileCount,
+		"last_scan_sha": lastSHA[:min(len(lastSHA), 7)],
+		"current_head":  currentSHA[:7],
+		"suggestion":    "Run chronicle update to rescan " + count + " commits (" + fmt.Sprintf("%d", fileCount) + " files changed).",
 	}
 }
 
