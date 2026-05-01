@@ -15,7 +15,16 @@ import (
 func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		start := time.Now()
-		result, err := next(ctx, req)
+		var result *mcplib.CallToolResult
+		var err error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic in %s: %v", toolName, r)
+				}
+			}()
+			result, err = next(ctx, req)
+		}()
 		durationMs := int(time.Since(start).Milliseconds())
 
 		entry := store.RequestLogEntry{
@@ -48,6 +57,13 @@ func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandler
 		}
 
 		logStore.LogRequest(entry) //nolint:errcheck
+
+		// Debug mode: write to JSONL file
+		if dl := GetDebugLogger(); dl != nil {
+			var params map[string]any
+			json.Unmarshal(paramsBytes, &params) //nolint:errcheck
+			dl.LogToolCall(toolName, params, entry.Summary, durationMs, entry.ErrorMessage)
+		}
 
 		// Auto-discovery: after import_all, analyze for low-confidence edges and gaps
 		if toolName == "chronicle_import_all" && err == nil && entry.ErrorMessage == "" {
@@ -321,7 +337,11 @@ func truncate(s string, max int) string {
 
 // NewServerWithLogging creates an MCP server with request logging to SQLite.
 func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServer {
-	s := server.NewMCPServer("chronicle", "0.1.0")
+	var serverOpts []server.ServerOption
+	if GetDebugLogger() != nil {
+		serverOpts = append(serverOpts, server.WithInstructions(debugInstructions))
+	}
+	s := server.NewMCPServer("chronicle", "0.1.0", serverOpts...)
 
 	add := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {
 		s.AddTool(tool, loggingWrap(logStore, tool.Name, handler))
@@ -358,6 +378,11 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(diagramCreateTool(), diagramCreateHandler())
 	add(diagramUpdateTool(), diagramUpdateHandler())
 	add(diagramAnnotateTool(), diagramAnnotateHandler())
+
+	// Debug mode: register chronicle_debug_log tool
+	if GetDebugLogger() != nil {
+		add(debugLogTool(), debugLogHandler())
+	}
 
 	return s
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/alexdx2/chronicle-core/internal/admin"
 	mcpserver "github.com/alexdx2/chronicle-core/internal/mcp"
+	"github.com/alexdx2/chronicle-core/store"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
 )
@@ -48,6 +49,20 @@ func newMCPCmd() *cobra.Command {
 			g := openGraph()
 			mcpserver.SetManifestPath(manifestPath)
 			mcpserver.SetGuideStore(g.Store())
+
+			debugMode, _ := cmd.Flags().GetBool("debug")
+			if debugMode {
+				cwd, _ := os.Getwd()
+				debugDir := filepath.Join(cwd, ".depbot", "debug")
+				dl, err := mcpserver.NewDebugLogger(debugDir, "0.3.0")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "debug mode init failed: %v\n", err)
+				} else {
+					mcpserver.SetDebugLogger(dl)
+					fmt.Fprintf(os.Stderr, "debug mode: logging to %s\n", debugDir)
+				}
+			}
+
 			s := mcpserver.NewServerWithLogging(g, g.Store())
 
 			adminPort, _ := cmd.Flags().GetInt("admin-port")
@@ -81,12 +96,28 @@ func newMCPCmd() *cobra.Command {
 			if err := server.ServeStdio(s); err != nil {
 				outputError(err)
 			}
+
+			// Shutdown: check for abandoned revisions and close debug logger
+			if dl := mcpserver.GetDebugLogger(); dl != nil {
+				allNodes, _ := g.Store().ListNodes(store.NodeFilter{})
+				if len(allNodes) > 0 {
+					domain := allNodes[0].DomainKey
+					if rev, err := g.Store().GetLatestRevision(domain); err == nil {
+						if _, snapErr := g.Store().GetLatestSnapshot(domain); snapErr != nil {
+							dl.LogAbandoned(rev.RevisionID)
+						}
+					}
+				}
+				dl.Close()
+				mcpserver.SetDebugLogger(nil)
+			}
 		},
 	}
 
 	serveCmd.Flags().Int("admin-port", 4200, "Admin dashboard HTTP port")
 	serveCmd.Flags().Bool("no-admin", false, "Disable admin dashboard")
 	serveCmd.Flags().Bool("open", false, "Auto-open dashboard in browser")
+	serveCmd.Flags().Bool("debug", false, "Enable debug logging to .depbot/debug/")
 
 	cmd.AddCommand(serveCmd)
 	return cmd
