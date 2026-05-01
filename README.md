@@ -131,14 +131,14 @@ Filter by node type, repo, confidence threshold. Hide a node type and Chronicle 
 
 ## Try it
 
-The repo includes a 4-service demo (Tom & Jerry) you can scan immediately:
+The repo includes a 4-service demo (Tom & Jerry) with a pre-built graph:
 
 ```bash
 cd fixtures/tom-and-jerry
-claude   # say: "chronicle scan"
+claude   # try: "chronicle impact Cat" or "chronicle diagram"
 ```
 
-Four NestJS microservices with Prisma models, HTTP cross-service calls, Kafka topics, guards, interceptors, gateways. A small but real graph that shows every layer Chronicle captures.
+Four NestJS microservices with Prisma models, HTTP cross-service calls, Kafka topics, guards, interceptors, gateways. The graph is already scanned — just query it.
 
 ## Under the hood: MCP tool flow
 
