@@ -173,6 +173,27 @@ Claude                              Chronicle MCP
 | **Meta** | `extraction_guide`, `scan_status`, `command`, `define_term`, `check_language` |
 | **Visual** | `diagram_create`, `diagram_update`, `diagram_annotate` |
 
+## Benchmark: MCP vs raw code reading
+
+We tested Chronicle against Claude Code without MCP (baseline grep + file reads) on the same codebase analysis tasks. The graph consistently outperforms on correctness and speed.
+
+**4-service microservices (tom-and-jerry fixture):**
+
+| Task | Chronicle MCP | Baseline (grep) | Winner |
+|------|:---:|:---:|:---:|
+| Impact analysis | 11/12 | 9/12 | MCP |
+| Request flow tracing | 14/14 | 14/14 | Tie |
+| Reverse dependencies | 10/10 | 10/10 | Tie |
+| Trap question (hallucination test) | 6/6 | 6/6 | Tie |
+| Cross-service path finding | 10/10 | 8/10 | MCP |
+| **Total correctness** | **51/52 (98%)** | **47/52 (90%)** | **MCP +8%** |
+| **Speed** | **259s** | 372s | **MCP 30% faster** |
+| **Hallucinations** | 0 | 1 run | **MCP cleaner** |
+
+Chronicle wins on tasks that require cross-boundary reasoning — Kafka paths, impact surfaces, multi-service dependencies. Both tie on tasks where `grep` is sufficient.
+
+Full methodology and raw data: [`benchmark/`](benchmark/)
+
 ## Multi-repo
 
 Need to connect graphs across repositories? [Chronicle Pro](https://github.com/alexdx2/chronicle-pro) adds federation — cross-repo impact analysis, external node resolution, and a combined dashboard.
