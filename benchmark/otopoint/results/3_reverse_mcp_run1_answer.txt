@@ -1,0 +1,125 @@
+## Services that inject SocketService
+
+**File:** `api/src/services/socket.service.ts` (exposed as a `@Global()` singleton)
+
+| Service / Class | File |
+|---|---|
+| `OrderService` | `services/order.service.ts` |
+| `OrderPubSubService` | `services/pubsub/order.pubsub.ts` |
+| `PaymentService` | `services/payment.service.ts` |
+| `PrinterCommunicationService` | `services/printer-communication.service.ts` |
+| `MenuVersionService` | `services/menu-version.service.ts` (via `forwardRef`) |
+| `BalanceService` | `services/balance.service.ts` |
+| `RefactoredPrinterFactory` | `services/refactored-printer.service.ts` |
+| `UserSessionService` | `services/user-session.service.ts` |
+| `SocketFactory` | `socket-handlers/factory.socket.ts` |
+| `BaseSocket` | `socket-handlers/base.socket.ts` (via `getSocketService()`) |
+| `VoucherBullQueue` | `bull/voucher.bull.ts` |
+| `TransactionResolver` | `graphql/resolvers/transaction.resolver.ts` |
+| `UserVoucherResolver` | `graphql/resolvers/user-voucher.resolver.ts` |
+| `SurpriseBoxResolver` | `graphql/resolvers/surprisebox.resolver.ts` |
+| `HealthController` | `controllers/health.controller.ts` |
+| `PrinterController` | `controllers/printer.controller.ts` |
+| `WebSocketGateway` | `gateways/websocket.gateway.ts` |
+| `MobileWebSocketGateway` | `gateways/mobile.gateway.ts` |
+| `CrmWebSocketGateway` | `gateways/crm.gateway.ts` |
+
+---
+
+## Events emitted
+
+Grouped by emitting service and resolved to actual event name strings:
+
+### OrderService
+| Event string | Method used | Scope |
+|---|---|---|
+| `order:purchased` (`SOCKET_EVENTS.ORDER.PURCHASED`) | `emitToUser()` | Per group member / per user |
+| `voucher_update` | `emitToUser()` | Per user |
+| `lobby_voucher_update` | `emitToLobby()` | Printer room |
+| `merchant_voucher_update` | `emitToMerchant()` | Merchant room |
+| _(dynamic via eventName variable)_ | `emitToMerchant()` | Merchant room |
+
+### OrderPubSubService (Redis → Socket bridge)
+| Event string | Via SocketService method |
+|---|---|
+| `orders:new` | `emitOrderCreated()` |
+| `order:update` | `emitOrderUpdate()` |
+| `orders:update` | `emitOrderUpdate()` |
+
+### PaymentService
+| Event string | Via SocketService method |
+|---|---|
+| `order:update` | `emitOrderUpdate()` |
+| `orders:update` | `emitOrderUpdate()` |
+
+### MenuVersionService
+| Event string | Via SocketService method |
+|---|---|
+| `menu_updated` | `emitMenuUpdated()` |
+
+### BalanceService / HealthController / TransactionResolver / UserVoucherResolver / SurpriseBoxResolver
+| Event string | Method used | Scope |
+|---|---|---|
+| `points_claimed` | `emitToUser()` | Per user |
+
+### PrinterCommunicationService (raw `.emit()` on server refs)
+| Event string | Scope |
+|---|---|
+| `user-joined` | Lobby room |
+| `user-left` | Lobby room |
+| `voucher-activated` | Lobby room |
+| `voucher-claimed` | Lobby room |
+| `group-created` | Lobby room |
+| `group-invite` | Lobby room |
+| `order-created` | Lobby room |
+
+### BaseSocket (raw `.emit()` on server refs)
+| Event string | Scope |
+|---|---|
+| `update_state` (`BaseSocketOutputEvent.UPDATE_STATE`) | Merchant room, all 3 namespaces |
+
+---
+
+## WebSocket Gateways
+
+Three gateways, each owning one Socket.io namespace and one reference slot on `SocketService`:
+
+| Gateway class | File | Namespace | Auth strategy | `socketService` ref |
+|---|---|---|---|---|
+| `WebSocketGateway` | `gateways/websocket.gateway.ts` | `/` (default, legacy) | JWT | `socketService.server` |
+| `MobileWebSocketGateway` | `gateways/mobile.gateway.ts` | `/mobile` | JWT (symmetric key) | `socketService.mobileServer` |
+| `CrmWebSocketGateway` | `gateways/crm.gateway.ts` | `/crm` | Auth0 RS256 JWKS | `socketService.crmServer` |
+
+All three have `cors: { origin: '*' }`. The legacy `/` gateway exists only for backward compatibility; the primary mobile endpoint is `/mobile`.
+
+Room naming conventions used across namespaces:
+
+| Room | Used for |
+|---|---|
+| `order:${orderId}` | Single-order subscriptions |
+| `merchant:${merchantId}:orders` | CRM all-orders feed |
+| `user:${userId}` | User-specific push (points, vouchers) |
+| `lobby:${printerId}` / `${printerId}_client` | Printer/lobby group events |
+
+---
+
+## Downstream consumers
+
+Who listens to each event (client-side):
+
+| Event | Mobile App (`/mobile`, `/`) | CRM (`/crm`) | Notes |
+|---|---|---|---|
+| `order:update` / `orders:update` | ✅ order tracking screens | ✅ kitchen / waiter dashboard | Emitted by OrderPubSubService & PaymentService |
+| `orders:new` | ❌ | ✅ CRM order list | New order notification for merchant |
+| `order:purchased` | ✅ post-checkout flow | ✅ | Sent to each group member individually |
+| `menu_updated` | ✅ re-fetches menu | ✅ | Broadcast scoped to printer IDs |
+| `points_claimed` | ✅ reward overlay / animation | ❌ | Used for in-app reward animation trigger |
+| `voucher_update` / `lobby_voucher_update` | ✅ cart/voucher state | ✅ | Voucher selection side-effects |
+| `merchant_voucher_update` | ❌ | ✅ | Merchant-side voucher reporting |
+| `update_state` | ✅ full lobby/merchant state | ✅ | BaseSocket broadcast; rebuilds local state |
+| `user-joined` / `user-left` | ✅ group membership UI | ❌ | Lobby collaboration |
+| `group-created` / `group-invite` | ✅ group ordering flow | ❌ | Group management |
+| `voucher-activated` / `voucher-claimed` | ✅ voucher redemption flow | ❌ | Per-lobby voucher events |
+| `order-created` | ✅ group order confirmation | ✅ | Lobby-scoped order notification |
+
+**Key architectural note:** `SocketService` is declared `@Global()` and holds three `Server` references. All domain services call its named methods (`emitToUser`, `emitToLobby`, `emitToMerchant`, `emitOrderUpdate`, etc.) rather than holding their own `Server` references — with the exception of `PrinterCommunicationService` and `BaseSocket`, which reach directly into `socketService.server / .mobileServer / .crmServer` for low-level `room.emit()` calls. Events are broadcast to **all three namespaces simultaneously** via those named methods, so mobile and CRM clients always receive the same update regardless of which namespace they're connected to.

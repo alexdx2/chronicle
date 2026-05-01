@@ -27,6 +27,9 @@ edge_types:
   PUBLISHES_TOPIC:
     from_layers: [code, service]
     to_layers: [contract]
+  CONSUMES_TOPIC:
+    from_layers: [code, service]
+    to_layers: [contract]
   CONTAINS:
     from_layers: [code, service]
     to_layers: [code, service, contract]

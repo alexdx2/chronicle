@@ -1,0 +1,64 @@
+## Request Chain (ordered)
+
+1. **`POST /arena/attack`** — HTTP request received by `arena-api`
+2. **`BattleGuard`** — `arena-api/src/arena/battle.guard.ts` — validates current hour is between 6 and 22 (daytime only); rejects outside this window
+3. **`ArenaController.attack(body: { weaponType })`** — `arena-api/src/arena/arena.controller.ts` — route handler decorated with `@Post('attack')` and `@UseGuards(BattleGuard)`
+4. **`ArenaService.tomAttacksJerry(weaponType)`** — `arena-api/src/arena/arena.service.ts` — main orchestrator; runs the following in sequence:
+   - **`TomClient.getStatus()`** → `GET http://tom-api:3001/tom/status` *(HTTP cross-service call)*
+   - **`JerryClient.getStatus()`** → `GET http://jerry-api:3002/jerry/status` *(HTTP cross-service call)*
+   - **`JerryClient.getTraps()`** → `GET http://jerry-api:3002/jerry/traps` *(HTTP cross-service call)*
+   - **Battle logic** — checks trap presence, compares speeds, computes damage → result is one of `TRAP_TRIGGERED`, `JERRY_DODGES`, or `TOM_HITS`
+   - **`PrismaService.battleEvent.create()`** — writes a `BattleEvent` row to arena-api's DB
+   - **`BattleResultProducer.publish(event)`** — publishes event to Kafka topic `battle-results`
+5. **Response returned** — the `BattleEvent` record plus Tom's and Jerry's names
+
+---
+
+## Cross-Service Calls
+
+| Caller | Target Service | Method | Endpoint |
+|---|---|---|---|
+| `arena-api` (`TomClient`) | `tom-api` | `GET` | `/tom/status` |
+| `arena-api` (`JerryClient`) | `jerry-api` | `GET` | `/jerry/status` |
+| `arena-api` (`JerryClient`) | `jerry-api` | `GET` | `/jerry/traps` |
+
+**Inside `tom-api`:** `TomController.getStatus()` → `TomService.getStatus()` → queries `Cat` table (with `weapons` relation) from tom-api's own DB.
+
+**Inside `jerry-api`:** `JerryController` has `TrapInterceptor` applied globally. Both endpoints hit `JerryService`:
+- `getStatus()` → queries `Mouse` table (with `traps` relation)
+- `getTraps()` → queries `Trap` table filtered by `isSet = true`
+
+---
+
+## Async Side Effects
+
+### Kafka — Topic: `battle-results`
+
+**Producer:** `BattleResultProducer.publish(event)` — `arena-api/src/arena/battle-result.producer.ts`
+
+**Consumer:** `BattleResultConsumer.handleBattleResult(event)` — `spectators-api/src/spectators/battle-result.consumer.ts`
+- Decorated with `@EventPattern('battle-results')`
+- Calls `SpectatorService.recordBattle(event)` — appends event to an in-memory `battles` array
+
+**Secondary HTTP calls triggered inside `spectators-api`** (when leaderboard/recent stats are later requested — not inline):
+- `SpectatorService.getTomName()` → `GET http://tom-api:3001/tom/status`
+- `SpectatorService.getJerryName()` → `GET http://jerry-api:3002/jerry/status`
+
+### WebSocket Gateway (defined but not wired into this flow)
+
+`BattleGateway` (`arena-api/src/arena/battle.gateway.ts`) exposes `broadcastBattleResult(event)` for real-time push to connected spectators, but this method is **not called** from `ArenaService.tomAttacksJerry()` in the current code — it exists as an unused broadcast path.
+
+---
+
+## Data Models Touched
+
+| Service | Model | Operation | Fields of Note |
+|---|---|---|---|
+| `arena-api` | `BattleEvent` | **CREATE** | `tomId`, `jerryId`, `weapon`, `trap` (nullable), `result` (enum), `damage`, `round`, `createdAt` |
+| `tom-api` | `Cat` | **READ** | `id`, `name`, `health`, `speed`, `mood` |
+| `tom-api` | `CatWeapon` | **READ** (via relation) | `id`, `name`, `damage`, `type`, `ownerId` |
+| `jerry-api` | `Mouse` | **READ** | `id`, `name`, `health`, `speed`, `clever` |
+| `jerry-api` | `Trap` | **READ** | `id`, `name`, `effect`, `isSet`, `ownerId` |
+| `spectators-api` | *(in-memory)* | **WRITE** | No DB — battles stored in `SpectatorService.battles[]` |
+
+**`BattleResult` enum** (arena-api): `TOM_HITS` | `JERRY_DODGES` | `TRAP_TRIGGERED` | `MUTUAL_DESTRUCTION`

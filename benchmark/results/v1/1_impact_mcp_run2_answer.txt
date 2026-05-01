@@ -1,0 +1,74 @@
+I have everything needed. Here's the full impact analysis, verified directly from the knowledge graph.
+
+---
+
+## Direct Dependencies
+
+These nodes have a **hard edge directly into `Cat`** (depth 1, impact score 95):
+
+| Component | Type | File | Edge |
+|---|---|---|---|
+| **TomService** | Provider | `tom-api/src/tom/tom.service.ts` | `USES_MODEL` |
+| **CatWeapon** | Data Model | `tom-api/prisma/schema.prisma` (lines 19–26) | `REFERENCES_MODEL` — has a `owner` back-relation (`@relation(fields: [ownerId], references: [id])`) |
+| **TomAttacksJerry** | Use Case / Flow | `arena-api/src/arena/arena.service.ts` (lines 16–51) | `REQUIRES` |
+
+`Cat` itself also uses:
+- **`CatMood` enum** — `mood` field (`USES_ENUM`, in `tom-api/prisma/schema.prisma`)
+- **`CatWeapon[]`** — `weapons` field (`REFERENCES_MODEL`)
+
+---
+
+## Transitive Dependencies
+
+**Depth 2** (impact score ~85.7, trust chain 0.903):
+
+| Component | Type | Service | File | Path |
+|---|---|---|---|---|
+| **TomController** | Controller | tom-api | `src/tom/tom.controller.ts` | Cat → TomService → TomController (`INJECTS`) |
+| **TomEventHandler** | Provider | tom-api | `src/tom/tom.events.ts` | Cat → TomService → TomEventHandler (`INJECTS`) |
+| **POST /arena/attack** | Endpoint | arena-api | `src/arena/arena.controller.ts` (lines 9–13) | Cat → TomAttacksJerry → POST /arena/attack (`TRIGGERS_FLOW`) |
+
+**Depth 3** (from reverse-dependency traversal):
+
+| Component | Type | Service | File | Path |
+|---|---|---|---|---|
+| **TomModule** | Module | tom-api | `src/tom/tom.module.ts` | Cat → TomService → TomModule (`CONTAINS`) |
+| **HealthCheckPipe** | Provider | tom-api | `src/tom/health.pipe.ts` | Cat → TomService → TomController → HealthCheckPipe |
+| **LoggingMiddleware** | Provider | tom-api | `src/tom/logging.middleware.ts` | Cat → TomService → TomController → LoggingMiddleware |
+| **ArenaController** | Controller | arena-api | `src/arena/arena.controller.ts` | Cat → TomAttacksJerry → POST /arena/attack → ArenaController |
+| **arena-api** (service) | Service | arena-api | — | Cat → TomAttacksJerry → POST /arena/attack → ArenaController → arena-api |
+
+---
+
+## Affected Endpoints
+
+| Endpoint | Service | File | How affected |
+|---|---|---|---|
+| **`POST /arena/attack`** | arena-api | `src/arena/arena.controller.ts` (lines 9–13) | Directly triggered by the `TomAttacksJerry` use case, which `REQUIRES` the Cat model. Schema changes to Cat (e.g., field rename, type change) will propagate through `ArenaService` and surface here. |
+
+No other endpoints appear in the impact chain — `GET /cats`, etc. are not separately registered in the graph beyond TomController at depth 2.
+
+---
+
+## External Systems
+
+**None confirmed in the graph.** Specifically:
+- There are **no `infra` layer nodes** (no database, cache, or external service nodes registered).
+- There are **no `external`-status nodes** reachable from Cat.
+- The one known external system in the codebase is the **`battle-results` Kafka topic** (`arena-api/src/arena/battle-result.producer.ts`), but it is **not in the Cat impact chain** — it is driven by `BattleResultProducer` which connects to `BattleEvent`, not `Cat`.
+
+> ⚠️ Notably absent from the graph: the **PostgreSQL database** that backs `tom-api`'s Prisma schema. Changing the Cat model *will* require a Prisma migration, but the DB itself has no node in the knowledge graph. This is a gap in coverage, not a gap in reality.
+
+---
+
+## Confidence: 88/100
+
+**High confidence because:**
+- All edges are `derivation_kind: hard` with confidence ≥ 0.95 and freshness = 1.0.
+- The impact traversal and reverse-dep traversal are fully consistent with each other.
+- File paths and line numbers are corroborated by multiple evidence entries.
+
+**Deducted for:**
+- The PostgreSQL/Prisma migration impact is real but not modeled (~5 pts).
+- Any HTTP clients in other services that deserialize Cat payloads (e.g., how `arena-api`'s `TomClient` uses Cat fields) are not fully traced beyond the ArenaController node (~5 pts).
+- No `infra` layer nodes exist, so downstream infrastructure impact (DB schema, Redis cache shape) cannot be confirmed from the graph alone.

@@ -1,0 +1,66 @@
+Here is the complete breakdown based on verified code:
+
+---
+
+## Services that inject SocketService
+
+| File | Role |
+|------|------|
+| `gateways/websocket.gateway.ts` | Sets `socketService.server` (default namespace) |
+| `gateways/mobile.gateway.ts` | Sets `socketService.mobileServer` (`/mobile`) |
+| `gateways/crm.gateway.ts` | Sets `socketService.crmServer` (`/crm`) |
+| `socket-handlers/factory.socket.ts` | Socket handler factory |
+| `services/order.service.ts` | Order lifecycle, point emission |
+| `services/balance.service.ts` | Balance/points events |
+| `services/payment.service.ts` | Payment completion events |
+| `services/menu-version.service.ts` | Menu update events (`forwardRef`) |
+| `services/printer-communication.service.ts` | Printer join/notify events |
+| `services/user-session.service.ts` | Session-related events |
+| `services/refactored-printer.service.ts` | Printer state events |
+| `services/pubsub/order.pubsub.ts` | Order creation & update fan-out |
+| `bull/voucher.bull.ts` | Voucher queue processor |
+| `controllers/health.controller.ts` | Health check (socket state inspection) |
+| `controllers/printer.controller.ts` | Printer HTTP → socket bridge |
+| `graphql/resolvers/user-voucher.resolver.ts` | Voucher purchase events |
+| `graphql/resolvers/surprisebox.resolver.ts` | Surprise box events |
+| `graphql/resolvers/transaction.resolver.ts` | Transaction events |
+
+---
+
+## Events emitted
+
+| Event name | Emitter | Room(s) targeted | Data |
+|---|---|---|---|
+| `order:update` | `order.pubsub.ts`, `payment.service.ts` | `order:{orderId}`, `merchant:{merchantId}:orders`, `{printerId}_client` | `OrderUpdateEvent` |
+| `orders:new` | `order.pubsub.ts` | `merchant:{merchantId}:orders`, `{printerId}_client` | `OrderCreatedEvent` |
+| `order:purchased` (`SOCKET_EVENTS.ORDER.PURCHASED`) | `order.service.ts` | `user:{userId}` | Order purchase payload |
+| `points_claimed` | `order.service.ts` (×4), `balance.service.ts`, `user-voucher.resolver.ts`, `surprisebox.resolver.ts` | `user:{userId}` | Points payload |
+| `voucher_update` | `order.service.ts` | `user:{userId}` | `VoucherUpdateEvent` |
+| `lobby_voucher_update` | `order.service.ts` | `printer:{printerId}` | `VoucherUpdateEvent` |
+| `merchant_voucher_update` | `order.service.ts` | `merchant:{merchantId}` | `VoucherUpdateEvent` |
+| `menu_updated` | `menu-version.service.ts` | `printer:{printerId}`, `merchant_{printerId}` | `{ menuVersion, printerIds }` |
+| `user-joined` | `printer-communication.service.ts` | `merchant_{printerId}`, `{printerId}_client` | User join payload |
+
+---
+
+## WebSocket Gateways
+
+| Gateway class | File | Namespace | Sets on SocketService | CRM event handlers |
+|---|---|---|---|---|
+| `WebSocketGateway` | `gateways/websocket.gateway.ts` | `/` (default, legacy) | `socketService.server` | — |
+| `MobileWebSocketGateway` | `gateways/mobile.gateway.ts` | `/mobile` | `socketService.mobileServer` | — |
+| `CrmWebSocketGateway` | `gateways/crm.gateway.ts` | `/crm` | `socketService.crmServer` | `subscribe_all_orders`, `unsubscribe_all_orders`, `subscribe_order`, `unsubscribe_order` |
+
+All three gateways implement `OnGatewayConnection`, `OnGatewayInit`, `OnGatewayDisconnect`. Each gateway's `afterInit()` injects its `Server` instance into the corresponding property on `SocketService`, which is how `SocketService` can broadcast to namespace-specific rooms. Emit methods (`emitOrderUpdate`, `emitToUser`, etc.) iterate over all three server references.
+
+---
+
+## Downstream consumers
+
+| Consumer | Channel | Events consumed |
+|---|---|---|
+| **Mobile app** (`/mobile` namespace) | Socket.io WS | `order:update`, `orders:new`, `order:purchased`, `points_claimed`, `voucher_update`, `lobby_voucher_update`, `menu_updated`, `user-joined` |
+| **CRM web** (`/crm` namespace) | Socket.io WS | `order:update`, `orders:new`, `merchant_voucher_update`, `menu_updated` — also subscribes via `subscribe_all_orders` / `subscribe_order` server-side events |
+| **Legacy clients** (default `/` namespace) | Socket.io WS | Same events as mobile; kept for backwards compat |
+| **Bull queue workers** | Internal (Redis queue) | `voucher.bull.ts` processes voucher jobs and re-emits `voucher_update` / `points_claimed` via SocketService |
+| **GraphQL subscriptions** | `order.pubsub.ts` bridges to GraphQL `PubSub` | `order:update` → GraphQL `ORDER_UPDATED` subscription (used by CRM Apollo subscriptions) |

@@ -1,0 +1,151 @@
+## Request Chain (ordered)
+
+### 1. GraphQL Mutation — `order.resolver.ts`
+
+Three entry points exist, all guarded by `GqlHybridAuthGuard` (tries both `jwt` mobile and `auth0` CRM strategies):
+
+| Mutation | Caller | Purpose |
+|---|---|---|
+| `createOrder` | Mobile (legacy) | Cart-only, no voucher |
+| `createOrderWithVoucher` | Mobile (primary) | Full flow: cart + vouchers + group |
+| `createMerchantOrder` | CRM | Offline/walk-in orders, creates temp user if needed |
+
+### 2. `OrderResolver.createOrderWithVoucher()`
+- Detects group vs individual order via `groupId` presence
+- Maps raw GraphQL input to internal `CartItem[]` format
+- Routes to → `OrderService.createOrderFromGroup()` **or** `OrderService.createOrderFromCart()`
+
+### 3. `PromotionService.getActivePromotions()` + `evaluatePromotions()`
+- Called first, **before** vouchers
+- Fetches all active promos for the merchant
+- Delegates to `@otopoint/pricing-engine` package's `evaluatePromotions()`
+- Returns adjusted item prices (stored in `prePromoPrice` / `promoDiscount` per item)
+
+### 4. `VoucherApplicationService.validateVoucherWithEntity()`
+- Validates each `userVoucherId` passed in: ownership, merchant scope, status (`AVAILABLE`), expiration, time-of-day restrictions
+- For `FREE_ITEM` vouchers: confirms target item exists in cart
+- For `DISCOUNT` vouchers: enforces one-per-order rule
+
+### 5. `VoucherApplicationService.applyVoucherToOrder()`
+- Calls `@otopoint/pricing-engine` to compute item/order-level discounts
+- Returns mutated cart items with `originalPrice` preserved for transparency
+
+### 6. `prisma.$transaction()` — all DB writes (10 s timeout, 5 s max-wait)
+```
+tx.order.create(...)
+tx.orderItem.createMany(...)
+tx.userVoucher.updateMany(...)       ← AVAILABLE → PENDING
+tx.promotionAppliedItem.createMany(...)
+```
+
+### 7. `RedisService.publishOrderCreated()`
+- Channel: `order:created:{merchantId}`
+- Payload: `{ orderId, merchantId, state, paymentStatus, eventType: 'created' }`
+- Up to 3 retries with exponential backoff (100 ms × 2ⁿ)
+
+### 8. `ChatService.createOrderPlaceholder()`
+- Writes a `ChatMessage` of type `ORDER_PLACEHOLDER` to the lobby chat room
+- Runs immediately post-transaction (not inside it)
+
+### 9. Socket events dispatched (see Async section)
+
+### 10. Response returned — `Order & { items: OrderItem[] }`
+
+---
+
+## Cross-Service Calls
+
+```
+OrderResolver
+ └── OrderService.createOrderFromCart / createOrderFromGroup
+      ├── PromotionService.getActivePromotions()
+      │    └── @otopoint/pricing-engine.evaluatePromotions()
+      ├── VoucherApplicationService.validateVoucherWithEntity()
+      ├── VoucherApplicationService.applyVoucherToOrder()
+      │    └── @otopoint/pricing-engine (discount calculation)
+      ├── PrismaService.$transaction()          ← DB commit
+      ├── RedisService.publishOrderCreated()    ← Redis Pub/Sub
+      ├── ChatService.createOrderPlaceholder()  ← chat message
+      └── SocketService.emitToUser()            ← ORDER.PURCHASED
+           └── (also fires voucher update events)
+```
+
+**Group-order extra path** (`createOrderFromGroup`):
+- Reads all member contexts from Redis
+- Collects each member's vouchers
+- Merges carts → then follows the same downstream path as `createOrderFromCart`
+
+**Points award** (`awardPointsForOrder`) is **not** triggered on creation — it fires when the order transitions to `CLOSED`/paid state via `updateOrderStatus`.
+
+---
+
+## Async Side Effects (queues, WebSocket, push)
+
+### Redis Pub/Sub (not Bull queues — order creation has no queue jobs)
+
+| Channel | Subscriber | Action |
+|---|---|---|
+| `order:created:{merchantId}` | `OrderPubSubService.handleOrderCreated()` | Emits Socket.io events to merchant & printer rooms |
+
+### Socket.io Events Emitted
+
+| Event | Room / Target | Trigger |
+|---|---|---|
+| `ORDER.PURCHASED` | `user:{userId}` | Immediately after order created |
+| `orders:new` | `merchant:{merchantId}:orders` | Via PubSub bridge |
+| `orders:new` | `{printerId}_client` | Via PubSub bridge (lobby printers) |
+| `voucher_update` | `user:{userId}` | Per applied voucher |
+| `lobby_voucher_update` | `lobby:{printerId}` | Per applied voucher |
+| `merchant_voucher_update` | `merchant:{merchantId}` | Per applied voucher |
+
+### Push Notifications
+
+Push fires are **state-change driven**, not on creation directly:
+
+| Trigger state | Service method | Target |
+|---|---|---|
+| `PREPARING`, `READY_FOR_PICKUP`, `CLOSED`, `CANCELLED` | `NotificationService.sendOrderStatusNotification()` | Customer (Expo SDK) |
+| `READY_FOR_PICKUP` | `NotificationService.sendMerchantStaffNotification()` | All OWNER/ADMIN/MANAGER/WAITER members |
+
+Notable logic:
+- Skips notification if user is currently in chat (presence check)
+- Respects `muteNotifications` and per-merchant opt-out settings
+- Staff can individually opt-out via `StaffPrinterNotification.pushEnabled = false`
+- Bad push tokens are auto-invalidated
+
+### Points Award (async, on order close)
+```
+updateOrderStatus(CLOSED)
+  → PointsRewardService.awardPointsForOrder()
+       → BalanceService.addPoints()
+            → tx.transaction.create()           (POINTS / ADD)
+            → tx.transactionBalance.update()
+            → tx.transactionMerchantBalance.update()
+  → SocketService.emit('points_claimed', { points, orderId, ... })
+```
+
+---
+
+## Data Models Touched
+
+| Model | Operation | When | Key Fields Written |
+|---|---|---|---|
+| `Order` | CREATE | In transaction | `id`, `merchantId`, `userId`, `state=PREPARING`, `paymentStatus=PENDING`, `deliveryMode`, `paymentMethod`, `subtotal`, `voucherDiscount`, `total`, `printerId`, `menuVersionId`, `participants[]` |
+| `OrderItem` | CREATE (batch) | In transaction | `orderId`, `menuItemId`, `name`, `price`, `originalPrice`, `quantity`, `options` (JSON), `isVoucherItem`, `appliedVoucherId`, `promoDiscount`, `prePromoPrice`, `itemState=PENDING`, `ownerId` |
+| `UserVoucher` | UPDATE (batch) | In transaction | `status: AVAILABLE→PENDING`, `orderId`, `usedAt` |
+| `PromotionAppliedItem` | CREATE (batch) | In transaction | `promotionId`, `orderItemId`, `discountAmount` — audit trail |
+| `ChatMessage` | CREATE | Post-transaction | `chatId`, `content`, `messageType=ORDER_PLACEHOLDER`, `senderType=MERCHANT`, `createdAt` |
+| `Transaction` | CREATE | On order CLOSE | `type=POINTS`, `action=ADD`, `userId`, `merchantId`, `amount` |
+| `TransactionBalance` | UPDATE | On order CLOSE | Latest `transactionId` projection |
+| `TransactionMerchantBalance` | UPDATE | On order CLOSE | Merchant-scoped balance projection |
+| `UserVoucher` | UPDATE | On order CLOSE | `status: PENDING→USED` |
+| `User` | CREATE (conditional) | `createMerchantOrder` only | Temporary walk-in user record |
+
+### Voucher Lifecycle Summary
+```
+AVAILABLE  ──[order created]──▶  PENDING  ──[order closed]──▶  USED
+                                              ──[order cancelled]──▶  AVAILABLE  (via returnVoucherToAvailable)
+```
+
+### Transaction Boundary
+All six writes (`Order`, `OrderItem[]`, `UserVoucher[]` status update, `PromotionAppliedItem[]`) are committed atomically. Redis pub/sub and chat message creation happen **after** the transaction commits. If pub/sub or chat fail, the order is already persisted — those are best-effort side effects.

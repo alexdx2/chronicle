@@ -1,0 +1,45 @@
+Here's the complete breakdown of the `battle-results` Kafka topic:
+
+---
+
+## Producers
+
+**`BattleResultProducer`** (`arena-api/src/arena/battle-result.producer.ts`)
+- Hardcodes the topic name `'battle-results'` (line 3)
+- Exposes a single `publish(event: any)` method
+- Is injected into `ArenaService` via constructor and called at the end of `tomAttacksJerry()`
+
+---
+
+## Consumers
+
+**`BattleResultConsumer`** (`spectators-api/src/spectators/battle-result.consumer.ts`)
+- Uses `@EventPattern('battle-results')` (NestJS microservices decorator) to subscribe
+- Handler method: `handleBattleResult(event: any)`
+- Delegates immediately to `SpectatorService.recordBattle(event)`
+
+---
+
+## Downstream Flow
+
+1. **Trigger**: `ArenaService.tomAttacksJerry(weaponType)` is called (via an HTTP endpoint in `arena-api`)
+2. **Battle logic runs**: Checks Jerry's traps, compares speeds, computes `result` (`TRAP_TRIGGERED` | `JERRY_DODGES` | `TOM_HITS`) and `damage`
+3. **Persisted to DB**: A `BattleEvent` record is written to Prisma/SQLite in `arena-api` *before* publishing
+4. **Published to Kafka**: `BattleResultProducer.publish(event)` sends the persisted `BattleEvent` to `battle-results`
+5. **Consumed by spectators-api**: `BattleResultConsumer.handleBattleResult()` receives the event and calls `SpectatorService.recordBattle(event)`, which appends it to an in-memory `battles[]` array
+6. **Available for read queries**: `SpectatorService` exposes:
+   - `getLeaderboard()` — counts Tom wins vs. Jerry wins from the in-memory array
+   - `getRecentBattles()` — returns last 10 events from the array
+
+> **Note:** `spectators-api`'s state is in-memory only — it does not persist to a database. It also has `TOM_API_URL` and `JERRY_API_URL` env vars configured in `SpectatorService`, but those are used for name lookups (`getTomName()`, `getJerryName()`), not for the Kafka event flow.
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| **`arena-api`** | **Producer** — owns battle logic, persists `BattleEvent` to its own DB, then publishes to `battle-results` |
+| **`spectators-api`** | **Consumer** — receives battle events, maintains in-memory leaderboard and recent-battle history |
+| **`tom-api`** | Indirectly involved — `arena-api` calls `TomClient.getStatus()` *before* the battle to fetch Tom's speed/ID, but does not interact with Kafka |
+| **`jerry-api`** | Indirectly involved — `arena-api` calls `JerryClient.getStatus()` and `getTraps()` *before* the battle, but does not interact with Kafka |

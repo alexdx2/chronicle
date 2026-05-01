@@ -30,12 +30,26 @@ type ImpactEntry struct {
 	EdgeTypes   []string `json:"edge_types"`
 }
 
+// SurfaceEntry represents an endpoint or topic exposed by an impacted node.
+type SurfaceEntry struct {
+	NodeKey   string `json:"node_key"`
+	Name      string `json:"name"`
+	ExposedBy string `json:"exposed_by"`
+}
+
+// AffectedSurface contains endpoints and topics reachable from impacted nodes.
+type AffectedSurface struct {
+	Endpoints []SurfaceEntry `json:"endpoints"`
+	Topics    []SurfaceEntry `json:"topics"`
+}
+
 // ImpactResult holds the full result of an impact query.
 type ImpactResult struct {
-	ChangedNode     string        `json:"changed_node"`
-	Impacts         []ImpactEntry `json:"impacts"`
-	TotalImpacted   int           `json:"total_impacted"`
-	MaxDepthReached int           `json:"max_depth_reached"`
+	ChangedNode     string          `json:"changed_node"`
+	Impacts         []ImpactEntry   `json:"impacts"`
+	AffectedSurface AffectedSurface `json:"affected_surface"`
+	TotalImpacted   int             `json:"total_impacted"`
+	MaxDepthReached int             `json:"max_depth_reached"`
 }
 
 // QueryImpact performs a reverse BFS from changedNodeKey, finding all nodes
@@ -191,10 +205,79 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 		impacts = impacts[:topK]
 	}
 
+	// Forward expansion: find affected endpoints and topics from impacted nodes.
+	surface := g.collectAffectedSurface(startNode.NodeID, impacts)
+
 	return &ImpactResult{
 		ChangedNode:     changedNodeKey,
 		Impacts:         impacts,
+		AffectedSurface: surface,
 		TotalImpacted:   len(impacts),
 		MaxDepthReached: maxDepthReached,
 	}, nil
+}
+
+// surfaceEdgeTypes defines which forward edge types reveal affected surface.
+var surfaceEdgeTypes = map[string]string{
+	"EXPOSES_ENDPOINT": "endpoints",
+	"PUBLISHES_TOPIC":  "topics",
+}
+
+// collectAffectedSurface follows forward EXPOSES_ENDPOINT and PUBLISHES_TOPIC
+// edges from all impacted nodes (and the changed node itself) to find the
+// externally visible surface affected by the change.
+func (g *Graph) collectAffectedSurface(changedNodeID int64, impacts []ImpactEntry) AffectedSurface {
+	// Collect all impacted node IDs.
+	impactedIDs := map[int64]string{changedNodeID: "(changed)"}
+	for _, imp := range impacts {
+		node, err := g.store.GetNodeByKey(imp.NodeKey)
+		if err == nil {
+			impactedIDs[node.NodeID] = imp.NodeKey
+		}
+	}
+
+	seen := map[string]bool{}
+	var endpoints []SurfaceEntry
+	var topics []SurfaceEntry
+
+	active := true
+	for nodeID, nodeKey := range impactedIDs {
+		edges, err := g.store.ListEdges(store.EdgeFilter{
+			FromNodeID: nodeID,
+			Active:     &active,
+		})
+		if err != nil {
+			continue
+		}
+		for _, e := range edges {
+			category, ok := surfaceEdgeTypes[e.EdgeType]
+			if !ok {
+				continue
+			}
+			targetNode, err := g.store.GetNodeByID(e.ToNodeID)
+			if err != nil {
+				continue
+			}
+			if seen[targetNode.NodeKey] {
+				continue
+			}
+			seen[targetNode.NodeKey] = true
+
+			entry := SurfaceEntry{
+				NodeKey:   targetNode.NodeKey,
+				Name:      targetNode.Name,
+				ExposedBy: nodeKey,
+			}
+			if category == "endpoints" {
+				endpoints = append(endpoints, entry)
+			} else {
+				topics = append(topics, entry)
+			}
+		}
+	}
+
+	return AffectedSurface{
+		Endpoints: endpoints,
+		Topics:    topics,
+	}
 }

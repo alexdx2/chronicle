@@ -1,0 +1,41 @@
+Here's everything verified directly from the source code:
+
+---
+
+## Producers
+
+- **`BattleResultProducer`** (`arena-api/src/arena/battle-result.producer.ts`)
+  - Defines `const TOPIC = 'battle-results'` and exposes an async `publish(event)` method.
+  - Called by **`ArenaService`** (`arena-api/src/arena/arena.service.ts`, line 49) inside `tomAttacksJerry()`, immediately after a `BattleEvent` is persisted to the Prisma DB.
+  - Registered as a provider in `ArenaModule`.
+
+---
+
+## Consumers
+
+- **`BattleResultConsumer`** (`spectators-api/src/spectators/battle-result.consumer.ts`)
+  - Decorated with `@EventPattern('battle-results')` — the NestJS Kafka microservice binding.
+  - Handler: `handleBattleResult(event)` → calls `this.spectatorService.recordBattle(event)`.
+
+---
+
+## Downstream Flow
+
+1. `POST /arena/attack` is received by **`ArenaController`** → delegated to **`ArenaService.tomAttacksJerry()`**.
+2. `ArenaService` queries Tom's and Jerry's status (via `TomClient` / `JerryClient`), resolves the battle outcome (`TOM_HITS`, `JERRY_DODGES`, or `TRAP_TRIGGERED`), and persists a `BattleEvent` row via Prisma.
+3. `BattleResultProducer.publish(event)` fires, emitting the persisted event to the **`battle-results`** Kafka topic.
+4. **`BattleResultConsumer`** in `spectators-api` receives the event and calls `SpectatorService.recordBattle(event)`, which appends it to an in-memory `battles[]` array.
+5. That in-memory store is then served by two HTTP endpoints on `StatsController`:
+   - `GET /stats/leaderboard` — returns win counts for Tom and Jerry, plus total battles.
+   - `GET /stats/recent` — returns the last 10 battle events.
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| **`arena-api`** | **Producer** — orchestrates battles, persists events, publishes to the topic |
+| **`spectators-api`** | **Consumer** — ingests battle results, maintains the leaderboard and recent-battles views |
+| **`tom-api`** | Upstream data source only (queried by `arena-api` before publishing; not directly involved in the Kafka flow) |
+| **`jerry-api`** | Upstream data source only (same as above) |

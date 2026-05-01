@@ -1,0 +1,9 @@
+There is **no `InventoryService`** anywhere in the OtoPoint codebase. The codebase contains no TypeScript file that references or defines a class or service by that name.
+
+This is not a component that exists in this project. If you're looking for a related concept, the backend services that manage similar concerns include:
+
+- **`MenuService`** — manages menu items, option groups, pricing (closest analog to "inventory")
+- **`OrderService`** — manages order lifecycle and item quantities
+- **`VoucherApplicationService`** — voucher and reward management
+
+Would you like me to look into any of those instead?

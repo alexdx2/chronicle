@@ -1,0 +1,11 @@
+There is **no `InventoryService`** anywhere in the OtoPoint codebase. The codebase does not have an inventory domain or service by that name.
+
+If you're looking for something related, the backend services that do exist include areas like:
+
+- `OrderService` – order lifecycle
+- `VoucherApplicationService` – voucher logic
+- `PrinterService` – lobby/printer management
+- `MenuService` – menu items and pricing
+- `MerchantService` – multi-tenancy
+
+Could you clarify what you're looking for? Perhaps you meant one of these, or a service from a different project?

@@ -1,0 +1,41 @@
+Here is the complete breakdown, verified directly from the source code:
+
+---
+
+## Producers
+
+**`BattleResultProducer`** — `arena-api/src/arena/battle-result.producer.ts`
+- Hardcodes the topic name as `const TOPIC = 'battle-results'`
+- Exposes a single `publish(event: any)` method
+- Is injected into `ArenaService`, which calls `battleResultProducer.publish(event)` after persisting a `BattleEvent` to the database (via Prisma) whenever `tomAttacksJerry()` resolves a battle outcome (`TOM_HITS`, `JERRY_DODGES`, or `TRAP_TRIGGERED`)
+
+---
+
+## Consumers
+
+**`BattleResultConsumer`** — `spectators-api/src/spectators/battle-result.consumer.ts`
+- Listens via `@EventPattern('battle-results')` (NestJS microservices decorator)
+- Handler: `handleBattleResult(event)` → immediately delegates to `spectatorService.recordBattle(event)`, which appends the event to an in-memory `battles[]` array
+
+---
+
+## Downstream Flow
+
+1. **`arena-api`** resolves a battle in `ArenaService.tomAttacksJerry()` and persists the event to Postgres via Prisma
+2. `BattleResultProducer.publish(event)` sends the serialized `BattleEvent` to the `battle-results` Kafka topic
+3. **`spectators-api`**'s `BattleResultConsumer` receives the event and calls `SpectatorService.recordBattle(event)`, storing it in memory
+4. The accumulated data then feeds two HTTP endpoints exposed by `StatsController`:
+   - `GET /stats/leaderboard` — tallies `TOM_HITS` vs `JERRY_DODGES`/`TRAP_TRIGGERED` wins across all stored events
+   - `GET /stats/recent` — returns the last 10 events
+5. There is also a **`CleanupTask`** in `spectators-api` that reads from `SpectatorService.getLeaderboard()` on a schedule (the in-memory store is its source)
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| **`arena-api`** | **Producer** — orchestrates battles, persists to DB, publishes to Kafka |
+| **`spectators-api`** | **Consumer** — ingests events, maintains in-memory leaderboard, exposes stats HTTP API |
+
+`tom-api` and `jerry-api` are **not** directly involved with this topic — they are called by `arena-api` via HTTP clients (`TomClient`, `JerryClient`) *before* the battle result is published, to fetch status data used in the outcome calculation.

@@ -1,0 +1,73 @@
+## Request Chain (ordered)
+
+1. **`POST /arena/attack`** — HTTP request arrives with body `{ weaponType: string }`
+2. **`BattleGuard`** (`arena-api/src/arena/battle.guard.ts`) — Time-window guard; rejects requests outside 6 AM–10 PM
+3. **`ArenaController.attack()`** (`arena-api/src/arena/arena.controller.ts`) — Delegates to service
+4. **`ArenaService.tomAttacksJerry(weaponType)`** (`arena-api/src/arena/arena.service.ts`) — Core business logic:
+   - Calls **`TomClient.getStatus()`** → `GET {TOM_API_URL}/tom/status`
+   - Calls **`JerryClient.getStatus()`** → `GET {JERRY_API_URL}/jerry/status`
+   - Calls **`JerryClient.getTraps()`** → `GET {JERRY_API_URL}/jerry/traps`
+   - Evaluates battle outcome:
+     - If Jerry has active trap → `TRAP_TRIGGERED` (0 damage)
+     - Else if Jerry speed > Tom speed + 20 → `JERRY_DODGES` (0 damage)
+     - Otherwise → `TOM_HITS` (25 damage)
+5. **`PrismaService.battleEvent.create()`** — Writes `BattleEvent` record to arena-api DB
+6. **`BattleResultProducer.publish(event)`** (`arena-api/src/arena/battle-result.producer.ts`) — Publishes to Kafka topic `battle-results`
+7. **Response returned** — enriched object with Tom/Jerry names + battle result
+
+---
+
+## Cross-Service Calls
+
+| From | To | Method | Endpoint | Purpose |
+|------|----|--------|----------|---------|
+| arena-api | tom-api | HTTP GET | `/tom/status` | Fetch Tom's health, speed, weapons |
+| arena-api | jerry-api | HTTP GET | `/jerry/status` | Fetch Jerry's health, speed |
+| arena-api | jerry-api | HTTP GET | `/jerry/traps` | Check for active traps |
+
+All three calls are **synchronous** and block the request. `TomClient` throws `HttpException` if tom-api is unreachable; `JerryClient` gracefully falls back to empty array on trap fetch failure.
+
+---
+
+## Async Side Effects
+
+### Kafka — `battle-results` topic
+
+**Producer:** `BattleResultProducer` (arena-api) publishes the full `BattleEvent` object.
+
+**Consumer:** `BattleResultConsumer` (spectators-api, `@EventPattern('battle-results')`)
+- Calls `SpectatorService.recordBattle(event)` → stores result, used for leaderboard and recent battle history
+
+### Local EventEmitter — `battle.result` event
+
+**Handler:** `TomEventHandler` (tom-api, `@OnEvent('battle.result')`)
+- Logs Tom's emotional reaction based on outcome (`TOM_HITS` → celebration, otherwise frustration)
+- ⚠️ **Note:** This uses NestJS `EventEmitter2` (in-process), not Kafka — there is no visible bridge connecting the Kafka `battle-results` publish to this local event, suggesting it may be dead/disconnected code or wired elsewhere.
+
+---
+
+## Data Models Touched
+
+### arena-api (direct writes)
+| Model | Operation | Key Fields |
+|-------|-----------|------------|
+| `BattleEvent` | **CREATE** | `tomId`, `jerryId`, `weapon`, `trap?`, `result` (enum), `damage`, `round`, `createdAt` |
+
+`BattleResult` enum values: `TOM_HITS`, `JERRY_DODGES`, `TRAP_TRIGGERED`, `MUTUAL_DESTRUCTION`
+
+### tom-api (read via HTTP)
+| Model | Operation | Key Fields |
+|-------|-----------|------------|
+| `Cat` | **READ** | `name`, `health`, `speed`, `mood`, `weapons` |
+| `CatWeapon` | **READ** | `name`, `damage`, `type`, `owner` |
+
+### jerry-api (read via HTTP)
+| Model | Operation | Key Fields |
+|-------|-----------|------------|
+| `Mouse` | **READ** | `name`, `health`, `speed`, `clever`, `traps` |
+| `Trap` | **READ** | `name`, `effect`, `isSet` |
+
+### spectators-api (written via Kafka consumer)
+| Model | Operation | Key Fields |
+|-------|-----------|------------|
+| Battle record (SpectatorService store) | **CREATE** | Full `BattleEvent` payload from Kafka |

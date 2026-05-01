@@ -1,0 +1,11 @@
+I searched the entire `fixtures/tom-and-jerry` codebase for `CacheInvalidator` and found **no matches**. This component does not exist anywhere in the four NestJS microservices (tom-api, jerry-api, arena-api, spectators-api).
+
+To be precise:
+- There is no class, interface, module, or file named `CacheInvalidator` in the codebase.
+- Therefore, there are no components that depend on it, and no endpoints are affected by it.
+
+If you believe this component should exist, it may have a different name. I'm happy to search for related patterns — for example:
+- Cache-related code (`cache`, `Cache`, `invalidate`, `Invalidate`)
+- A specific service or module you're thinking of
+
+Would you like me to search for any of those?

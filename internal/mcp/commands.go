@@ -52,26 +52,37 @@ Incremental scan (when user says "update the graph" or "rescan changes"):
 4. Call chronicle_check_language to find violations
 5. Report violations and suggestions`,
 
-	"impact": `Impact analysis (user will specify the node):
-1. Ask user: "What entity/service/model do you want to analyze?"
-2. Find the node_key: call chronicle_node_list with filters
-3. Call chronicle_impact with the node_key, depth 4
-4. Explain the blast radius — which services, endpoints, models are affected
-5. Show the dependency chain with evidence`,
+	"impact": `Impact analysis:
+1. Find the node_key: call chronicle_node_list with filters
+2. Call chronicle_impact with the node_key, depth 4
+3. Report the blast radius — impacted services, endpoints (from affected_surface), models
+4. Trust results with impact_score >= 80. For scores < 50, verify by reading source.
+5. If the result is empty or surprisingly small, search source code — graph may be incomplete.
+6. Only verify against code when the answer matters for a real decision (refactor, deletion, etc.)
+7. If you verified something by reading code, persist the finding:
+   - Confirmed: chronicle_evidence_add(target_kind="edge", edge_key, source_kind="file", file_path, line_start, line_end, confidence=0.95, polarity="positive")
+   - Disproved: chronicle_evidence_add(..., polarity="negative", confidence=0.90)
+   This raises/lowers confidence for future queries.`,
 
 	"deps": `Dependency analysis:
-1. Ask user: "What do you want to check dependencies for?"
-2. Find the node_key
-3. Call chronicle_query_deps for forward deps
-4. Call chronicle_query_reverse_deps for reverse deps
-5. Explain both directions`,
+1. Find the node_key
+2. Call chronicle_query_deps for forward deps
+3. Call chronicle_query_reverse_deps for reverse deps
+4. Trust results. If empty or surprisingly few, grep source code — graph may be incomplete.
+5. Stale nodes (status="stale") may have changed since last scan — verify if acting on them.
+6. If you find a dependency by reading code that the graph missed, add evidence:
+   chronicle_evidence_add(target_kind="edge", edge_key="from->to:EDGE_TYPE", source_kind="file", file_path, line_start, line_end, confidence=0.95, polarity="positive")
+7. Explain both directions`,
 
 	"path": `Path finding:
-1. Ask user for start and end nodes
-2. Find both node_keys
-3. Call chronicle_query_path with mode='directed'
-4. If no path found, try mode='connected'
-5. Explain the path with edge types`,
+1. Find both node_keys
+2. Call chronicle_query_path with mode='directed'
+3. If no path found, try mode='connected'
+4. Trust paths with path_score > 0.3. For lower scores, verify the weakest edge if acting on results.
+5. If no path in either mode, search source code — graph may not cover all connections.
+6. If you discover a connection by reading code, add evidence to strengthen it for next time:
+   chronicle_evidence_add(target_kind="edge", edge_key, source_kind="file", file_path, line_start, line_end, confidence=0.95)
+7. Explain the path with edge types`,
 
 	"flows": `Business flow / use case analysis:
 1. Call chronicle_extraction_guide(technology='flow') for detailed instructions

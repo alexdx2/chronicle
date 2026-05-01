@@ -1,0 +1,136 @@
+Based on the thorough codebase analysis, here is the complete impact map:
+
+---
+
+## Direct Dependencies
+
+These files directly query `prisma.order` or `prisma.orderItem`, or hold foreign keys into the Order model:
+
+| File | What it does with Order |
+|------|------------------------|
+| `api/src/services/order.service.ts` | Creates, reads, updates, cancels orders. Core CRUD and lifecycle. All state transitions. |
+| `api/src/models/order.model.ts` | Domain model: pricing, voucher application, state validation, `toPrismaCreateInput()` serialization |
+| `api/src/models/value-objects/order-state-machine.ts` | Encodes valid `OrderState` transitions |
+| `api/src/models/value-objects/order-pricing.ts` | Subtotal/discount/total calculation against Order fields |
+| `api/src/graphql/resolvers/order.resolver.ts` | GraphQL entry point; all mutations/queries map to Order fields |
+| `api/src/graphql/resolvers/payment.resolver.ts` | `createPaymentIntent` reads Order total; `paymentStatus` returns `orderId` |
+| `api/src/services/payment.service.ts` | Creates `Payment` record (FK → Order); `fulfillPayment()` calls `OrderService` after Stripe success |
+| `api/src/services/voucher-application.service.ts` | Reads/writes `UserVoucher.orderId`; validates voucher against order fields |
+| `api/src/services/voucher-queue.service.ts` | Manages per-member voucher queues for group orders |
+| `api/src/services/promotion.service.ts` | `evaluateAndApplyPromotions()` receives order items; writes `PromotionAppliedItem` (FK → Order) |
+| `api/src/services/chat.service.ts` | `ChatMessage.orderId` FK; creates ORDER_PLACEHOLDER and SYSTEM messages on status change |
+| `api/src/services/points-reward.service.ts` | Awards points when Order hits CLOSED+PAID; creates `Transaction` record |
+| `api/src/services/notification.service.ts` | Sends push/in-app on order state change; reads `Order.state` |
+| `api/src/services/notification-facade.service.ts` | Coordinates notification delivery for order events |
+| `api/src/services/reddis/order.reddis.ts` | Publishes `order:created`, `order:updated`, `order:cancelled` to Redis channels |
+| `api/src/services/pubsub/order.pubsub.ts` | Redis → Socket.io bridge; re-fetches Order from DB and emits to rooms |
+| `api/src/services/socket.service.ts` | `emitOrderCreated`, `emitOrderUpdate`; writes to `order:{id}`, `merchant:{id}:orders`, `{printerId}_client` rooms |
+| `api/src/controllers/stripe-webhook.controller.ts` | Processes `payment_intent.succeeded/failed/canceled`; triggers order creation/update via PaymentService |
+| `api/src/controllers/dev.controller.ts` | `POST /dev/create-order`, `POST /dev/set-order-status` |
+| `api/src/controllers/health.controller.ts` | E2E endpoints: `/dev/e2e/last-order`, `/dev/e2e/order-count`, `/dev/e2e/create-order`, `/dev/e2e/reset-orders`, `/dev/e2e/advance-order` |
+| `api/src/@generated/order/order.model.ts` | Auto-generated Prisma → GraphQL `@ObjectType()` class; must be re-generated on schema change |
+| `api/prisma/schema.prisma` | Source of truth for `Order`, `OrderItem`, `Payment`, related enums |
+
+**Prisma Relations that would break on field removal/rename:**
+
+| Related Model | FK field | Effect |
+|---|---|---|
+| `OrderItem` | `orderId` | Cascade delete/child rows |
+| `Payment` | `orderId` | 1-to-1; Stripe fulfillment breaks |
+| `UserVoucher` | `orderId` | Voucher lifecycle breaks |
+| `ChatMessage` | `orderId` | Order placeholder messages orphaned |
+| `PromotionAppliedItem` | `orderId` | Promotion audit trail broken |
+| `Transaction` | references orderId in metadata | Points audit trail affected |
+
+---
+
+## Transitive Dependencies
+
+Services that depend on `OrderService` or `OrderModel` but don't query Prisma directly:
+
+| File | Dependency Chain |
+|------|-----------------|
+| `api/src/gateways/crm.gateway.ts` | Manages room subscriptions (`order:{id}`, `merchant:{id}:orders`) — if Order ID type changes, room names break |
+| `api/src/gateways/mobile.gateway.ts` | Mobile namespace; listens for lobby → order correlation events |
+| `api/src/gateways/websocket.gateway.ts` | Legacy default namespace; order events routed through here |
+| `api/src/services/push.service.ts` | Downstream of `NotificationService`; sends FCM with order status payload |
+| `api/src/bull/voucher.bull.ts` | `voucher-deactivate` queue — currently disabled but reads `UserVoucher.orderId` |
+| `api/src/shared/socket-events.ts` | Defines event name constants (`order:update`, `order:purchased`, `orders:new`, `order_item:state_changed`, etc.) — interface contract between backend and all clients |
+| `api/src/services/merchant-plan.service.ts` | Plan feature flags gate which order features (payment methods, delivery modes) are allowed |
+| `api/src/services/stripe.service.ts` | Low-level Stripe SDK calls; called by PaymentService for order payments |
+| `api/src/services/stripe-connect.service.ts` | Merchant onboarding; indirectly required for orders to have `ONLINE_CARD` payment method |
+| `crm/src/` (GraphQL client) | All CRM dashboard queries/mutations consume the Order GraphQL type — field changes require updating Apollo queries and TypeScript types |
+| `mobile/` (GraphQL client) | Mobile app order queries/subscriptions break on Order field changes |
+| `web/src/` (GraphQL client) | Customer web checkout and success pages consume Order; anonymous order flow breaks |
+
+---
+
+## Affected Endpoints
+
+### GraphQL (all in `api/src/graphql/resolvers/order.resolver.ts` unless noted)
+
+| Operation | Type | Guard |
+|-----------|------|-------|
+| `createOrder` | Mutation | `GqlAuthGuard` (mobile) |
+| `createOrderWithVoucher` | Mutation | `GqlAuthGuard` (mobile) |
+| `createMerchantOrder` | Mutation | `GqlAuth0AuthGuard` (CRM) |
+| `updateOrder` | Mutation | Authenticated |
+| `updateOrderStatus` | Mutation | `GqlAuth0AuthGuard` (CRM) |
+| `updatePaymentStatus` | Mutation | `GqlAuth0AuthGuard` (CRM) |
+| `cancelOrder` | Mutation | Authenticated |
+| `setOrderWarning` | Mutation | `GqlAuth0AuthGuard` (CRM) |
+| `updateOrderItemState` | Mutation | `GqlAuth0AuthGuard` (CRM) |
+| `updateOrderItemsState` | Mutation | `GqlAuth0AuthGuard` (CRM) |
+| `simpleFindOrders` | Query | Authenticated |
+| `getOrdersForMerchant` | Query | `GqlAuth0AuthGuard` (CRM) |
+| `getOrderById` | Query | Authenticated |
+| `pointsEarned` | ResolveField on Order | — |
+| `userOtp` | ResolveField on Order | — |
+| `allItemsReady` | ResolveField on Order | — |
+| `createPaymentIntent` | Mutation (payment.resolver.ts) | `GqlAuthGuard` |
+| `paymentStatus` | Query (payment.resolver.ts) | `GqlAuthGuard` |
+
+### REST
+
+| Method | Path | File |
+|--------|------|------|
+| `POST` | `/stripe/webhook` | `stripe-webhook.controller.ts` |
+| `POST` | `/notification/order/:orderId/status` | `notification.controller.ts` |
+| `GET` | `/dev/e2e/last-order` | `health.controller.ts` |
+| `GET` | `/dev/e2e/order-count` | `health.controller.ts` |
+| `POST` | `/dev/e2e/create-order` | `health.controller.ts` |
+| `POST` | `/dev/e2e/reset-orders` | `health.controller.ts` |
+| `POST` | `/dev/e2e/advance-order` | `health.controller.ts` |
+| `POST` | `/dev/create-order` | `dev.controller.ts` |
+| `POST` | `/dev/set-order-status` | `dev.controller.ts` |
+
+---
+
+## External Systems
+
+| System | How it couples to Order | Break scenario |
+|--------|------------------------|----------------|
+| **PostgreSQL** | Primary store for `Order`, `OrderItem`, `Payment`, `UserVoucher.orderId`, `PromotionAppliedItem.orderId`, `ChatMessage.orderId` | Any field rename/type change requires migration + `prisma generate` |
+| **Redis (Pub/Sub)** | Channels `order:created:{merchantId}`, `order:updated:{orderId}`, `order:cancelled:{orderId}` keyed on Order ID and merchantId. Files: `order.reddis.ts`, `order.pubsub.ts` | Changing `id` type or `merchantId` breaks channel routing |
+| **Socket.io** | Rooms: `order:{orderId}`, `merchant:{merchantId}:orders`, `{printerId}_client`. Events: `order:created`, `order:updated`, `order:cancelled`, `order:purchased`, `orders:new`, `order_item:state_changed`, `order_item:bulk_state_changed`. File: `socket-events.ts`, all 3 gateways | Room names embed Order field values; event payload shape consumed by mobile + CRM |
+| **Stripe** | `Payment.stripePaymentIntentId` 1-to-1 with Order. `stripe-webhook.controller.ts` calls `paymentService.fulfillPayment()` which creates the Order. `payment.service.ts` reads order total for PaymentIntent amount | Changing `total`, `paymentMethod`, `paymentStatus`, or `Payment` relation breaks checkout and webhook handler |
+| **Centrifugo** | Chat system uses Centrifugo channels; `chat.service.ts` creates ORDER_PLACEHOLDER messages with `orderId`. File: `api/src/services/chat.service.ts` | Changing Order ID or removing `chatMessages` relation breaks order-chat linkage |
+| **FCM (Firebase Cloud Messaging)** | `push.service.ts` sends push notifications with order state in payload | Push payload shape must match `Order.state` enum values |
+| **Prisma Generated Types** | `api/src/@generated/order/order.model.ts` is auto-generated; all Apollo codegen on CRM/mobile/web derives from this | Must run `prisma generate` + client codegen after any schema change |
+| **@otopoint/pricing-engine** | External/internal package; `promotion.service.ts` feeds it order item data | API contract between engine and Order item shape must stay aligned |
+
+---
+
+## Confidence: 90/100
+
+**High confidence areas (verified file-by-file):**
+- Direct Prisma service, resolver, and controller dependencies
+- Redis pub/sub channel names and socket room naming conventions
+- Stripe webhook event → Order creation path
+- Voucher and Promotion FK relationships
+- GraphQL mutation/query inventory
+
+**Uncertainty (−10):**
+- The `@otopoint/pricing-engine` package is referenced but its internal interface contract with `OrderItem` fields wasn't fully inspected — a field rename on `OrderItem` (e.g., `price`, `quantity`, `category`) could silently break promotion evaluation at runtime without a compile error if the package is loosely typed.
+- Centrifugo channel configuration (server-side) wasn't fully traced — it's possible chat channels are keyed on Order fields beyond what `chat.service.ts` shows.
+- Mobile and CRM Apollo client query files were not exhaustively enumerated — there may be additional fragments consuming Order fields not captured by the backend analysis alone.

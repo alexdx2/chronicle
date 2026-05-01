@@ -1,0 +1,57 @@
+Here is a precise breakdown based on what's in the codebase:
+
+---
+
+## Producers
+
+| Class | File | Trigger |
+|---|---|---|
+| `BattleResultProducer` | `arena-api/src/arena/battle-result.producer.ts` | Called by `ArenaService.tomAttacksJerry()` after each battle event is persisted to the DB |
+
+**What triggers a publish:** `ArenaService.tomAttacksJerry()` (line 49) calls `battleResultProducer.publish(event)` after computing the battle outcome (`TOM_HITS`, `JERRY_DODGES`, or `TRAP_TRIGGERED`) and writing the `BattleEvent` record to Prisma/SQLite. The publish happens on every `POST /arena/attack`.
+
+---
+
+## Consumers
+
+| Class | File | Handler method | Pattern binding |
+|---|---|---|---|
+| `BattleResultConsumer` | `spectators-api/src/spectators/battle-result.consumer.ts` | `handleBattleResult(event)` | `@EventPattern('battle-results')` |
+
+`BattleResultConsumer` depends on `SpectatorService` (injected via constructor) and delegates to `spectatorService.recordBattle(event)`.
+
+---
+
+## Downstream Flow
+
+```
+POST /arena/attack
+  └── ArenaService.tomAttacksJerry()
+        ├── calls tom-api  GET /tom/status
+        ├── calls jerry-api GET /jerry/status
+        ├── calls jerry-api GET /jerry/traps
+        ├── computes result (TOM_HITS | JERRY_DODGES | TRAP_TRIGGERED)
+        ├── prisma.battleEvent.create()  ← persists to arena-api DB
+        └── BattleResultProducer.publish(event)
+              └── [Kafka: topic "battle-results"]
+                    └── BattleResultConsumer.handleBattleResult(event)  [spectators-api]
+                          └── SpectatorService.recordBattle(event)
+                                └── in-memory battles[] array appended
+
+After recording, SpectatorService powers two HTTP endpoints:
+  GET /stats/leaderboard  → tallies TOM_HITS vs JERRY_DODGES/TRAP_TRIGGERED wins
+  GET /stats/recent       → returns last 10 battle events
+```
+
+**Important note:** `SpectatorService` stores battles in an **in-memory array** (`private battles: any[] = []`), not a database. State is lost on restart.
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| **arena-api** | Sole **producer** — orchestrates battles, persists `BattleEvent` to its own Prisma DB, publishes to `battle-results` |
+| **spectators-api** | Sole **consumer** — receives events, stores them in-memory, exposes leaderboard and recent-battles endpoints |
+| **tom-api** | Indirectly involved — `ArenaService` fetches `GET /tom/status` before each battle to get Tom's speed/id/name |
+| **jerry-api** | Indirectly involved — `ArenaService` fetches `GET /jerry/status` and `GET /jerry/traps` before each battle |

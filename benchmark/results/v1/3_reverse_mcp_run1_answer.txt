@@ -1,0 +1,61 @@
+Here's the complete picture of the `battle-results` Kafka topic, verified directly from source:
+
+---
+
+## Producers
+
+- **`BattleResultProducer`** — `arena-api/src/arena/battle-result.producer.ts`
+  - Publishes to the `battle-results` topic via `publish(event)`.
+  - Triggered internally by `ArenaService.tomAttacksJerry()` after a battle outcome is determined and persisted to the database. The event payload is a `BattleEvent` Prisma record containing `tomId`, `jerryId`, `weapon`, `trap`, `result` (`TOM_HITS` | `JERRY_DODGES` | `TRAP_TRIGGERED`), and `damage`.
+
+---
+
+## Consumers
+
+- **`BattleResultConsumer`** — `spectators-api/src/spectators/battle-result.consumer.ts`
+  - Listens on `@EventPattern('battle-results')`.
+  - On receipt, calls `SpectatorService.recordBattle(event)`, which appends the event to an in-memory `battles[]` array.
+
+---
+
+## Downstream Flow
+
+```
+[HTTP] POST /arena/attack
+       │
+       ▼
+ArenaService.tomAttacksJerry()
+  ├─ fetches Tom & Jerry status (HTTP → tom-api, jerry-api)
+  ├─ fetches Jerry's traps (HTTP → jerry-api)
+  ├─ computes result: TOM_HITS | JERRY_DODGES | TRAP_TRIGGERED
+  ├─ persists BattleEvent → Prisma (arena-api DB)
+  └─ BattleResultProducer.publish(event)
+                │
+                ▼
+        Kafka: battle-results
+                │
+                ▼
+        BattleResultConsumer.handleBattleResult(event)
+                │
+                ▼
+        SpectatorService.recordBattle(event)
+          └─ appends to in-memory battles[]
+                │
+                ▼
+        Powers spectators-api endpoints:
+          GET /spectators/leaderboard  → win counts by TOM_HITS / JERRY_DODGES / TRAP_TRIGGERED
+          GET /spectators/recent       → last 10 battle events
+```
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| **`arena-api`** | **Producer** — orchestrates battles, persists results, publishes to Kafka |
+| **`spectators-api`** | **Consumer** — receives battle events, maintains in-memory leaderboard and recent-battles state |
+| **`tom-api`** | Indirect — queried by `arena-api` during battle resolution for Tom's status |
+| **`jerry-api`** | Indirect — queried by `arena-api` during battle resolution for Jerry's status and active traps |
+
+> **Note:** `spectators-api`'s leaderboard is in-memory only (`battles[]` array) — it is not persisted to a database. This means state is lost on service restart, and it relies entirely on receiving Kafka events to stay current.

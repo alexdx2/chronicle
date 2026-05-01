@@ -1,0 +1,11 @@
+`CacheInvalidator` **does not exist** in this codebase.
+
+I searched the entire `fixtures/tom-and-jerry` project — all four microservices (`tom-api`, `jerry-api`, `arena-api`, `spectators-api`) — and found zero occurrences of `CacheInvalidator`.
+
+There is no such component, so there are no dependencies on it and no affected endpoints to report.
+
+---
+
+**What does exist (that may be relevant):**
+
+There is a `CacheService` in `arena-api` (`src/arena/cache.service.ts`), which is a different component entirely. If you meant that, I can search for what depends on it instead.

@@ -1,0 +1,95 @@
+Here is the complete traced request flow for `POST /arena/attack`:
+
+---
+
+## Request Chain (ordered)
+
+1. **`POST /arena/attack`** — HTTP request hits `arena-api`
+
+2. **`BattleGuard`** (`arena-api/src/arena/battle.guard.ts`)
+   Guards the route — rejects the request if the current hour is outside 6am–10pm (Tom sleeps at night). Returns 403 if blocked.
+
+3. **`ArenaController.attack()`** (`arena-api/src/arena/arena.controller.ts`)
+   Extracts `{ weaponType: string }` from request body, delegates to `ArenaService`.
+
+4. **`ArenaService.tomAttacksJerry(weaponType)`** (`arena-api/src/arena/arena.service.ts`)
+   Main business logic:
+
+   a. **`TomClient.getStatus()`** → `GET http://tom-api:3001/tom/status`
+      - Hits `TomController.getStatus()` → `TomService.getStatus()`
+      - Queries `Cat` (where name = "Tom") with `weapons` relation included
+      - Returns `{ id, name, health, speed, mood, weapons[] }`
+
+   b. **`JerryClient.getStatus()`** → `GET http://jerry-api:3002/jerry/status`
+      - Hits `JerryController.getStatus()` (wrapped by `TrapInterceptor`) → `JerryService.getStatus()`
+      - Queries `Mouse` (where name = "Jerry") with `traps` relation included
+      - Returns `{ id, name, health, speed, clever, traps[] }`
+
+   c. **`JerryClient.getTraps()`** → `GET http://jerry-api:3002/jerry/traps`
+      - Hits `JerryController.getTraps()` → `JerryService.getTraps()`
+      - Queries `Trap` (where `isSet: true`)
+      - Returns active traps array
+
+   d. **Battle resolution logic:**
+      | Condition | Result | Damage |
+      |---|---|---|
+      | Active trap exists | `TRAP_TRIGGERED` | 0 |
+      | `jerry.speed > tom.speed + 20` | `JERRY_DODGES` | 0 |
+      | Otherwise | `TOM_HITS` | 25 |
+
+   e. **`PrismaService.battleEvent.create()`** — Writes `BattleEvent` to arena-api's PostgreSQL DB
+
+   f. **`BattleResultProducer.publish(event)`** — Publishes to Kafka topic `battle-results`
+
+5. **Response** returned: `{ ...event, tom: tom.name, jerry: jerry.name }`
+
+---
+
+## Cross-Service Calls
+
+| From | To | Method | Endpoint | Purpose |
+|---|---|---|---|---|
+| `arena-api` (TomClient) | `tom-api` | `GET` | `/tom/status` | Get Tom's speed/health/id |
+| `arena-api` (JerryClient) | `jerry-api` | `GET` | `/jerry/status` | Get Jerry's speed/health/id |
+| `arena-api` (JerryClient) | `jerry-api` | `GET` | `/jerry/traps` | Check for active traps |
+
+All calls use plain `fetch()` with env-configured base URLs (`TOM_API_URL`, `JERRY_API_URL`).
+
+---
+
+## Async Side Effects
+
+**Kafka topic: `battle-results`**
+
+- **Producer:** `BattleResultProducer` in `arena-api` publishes the full `BattleEvent` after each attack
+- **Consumer:** `BattleResultConsumer` in `spectators-api` listens via `@EventPattern('battle-results')`
+  - Calls `SpectatorService.recordBattle(event)` — appends to an **in-memory** battles array (no DB persistence in spectators-api)
+  - This updates the in-memory leaderboard (tom wins, jerry wins, total count) used by `/spectators/leaderboard` and `/spectators/recent`
+
+---
+
+## Data Models Touched
+
+### `arena-api` — PostgreSQL
+| Model | Operation | Details |
+|---|---|---|
+| `BattleEvent` | **CREATE** | `{ tomId, jerryId, weapon, trap?, result, damage, round, createdAt }` |
+
+`result` is an enum: `TOM_HITS | JERRY_DODGES | TRAP_TRIGGERED | MUTUAL_DESTRUCTION`
+
+### `tom-api` — PostgreSQL (read-only during attack)
+| Model | Operation | Details |
+|---|---|---|
+| `Cat` | **READ** | `findFirst({ where: { name: 'Tom' }, include: { weapons: true } })` |
+| `CatWeapon` | **READ** (via relation) | Included in Cat query |
+
+### `jerry-api` — PostgreSQL (read-only during attack)
+| Model | Operation | Details |
+|---|---|---|
+| `Mouse` | **READ** | `findFirst({ where: { name: 'Jerry' }, include: { traps: true } })` |
+| `Trap` | **READ** | `findMany({ where: { isSet: true } })` |
+
+### `spectators-api` — No DB
+| Store | Operation | Details |
+|---|---|---|
+| In-memory `battles[]` array | **PUSH** | Appends battle event on Kafka message receipt |

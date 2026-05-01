@@ -94,6 +94,96 @@ func TestQueryPathIncludeStructural(t *testing.T) {
 	}
 }
 
+// seedPubSubGraph creates: Producer -PUBLISHES_TOPIC-> Topic <-CONSUMES_TOPIC- Consumer
+func seedPubSubGraph(t *testing.T) *Graph {
+	t.Helper()
+	g := setupGraph(t)
+	revID, _ := g.Store().CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:provider:orders:producer", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Producer"}, revID)
+	g.UpsertNode(validate.NodeInput{NodeKey: "contract:topic:orders:events", Layer: "contract", NodeType: "topic", DomainKey: "orders", Name: "events"}, revID)
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:provider:orders:consumer1", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Consumer1"}, revID)
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:provider:orders:consumer2", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Consumer2"}, revID)
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:provider:orders:handler", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Handler"}, revID)
+
+	// Producer -> topic (forward)
+	g.UpsertEdge(validate.EdgeInput{FromNodeKey: "code:provider:orders:producer", ToNodeKey: "contract:topic:orders:events", EdgeType: "PUBLISHES_TOPIC", DerivationKind: "hard", FromLayer: "code", ToLayer: "contract"}, revID)
+	// Consumer1 -> topic (DB direction: consumer points to topic)
+	g.UpsertEdge(validate.EdgeInput{FromNodeKey: "code:provider:orders:consumer1", ToNodeKey: "contract:topic:orders:events", EdgeType: "CONSUMES_TOPIC", DerivationKind: "hard", FromLayer: "code", ToLayer: "contract"}, revID)
+	// Consumer2 -> topic
+	g.UpsertEdge(validate.EdgeInput{FromNodeKey: "code:provider:orders:consumer2", ToNodeKey: "contract:topic:orders:events", EdgeType: "CONSUMES_TOPIC", DerivationKind: "hard", FromLayer: "code", ToLayer: "contract"}, revID)
+	// Consumer1 -> Handler (downstream processing)
+	g.UpsertEdge(validate.EdgeInput{FromNodeKey: "code:provider:orders:consumer1", ToNodeKey: "code:provider:orders:handler", EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"}, revID)
+
+	return g
+}
+
+func TestQueryPathPubSub(t *testing.T) {
+	g := seedPubSubGraph(t)
+	// Producer → topic → consumer1 should be found in directed mode.
+	result, err := g.QueryPath("code:provider:orders:producer", "code:provider:orders:consumer1", PathOptions{MaxDepth: 6, TopK: 3, Mode: "directed"})
+	if err != nil {
+		t.Fatalf("QueryPath: %v", err)
+	}
+	if len(result.Paths) == 0 {
+		t.Fatal("expected at least 1 path through topic in directed mode")
+	}
+	p := result.Paths[0]
+	if p.Depth != 2 {
+		t.Errorf("depth = %d, want 2 (producer→topic→consumer)", p.Depth)
+	}
+	// Path should go through the topic node.
+	found := false
+	for _, n := range p.Nodes {
+		if n == "contract:topic:orders:events" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("path should traverse topic node, got nodes: %v", p.Nodes)
+	}
+}
+
+func TestQueryPathPubSubMultiConsumer(t *testing.T) {
+	g := seedPubSubGraph(t)
+	// Producer → topic → consumer2 should also be reachable.
+	result, err := g.QueryPath("code:provider:orders:producer", "code:provider:orders:consumer2", PathOptions{MaxDepth: 6, TopK: 3, Mode: "directed"})
+	if err != nil {
+		t.Fatalf("QueryPath: %v", err)
+	}
+	if len(result.Paths) == 0 {
+		t.Fatal("expected path to consumer2 through topic")
+	}
+}
+
+func TestQueryPathPubSubToDownstream(t *testing.T) {
+	g := seedPubSubGraph(t)
+	// Producer → topic → consumer1 → handler (3 hops, crosses pub/sub boundary).
+	result, err := g.QueryPath("code:provider:orders:producer", "code:provider:orders:handler", PathOptions{MaxDepth: 6, TopK: 3, Mode: "directed"})
+	if err != nil {
+		t.Fatalf("QueryPath: %v", err)
+	}
+	if len(result.Paths) == 0 {
+		t.Fatal("expected path producer→topic→consumer→handler")
+	}
+	if result.Paths[0].Depth != 3 {
+		t.Errorf("depth = %d, want 3", result.Paths[0].Depth)
+	}
+}
+
+func TestQueryPathNoPubSubForNonTopic(t *testing.T) {
+	g := seedPubSubGraph(t)
+	// Handler is not a topic node. Reverse CONSUMES_TOPIC should NOT be followed from it.
+	// There's no forward edge from handler to anything, so no path from handler to producer.
+	result, err := g.QueryPath("code:provider:orders:handler", "code:provider:orders:producer", PathOptions{MaxDepth: 6, TopK: 3, Mode: "directed"})
+	if err != nil {
+		t.Fatalf("QueryPath: %v", err)
+	}
+	if len(result.Paths) != 0 {
+		t.Errorf("expected no path from handler to producer in directed mode, got %d", len(result.Paths))
+	}
+}
+
 func TestQueryPathDerivationFilter(t *testing.T) {
 	g := seedPathGraph(t)
 	// hard-only: no path A->D because CALLS_SERVICE is linked

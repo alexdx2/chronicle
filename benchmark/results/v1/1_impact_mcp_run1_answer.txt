@@ -1,0 +1,65 @@
+Here is the full impact analysis for the `Cat` data model (`tom-api/prisma/schema.prisma`), based on the live knowledge graph:
+
+---
+
+## Direct Dependencies
+
+These nodes directly reference the `Cat` model (depth 1, impact score ~95):
+
+| Component | Type | File | Edge |
+|---|---|---|---|
+| **TomService** | provider | `tom-api/src/tom/tom.service.ts` | `USES_MODEL` |
+| **CatWeapon** | data model | `tom-api/prisma/schema.prisma` (lines 19–26) | `REFERENCES_MODEL` |
+| **TomAttacksJerry** | use case / flow | `arena-api/src/arena/arena.service.ts` (lines 16–51) | `REQUIRES` |
+
+---
+
+## Transitive Dependencies
+
+**Depth 2** (impact score ~85.7):
+
+| Component | Type | File | Path |
+|---|---|---|---|
+| **TomController** | controller | `tom-api/src/tom/tom.controller.ts` | Cat → TomService → TomController (`INJECTS`) |
+| **TomEventHandler** | provider | `tom-api/src/tom/tom.events.ts` | Cat → TomService → TomEventHandler (`INJECTS`) |
+| **TomModule** | module | `tom-api` (structural) | Cat → TomService → TomModule |
+| **POST /arena/attack** | endpoint | `arena-api/src/arena/arena.controller.ts` (lines 9–13) | Cat → TomAttacksJerry → endpoint (`TRIGGERS_FLOW`) |
+
+**Depth 3**:
+
+| Component | Type | File | Path |
+|---|---|---|---|
+| **ArenaController** | controller | `arena-api/src/arena/arena.controller.ts` | … → POST /arena/attack → ArenaController |
+| **HealthCheckPipe** | provider | `tom-api/src/tom/health.pipe.ts` | … → TomController → HealthCheckPipe |
+| **LoggingMiddleware** | provider | `tom-api/src/tom/logging.middleware.ts` | … → TomController → LoggingMiddleware |
+| **arena-api** | service | `arena-api/src/arena/arena.module.ts` | … → ArenaController → arena-api |
+
+---
+
+## Affected Endpoints
+
+| Endpoint | Service | File | Depth |
+|---|---|---|---|
+| **POST /arena/attack** | `arena-api` | `arena-api/src/arena/arena.controller.ts` (lines 9–13) | 2 |
+
+This is the only HTTP contract exposed in the blast radius. It is implemented in `ArenaController` and triggered by the `TomAttacksJerry` use case, which depends on Cat.
+
+---
+
+## External Systems
+
+| System | Type | How affected | Depth |
+|---|---|---|---|
+| **arena-api** (microservice) | service | Cross-service blast radius — the `TomAttacksJerry` flow lives in `arena-api` and is triggered via `POST /arena/attack`. Any Cat schema change that alters the data contract passed to this flow affects the arena-api service boundary. | 3 |
+
+No other external systems (message brokers, third-party APIs, databases outside of tom-api's Prisma schema) appeared in the graph within 3 hops. Note: `TomEventHandler` (`tom-api/src/tom/tom.events.ts`) is a Kafka/event handler and could fan out further — but no downstream consumers appeared in the graph at this depth.
+
+---
+
+## Confidence: 88/100
+
+**Why 88 and not higher:**
+- All 11 impacted nodes are `active`, `freshness=1`, and have trust scores of 0.95–0.997 — the graph data itself is highly reliable.
+- The impact tool reported `max_depth_reached: 2`, meaning the scored blast radius is solid to depth 2. Depth-3 nodes (HealthCheckPipe, LoggingMiddleware, ArenaController, arena-api) come from the structural reverse-dep query and are real, but their impact scores weren't computed.
+- **TomEventHandler** may publish Kafka events that consumers in `spectators-api` or `jerry-api` react to — the graph does not show those downstream consumers within 3 hops, so there could be additional blast radius not captured here.
+- No `jerry-api` or `spectators-api` nodes appeared in the blast radius, which is consistent with the Cat model being `tom-api`-owned — but this could mean those dependencies weren't scanned, not that they don't exist.

@@ -1,0 +1,70 @@
+## Services that inject SocketService
+
+| Service / Class | File |
+|---|---|
+| `OrderService` | `src/services/order.service.ts` |
+| `BalanceService` | `src/services/balance.service.ts` |
+| `UserSessionService` | `src/services/user-session.service.ts` |
+| `PrinterCommunicationService` | `src/services/printer-communication.service.ts` |
+| `MenuVersionService` | `src/services/menu-version.service.ts` |
+| `PaymentService` | `src/services/payment.service.ts` |
+| `OrderPubSubService` | `src/services/pubsub/order.pubsub.ts` |
+| `RefactoredPrinterFactory` | `src/services/refactored-printer.service.ts` |
+| `SocketFactory` | `src/socket-handlers/factory.socket.ts` |
+| `VoucherProcessor` (Bull job) | `src/bull/voucher.bull.ts` |
+| `TransactionResolver` | `src/graphql/resolvers/transaction.resolver.ts` |
+| `SurpriseBoxResolver` | `src/graphql/resolvers/surprisebox.resolver.ts` |
+| `UserVoucherResolver` | `src/graphql/resolvers/user-voucher.resolver.ts` |
+| `HealthController` | `src/controllers/health.controller.ts` |
+
+---
+
+## Events emitted
+
+| Event name | Method used | Emitting service(s) | Target room |
+|---|---|---|---|
+| `order:update` | `emitOrderUpdate()` | `OrderPubSubService`, `PaymentService` | `order:{orderId}` |
+| `orders:update` | `emitOrderUpdate()` | `OrderPubSubService`, `PaymentService` | `merchant:{merchantId}:orders`, `{printerId}_client` |
+| `orders:new` | `emitOrderCreated()` | `OrderPubSubService` | `merchant:{merchantId}:orders`, `{printerId}_client` |
+| `points_claimed` | `emitToUser()` | `OrderService`, `BalanceService`, `TransactionResolver`, `SurpriseBoxResolver`, `UserVoucherResolver`, `HealthController` | `user:{userId}` |
+| `voucher_update` | `emitToUser()` | `OrderService` | `user:{userId}` |
+| `lobby_voucher_update` | `emitToLobby()` | `OrderService` | `lobby:{printerId}` |
+| `merchant_voucher_update` | `emitToMerchant()` | `OrderService` | `merchant:{merchantId}` |
+| `menu_updated` | `emitMenuUpdated()` | `MenuVersionService` | `printer:{printerId}` (mobile), `merchant_{printerId}` (CRM) |
+| `order_item:state_changed` | `emitToMerchant()` | `OrderService` | `merchant:{merchantId}` |
+| `order_item:bulk_state_changed` | `emitToMerchant()` | `OrderService` | `merchant:{merchantId}` |
+| `user-joined` | `PrinterCommunicationService` (raw `.emit()`) | `PrinterCommunicationService` | lobby/printer room |
+| `user-left` | `PrinterCommunicationService` (raw `.emit()`) | `PrinterCommunicationService` | lobby/printer room |
+| `voucher-activated` | `PrinterCommunicationService` (raw `.emit()`) | `PrinterCommunicationService` | lobby/printer room |
+| `voucher-claimed` | `PrinterCommunicationService` (raw `.emit()`) | `PrinterCommunicationService` | lobby/printer room |
+| `group-created` | `PrinterCommunicationService` (raw `.emit()`) | `PrinterCommunicationService` | lobby/printer room |
+| `group-invite` | `PrinterCommunicationService` (raw `.emit()`) | `PrinterCommunicationService` | lobby/printer room |
+| `order-created` | `PrinterCommunicationService` (raw `.emit()`) | `PrinterCommunicationService` | lobby/printer room |
+
+---
+
+## WebSocket Gateways
+
+Three gateways register themselves on `SocketService`'s server references during `afterInit()`:
+
+| Gateway class | File | Namespace | `SocketService` property set |
+|---|---|---|---|
+| `WebSocketGateway` | `src/gateways/websocket.gateway.ts` | `/` (default, legacy) | `socketService.server` |
+| `MobileWebSocketGateway` | `src/gateways/mobile.gateway.ts` | `/mobile` | `socketService.mobileServer` |
+| `CrmWebSocketGateway` | `src/gateways/crm.gateway.ts` | `/crm` | `socketService.crmServer` |
+
+All three gateways also **inject** `SocketService` themselves (to receive and store the `Server` instance). `SocketFactory` is also injected into the two client-facing gateways (`WebSocketGateway`, `MobileWebSocketGateway`) and calls `baseJoinPrinter()` on new connections.
+
+---
+
+## Downstream consumers
+
+Who ultimately receives these events by client type:
+
+| Consumer | Gateway / namespace | Events received |
+|---|---|---|
+| **Mobile app** (`/mobile` + legacy `/`) | `MobileWebSocketGateway` + `WebSocketGateway` | `order:update`, `orders:new`, `points_claimed`, `voucher_update`, `lobby_voucher_update`, `menu_updated`, `user-joined`, `user-left`, `voucher-activated`, `voucher-claimed`, `group-created`, `group-invite`, `order-created` |
+| **CRM web** (`/crm`) | `CrmWebSocketGateway` | `order:update`, `orders:update`, `orders:new`, `merchant_voucher_update`, `menu_updated` (via `merchant_{printerId}` room), `order_item:state_changed`, `order_item:bulk_state_changed`, `user-joined`, `user-left`, `group-created` |
+| **Customer web** (`/mobile` or legacy) | Same as mobile (anonymous users join via the same socket path) | `order:update`, `points_claimed` |
+
+**Key architectural note:** `SocketService` is a singleton that holds three `Server` references (`server`, `mobileServer`, `crmServer`). Its named emit helpers (`emitOrderUpdate`, `emitVoucherUpdate`, etc.) fan out to all three namespaces in a single call. `PrinterCommunicationService` accesses the raw server refs directly (`.server?.to(room).emit(...)`) rather than using the helper methods, bypassing the fan-out abstraction.

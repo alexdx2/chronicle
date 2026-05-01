@@ -1,0 +1,131 @@
+Here is the complete impact analysis based on verified codebase exploration:
+
+---
+
+## Direct Dependencies
+
+### Core Service Layer
+| File | Role |
+|------|------|
+| `api/src/services/order.service.ts` (~2,393 lines) | Orchestrates entire order lifecycle — `createOrderFromCart`, `createOrderFromGroup`, `updateOrderStatus`, `updatePaymentStatus`, `cancelOrder`, `setOrderWarning`, `updateOrderItemState` |
+| `api/src/models/order.model.ts` (~250 lines) | Domain model — `OrderModel`, `CartItem`, `OrderCreationData`, `fromCart()`, `fromGroupContexts()`, `toPrismaCreateInput()` |
+| `api/src/models/value-objects/order-state-machine.ts` | State transition rules (PREPARING → READY_FOR_PICKUP → CLOSED/CANCELLED) |
+| `api/src/models/value-objects/order-pricing.ts` | Price calculation with vouchers and promos applied to `Order.total`, `Order.subtotal`, `Order.voucherDiscount` |
+| `api/src/graphql/resolvers/order.resolver.ts` (~474 lines) | All GraphQL operations — direct `prisma.order.findMany()` calls, plus routes to OrderService |
+| `api/src/services/reddis/order.reddis.ts` (~234 lines) | Publishes `order:created:{merchantId}`, `order:updated:{orderId}`, `order:cancelled:{orderId}` to Redis |
+| `api/src/services/pubsub/order.pubsub.ts` (~222 lines) | Subscribes to `order:*` Redis pattern, bridges to Socket.io via `SocketService` |
+| `api/src/services/dashboard-action.service.ts` | CRM order state machine — 10 action kinds (SET_STATUS, CLOSE_ORDER, CANCEL_ORDER, MARK_DELIVERED, FLAG_PROBLEM, etc.) |
+
+### Generated Types (Prisma-gen)
+| Directory | Contents |
+|-----------|----------|
+| `api/src/@generated/order/` (208 files) | All GraphQL input/output types: `CreateOneOrderArgs`, `UpdateOneOrderArgs`, `OrderWhereInput`, `OrderCreateInput`, aggregations, etc. |
+| `api/src/@generated/order-item/` | Same for `OrderItem` — all field changes regenerate all these |
+
+### DTOs
+- `api/src/graphql/dto/create-order-with-voucher.input.ts`
+- `api/src/graphql/dto/create-merchant-order.input.ts`
+
+---
+
+## Transitive Dependencies
+
+| Service | Dependency Chain | File |
+|---------|-----------------|------|
+| `VoucherApplicationService` | OrderService → | `api/src/services/voucher-application.service.ts` — `validateVoucherWithEntity()`, `markVoucherAsUsed()`, `returnVoucherToAvailable()`. Also reads `Order.appliedVoucherId` and `OrderItem.appliedVoucherId` |
+| `PromotionService` | OrderService → | `api/src/services/promotion.service.ts` — `evaluatePromotions()` writes `PromotionAppliedItem` rows keyed to `OrderItem.id` |
+| `PointsRewardService` | OrderService → | `api/src/services/points-reward.service.ts` — `awardPointsForOrder()` triggered on CLOSED+PAID; creates immutable `Transaction` entries |
+| `ChatService` | OrderService → | `api/src/services/chat.service.ts` (~700 lines) — `createOrderPlaceholder()`, `notifyOrderStatusChange()`, `createOrderStatusMessage()`. `ChatMessage.orderId` FK directly references Order |
+| `NotificationService` | OrderService → | `api/src/services/notification.service.ts` — `sendOrderStatusNotification()`, `sendMerchantStaffNotification()`; creates `UserNotification` entries with `ORDER_STATUS` type |
+| `CentrifugoService` | ChatService → | `api/src/services/centrifugo.service.ts` — broadcasts chat messages containing order references; uses `centrifugo:retry:queue` Redis queue |
+| `PaymentService` | OrderResolver + Stripe → | `api/src/services/payment.service.ts` — `createPaymentIntent()` reads vouchers on Order; `handlePaymentSucceeded()` / `handlePaymentFailed()` / `handlePaymentCanceled()` update `Payment.status` and trigger `Order.paymentStatus` update |
+| `StripeService` / `StripeConnectService` | PaymentService → | `api/src/services/stripe.service.ts`, `api/src/services/stripe-connect.service.ts` — Express/Standard account routing; `Payment` model has 1:1 FK to Order (`orderId` unique) |
+| `PrinterService` / `RefactoredPrinterService` | OrderService → | `api/src/services/printer.service.ts`, `api/src/services/refactored-printer.service.ts` — Redis user contexts per printer merged into group orders; `Order.printerId` FK |
+| `SocketService` | OrderPubSubService → | `api/src/services/socket.service.ts` — `emitOrderCreated()`, `emitOrderUpdate()`; broadcasts to rooms `order:{orderId}`, `merchant:{merchantId}:orders`, `{printerId}_client` |
+| `VoucherExpiryService` | (cron) | `api/src/services/voucher-expiry.service.ts` — `@Cron(EVERY_MINUTE)` processes expired voucher activations; vouchers are bound to Orders |
+| `TransactionBalance` / `TransactionMerchantBalance` | PointsRewardService → | Event-sourced projections; `Order.total` and `Order.merchantId` feed into point calculations per merchant rate |
+| CRM Gateway | DashboardActionService → | `api/src/gateways/crm.gateway.ts`, `api/src/socket-handlers/crm.socket.ts` — real-time CRM order dashboard subscription |
+
+---
+
+## Affected Endpoints
+
+### GraphQL Mutations
+| Operation | Guard | Notes |
+|-----------|-------|-------|
+| `createOrder` | `GqlAuthGuard` (mobile) | Routes → `OrderService.createOrderFromCart()` |
+| `createOrderWithVoucher` | `GqlAuthGuard` | Group or cart order with voucher IDs |
+| `createMerchantOrder` | `GqlAuth0AuthGuard` (CRM) | Offline/walk-in order; creates temp user |
+| `updateOrder` | Auth | Raw `prisma.order.update()` — any field rename breaks this directly |
+| `updateOrderStatus` | Auth | → `OrderService.updateOrderStatus()` |
+| `updatePaymentStatus` | Auth | → `OrderService.updatePaymentStatus()` |
+| `cancelOrder` | Auth | → `OrderService.cancelOrder()` |
+| `setOrderWarning` | Auth | → `OrderService.setOrderWarning()` |
+| `updateOrderItemState` | Auth | Station workflow (single item) |
+| `updateOrderItemsState` | Auth | Station workflow (bulk items) |
+
+### GraphQL Queries
+| Operation | Notes |
+|-----------|-------|
+| `simpleFindOrders` | Raw `prisma.order.findMany()` with PrismaSelect — field renames directly break response shape |
+| `getOrdersForMerchant` | → `OrderService.getOrdersForMerchant()` |
+| `getOrderById` | → `OrderService.getOrderById()` |
+
+### GraphQL Computed Fields (Resolvers on Order type)
+| Field | Logic |
+|-------|-------|
+| `pointsEarned` | Derived from `order.total` × merchant rate |
+| `userOtp` | Derived from `order.id` |
+| `allItemsReady` | Derived from `order.items[].itemState` |
+
+### REST Endpoints
+| Route | Method | File | Notes |
+|-------|--------|------|-------|
+| `POST /stripe/webhook` | POST | `api/src/controllers/stripe-webhook.controller.ts` | Handles `payment_intent.succeeded/failed/canceled` → updates Order payment status |
+| `POST /notifications/order/:orderId/status` | POST | `api/src/controllers/notification.controller.ts` | Send order status push notification |
+| `GET /e2e/last-order` | GET | `api/src/controllers/health.controller.ts` | Dev/staging only — fetches last order |
+| `GET /e2e/order-count` | GET | `api/src/controllers/health.controller.ts` | Dev/staging only — counts orders since timestamp |
+
+### Socket.io Events (Server ↔ Client)
+| Event Constant | Direction | Consumer |
+|---------------|-----------|----------|
+| `subscribe_order` / `unsubscribe_order` | Client→Server | Mobile/web order tracking |
+| `order:update` | Server→Client | Customer order page |
+| `order:created` | Server→Client | Merchant dashboard |
+| `order:status_changed` | Server→Client | Customer |
+| `order:payment_updated` | Server→Client | Customer |
+| `order:purchased` | Server→Client | Mobile — confirms order placed |
+| `subscribe_all_orders` / `unsubscribe_all_orders` | Client→Server | CRM merchant dashboard |
+| `orders:update` / `orders:new` / `orders:bulk_update` | Server→Client | CRM |
+| `order_item:state_changed` | Server→Client | CRM kitchen station view |
+| `order_item:bulk_state_changed` | Server→Client | CRM kitchen station view |
+
+---
+
+## External Systems
+
+| System | How it touches Order | File |
+|--------|---------------------|------|
+| **PostgreSQL (Prisma)** | `Order` and `OrderItem` tables; relations to `Payment`, `UserVoucher`, `ChatMessage`, `PromotionAppliedItem`, `Printer`, `Merchant`, `User` | `api/prisma/schema.prisma` lines 1247–1362 |
+| **Redis (pub/sub)** | Channels `order:created:{merchantId}`, `order:updated:{orderId}`, `order:cancelled:{orderId}`; subscriber pattern `order:*` in `OrderPubSubService` | `api/src/services/reddis/order.reddis.ts`, `api/src/services/pubsub/order.pubsub.ts` |
+| **Redis (session/cart)** | Per-user cart contexts (keyed to `printerId`) are merged when creating group orders | `api/src/services/reddis/printer.reddis.ts` |
+| **Redis (retry queue)** | `centrifugo:retry:queue` — failed Centrifugo publishes for order chat messages | `api/src/services/centrifugo.service.ts` |
+| **Stripe** | `Payment` model has `orderId` FK (unique 1:1). `createPaymentIntent` reads order totals+vouchers. Webhook events `payment_intent.succeeded/failed/canceled` update `Order.paymentStatus`. | `api/src/services/stripe.service.ts`, `api/src/services/payment.service.ts`, `api/src/controllers/stripe-webhook.controller.ts` |
+| **Socket.io (WebSocket)** | 10+ order events; rooms `order:{orderId}`, `merchant:{merchantId}:orders`, `{printerId}_client`. Any field change in Order affects the shape of socket payloads. | `api/src/services/socket.service.ts`, `api/src/shared/socket-events.ts` |
+| **Centrifugo** | Broadcasts chat messages that reference `Order.id` (ORDER_PLACEHOLDER message type). HTTP API calls to Centrifugo server on order status changes. | `api/src/services/centrifugo.service.ts`, `api/src/services/chat.service.ts` |
+| **Bull (queue)** | No dedicated order queue found. `voucher-deactivate` Bull queue is indirectly affected because vouchers are bound to orders. | `api/src/bull/voucher.bull.ts` |
+| **Event-sourcing (Transaction log)** | On `CLOSED + PAID`, `PointsRewardService` reads `Order.total` and `Order.merchantId` to create immutable `Transaction` records. Changing these fields breaks balance projections. | `api/src/services/points-reward.service.ts` |
+| **Push Notifications (FCM/APNS via NotificationService)** | `sendOrderStatusNotification()` and `sendMerchantStaffNotification()` triggered by order state changes | `api/src/services/notification.service.ts` |
+| **Mobile App (Socket.io client)** | Receives `order:purchased`, `order:update`, `order:status_changed`; payload shape tied to Order fields | Mobile app Socket.io consumers |
+| **CRM Web (Socket.io client)** | Subscribes `subscribe_all_orders`; receives `orders:new`, `orders:update`; Dashboard state machine reads `Order.state`, `Order.paymentStatus`, `Order.deliveryMode`, `Order.hasWarning` | CRM dashboard WebSocket subscription |
+| **Customer Web (`/web`)** | Calls `createOrder` GraphQL mutation; displays `Order.state`, `Order.total`, `Order.id` on success page; passes `Order.id` to deeplink | `web/src/pages/CheckoutPage.tsx`, `web/src/pages/SuccessPage.tsx` |
+
+---
+
+## Confidence: 92/100
+
+**Why not 100:**
+- `api/src/services/order.service.ts` is 2,393 lines — inner method bodies not exhaustively read; edge-case callers in test helpers and dev controllers may exist.
+- `@generated/order/` directory (208 files) was confirmed by path but not individually verified — standard Prisma/Paljs gen means every field rename regenerates all 208 files.
+- `payment.service.ts` `fulfillPayment()` internals (order creation on Stripe webhook) were described by the service but the exact `prisma.order.create()` call site was not line-verified.
+- Any queue processor for auto-disconnect (mentioned in `ORDER_AUTO_DISCONNECT_IMPLEMENTATION.md` in docs) was not found as a Bull processor — it may be implemented via Socket.io disconnect events rather than a queue; not confirmed.

@@ -1,0 +1,151 @@
+Now I have enough verified data for a precise, file-referenced answer.
+
+---
+
+## Direct Dependencies
+
+These files directly call `prisma.order.*` or import the `Order` type from `@prisma/client`:
+
+### Services
+
+| File | What it does with Order |
+|---|---|
+| `api/src/services/order.service.ts` | **Core owner.** All CRUD: create, read, update state, cancel, pricing. Source of truth for order lifecycle. |
+| `api/src/services/payment.service.ts` | Creates Orders after payment resolution. Calls `prisma.order.update` to set `PAID` status and link `orderId` to `Payment`. |
+| `api/src/services/dashboard-action.service.ts` | Executes CRM-driven state transitions (SET_STATUS, SET_PAYMENT, FLAG_PROBLEM). Reads/writes `OrderState`, `PaymentStatus`, `hasWarning`. |
+| `api/src/services/chat.service.ts` | Calls `prisma.order.findUnique` to hydrate ORDER_PLACEHOLDER chat messages with order data. |
+| `api/src/services/points-reward.service.ts` | Receives a full `Order` object; reads `order.total`, `order.userId`, `order.merchantId` to calculate and award loyalty points. |
+| `api/src/services/refactored-printer.service.ts` | Creates orders via `OrderService` in lobby/printer context. |
+| `api/src/services/reddis/order.reddis.ts` | Imports `Order`, `OrderState`, `PaymentStatus`. Publishes `OrderEventPayload` to Redis channels `order:created:{merchantId}`, `order:updated:{orderId}`, `order:cancelled:{orderId}`. |
+
+### GraphQL Resolver
+
+| File | What it does with Order |
+|---|---|
+| `api/src/graphql/resolvers/order.resolver.ts` | **11 operations** directly on Order (see Affected Endpoints). Returns `Order` type from every operation. |
+
+### Domain Models / Value Objects
+
+| File | What it does with Order |
+|---|---|
+| `api/src/models/order.model.ts` | Rich domain `OrderModel` class wrapping the Prisma `Order`. |
+| `api/src/models/value-objects/order-pricing.ts` | Computes `subtotal`, `voucherDiscount`, `total` — mirrors the Order pricing fields directly. |
+| `api/src/models/value-objects/order-state-machine.ts` | Validates `OrderState` enum transitions (PREPARING → READY_FOR_PICKUP → CLOSED / CANCELLED). |
+
+### DTOs / Inputs
+
+| File | What it does with Order |
+|---|---|
+| `api/src/graphql/dto/create-order-with-voucher.input.ts` | Custom GraphQL input for voucher-linked order creation. |
+| `api/src/graphql/dto/create-merchant-order.input.ts` | Custom input for offline/walk-in order creation. |
+
+### Auto-Generated Types (`@generated/order/`)
+
+`npx prisma generate` produces 100+ files under `api/src/@generated/order/` — all CRUD args, Where/OrderBy inputs, aggregate types. **Every field rename or type change regenerates this entire directory and breaks any code that imports these types.**
+
+---
+
+## Transitive Dependencies
+
+These files don't touch `prisma.order` directly but depend on types or services that do:
+
+| File | Transitive path |
+|---|---|
+| `api/src/services/socket.service.ts` | Consumes `OrderUpdateEvent` / `OrderCreatedEvent` interfaces; emits `order:update` and `orders:new` Socket.io events to rooms derived from `orderId`, `merchantId`, `printerId`. |
+| `api/src/services/pubsub/order.pubsub.ts` | Bridges Redis `OrderEventPayload` → Socket.io via `SocketService`. |
+| `api/src/services/voucher-queue.service.ts` | Bull queue jobs triggered post-order to transition `UserVoucher` from PENDING → USED. Depends on `orderId`. |
+| `api/src/bull/voucher.bull.ts` | Bull processor for voucher queue jobs. Processes by `orderId`. |
+| `api/src/gateways/crm.gateway.ts` | WebSocket gateway; subscribes CRM clients to room `order:{orderId}` and `merchant:{merchantId}:orders`. |
+| `api/src/socket-handlers/client.socket.ts` | Mobile client socket handler; tracks order state changes for the ordering user. |
+| `api/src/socket-handlers/crm.socket.ts` | CRM socket handler; relays order updates to CRM dashboards. |
+| `api/src/socket-handlers/merchant.socket.ts` | Merchant dashboard socket handler; receives `orders:new` / `orders:update` events. |
+| `api/src/services/centrifugo.service.ts` | Publishes real-time order-related updates (via chat placeholders) to Centrifugo channels. |
+| `api/src/controllers/stripe-webhook.controller.ts` | Stripe webhook receiver. On `payment_intent.succeeded` calls `PaymentService.fulfillOrder()` which calls `OrderService`. |
+| `api/src/controllers/health.controller.ts` | Many `/api/e2e/*` dev endpoints directly create, advance, and reset Orders via `prisma.order.*`. |
+| `api/src/controllers/dev.controller.ts` | Dev endpoints `POST /dev/create-order` and `POST /dev/set-order-status` directly use `prisma.order`. |
+| `api/src/controllers/notification.controller.ts` | `POST /notification/order/:orderId/status` triggers push notifications using `orderId`. |
+
+**Related Prisma models that hard-reference Order (FK on their side) — a schema field rename or removal cascades to these:**
+
+| Model | Relation |
+|---|---|
+| `OrderItem` | `orderId` FK (cascade delete) — owns item states, pricing per item |
+| `Payment` | `orderId` FK (1-to-1, unique) — Stripe payment link |
+| `UserVoucher` | `appliedVoucherId` FK on Order (inverse: `Order.appliedVoucherId @unique`) |
+| `ChatMessage` | `orderId` optional FK — ORDER_PLACEHOLDER messages |
+| `Printer` | `orders Order[]` reverse relation — used in printer disconnect-on-order-status logic (`@generated/printer/printer-createdisconnect-on-order-status.input.ts`) |
+
+---
+
+## Affected Endpoints
+
+### GraphQL (all in `api/src/graphql/resolvers/order.resolver.ts`, guarded by `GqlHybridAuthGuard` or `GqlAuth0AuthGuard`)
+
+| Operation | Type | Guard | Description |
+|---|---|---|---|
+| `simpleFindOrders` | Query | Hybrid | Filter orders by arbitrary where clause |
+| `getOrdersForMerchant` | Query | Hybrid | All orders for a merchant |
+| `getOrderById` | Query | Hybrid | Single order by ID |
+| `createOrder` | Mutation | Hybrid | Standard cart → order |
+| `createOrderWithVoucher` | Mutation | Hybrid | Cart + voucher → order |
+| `createMerchantOrder` | Mutation | Auth0 | Offline/walk-in order (CRM only) |
+| `updateOrder` | Mutation | Hybrid | Generic update (passes through to Prisma) |
+| `updateOrderStatus` | Mutation | Hybrid | Kitchen/merchant state advance |
+| `updatePaymentStatus` | Mutation | Hybrid | Payment status change |
+| `cancelOrder` | Mutation | Hybrid | Cancel with validation |
+| `setOrderWarning` | Mutation | Hybrid | Toggle kitchen warning flag |
+| `updateOrderItemState` | Mutation | Hybrid | Single item state (station workflow) |
+| `updateOrderItemsState` | Mutation | Hybrid | Bulk item state update |
+
+### REST
+
+| Endpoint | Controller | Order relevance |
+|---|---|---|
+| `POST /dev/create-order` | `dev.controller.ts` | Creates test Order directly via `prisma.order` |
+| `POST /dev/set-order-status` | `dev.controller.ts` | Sets `OrderState` directly |
+| `POST /dev/reset` | `dev.controller.ts` | Deletes all orders for user/merchant |
+| `POST /notification/order/:orderId/status` | `notification.controller.ts` | Sends push using order ID + status |
+| `POST /webhook` | `stripe-webhook.controller.ts` | Stripe → PaymentService → OrderService |
+| `GET /api/e2e/last-order` | `health.controller.ts` | Returns last Order for E2E user |
+| `POST /api/e2e/create-order` | `health.controller.ts` | Seeds a PREPARING Order |
+| `POST /api/e2e/reset-orders` | `health.controller.ts` | Deletes all Orders for E2E user |
+| `POST /api/e2e/advance-order` | `health.controller.ts` | Cycles Order through state transitions |
+| `GET /api/e2e/order-count` | `health.controller.ts` | Counts Orders since timestamp |
+
+### WebSocket Events (Socket.io)
+
+| Event (emitted) | Direction | Rooms |
+|---|---|---|
+| `order:update` | Server → Client | `order:{orderId}`, `merchant:{merchantId}:orders`, `printer:{printerId}:clients` |
+| `orders:new` | Server → Client | `merchant:{merchantId}:orders`, `printer:{printerId}:clients` |
+| `orders:update` | Server → CRM | `merchant:{merchantId}:orders` |
+| `subscribe_order` | Client → Server | Joins room `order:{orderId}` |
+| `unsubscribe_order` | Client → Server | Leaves room `order:{orderId}` |
+
+---
+
+## External Systems
+
+| System | File(s) | How Order is involved |
+|---|---|---|
+| **PostgreSQL (Prisma)** | All 39 files with `prisma.order` | Primary store. Any schema change requires migration + `prisma generate`. |
+| **Redis (Pub/Sub)** | `order.reddis.ts`, `order.pubsub.ts` | `OrderEventPayload` (orderId, state, paymentStatus, merchantId) published to `order:created:*`, `order:updated:*`, `order:cancelled:*`. Field changes break the payload contract. |
+| **Redis (Adapter)** | `socket.service.ts` | Socket.io Redis adapter uses merchant/printer rooms keyed by Order fields. |
+| **Socket.io (mobile server)** | `socket.service.ts`, `client.socket.ts` | Emits `order:update` / `orders:new` payloads containing Order fields directly. |
+| **Socket.io (CRM server)** | `socket.service.ts`, `crm.gateway.ts`, `crm.socket.ts` | Same payloads to CRM-connected clients. |
+| **Stripe** | `payment.service.ts`, `stripe-webhook.controller.ts` | PaymentIntent metadata references the order; webhook creates/links Order on success. `Payment.orderId` is the FK. |
+| **Centrifugo** | `centrifugo.service.ts`, `centrifugo.controller.ts` | Publishes chat messages with ORDER_PLACEHOLDER type; those messages reference `orderId`. |
+| **Bull / BullMQ** | `voucher-queue.service.ts`, `bull/voucher.bull.ts` | Jobs enqueued with `orderId` to finalize voucher state post-order. |
+| **Expo Push Notifications** | `notification.controller.ts` | Push payloads include `orderId` and `OrderState` for deep-linking. |
+
+---
+
+## Confidence
+
+**92/100**
+
+- The 39 files with direct `prisma.order` calls are verified by grep. The GraphQL resolver operations (13 total) are verified by source read.  
+- The Prisma schema block (lines 1247–1287) is verified verbatim.  
+- The `OrderEventPayload`, Redis channel names, and Socket.io event names are verified from source.  
+- The Stripe webhook → PaymentService → OrderService chain is verified from `payment.service.ts`.  
+- Minor uncertainty: `printer-communication.service.ts` and any background jobs not surfaced in the `prisma.order` grep (e.g., automatic promotions pipeline which references orders indirectly via `promotion-order-flow.test.ts`) — these are transitive and not fully traced. The auto-generated `@generated/order/` count of "100+" is an estimate based on the pattern; exact count not verified.

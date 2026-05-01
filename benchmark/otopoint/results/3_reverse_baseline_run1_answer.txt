@@ -1,0 +1,102 @@
+Now I have everything needed. Here is the complete, verified answer:
+
+---
+
+## Services that inject SocketService
+
+### Gateways (register server instances onto SocketService)
+| File | Class | Purpose |
+|---|---|---|
+| `gateways/crm.gateway.ts` | `CrmWebSocketGateway` | Assigns `socketService.crmServer` on `afterInit` |
+| `gateways/mobile.gateway.ts` | `MobileWebSocketGateway` | Assigns `socketService.mobileServer` on `afterInit` |
+| `gateways/websocket.gateway.ts` | `WebSocketGateway` (legacy) | Assigns `socketService.server` on `afterInit` |
+
+### Domain / Application Services
+| File | Class | How it uses SocketService |
+|---|---|---|
+| `services/order.service.ts` | `OrderService` | `emitToUser`, `emitToLobby`, `emitToMerchant` |
+| `services/balance.service.ts` | `BalanceService` | `emitToUser` |
+| `services/payment.service.ts` | `PaymentService` | `emitOrderUpdate` |
+| `services/pubsub/order.pubsub.ts` | `OrderPubSub` | `emitOrderCreated`, `emitOrderUpdate` |
+| `services/menu-version.service.ts` | `MenuVersionService` | `emitMenuUpdated` |
+| `services/printer-communication.service.ts` | `PrinterCommunicationService` | Direct `server?.to(room).emit(...)` on all 3 namespaces |
+| `services/user-session.service.ts` | `UserSessionService` | Reads `mobileServer` and `server` to `fetchSockets()` (no emit) |
+| `services/refactored-printer.service.ts` | `RefactoredPrinterService` | Passes `server` to `BaseSocket.emitStateChanged` |
+
+### GraphQL Resolvers
+| File | Class | What it emits |
+|---|---|---|
+| `graphql/resolvers/transaction.resolver.ts` | `TransactionResolver` | `emitToUser('points_claimed', ...)` |
+| `graphql/resolvers/user-voucher.resolver.ts` | `UserVoucherResolver` | `emitToUser('points_claimed', ...)` |
+| `graphql/resolvers/surprisebox.resolver.ts` | `SurpriseBoxResolver` | `emitToUser('points_claimed', ...)` |
+
+### Socket Handlers & REST Controllers
+| File | Class | How it uses SocketService |
+|---|---|---|
+| `socket-handlers/factory.socket.ts` | `FactorySocket` | Passes `server` to `BaseSocket.emitStateChanged` |
+| `controllers/printer.controller.ts` | `PrinterController` | Passes `server` to `BaseSocket.emitStateChanged` |
+| `controllers/health.controller.ts` | `HealthController` | `emitToUser('points_claimed', ...)` (test/debug endpoint) |
+
+### Bull Processors
+| File | Usage |
+|---|---|
+| `bull/voucher.bull.ts` | `VoucherBull` — `emitStateChanged` call is **commented out**; no active emit |
+
+---
+
+## Events emitted
+
+All calls are verified from source. Rooms and namespaces are explicit.
+
+### Via `SocketService` high-level methods
+
+| Event name | Method | Room(s) targeted | Emitting namespace(s) |
+|---|---|---|---|
+| `order:update` | `emitOrderUpdate` | `order:${orderId}`, `merchant:${merchantId}:orders`, `${printerId}_client` | mobile, CRM, legacy |
+| `orders:update` | `emitOrderUpdate` | `merchant:${merchantId}:orders` | mobile, CRM, legacy |
+| `orders:new` | `emitOrderCreated` | `merchant:${merchantId}:orders`, `${printerId}_client` | mobile, CRM, legacy |
+| `voucher_update` | `emitToUser` / `emitVoucherUpdate` | `user:${userId}` | mobile, legacy |
+| `lobby_voucher_update` | `emitToLobby` / `emitVoucherUpdate` | `lobby:${printerId}` | mobile, legacy |
+| `merchant_voucher_update` | `emitToMerchant` / `emitVoucherUpdate` | `merchant:${merchantId}` | mobile, CRM |
+| `menu_updated` | `emitMenuUpdated` | `printer:${printerId}` (mobile), `merchant_${printerId}` (CRM) | mobile, CRM |
+| `points_claimed` | `emitToUser` | `user:${userId}` | mobile, legacy |
+| `order:purchased` | `emitToUser` (`SOCKET_EVENTS.ORDER.PURCHASED`) | `user:${userId}` | mobile, legacy |
+| `order_item:state_changed` | `emitToMerchant` | `merchant:${merchantId}` | mobile, CRM |
+| `order_item:bulk_state_changed` | `emitToMerchant` | `merchant:${merchantId}` | mobile, CRM |
+
+### Via `PrinterCommunicationService` (raw emit via SocketService servers)
+
+| Event name | Room(s) targeted | Namespaces |
+|---|---|---|
+| `user-joined` | merchant room + `${printerId}_client` room | all 3 |
+| `user-left` | merchant room + `${printerId}_client` room | all 3 |
+| `voucher-activated` | merchant room | all 3 |
+| `voucher-claimed` | `${printerId}_client` room | all 3 |
+| `group-created` | `${printerId}_client` room | all 3 |
+| `group-invite` | individual socket (found by user ID search) | mobile + legacy |
+| `order-created` | merchant room | all 3 |
+
+### Via `BaseSocket.emitStateChanged` (PrinterController / FactorySocket)
+Emits `update_state` to the printer's state room via `socketService.server` (legacy namespace only in these callers).
+
+---
+
+## WebSocket Gateways
+
+| File | Class | Namespace | Clients |
+|---|---|---|---|
+| `gateways/mobile.gateway.ts` | `MobileWebSocketGateway` | `/mobile` | React Native app |
+| `gateways/crm.gateway.ts` | `CrmWebSocketGateway` | `/crm` | CRM web (Auth0 users) |
+| `gateways/websocket.gateway.ts` | `WebSocketGateway` | `/` (default) | Legacy — redirects to the two namespaces above |
+
+`SocketService` holds references to all three as `mobileServer`, `crmServer`, and `server` respectively. Each gateway sets its own field in `afterInit()`.
+
+---
+
+## Downstream consumers
+
+| Consumer | Namespace | Events it receives |
+|---|---|---|
+| **Mobile app** (React Native, `/mobile`) | `/mobile` | `order:update`, `orders:new`, `order:purchased`, `points_claimed`, `voucher_update`, `lobby_voucher_update`, `merchant_voucher_update`, `menu_updated`, `user-joined`, `user-left`, `voucher-claimed`, `group-created`, `group-invite`, `update_state` |
+| **CRM web** (React, Auth0, `/crm`) | `/crm` | `order:update`, `orders:update`, `orders:new`, `merchant_voucher_update`, `menu_updated`, `order_item:state_changed`, `order_item:bulk_state_changed`, `user-joined`, `user-left`, `voucher-activated`, `order-created` |
+| **Legacy clients** (default `/` namespace) | `/` | All events that still broadcast to `this.server` — primarily `order:update`, `orders:new`, `points_claimed`, `order:purchased`, `voucher_update`, `lobby_voucher_update`, `user-joined`, `user-left`, `voucher-claimed`, `group-created`, `group-invite` |

@@ -1,0 +1,8 @@
+# Raw JSON results (reproducible, large)
+results/*.json
+results/v1/*.json
+otopoint/results/*.json
+# Keep answer texts and analysis
+!results/*_answer.txt
+!results/v1/*_answer.txt
+!otopoint/results/*_answer.txt

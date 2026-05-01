@@ -1,0 +1,74 @@
+Now I have a full picture. Here's the complete connectivity analysis:
+
+---
+
+## Direct Connections
+
+**spectators-api → tom-api** (1 hop)
+
+The connection is implemented via **`SpectatorService`** inside `spectators-api`, which directly calls `tom-api` as a service dependency.
+
+| From | Edge | To | Derivation |
+|------|------|----|------------|
+| `spectators-api` | `CALLS_SERVICE` | `tom-api` | `linked` (service-level) |
+| `SpectatorService` | `CALLS_SERVICE` | `tom-api` | `hard` (code-level) |
+| `SpectatorService` | `CALLS_ENDPOINT` | `GET /tom/status` | `hard` (explicit HTTP call) |
+
+The concrete call chain is:
+```
+StatsController  →  [injects]  →  SpectatorService  →  CALLS_SERVICE  →  tom-api
+                                                     ↘  CALLS_ENDPOINT →  GET /tom/status
+```
+`StatsController` (which exposes `GET /stats/leaderboard` and `GET /stats/recent`) injects `SpectatorService`, which in turn directly calls `tom-api`.
+
+---
+
+## Indirect Connections (via other services)
+
+**Path 1 — Via `jerry-api`** (3 hops, score: 0.65)
+
+```
+spectators-api  →[CALLS_SERVICE]→  jerry-api
+                                       ↑
+SpectatorService  →[CALLS_SERVICE]→  jerry-api
+SpectatorService  →[CALLS_SERVICE]→  tom-api
+```
+In undirected graph traversal, `jerry-api` acts as a shared hub: `SpectatorService` calls *both* `jerry-api` and `tom-api`. This means any change to `jerry-api`'s contract can trigger cascading re-evaluation across both target services.
+
+**Path 2 — Via `StatsController` endpoints** (4 hops)
+
+```
+spectators-api
+  →[EXPOSES_ENDPOINT]→  GET /stats/leaderboard  (or GET /stats/recent)
+       ←[EXPOSES_ENDPOINT]← StatsController
+              →[INJECTS]→ SpectatorService
+                    →[CALLS_SERVICE]→ tom-api
+```
+Any caller of `GET /stats/leaderboard` or `GET /stats/recent` indirectly triggers a downstream call to `tom-api`.
+
+**Path 3 — Via `TomClient`** (6 hops)
+
+```
+spectators-api → ... → SpectatorService →[CALLS_ENDPOINT]→ GET /tom/status
+                                          TomClient        →[CALLS_ENDPOINT]→ GET /tom/status
+                                          TomClient        →[CALLS_SERVICE]→  tom-api
+```
+Both `SpectatorService` and `TomClient` call `GET /tom/status`. They are parallel consumers of the same `tom-api` endpoint.
+
+---
+
+## Shared Dependencies
+
+| Shared Node | Type | Role |
+|---|---|---|
+| `GET /tom/status` | HTTP endpoint | Called directly by `SpectatorService` in spectators-api; also consumed by `TomClient` |
+| `GET /tom/weapons` | HTTP endpoint | Reachable from spectators-api at depth 2 via SpectatorService |
+| `POST /tom/arm` | HTTP endpoint | Reachable from spectators-api at depth 2 via SpectatorService |
+| `jerry-api` | service | Both spectators-api and tom-api's ecosystem share a dependency on jerry-api via `SpectatorService` / `JerryClient` |
+| `battle-results` | Kafka topic | spectators-api has a `BattleResultConsumer`; the topic is produced by `arena-api` which orchestrates tom-api — creating an event-driven indirect link |
+| `GameEvent` enum | shared data | Defined in the shared package, consumed across services |
+| `SpectatorWatchesBattle` | use case / flow | A business flow that directly ties spectators-api's observation behavior to tom-api's state |
+
+---
+
+**Summary:** The primary connection is **direct and intentional** — `SpectatorService` in `spectators-api` explicitly calls `tom-api` (and its `GET /tom/status` endpoint) to fetch live state data for the stats endpoints. The indirect connections are all traversals of this same `SpectatorService` hub, plus an event-driven path via arena-api's `battle-results` Kafka topic.

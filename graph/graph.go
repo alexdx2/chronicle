@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
@@ -37,6 +38,40 @@ func (g *Graph) Store() *store.Store {
 // Registry returns the underlying registry.
 func (g *Graph) Registry() *registry.Registry {
 	return g.reg
+}
+
+// ResolveNodeKey resolves a name-or-key string to a node_key.
+// Tries in order: exact key match → case-insensitive name search.
+// Returns the node_key and an error if not found or ambiguous.
+func (g *Graph) ResolveNodeKey(nameOrKey string) (string, error) {
+	// Try exact key first.
+	if _, err := g.store.GetNodeByKey(nameOrKey); err == nil {
+		return nameOrKey, nil
+	}
+
+	// Search by name.
+	nodes, err := g.store.SearchNodesByName(nameOrKey)
+	if err != nil {
+		return "", fmt.Errorf("ResolveNodeKey: %w", err)
+	}
+	if len(nodes) == 0 {
+		return "", fmt.Errorf("ResolveNodeKey: no node found matching %q", nameOrKey)
+	}
+	if len(nodes) == 1 {
+		return nodes[0].NodeKey, nil
+	}
+	// Multiple matches — prefer exact name match.
+	for _, n := range nodes {
+		if strings.EqualFold(n.Name, nameOrKey) {
+			return n.NodeKey, nil
+		}
+	}
+	// Ambiguous — return first with a helpful error listing options.
+	var keys []string
+	for _, n := range nodes[:min(len(nodes), 5)] {
+		keys = append(keys, n.NodeKey+" ("+n.Name+")")
+	}
+	return "", fmt.Errorf("ResolveNodeKey: ambiguous — %d matches for %q: %s", len(nodes), nameOrKey, strings.Join(keys, ", "))
 }
 
 // UpsertNode validates the input and upserts a node into the store.

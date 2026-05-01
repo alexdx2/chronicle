@@ -1,0 +1,84 @@
+Here is the verified, precise picture of every connection between **spectators-api** and **tom-api**:
+
+---
+
+## Direct Connections
+
+### HTTP GET `/tom/status`
+**spectators-api → tom-api** (synchronous HTTP)
+
+`spectators-api/src/spectators/spectator.service.ts`:
+```typescript
+const TOM_API_URL = process.env.TOM_API_URL || 'http://tom-api:3001';
+
+async getTomName() {
+  const r = await fetch(`${TOM_API_URL}/tom/status`);
+  return r.ok ? (await r.json()).name : 'Tom';
+}
+```
+
+spectators-api calls tom-api's `/tom/status` endpoint directly to resolve Tom's display name. Configured via `TOM_API_URL` env var (default `http://tom-api:3001`).
+
+---
+
+## Indirect Connections (via other services)
+
+### Via arena-api → Kafka topic `battle-results`
+
+**Path:** `tom-api` → *(HTTP)* → `arena-api` → *(Kafka: `battle-results`)* → `spectators-api`
+
+**Step 1 — arena-api calls tom-api:**
+`arena-api/src/arena/tom.client.ts`:
+```typescript
+const TOM_API_URL = process.env.TOM_API_URL || 'http://tom-api:3001';
+
+async getStatus() {
+  const response = await fetch(`${TOM_API_URL}/tom/status`);
+  return response.json();
+}
+```
+
+**Step 2 — arena-api publishes battle results to Kafka:**
+`arena-api/src/arena/battle-result.producer.ts` publishes events to hardcoded topic `'battle-results'`.
+
+**Step 3 — spectators-api consumes those events:**
+`spectators-api/src/spectators/battle-result.consumer.ts`:
+```typescript
+@EventPattern('battle-results')
+handleBattleResult(event: any) {
+  this.spectatorService.recordBattle(event);
+}
+```
+
+Tom's status data originates in tom-api, flows through arena-api's battle logic, is published to the `battle-results` Kafka topic, and is ultimately consumed and stored by spectators-api for leaderboard tracking (`TOM_HITS`, `JERRY_DODGES`, `TRAP_TRIGGERED`, `MUTUAL_DESTRUCTION`).
+
+> **Note:** arena-api's `BattleResultProducer` is a stub in this fixture (it does `console.log` instead of a real Kafka send), but the spectators-api consumer is wired up with `@nestjs/microservices` `@EventPattern` — the architectural contract is real.
+
+---
+
+## Shared Dependencies
+
+| Dependency | tom-api | spectators-api | Notes |
+|---|---|---|---|
+| `@nestjs/common` | ✅ `^10.0.0` | ✅ `^10.0.0` | Core NestJS framework |
+| `@nestjs/core` | ✅ `^10.0.0` | ✅ `^10.0.0` | NestJS runtime |
+| `@nestjs/microservices` | ❌ | ✅ `^10.0.0` | Kafka consumer infra (spectators only) |
+| `@prisma/client` | ✅ `^5.0.0` | ❌ | DB access (tom only; no shared DB) |
+
+### Shared codebase library (`shared/`)
+The fixture contains a `shared/` package defining:
+- **`constants.ts`**: `BATTLE_TOPIC = 'battle-results'`, `MAX_HEALTH_TOM = 9`, `GameEvent` enum
+- **`interfaces.ts`**: `BattleOutcome` (with `tomId`, `result`) and `CharacterStatus` (with `id`, `name`, `health`, `speed`)
+- **`config.ts`**: `ServiceConfig` interface
+
+However, neither `tom-api/package.json` nor `spectators-api/package.json` declares `@tomandjerry/shared` as a dependency — it is used by other services in the fixture but not directly imported by these two.
+
+---
+
+### Summary
+
+| Connection type | Path | Mechanism |
+|---|---|---|
+| **Direct** | spectators-api → tom-api | HTTP GET `/tom/status` |
+| **Indirect** | tom-api → arena-api → spectators-api | HTTP + Kafka `battle-results` topic |
+| **Shared infra** | Both services | `@nestjs/common`, `@nestjs/core` |

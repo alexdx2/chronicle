@@ -1,0 +1,79 @@
+Here is the full connectivity analysis between **spectators-api** and **tom-api**, based on the knowledge graph (98 total paths found — I'll present the meaningful structural ones):
+
+---
+
+## Direct Connections
+
+**spectators-api → tom-api** (`CALLS_SERVICE`, derivation: `linked`)
+
+There is a single top-level direct edge at the service layer. This is a service-to-service call relationship, confirmed at the graph's service layer. It is derived via a `linked` inference (from code-level evidence rolled up).
+
+---
+
+## Indirect Connections (via other services)
+
+### 1. Via `SpectatorService` provider → `GET /tom/status` endpoint
+The primary code-level path, fully hard-derived:
+
+```
+spectators-api
+  └─ EXPOSES_ENDPOINT → GET /stats/leaderboard (or GET /stats/recent)
+       └─ StatsController EXPOSES_ENDPOINT → GET /stats/leaderboard
+            └─ StatsController INJECTS → SpectatorService
+                 └─ SpectatorService CALLS_ENDPOINT → GET /tom/status
+                      └─ tom-api EXPOSES_ENDPOINT → GET /tom/status
+```
+
+This is the most important indirect path — it shows the **exact code chain**: the `StatsController` injects `SpectatorService`, and `SpectatorService` makes an HTTP call to tom-api's `GET /tom/status` endpoint.
+
+### 2. Via `SpectatorService` → tom-api (direct service call)
+A shorter variant of the above, where `SpectatorService` is resolved as directly calling tom-api at the service level:
+
+```
+spectators-api
+  └─ EXPOSES_ENDPOINT → GET /stats/leaderboard
+       └─ StatsController INJECTS → SpectatorService
+            └─ SpectatorService CALLS_SERVICE → tom-api
+```
+
+### 3. Via `jerry-api` (shared intermediary)
+`SpectatorService` calls **both** jerry-api and tom-api, making jerry-api a common hub:
+
+```
+spectators-api
+  └─ CALLS_SERVICE → jerry-api
+                         ↑
+       SpectatorService CALLS_SERVICE → jerry-api
+       SpectatorService CALLS_SERVICE → tom-api
+```
+
+This means spectators-api and tom-api are indirectly connected through the fact that the same internal `SpectatorService` component fans out calls to both services.
+
+### 4. Via `jerry-api` endpoints
+```
+spectators-api
+  └─ CALLS_SERVICE → jerry-api
+       └─ jerry-api EXPOSES_ENDPOINT → GET /jerry/status
+            └─ SpectatorService CALLS_ENDPOINT → GET /jerry/status
+                 └─ SpectatorService CALLS_SERVICE → tom-api
+```
+
+---
+
+## Shared Dependencies
+
+These are contracts and nodes that both services are connected to through the graph:
+
+| Shared Node | spectators-api role | tom-api role |
+|---|---|---|
+| `GET /tom/status` | **Calls** this endpoint (via `SpectatorService`) | **Exposes** this endpoint |
+| `GET /tom/weapons` | **Calls** this endpoint (via `SpectatorService`) | **Exposes** this endpoint |
+| `POST /tom/arm` | **Calls** this endpoint (via `SpectatorService`) | **Exposes** this endpoint |
+
+All three are tom-api's own published contract endpoints, consumed by spectators-api's `SpectatorService`. There are no shared third-party services or data models between the two — tom-api's dependency graph terminates at its own endpoints (depth 1), while spectators-api's shared data models (`Mouse`, `Trap`) and flows (`JerrySetsTrap`) trace back through jerry-api, not tom-api.
+
+---
+
+### Summary
+
+The connection is **one-directional**: **spectators-api calls tom-api**, never the reverse. The mechanism is `SpectatorService` (an internal NestJS provider inside spectators-api), which is injected into `StatsController` and makes HTTP calls to tom-api's three endpoints (`/tom/status`, `/tom/weapons`, `/tom/arm`). There is no shared message bus or Kafka topic between these two services specifically.

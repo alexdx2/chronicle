@@ -1,0 +1,77 @@
+Based on a complete read of all source files across all four services, here is the verified impact analysis for the **`Cat` data model** (`tom-api/prisma/schema.prisma`):
+
+---
+
+## Direct Dependencies
+
+These components read from or write to the `Cat` / `CatWeapon` Prisma models directly:
+
+| Component | File | Nature of dependency |
+|---|---|---|
+| **CatWeapon model** | `tom-api/prisma/schema.prisma` | Foreign key `ownerId → Cat.id`; collapses if `Cat.id` changes |
+| **TomService** | `tom-api/src/tom/tom.service.ts` | Calls `prisma.cat.findFirst()`, `prisma.catWeapon.findMany()`, `prisma.catWeapon.create()` — any field rename/removal breaks these directly |
+| **HealthCheckPipe** | `tom-api/src/tom/health.pipe.ts` | Validates `health` must be 0–9 (hardcoded to Cat's domain semantic of "9 lives") |
+
+---
+
+## Transitive Dependencies
+
+**Depth 1 — directly consuming TomService:**
+
+| Component | File | Dependency path |
+|---|---|---|
+| **TomController** | `tom-api/src/tom/tom.controller.ts` | Exposes TomService output verbatim via HTTP responses |
+
+**Depth 2 — consuming tom-api over HTTP:**
+
+| Component | File | Dependency path | Fields consumed |
+|---|---|---|---|
+| **TomClient** | `arena-api/src/arena/tom.client.ts` | Calls `GET /tom/status` → parses JSON as Cat shape | `id`, `speed`, `name` |
+| **SpectatorService** | `spectators-api/src/spectators/spectator.service.ts` | Calls `GET /tom/status` → reads `.name` | `name` |
+
+**Depth 3 — consuming TomClient / ArenaService internals:**
+
+| Component | File | Dependency path | Risk |
+|---|---|---|---|
+| **ArenaService** | `arena-api/src/arena/arena.service.ts` | Uses `tom.speed`, `tom.id`, `tom.name` from TomClient response to drive battle logic and write `BattleEvent.tomId` | `speed` used in dodge calculation; `id` stored in DB |
+| **BattleQueueConsumer** | `arena-api/src/arena/battle.queue.ts` | Calls `arenaService.tomAttacksJerry()` from queue jobs | Inherits all ArenaService risks |
+| **BattleEvent model** | `arena-api/prisma/schema.prisma` | Stores `tomId` sourced from `Cat.id` | Data integrity if `Cat.id` format changes |
+| **CharacterStatus interface** | `shared/src/interfaces.ts` | Declares `{ id, name, health, speed }` — mirrors Cat's response shape | Must stay in sync if Cat fields change |
+
+---
+
+## Affected Endpoints
+
+| Endpoint | Service | Why affected |
+|---|---|---|
+| `GET /tom/status` | tom-api | Returns Cat record directly (all fields) |
+| `GET /tom/weapons` | tom-api | Returns all CatWeapon records (linked to Cat) |
+| `POST /tom/arm` | tom-api | Creates a CatWeapon bound to `Cat.id`; reads Cat to get `ownerId` |
+| `POST /arena/attack` | arena-api | Reads tom status (Cat data), uses `tom.speed` in dodge logic, writes `tomId` to BattleEvent |
+| `GET /arena/history` | arena-api | Returns BattleEvents that contain `tomId` derived from Cat |
+| `GET /arena/score` | arena-api | Aggregates BattleEvents seeded by Cat-backed tom status |
+| `GET /stats/leaderboard` | spectators-api | Calls `getTomName()` → `GET /tom/status` → reads `Cat.name` |
+| `GET /stats/recent` | spectators-api | Recent battles include `tom.name` from Cat |
+
+---
+
+## External Systems
+
+| System | Where referenced | What's at risk |
+|---|---|---|
+| **PostgreSQL (tom-api DB)** | `tom-api/prisma/schema.prisma` | Stores Cat and CatWeapon tables; schema migration required for any model change |
+| **PostgreSQL (arena-api DB)** | `arena-api/prisma/schema.prisma` | Stores `BattleEvent.tomId` (derived from `Cat.id`); referential integrity at risk if ID format changes |
+| **Kafka (`battle-results` topic)** | `arena-api/src/arena/battle-result.producer.ts` | Published events include `tomId` (from Cat) and `tom.name`; consumers like spectators-api read this |
+| **Redis** | `arena-api/src/arena/cache.service.ts` | CacheService is wired into arena-api; if Tom status is cached, stale Cat data could persist post-change |
+| **Notification Service (`http://notifications:3005`)** | `spectators-api/src/spectators/notification.service.ts` | Receives battle result push events containing result strings derived from Cat-based battle logic |
+
+---
+
+## Confidence: 88/100
+
+**High confidence because:** All four services were read in full; the dependency chain from `Cat` → `TomService` → `TomController` → HTTP → `TomClient`/`SpectatorService` → `ArenaService` → Kafka → `spectators-api` is fully traceable in source.
+
+**Slight deductions because:**
+- `CacheService` in arena-api is instantiated but no call site was found explicitly caching `GET /tom/status` results — it may or may not cache Cat data in a real deployment.
+- `shared/src/interfaces.ts` (`CharacterStatus`) is defined but no explicit import was found in the files reviewed — it may be unused or used only at the type level by consumers not yet read.
+- There are no integration/contract tests visible, so runtime breakage patterns can't be fully confirmed.

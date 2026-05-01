@@ -1,0 +1,64 @@
+Here is the complete traced flow for `POST /arena/attack`, based entirely on the source code:
+
+---
+
+## Request Chain (ordered)
+
+1. **`POST /arena/attack`** arrives at **`arena-api`** with body `{ weaponType: string }`
+
+2. **`BattleGuard`** (`battle.guard.ts`)
+   Guards the route. Reads the current hour — only allows requests if `hour >= 6 && hour < 22`. Returns `403` outside those hours; no service code runs.
+
+3. **`ArenaController.attack()`** (`arena.controller.ts`)
+   Receives the request body, delegates to `arenaService.tomAttacksJerry(body.weaponType)`.
+
+4. **`ArenaService.tomAttacksJerry()`** (`arena.service.ts`)
+   Core logic — executes the following in sequence:
+   - Calls `TomClient.getStatus()` → HTTP GET `http://tom-api:3001/tom/status`
+   - Calls `JerryClient.getStatus()` → HTTP GET `http://jerry-api:3002/jerry/status`
+   - Calls `JerryClient.getTraps()` → HTTP GET `http://jerry-api:3002/jerry/traps`
+   - Evaluates battle outcome:
+     - `TRAP_TRIGGERED` (damage=0) if any trap has `isSet=true`
+     - `JERRY_DODGES` (damage=0) if `jerry.speed > tom.speed + 20`
+     - `TOM_HITS` (damage=25) otherwise
+   - Calls `PrismaService.battleEvent.create()` → writes `BattleEvent` row to arena-api's PostgreSQL
+   - Calls `BattleResultProducer.publish(event)` → publishes to Kafka topic `battle-results`
+   - Returns `{ ...event, tom: tom.name, jerry: jerry.name }` to the controller
+
+---
+
+## Cross-Service Calls
+
+| Caller (arena-api) | Target Service | Endpoint | Handler | DB Query |
+|---|---|---|---|---|
+| `TomClient.getStatus()` | **tom-api** | `GET /tom/status` | `TomController` → `TomService.getStatus()` | `Cat.findFirst({ where: { name: 'Tom' }, include: { weapons: true } })` |
+| `JerryClient.getStatus()` | **jerry-api** | `GET /jerry/status` | `JerryController` (+ `TrapInterceptor`) → `JerryService.getStatus()` | `Mouse.findFirst({ where: { name: 'Jerry' }, include: { traps: true } })` |
+| `JerryClient.getTraps()` | **jerry-api** | `GET /jerry/traps` | `JerryController` (+ `TrapInterceptor`) → `JerryService.getTraps()` | `Trap.findMany({ where: { isSet: true } })` |
+
+**Note:** `TrapInterceptor` wraps all `jerry-api` controller responses — it logs before the handler runs and checks `data.trapTriggered` in the response tap, but does not alter the data returned.
+
+---
+
+## Async Side Effects
+
+### Kafka → spectators-api
+- `BattleResultProducer.publish(event)` publishes the `BattleEvent` to topic **`battle-results`**
+- **`spectators-api`** `BattleResultConsumer` (@EventPattern `'battle-results'`) receives the message → calls `SpectatorService.recordBattle(event)` which appends the event to an in-memory `battles[]` array
+
+### What does NOT fire (despite the infrastructure existing)
+- **WebSocket** (`BattleGateway.broadcastBattleResult()`): The gateway is registered in `ArenaModule`, but `ArenaService` does not inject it — `broadcastBattleResult()` is **never called** from `tomAttacksJerry()`. No WebSocket broadcast happens.
+- **Push notifications** (`NotificationService`): Defined in `spectators-api` but **not registered** in `SpectatorsModule.providers` and not injected anywhere — it is dead code in this flow.
+- **Bull queue** (`BattleQueueProducer/Consumer`): Exists in arena-api but is a separate entry point (`battleQueue.add('attack', ...)`), not invoked by the HTTP controller.
+
+---
+
+## Data Models Touched
+
+| Service | Model | Operation | Fields Written/Read |
+|---|---|---|---|
+| **arena-api** | `BattleEvent` | **CREATE** | `tomId`, `jerryId`, `weapon`, `trap`, `result` (enum: TOM_HITS / JERRY_DODGES / TRAP_TRIGGERED / MUTUAL_DESTRUCTION), `damage`, `round`, `createdAt` |
+| **tom-api** | `Cat` | READ | `id`, `name`, `speed`, `health`, `mood` |
+| **tom-api** | `CatWeapon` | READ (via include) | `id`, `name`, `damage`, `type`, `ownerId` |
+| **jerry-api** | `Mouse` | READ | `id`, `name`, `speed`, `health`, `clever` |
+| **jerry-api** | `Trap` | READ | `id`, `name`, `effect`, `isSet`, `ownerId` |
+| **spectators-api** | *(in-memory)* | APPEND | Raw `BattleEvent` stored in `SpectatorService.battles[]` — no DB |

@@ -1,0 +1,72 @@
+Here is the full impact analysis for the **Cat** data model (`tom-api/prisma/schema.prisma`):
+
+---
+
+## Direct Dependencies
+These components directly reference the `Cat` model (depth 1, impact score ≥ 95):
+
+| Component | Type | File | Edge |
+|---|---|---|---|
+| **TomService** | NestJS Provider | `tom-api/src/tom/tom.service.ts` | `USES_MODEL` |
+| **CatWeapon** | Prisma Model | `tom-api/prisma/schema.prisma` | `REFERENCES_MODEL` |
+
+- **TomService** is the primary business logic layer for tom-api; it reads/writes `Cat` records via Prisma.
+- **CatWeapon** has a foreign-key or relational reference to `Cat` in the Prisma schema — any field removal or type change on `Cat` will break the `CatWeapon` relation.
+
+---
+
+## Transitive Dependencies
+Components affected transitively (depth 2–3):
+
+| Depth | Component | Type | Service | Path |
+|---|---|---|---|---|
+| 2 | **TomController** | NestJS Controller | `tom-api` | Cat → TomService → TomController |
+| 2 | **TomModule** | NestJS Module | `tom-api` | Cat → TomService → TomModule |
+| 2 | **TomClient** | HTTP Client Provider | `arena-api` | Cat → TomService → `GET /tom/status` → TomClient |
+| 2 | **SpectatorService** | NestJS Provider | `spectators-api` | Cat → TomService → `GET /tom/status` → SpectatorService |
+| 3 | **ArenaService** | NestJS Provider | `arena-api` | … → TomClient → ArenaService |
+| 3 | **ArenaModule** | NestJS Module | `arena-api` | … → TomClient → ArenaModule |
+| 3 | **StatsController** | NestJS Controller | `spectators-api` | … → SpectatorService → StatsController |
+| 3 | **SpectatorsModule** | NestJS Module | `spectators-api` | … → SpectatorService → SpectatorsModule |
+| 3 | **BattleResultConsumer** | Kafka Consumer | `spectators-api` | … → SpectatorService → BattleResultConsumer |
+| 3 | **CleanupTask** | Cron Provider | `spectators-api` | … → SpectatorService → CleanupTask |
+
+> Key propagation vector: `GET /tom/status` is called by both **arena-api** (via `TomClient`) and **spectators-api** (via `SpectatorService`). Any change to the `Cat` model that alters the shape of that endpoint's response will cascade into both downstream services.
+
+---
+
+## Affected Endpoints
+All three tom-api endpoints are exposed by `TomController`, which is directly wired to `TomService`:
+
+| Endpoint | Service | Description | Impact |
+|---|---|---|---|
+| `GET /tom/status` | `tom-api` (port 3001) | Returns Tom cat status including weapons | **High** — consumed by arena-api and spectators-api; response shape changes break consumers |
+| `GET /tom/weapons` | `tom-api` (port 3001) | Returns all of Tom's weapons | **Medium** — returns `CatWeapon` data, itself referencing `Cat` |
+| `POST /tom/arm` | `tom-api` (port 3001) | Equip Tom with a weapon (`body: weaponType:string`) | **Medium** — writes through TomService into Cat/CatWeapon |
+
+Indirectly, because `ArenaService` and `ArenaController` depend on `TomClient` → `GET /tom/status`:
+
+| Endpoint | Service | Description |
+|---|---|---|
+| `POST /arena/attack` | `arena-api` (port 3003) | Tom attacks Jerry — orchestrates full battle flow |
+| `GET /stats/leaderboard` | `spectators-api` (port 3004) | Win counts from battle events |
+| `GET /stats/recent` | `spectators-api` (port 3004) | Last 10 battle events |
+
+---
+
+## External Systems
+
+| System | Status | Details |
+|---|---|---|
+| **notifications** | `unknown` (external) | External push notification service at `http://notifications:3005` — referenced from the graph but not an internal service. If battle outcomes triggered by Tom's Cat model data reach this service (via arena-api's event pipeline), payload changes could affect it. |
+| **PostgreSQL (tom-api)** | Implicit | The `Cat` model is backed by a Prisma-managed PostgreSQL database in `tom-api`. Schema migrations are required for any structural change. |
+| **Kafka (`battle-results` topic)** | Contract | arena-api produces `BattleEvent` payloads to Kafka after each attack; spectators-api consumes them. If `Cat` model changes ripple through `ArenaService` battle logic, the Kafka payload shape could change. |
+
+---
+
+## Confidence: 85/100
+
+**Why not higher:** The graph has high per-node confidence (1.0) and well-defined edges. The core impact chain (Cat → TomService → TomController → endpoints) is solid. The slightly lower score reflects:
+- The cascade through `GET /tom/status` into arena-api/spectators-api depends on runtime HTTP contract compatibility — this is structurally verified but runtime behavior may vary.
+- The `notifications` external service dependency path isn't fully traced in the graph (status: `unknown`).
+- It's unclear whether `SpectatorService` directly models `Cat` fields or only uses aggregated data, which could narrow actual breakage.

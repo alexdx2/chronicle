@@ -1,0 +1,62 @@
+Here is a precise, source-verified breakdown of every connection between **spectators-api** and **tom-api**:
+
+---
+
+## Direct Connections
+
+**spectators-api → tom-api via HTTP**
+
+`SpectatorService.getTomName()` in `spectators-api/src/spectators/spectator.service.ts` makes a direct outbound HTTP `GET` request to tom-api's REST endpoint:
+
+```
+GET http://tom-api:3001/tom/status
+```
+
+- Configured via `process.env.TOM_API_URL || 'http://tom-api:3001'`
+- Calls the `TomController.getStatus()` handler in `tom-api/src/tom/tom.controller.ts`
+- spectators-api uses the response (`response.name`) to populate its leaderboard display
+
+**Direction:** spectators-api (caller) → tom-api (responder). No reverse call from tom-api back to spectators-api exists.
+
+---
+
+## Indirect Connections (via other services)
+
+**Path: spectators-api ← Kafka `battle-results` ← arena-api → tom-api**
+
+This is a two-hop indirect connection through **arena-api**:
+
+1. **arena-api → tom-api (HTTP):** `arena-api/src/arena/tom.client.ts` (`TomClient.getStatus()`) also calls `GET http://tom-api:3001/tom/status` during battle processing in `ArenaService.tomAttacksJerry()`.
+
+2. **arena-api → Kafka:** After a battle resolves, `ArenaService` calls `BattleResultProducer.publish(event)` in `arena-api/src/arena/battle-result.producer.ts`, which publishes the battle outcome to Kafka topic **`battle-results`**.
+
+3. **spectators-api ← Kafka:** `BattleResultConsumer` in `spectators-api/src/spectators/battle-result.consumer.ts` subscribes to the same `battle-results` topic via `@EventPattern('battle-results')` and feeds results into `SpectatorService.recordBattle()`.
+
+So every time arena-api orchestrates a fight (which itself calls tom-api), spectators-api receives the outcome. Tom's activity flows to spectators-api transitively through arena-api.
+
+---
+
+## Shared Dependencies
+
+**Shared npm packages (verified via `package.json`):**
+
+| Package | spectators-api | tom-api |
+|---|---|---|
+| `@nestjs/common ^10.0.0` | ✅ | ✅ |
+| `@nestjs/core ^10.0.0` | ✅ | ✅ |
+| `@nestjs/microservices ^10.0.0` | ✅ | ❌ |
+| `@prisma/client ^5.0.0` | ❌ | ✅ |
+
+Both services share the NestJS framework core, but differ in their other dependencies — spectators-api uses the microservices transport layer (Kafka), while tom-api uses Prisma for database access.
+
+**Important:** Neither spectators-api nor tom-api imports from the project-local `shared/` package (no `shared` imports found in either service's source files). The `shared/` package (`BattleOutcome`, `BATTLE_TOPIC`, `GameEvent`, etc.) is not used by these two services directly — it is defined in the repo but not consumed by them.
+
+---
+
+### Summary
+
+| Connection Type | Path | Direction |
+|---|---|---|
+| HTTP REST call | spectators-api → `GET /tom/status` → tom-api | Direct |
+| Kafka event (indirect) | tom-api activity → arena-api → `battle-results` topic → spectators-api | Indirect (via arena-api) |
+| NestJS framework | Both depend on `@nestjs/common` + `@nestjs/core` | Shared dep |

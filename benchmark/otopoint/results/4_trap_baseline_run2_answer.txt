@@ -1,0 +1,9 @@
+There is no `InventoryService` anywhere in the `/api` directory (or the broader codebase). The OtoPoint backend does not contain a component by that name — no class definition, no import, and no injection of `InventoryService` exists.
+
+If you're thinking of a specific service that manages stock, quantities, or similar inventory-like concerns, it may exist under a different name. Common candidates in this codebase are:
+
+- **`MenuService`** — manages menu items and pricing
+- **`VoucherApplicationService`** — manages voucher lifecycle
+- **`OrderService`** — manages order items and quantities
+
+Let me know which domain you're investigating and I can search for the actual service name.

@@ -1,0 +1,77 @@
+Here is the complete connection map between **spectators-api** and **tom-api**, based on verified graph data:
+
+---
+
+## Direct Connections
+
+There is **one direct service call** (derivation: `linked` — inferred from service manifest/config, not hard-coded call site):
+
+```
+spectators-api ──CALLS_SERVICE──▶ tom-api
+```
+
+This is a top-level service-to-service dependency registered in the graph — spectators-api is declared as a consumer of tom-api.
+
+---
+
+## Indirect Connections (via other services / internal code)
+
+### Path 1 — via `SpectatorService` provider → `tom-api` (depth 4, hard evidence)
+This is the **strongest code-level path**, backed by hard derivation at every hop:
+```
+spectators-api
+  ──EXPOSES_ENDPOINT──▶ GET /stats/leaderboard (or GET /stats/recent)
+       ◀──EXPOSES_ENDPOINT── StatsController
+                ──INJECTS──▶ SpectatorService
+                       ──CALLS_SERVICE──▶ tom-api
+```
+`SpectatorService` is the actual runtime caller — it makes live HTTP calls to tom-api from within the leaderboard/recent-stats endpoints.
+
+### Path 2 — via `SpectatorService` → `GET /tom/status` ← `tom-api` (depth 5)
+Same `SpectatorService` path, but resolved through the specific endpoint contract:
+```
+spectators-api → StatsController → SpectatorService
+  ──CALLS_ENDPOINT──▶ GET /tom/status ◀──EXPOSES_ENDPOINT── tom-api
+```
+
+### Path 3 — via `jerry-api` as shared call target (depth 3)
+`SpectatorService` calls **both** jerry-api and tom-api, creating an indirect bridge through the shared caller:
+```
+spectators-api ──CALLS_SERVICE──▶ jerry-api
+                                    ▲
+                          SpectatorService ──CALLS_SERVICE──▶ tom-api
+```
+
+### Path 4 — via `jerry-api` endpoint contract (depth 4)
+```
+spectators-api ──CALLS_SERVICE──▶ jerry-api
+  ──EXPOSES_ENDPOINT──▶ GET /jerry/status ◀──CALLS_ENDPOINT── SpectatorService
+                                                ──CALLS_SERVICE──▶ tom-api
+```
+
+---
+
+## Shared Dependencies
+
+These are the **tom-api endpoint contracts** that spectators-api directly consumes (spectators-api calls them; tom-api exposes them):
+
+| Endpoint | spectators-api role | tom-api role |
+|---|---|---|
+| `GET /tom/status` | calls via `SpectatorService` | exposes |
+| `GET /tom/weapons` | calls via `SpectatorService` | exposes |
+| `POST /tom/arm` | calls via `SpectatorService` | exposes |
+
+These three REST contracts are the **concrete dependency surface** — they are the specific API operations that make spectators-api functionally dependent on tom-api at runtime.
+
+---
+
+### Summary
+
+| Connection type | Route | Confidence |
+|---|---|---|
+| Direct | `spectators-api → tom-api` | `linked` (manifest-level) |
+| Code-level (primary) | `spectators-api → StatsController → SpectatorService → tom-api` | `hard` (all hops) |
+| Via endpoint contract | `SpectatorService → GET /tom/status ← tom-api` | `hard` |
+| Via shared intermediary | Through `jerry-api` as a shared call target | `linked/hard` mixed |
+
+The core relationship is: **spectators-api's `SpectatorService` provider makes live HTTP calls to tom-api** to power its leaderboard and recent-stats endpoints (`GET /stats/leaderboard`, `GET /stats/recent`). There is no path that goes through arena-api.

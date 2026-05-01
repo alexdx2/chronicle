@@ -147,3 +147,65 @@ func TestDeleteNodeNotFound(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func seedSearchNodes(t *testing.T, s *Store) {
+	t.Helper()
+	revID, _ := s.CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+	s.UpsertNode(makeNodeRow("code:controller:orders:a", "code", "controller", "orders", "A", revID))
+	s.UpsertNode(makeNodeRow("code:provider:orders:order-svc", "code", "provider", "orders", "OrderService", revID))
+	s.UpsertNode(makeNodeRow("code:provider:orders:pay-svc", "code", "provider", "orders", "PaymentService", revID))
+	s.UpsertNode(makeNodeRow("service:service:orders:d", "service", "service", "orders", "D", revID))
+}
+
+func TestSearchNodesByNameExact(t *testing.T) {
+	s := openTestStore(t)
+	seedSearchNodes(t, s)
+
+	results, err := s.SearchNodesByName("A")
+	if err != nil {
+		t.Fatalf("SearchNodesByName: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result, got 0")
+	}
+	// Exact match should come first.
+	if results[0].Name != "A" {
+		t.Errorf("first result name = %q, want A", results[0].Name)
+	}
+	if results[0].NodeKey != "code:controller:orders:a" {
+		t.Errorf("first result key = %q, want code:controller:orders:a", results[0].NodeKey)
+	}
+}
+
+func TestSearchNodesByNamePartial(t *testing.T) {
+	s := openTestStore(t)
+	seedSearchNodes(t, s)
+
+	results, err := s.SearchNodesByName("Service")
+	if err != nil {
+		t.Fatalf("SearchNodesByName: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for 'Service', got %d", len(results))
+	}
+	names := map[string]bool{}
+	for _, r := range results {
+		names[r.Name] = true
+	}
+	if !names["OrderService"] || !names["PaymentService"] {
+		t.Errorf("expected OrderService and PaymentService, got %v", names)
+	}
+}
+
+func TestSearchNodesByNameEmpty(t *testing.T) {
+	s := openTestStore(t)
+	seedSearchNodes(t, s)
+
+	results, err := s.SearchNodesByName("zzz")
+	if err != nil {
+		t.Fatalf("SearchNodesByName: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for 'zzz', got %d", len(results))
+	}
+}

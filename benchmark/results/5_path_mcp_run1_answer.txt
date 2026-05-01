@@ -1,0 +1,38 @@
+I now have everything needed for a complete answer.
+
+---
+
+## Direct Connections
+
+**spectators-api → tom-api** (`CALLS_SERVICE`, confidence: 0.95 — hard evidence)
+
+The `SpectatorService` (`spectators-api/src/spectators/spectator.service.ts`) calls **`GET /tom/status`** directly on tom-api. Its description confirms: *"Records battles, serves leaderboard/recent. Calls tom-api and jerry-api for names."* — it fetches Tom's name/status when populating leaderboard and recent-battle records.
+
+---
+
+## Indirect Connections (via other services)
+
+**spectators-api → jerry-api ← arena-api → tom-api** (depth 3, score 0.77)
+
+This is the only indirect path found. It runs through **arena-api** as the bridge:
+
+| Hop | Edge | Type |
+|-----|------|------|
+| spectators-api → jerry-api | `CALLS_SERVICE` | hard |
+| arena-api → jerry-api | `CALLS_SERVICE` | hard |
+| arena-api → tom-api | `CALLS_SERVICE` | hard |
+
+The path is undirected — spectators-api and tom-api both connect *to* jerry-api, and arena-api connects them all. In practice this means: arena-api orchestrates battles by calling both tom-api (`GET /tom/status`) and jerry-api; spectators-api independently polls jerry-api for Jerry's name — so all four services are entangled through arena-api's battle orchestration flow.
+
+---
+
+## Shared Dependencies
+
+| Shared Node | spectators-api role | tom-api role |
+|-------------|-------------------|--------------|
+| **`GET /tom/status`** endpoint | `SpectatorService` calls it (name enrichment for leaderboard) | `TomController` exposes it |
+| **`battle-results` Kafka topic** | `BattleResultConsumer` consumes it — receives all battle outcomes including Tom's results | tom-api's data flows *into* battles that arena-api then publishes here |
+| **`shared` TypeScript library** (`shared/src`) | Both services are in the same monorepo and share this package (interfaces, config, constants) | Same shared package |
+| **`jerry-api`** | spectators-api calls it directly (`CALLS_SERVICE`) | arena-api calls jerry-api during battles it runs *against* tom-api |
+
+**Key takeaway:** spectators-api is a *reader* of tom-api — it calls `GET /tom/status` to enrich its leaderboard data, and it passively receives battle outcomes (which include tom-api participation) via the `battle-results` Kafka topic produced by arena-api. There is no path where tom-api calls spectators-api.

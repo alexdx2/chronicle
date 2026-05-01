@@ -1,0 +1,106 @@
+## Services that inject SocketService
+
+SocketService is defined in `api/src/services/socket.service.ts`. It exposes three server instances (`server` / `mobileServer` / `crmServer`) and typed emit methods. **17 classes** inject it:
+
+| Class | File |
+|---|---|
+| `WebSocketGateway` | `gateways/websocket.gateway.ts` |
+| `MobileWebSocketGateway` | `gateways/mobile.gateway.ts` |
+| `CrmWebSocketGateway` | `gateways/crm.gateway.ts` |
+| `SocketFactory` | `socket-handlers/factory.socket.ts` |
+| `OrderService` | `services/order.service.ts` |
+| `PaymentService` | `services/payment.service.ts` |
+| `BalanceService` | `services/balance.service.ts` |
+| `OrderPubSubService` | `services/pubsub/order.pubsub.ts` |
+| `MenuVersionService` | `services/menu-version.service.ts` |
+| `PrinterCommunicationService` | `services/printer-communication.service.ts` |
+| `UserSessionService` | `services/user-session.service.ts` |
+| `TransactionResolver` | `graphql/resolvers/transaction.resolver.ts` |
+| `SurpriseBoxResolver` | `graphql/resolvers/surprisebox.resolver.ts` |
+| `UserVoucherResolver` | `graphql/resolvers/user-voucher.resolver.ts` |
+| `VoucherProcessor` | `bull/voucher.bull.ts` |
+| `HealthController` | `controllers/health.controller.ts` |
+| `PrinterController` | `controllers/printer.controller.ts` |
+
+---
+
+## Events emitted
+
+### OrderService
+| Event | Room | Trigger |
+|---|---|---|
+| `SOCKET_EVENTS.ORDER.PURCHASED` | `user:{userId}` | Cart purchase completion (per-member + owner) |
+| `voucher_update` | `user:{userId}` | Voucher state change during order |
+| `lobby_voucher_update` | `lobby:{printerId}` | Voucher state broadcast to lobby |
+| `merchant_voucher_update` | `merchant:{merchantId}` | Voucher state broadcast to merchant |
+
+### PaymentService
+| Event | Room | Trigger |
+|---|---|---|
+| `order:update` / `orders:update` | order + merchant rooms | Post-payment order state change (via `emitOrderUpdate`) |
+
+### BalanceService
+| Event | Room | Trigger |
+|---|---|---|
+| `points_claimed` | `user:{userId}` | Points earned/adjusted |
+
+### OrderPubSubService (Redis → Socket relay)
+| Event | Room | Trigger |
+|---|---|---|
+| `orders:new` | `merchant:{merchantId}:orders` | Redis pub triggers `emitOrderCreated` |
+| `order:update` / `orders:update` | order + merchant + lobby rooms | Redis pub triggers `emitOrderUpdate` |
+
+### MenuVersionService
+| Event | Room | Trigger |
+|---|---|---|
+| `menu_updated` | `printer:{printerId}` + `merchant_{printerId}` | Menu version bump |
+
+### TransactionResolver / SurpriseBoxResolver / UserVoucherResolver
+| Event | Room | Trigger |
+|---|---|---|
+| `points_claimed` | `user:{userId}` | Manual award, surprise box reward, voucher grant |
+
+### PrinterCommunicationService
+Directly accesses `socketService.server`, `socketService.mobileServer`, `socketService.crmServer` to emit to arbitrary rooms — acts as the low-level broadcast layer.
+
+### VoucherProcessor (Bull queue)
+Emits voucher state events (expiry, status changes) triggered by background jobs.
+
+---
+
+## WebSocket Gateways
+
+| Class | File | Namespace | Roles |
+|---|---|---|---|
+| `WebSocketGateway` | `gateways/websocket.gateway.ts` | `/` (legacy/default) | Registers `socketService.server`; handles legacy connections |
+| `MobileWebSocketGateway` | `gateways/mobile.gateway.ts` | `/mobile` | Registers `socketService.mobileServer`; handles mobile client connect/disconnect/room joins |
+| `CrmWebSocketGateway` | `gateways/crm.gateway.ts` | `/crm` | Registers `socketService.crmServer`; handles CRM multi-printer subscriptions |
+
+All three implement `OnGatewayInit`, `OnGatewayConnection`, `OnGatewayDisconnect`. On `afterInit` they assign their `@WebSocketServer()` instance to the corresponding SocketService property.
+
+**Room patterns used across all gateways:**
+
+| Room key | Used by |
+|---|---|
+| `user:{userId}` | `emitToUser()` — direct user events |
+| `order:{orderId}` | `emitOrderUpdate()` — order-specific |
+| `merchant:{merchantId}:orders` | `emitOrderCreated()` / `emitOrderUpdate()` |
+| `merchant:{merchantId}` | `emitToMerchant()` |
+| `lobby:{printerId}` | `emitToLobby()` |
+| `printer:{printerId}` | Mobile printer room (menu updates, order events) |
+| `merchant_{printerId}` | CRM printer subscription room |
+| `{printerId}_client` | Lobby client subscriptions |
+
+---
+
+## Downstream consumers
+
+| Consumer | Namespace | How they receive |
+|---|---|---|
+| **Mobile app** | `/mobile` | Subscribes to `user:{userId}`, `printer:{printerId}`, `order:{orderId}` — receives orders, points, vouchers, menu updates |
+| **CRM web** | `/crm` | Subscribes to `merchant:{merchantId}:orders`, `merchant_{printerId}` — multi-printer monitoring, live order list |
+| **Legacy clients** | `/` | Default namespace; pre-refactor clients still supported |
+| **Bull queue workers** | Internal | `VoucherProcessor` consumes queue jobs and emits back to clients via SocketService |
+| **Redis PubSub** | Internal | `OrderPubSubService` subscribes to Redis channels and relays events to all Socket.io namespaces — this is the bridge between distributed processes and real-time clients |
+
+The critical architectural point: **SocketService is the single fan-out hub**. All domain services call its typed methods (`emitOrderUpdate`, `emitToUser`, etc.), and SocketService broadcasts to all three namespaces simultaneously — meaning an order update from `OrderService` reaches mobile, CRM, and legacy clients in one call.

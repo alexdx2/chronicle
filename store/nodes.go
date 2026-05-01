@@ -247,6 +247,46 @@ func (s *Store) ListNodes(f NodeFilter) ([]NodeRow, error) {
 	return out, rows.Err()
 }
 
+// SearchNodesByName finds active nodes whose name matches (case-insensitive).
+// Returns up to 10 matches, preferring exact matches first.
+func (s *Store) SearchNodesByName(name string) ([]NodeRow, error) {
+	const q = `
+		SELECT node_id, node_key, layer, node_type, domain_key, name,
+		       COALESCE(qualified_name,''), COALESCE(repo_name,''), COALESCE(file_path,''),
+		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
+		       COALESCE(visibility,''), status,
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
+		FROM graph_nodes
+		WHERE (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		  AND status = 'active'
+		  AND name LIKE ?
+		ORDER BY
+		  CASE WHEN LOWER(name) = LOWER(?) THEN 0 ELSE 1 END,
+		  node_key
+		LIMIT 10
+	`
+	rows, err := s.db.Query(q, "%"+name+"%", name)
+	if err != nil {
+		return nil, fmt.Errorf("SearchNodesByName: %w", err)
+	}
+	defer rows.Close()
+
+	var out []NodeRow
+	for rows.Next() {
+		var r NodeRow
+		if err := rows.Scan(
+			&r.NodeID, &r.NodeKey, &r.Layer, &r.NodeType, &r.DomainKey, &r.Name,
+			&r.QualifiedName, &r.RepoName, &r.FilePath, &r.Lang, &r.OwnerKey,
+			&r.Environment, &r.Visibility, &r.Status,
+			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
+		); err != nil {
+			return nil, fmt.Errorf("SearchNodesByName scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // DeleteNode sets the status of the node to 'deleted'.
 func (s *Store) DeleteNode(key string) error {
 	res, err := s.db.Exec(`UPDATE graph_nodes SET status='deleted' WHERE node_key=?`, key)

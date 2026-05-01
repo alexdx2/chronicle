@@ -1,0 +1,67 @@
+Now I have everything needed. Here is the complete impact analysis:
+
+---
+
+## Direct Dependencies
+
+These nodes directly reference the `Cat` model (depth 1, impact score ≥ 95):
+
+| Component | Type | File | Edge | Impact Score |
+|---|---|---|---|---|
+| **TomService** | NestJS provider | `tom-api/src/tom/tom.service.ts` | `USES_MODEL` — manages Cat CRUD via Prisma | 95 |
+| **CatWeapon** | Data model | `tom-api/prisma/schema.prisma` | `REFERENCES_MODEL` — foreign key/relational reference to Cat | 95 |
+
+---
+
+## Transitive Dependencies
+
+**Depth 2** — components that depend on the direct dependents above:
+
+| Component | Type | File | Path | Impact Score |
+|---|---|---|---|---|
+| **TomController** | NestJS controller | `tom-api/src/tom/tom.controller.ts` | Cat → TomService → TomController (`INJECTS`) | 85.7 |
+| **PrismaService (tom-api)** | NestJS provider | `tom-api/src/prisma/prisma.service.ts` | Cat → TomService → PrismaService (`INJECTS`) | ~85 |
+
+**Depth 3** — services that call `tom-api` and would be broken if its API surface changes:
+
+| Component | Type | Edge |
+|---|---|---|
+| **arena-api** | Microservice | `CALLS_SERVICE` tom-api — orchestrates battle flow by calling tom-api endpoints |
+| **spectators-api** | Microservice | `CALLS_SERVICE` tom-api — consumes tom-api data for stats |
+
+> **Note:** The Chronicle impact engine intentionally does not propagate through `EXPOSES_ENDPOINT` edges in reverse (endpoints don't re-expose their parent's blast radius). The depth-3 service-level callers above were identified by inspecting `CALLS_SERVICE` edges directly.
+
+---
+
+## Affected Endpoints
+
+All three are exposed by `TomController` (`tom-api/src/tom/tom.controller.ts`) which is injected with `TomService` which owns the Cat model:
+
+| Endpoint | Service | Description |
+|---|---|---|
+| `GET /tom/status` | tom-api (port 3001) | Returns Tom cat status including weapons — directly reflects Cat fields |
+| `GET /tom/weapons` | tom-api (port 3001) | Returns all of Tom's weapons — CatWeapon is linked to Cat |
+| `POST /tom/arm` | tom-api (port 3001) | Equip Tom with a weapon (`body: weaponType`) — writes to Cat/CatWeapon |
+| `POST /arena/attack` *(indirect)* | arena-api (port 3003) | Orchestrates full battle flow by calling tom-api — will break if tom-api's Cat-derived response shape changes |
+
+---
+
+## External Systems
+
+| System | Status | Connection Path | Risk |
+|---|---|---|---|
+| **notifications** (http://notifications:3005) | `unknown` (external, not in this repo) | Cat → tom-api ← spectators-api → `NotificationService` → notifications | **Low / indirect** — spectators-api calls tom-api and also calls the notifications service; a Cat shape change that breaks spectators-api could propagate here, but there is no direct data path from Cat to notifications |
+
+No other external systems (Kafka, Redis, WebSocket) are in the direct blast radius of the Cat model change.
+
+---
+
+## Confidence: 82/100
+
+**Why not higher:**
+- The graph has **no evidence entries** on the Cat node — it was imported structurally but lacks runtime/test evidence to confirm actual query shapes.
+- **spectators-api → tom-api** dependency is confirmed in the graph, but the *specific fields* consumed from the Cat model are not captured — it may or may not break depending on which Cat fields change.
+- The **notifications** path is 4+ hops and only relevant if spectators-api breaks badly enough to affect its outbound notification calls.
+- `CatWeapon` is a direct schema-level reference (`REFERENCES_MODEL`), but whether application code that reads `CatWeapon` also selects Cat fields depends on Prisma `include` usage not tracked in the graph.
+
+**Why not lower:** All structural edges (`USES_MODEL`, `REFERENCES_MODEL`, `INJECTS`, `EXPOSES_ENDPOINT`, `CALLS_SERVICE`) are `hard`-derived with 0.95 confidence, and the file paths are precisely identified.

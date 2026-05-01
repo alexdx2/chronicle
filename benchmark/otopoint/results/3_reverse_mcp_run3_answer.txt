@@ -1,0 +1,72 @@
+## Services that inject SocketService
+
+`SocketService` is a `@Global()` singleton defined in `api/src/services/socket.service.ts` and exported from `api/src/socket.module.ts`. It holds three server references: `server` (legacy), `mobileServer` (`/mobile`), `crmServer` (`/crm`).
+
+| Injector | File |
+|---|---|
+| `WebSocketGateway` (legacy) | `api/src/gateways/websocket.gateway.ts` |
+| `MobileGateway` | `api/src/gateways/mobile.gateway.ts` |
+| `CrmGateway` | `api/src/gateways/crm.gateway.ts` |
+| `OrderService` | `api/src/services/order.service.ts` |
+| `BalanceService` | `api/src/services/balance.service.ts` |
+| `MenuVersionService` | `api/src/services/menu-version.service.ts` |
+| `PaymentService` | `api/src/services/payment.service.ts` |
+| `OrderPubSubService` | `api/src/services/pubsub/order.pubsub.ts` |
+| `PrinterCommunicationService` | `api/src/services/printer-communication.service.ts` |
+| `UserSessionService` | `api/src/services/user-session.service.ts` |
+| `RefactoredPrinterFactory` | `api/src/services/refactored-printer.service.ts` |
+| `SocketFactory` | `api/src/socket-handlers/factory.socket.ts` |
+| `UserVoucherResolver` | `api/src/graphql/resolvers/user-voucher.resolver.ts` |
+| `TransactionResolver` | `api/src/graphql/resolvers/transaction.resolver.ts` |
+| `SurpriseBoxResolver` | `api/src/graphql/resolvers/surprisebox.resolver.ts` |
+| `HealthController` | `api/src/controllers/health.controller.ts` |
+| `VoucherProcessor` (Bull) | `api/src/bull/voucher.bull.ts` |
+
+---
+
+## Events emitted
+
+All event names are declared in `api/src/shared/socket-events.ts`.
+
+| Event name | Emitter(s) | Targeting |
+|---|---|---|
+| `order:purchased` (`SOCKET_EVENTS.ORDER.PURCHASED`) | `OrderService` | `emitToUser(userId, ...)` — each group member + order owner |
+| `order:update` / `orders:update` | `OrderPubSubService` (via `emitOrderUpdate`) | Room: order ID + lobby |
+| `orders:new` | `OrderPubSubService` (via `emitOrderCreated`) | Room: merchant |
+| `order:status_changed` | `OrderService` | `emitToMerchant(merchantId, ...)` |
+| `order_item:state_changed` | `OrderService` | `emitToMerchant(merchantId, ...)` |
+| `order_item:bulk_state_changed` | `OrderService` | `emitToMerchant(merchantId, ...)` |
+| `order:payment_updated` | `PaymentService` | (via SocketService) |
+| `points_claimed` | `OrderService`, `BalanceService`, `UserVoucherResolver`, `TransactionResolver` | `emitToUser(userId, ...)` |
+| `voucher_update` | `OrderService` | `emitToUser(userId, ...)` |
+| `lobby_voucher_update` | `OrderService` | `emitToLobby(printerId, ...)` |
+| `merchant_voucher_update` | `OrderService` | `emitToMerchant(merchantId, ...)` |
+| `menu_updated` | `MenuVersionService` (via `emitMenuUpdated`) | `emitToLobby` per printerId |
+| `user:joined` | `PrinterCommunicationService` / `RefactoredPrinterFactory` | Room |
+| `voucher:purchased` / `voucher:used` / `voucher:expired` | `VoucherProcessor` (Bull) | (via SocketService) |
+
+`PrinterCommunicationService.emitToRoom()` fans out every emit to **all three** server instances simultaneously (legacy, mobile, CRM).
+
+---
+
+## WebSocket Gateways
+
+| Gateway | Namespace | Assigns server reference |
+|---|---|---|
+| `websocket.gateway.ts` | *(root, legacy)* | `socketService.server` |
+| `mobile.gateway.ts` | `/mobile` | `socketService.mobileServer` |
+| `crm.gateway.ts` | `/crm` | `socketService.crmServer` |
+
+All gateways use `cors: { origin: '*' }`. The legacy gateway acts as a compatibility shim that redirects connections to `/mobile` or `/crm`. The CRM gateway additionally injects `PrismaService`, `RedisClientType`, `RefactoredPrinterFactory`, and `ChatService` to handle multi-printer subscription flows.
+
+---
+
+## Downstream consumers
+
+| Consumer | Receives via |
+|---|---|
+| **Mobile app** (`/mobile` namespace) | `mobileServer` — order updates, `order:purchased`, `points_claimed`, `voucher_update`, `menu_updated`, lobby events |
+| **CRM web** (`/crm` namespace) | `crmServer` — `orders:new`, `orders:update`, `order_item:*`, `merchant_voucher_update`, `menu_updated`, multi-printer lobby events |
+| **Legacy clients** (root namespace) | `server` — same events fanned out by `PrinterCommunicationService.emitToRoom()` for backward compatibility |
+| **Order pub/sub pipeline** | `OrderPubSubService` subscribes to Redis channels, then calls `socketService.emitOrderCreated/emitOrderUpdate` to push to all connected clients |
+| **Bull queue workers** | `VoucherProcessor` emits voucher lifecycle events (`voucher:purchased`, `voucher:used`, `voucher:expired`) after async job processing |

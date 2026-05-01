@@ -1,0 +1,125 @@
+Here is the complete traced flow, verified against the actual source code:
+
+---
+
+## Request Chain (ordered)
+
+### 1. GraphQL Mutation — `order.resolver.ts`
+Three mutations can trigger order creation:
+- **`createOrderWithVoucher`** — primary path (individual customer with vouchers)
+- **`createOrder`** — legacy path (no voucher support)
+- **`createMerchantOrder`** — CRM offline/walk-in path
+
+All three are guarded by `GqlAuthGuard` / `GqlHybridAuthGuard` and delegate to `OrderService`.
+
+### 2. `OrderService.createOrderFromCart()` — main individual order path
+*(or `createOrderFromGroup()` when a group owner is placing on behalf of the group)*
+
+**Phase 1 — Validation & Menu Enrichment**
+- Prisma reads `MenuItem` records to validate cart items and resolve current prices
+
+**Phase 2 — Promotion Evaluation**
+- Calls `PromotionService.getActivePromotions(merchantId)` — Prisma read on `Promotion` table
+- Passes items + promotions to `@otopoint/pricing-engine` (internal package) → `evaluatePromotions()`
+- Mutates item prices in the in-memory `OrderModel` with discount amounts
+
+**Phase 3 — Voucher Validation**
+- Batch-fetches all requested `UserVoucher` records from Prisma (single query)
+- Calls `VoucherApplicationService.validateVoucherWithEntity()` per voucher (pure validation, no DB I/O at this step)
+  - Checks: ownership, merchant match, status=`AVAILABLE`, not expired, time restrictions, required items present in cart
+- Applies valid vouchers to the `OrderModel` (modifies in-memory totals; `FREE_ITEM` zeroes item price, `DISCOUNT` reduces order total)
+
+**Phase 4 — Prisma Transaction (single atomic write)**
+```
+prisma.$transaction([
+  Order.create({ data: orderModel.toPrismaCreateInput() })
+     └─ OrderItem.createMany() nested
+     └─ PromotionAppliedItem.createMany() nested (if promos)
+  UserVoucher.updateMany({ status: PENDING, orderId, usedAt: now })
+])
+```
+Transaction has `maxWait: 5s`, `timeout: 10s`.
+
+**Phase 5 — Post-persistence side effects (synchronous, after commit)**
+See *Async Side Effects* section below.
+
+### Group Order path — `createOrderFromGroup()`
+Before the same Phase 1–5 above:
+- Validates group exists and caller is group owner (Redis read via `PrinterRedisService.getGroup()`)
+- Calls `PrinterRedisService.getGroupContexts()` → reads all members' cart contexts from Redis
+- Collects `FREE_ITEM` vouchers from each member's Redis queue (`VoucherQueueService.getVouchersByUser()`)
+- Collects `DISCOUNT` voucher from owner only
+- Merges all member items into one `OrderModel`, then continues identically
+
+---
+
+## Cross-Service Calls
+
+| Caller | Callee | Method | Purpose |
+|---|---|---|---|
+| `OrderService` | `PromotionService` | `getActivePromotions()` | Fetch active promos for merchant |
+| `OrderService` | `@otopoint/pricing-engine` | `evaluatePromotions()` | Apply discount rules to items |
+| `OrderService` | `VoucherApplicationService` | `validateVoucherWithEntity()` | Validate each voucher (pure, no DB) |
+| `OrderService` | `OrderRedisService` | `publishOrderCreated()` | Publish to Redis Pub/Sub channel |
+| `OrderService` | `SocketService` | `emitToUser()` | Send `order:purchased` to customer |
+| `OrderService` | `SocketService` | `emitToUser/Lobby/Merchant()` | Send voucher state updates |
+| `OrderService` | `ChatService` | `createOrderPlaceholder()` | Create order card in chat |
+| `ChatService` | `CentrifugoService` | `publish()` | Push chat message to Centrifugo |
+| `OrderService` (group) | `PrinterRedisService` | `getGroup()`, `getGroupContexts()` | Read group state from Redis |
+| `OrderService` (group) | `VoucherQueueService` | `getVouchersByUser()` | Get FREE_ITEM vouchers from Redis |
+
+---
+
+## Async Side Effects (queues, WebSocket, push)
+
+### Redis Pub/Sub
+`OrderRedisService.publishOrderCreated()` publishes to:
+```
+channel: order:created:{merchantId}
+payload: { orderId, merchantId, state, paymentStatus, estimatedTime?, readyTime?, updatedAt, eventType: 'created' }
+```
+This is consumed by `OrderPubSubService`, which fans out to merchant dashboards and kitchen displays via Socket.io rooms.
+
+### Socket.io Events (emitted synchronously post-transaction)
+
+| Event | Room/Target | Trigger | Payload |
+|---|---|---|---|
+| `order:purchased` | User socket | Always | `orderId, merchantId, total, itemCount, state, paymentStatus, createdAt` |
+| `voucher_update` | User socket | If vouchers applied | `userId, merchantId, printerId, vouchers[], action, voucherCount` |
+| `lobby_voucher_update` | Lobby room | If in lobby + vouchers applied | Same as above |
+| `merchant_voucher_update` | Merchant room | If vouchers applied | Same as above |
+
+### Centrifugo (via `ChatService.createOrderPlaceholder()`)
+- Finds or creates a `Chat` between user and merchant
+- Creates a `ChatMessage` with `messageType: ORDER_PLACEHOLDER` (a live order card embedded in the chat stream)
+- Calls `CentrifugoService.publish()` → pushes to `chat:{chatId}` channel
+- This is the real-time order card visible in the merchant chat UI
+
+### Bull Queues
+**Currently disabled.** The `VoucherProcessor` (`/api/src/bull/voucher.bull.ts`) is commented out with the note: *"Voucher processing disabled - needs updating for new voucher system."* No jobs are enqueued at order creation time.
+
+### Push Notifications
+`NotificationService` exists and has a `sendNotification()` method, but **it is not called during order creation**. Push notifications are not part of this flow.
+
+### Points / Balance
+Points are **not awarded at order creation**. The `BalanceService` / `PointsRewardService` is invoked later in the order lifecycle — at order payment (`payFullOrder()`) or order close, not at creation. Order state starts as `PREPARING` / payment status `PENDING`.
+
+---
+
+## Data Models Touched
+
+| Model (Prisma table) | Operation | Details |
+|---|---|---|
+| `MenuItem` | READ | Validate cart items, resolve current prices |
+| `Promotion` | READ | Fetch active promotions for merchant |
+| `UserVoucher` | READ | Batch-fetch requested vouchers |
+| `Order` | CREATE | Main order record; state=`PREPARING`, paymentStatus=`PENDING`, promotionDiscountTotal, voucherDiscountTotal, originalTotal, finalTotal |
+| `OrderItem` | CREATE (many) | One row per item: name, price, options snapshot, `itemState=PENDING`; if FREE_ITEM voucher: `originalPrice`, `discountedPrice`, linked `userVoucherId` |
+| `PromotionAppliedItem` | CREATE (many, conditional) | Audit: `promotionId`, `orderItemId`, `discountAmount` — only when promotions are active |
+| `UserVoucher` | UPDATE | `status → PENDING`, `orderId`, `usedAt = now()` — all applied vouchers in one `updateMany` |
+| `Chat` | UPSERT | Find or create chat thread between user and merchant; update `lastMessageAt`, `lastMessageId` |
+| `ChatMessage` | CREATE | `messageType: ORDER_PLACEHOLDER` with `orderId` reference; displayed as live order card in chat |
+
+**Redis keys written:**
+- Group context keys cleaned up after group order (via `PrinterRedisService`)
+- Voucher queue keys updated (via `VoucherQueueService.removeVoucher()` for consumed FREE_ITEM vouchers)

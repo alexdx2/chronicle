@@ -1,0 +1,84 @@
+Here is the complete traced request flow for **POST /arena/attack**:
+
+---
+
+## Request Chain (ordered)
+
+| Step | Component | Location | Action |
+|------|-----------|----------|--------|
+| 1 | **HTTP POST /arena/attack** | `arena-api` | Client sends `{ weaponType: string }` |
+| 2 | **BattleGuard** | `arena-api/src/arena/battle.guard.ts` | Checks `new Date().getHours()` — rejects with 403 outside 06:00–22:00 |
+| 3 | **ArenaController.attack()** | `arena-api/src/arena/arena.controller.ts` | Receives body, delegates to `ArenaService.tomAttacksJerry(weaponType)` |
+| 4 | **TomClient.getStatus()** | `arena-api/src/arena/tom.client.ts` | `GET http://tom-api:3001/tom/status` |
+| 5 | **TomController.getStatus()** | `tom-api/src/tom/tom.controller.ts` | Delegates to `TomService.getStatus()` |
+| 6 | **TomService.getStatus()** | `tom-api/src/tom/tom.service.ts` | `prisma.cat.findFirst({ where: { name: 'Tom' }, include: { weapons } })` → returns Tom's stats |
+| 7 | **JerryClient.getStatus()** | `arena-api/src/arena/jerry.client.ts` | `GET http://jerry-api:3002/jerry/status` |
+| 8 | **TrapInterceptor** (pre) | `jerry-api/src/jerry/trap.interceptor.ts` | Logs "Checking for active traps before handler..." (applied to all Jerry routes) |
+| 9 | **JerryController.getStatus()** | `jerry-api/src/jerry/jerry.controller.ts` | Delegates to `JerryService.getStatus()` |
+| 10 | **JerryService.getStatus()** | `jerry-api/src/jerry/jerry.service.ts` | `prisma.mouse.findFirst({ where: { name: 'Jerry' }, include: { traps } })` → returns Jerry's stats |
+| 11 | **TrapInterceptor** (post) | `jerry-api/src/jerry/trap.interceptor.ts` | Checks `data?.trapTriggered` on response |
+| 12 | **JerryClient.getTraps()** | `arena-api/src/arena/jerry.client.ts` | `GET http://jerry-api:3002/jerry/traps` |
+| 13 | **TrapInterceptor** (pre) | `jerry-api/src/jerry/trap.interceptor.ts` | Logs pre-check again |
+| 14 | **JerryController.getTraps()** | `jerry-api/src/jerry/jerry.controller.ts` | Delegates to `JerryService.getTraps()` |
+| 15 | **JerryService.getTraps()** | `jerry-api/src/jerry/jerry.service.ts` | `prisma.trap.findMany({ where: { isSet: true } })` → returns active traps |
+| 16 | **TrapInterceptor** (post) | `jerry-api/src/jerry/trap.interceptor.ts` | Post-response tap |
+| 17 | **ArenaService** (battle logic) | `arena-api/src/arena/arena.service.ts` | Evaluates: if active trap → `TRAP_TRIGGERED`; elif Jerry speed > Tom speed+20 → `JERRY_DODGES`; else → `TOM_HITS` (damage=25) |
+| 18 | **PrismaService.battleEvent.create()** | `arena-api` (PostgreSQL) | Writes `BattleEvent` record to DB |
+| 19 | **BattleResultProducer.publish()** | `arena-api/src/arena/battle-result.producer.ts` | Publishes event to Kafka topic `battle-results` |
+| 20 | **ArenaController** returns | `arena-api` | Returns `{ ...battleEvent, tom: tom.name, jerry: jerry.name }` to HTTP client |
+
+---
+
+## Cross-Service Calls
+
+| From | To | Endpoint | Method | Failure Handling |
+|------|----|----------|--------|-----------------|
+| `arena-api` | `tom-api` | `/tom/status` | GET | Throws `HttpException('Tom unavailable', status)` |
+| `arena-api` | `jerry-api` | `/jerry/status` | GET | Throws `HttpException('Jerry unavailable', status)` |
+| `arena-api` | `jerry-api` | `/jerry/traps` | GET | Returns `[]` on failure (silent fallback) |
+| `spectators-api` | `tom-api` | `/tom/status` | GET | Returns `'Tom'` name on failure (on-demand, not part of this flow) |
+| `spectators-api` | `jerry-api` | `/jerry/status` | GET | Returns `'Jerry'` name on failure (on-demand, not part of this flow) |
+
+---
+
+## Async Side Effects
+
+| Trigger | System | Topic/Mechanism | Consumer | Handler |
+|---------|--------|-----------------|----------|---------|
+| `BattleResultProducer.publish(event)` | **Kafka** | `battle-results` | `spectators-api` → `BattleResultConsumer` | `@EventPattern('battle-results')` → `SpectatorService.recordBattle(event)` |
+
+`SpectatorService.recordBattle()` appends the event to an in-memory `battles[]` array used for the leaderboard (`getLeaderboard()`) and recent battle history (`getRecentBattles()`).
+
+> **Note:** The `BattleGateway` (WebSocket server in `arena-api`) has a `broadcastBattleResult()` method that can push to all connected socket clients, but it is **not wired into the attack flow** — it's not called from `tomAttacksJerry()` or `BattleResultProducer`.
+
+---
+
+## Data Models Touched
+
+### `arena-api` (PostgreSQL via Prisma)
+
+| Model | Operation | Fields Written |
+|-------|-----------|---------------|
+| `BattleEvent` | `CREATE` | `tomId`, `jerryId`, `weapon`, `trap` (nullable), `result` (enum), `damage`, `round` (default 1), `createdAt` (auto) |
+
+**BattleResult enum:** `TOM_HITS`, `JERRY_DODGES`, `TRAP_TRIGGERED`, `MUTUAL_DESTRUCTION`
+
+### `tom-api` (PostgreSQL via Prisma — read only)
+
+| Model | Operation | Purpose |
+|-------|-----------|---------|
+| `Cat` | `findFirst` (WHERE name='Tom') | Fetch Tom's stats (health, mood, speed) |
+| `CatWeapon` | included via relation | Tom's current weapons |
+
+### `jerry-api` (PostgreSQL via Prisma — read only)
+
+| Model | Operation | Purpose |
+|-------|-----------|---------|
+| `Mouse` | `findFirst` (WHERE name='Jerry') | Fetch Jerry's stats (health, speed, clever) |
+| `Trap` | `findMany` (WHERE isSet=true) | Find active traps |
+
+### `spectators-api` (in-memory — async, post-Kafka)
+
+| Store | Operation | Purpose |
+|-------|-----------|---------|
+| `SpectatorService.battles[]` | `push(event)` | Appends battle result for leaderboard/history |

@@ -1,0 +1,13 @@
+There is **no `InventoryService`** anywhere in the codebase — not in `/api`, `/crm`, `/mobile`, or `/web`. No TypeScript files reference this name.
+
+OtoPoint does not have an inventory management system. The platform's architecture covers:
+
+- **Order Management** (`OrderService`)
+- **Menu & Pricing** (menu services/resolvers)
+- **Voucher & Loyalty** (`VoucherApplicationService`)
+- **Balance / Transactions** (event-sourced ledger)
+- **Lobby / Printer** (`printer.service.ts`, `group-management.service.ts`)
+- **Offline Orders**
+- **Merchant & Multi-tenancy**
+
+If you're looking for something related — such as menu item availability, stock tracking, or a service managing menu item quantities — let me know what behavior you're trying to trace and I can find the correct service.

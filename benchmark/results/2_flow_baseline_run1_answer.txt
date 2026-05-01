@@ -1,0 +1,93 @@
+## Request Chain (ordered)
+
+1. **`POST /arena/attack`** — HTTP request hits `ArenaController` (`arena-api/src/arena/arena.controller.ts`)
+
+2. **`BattleGuard`** (`arena-api/src/arena/battle.guard.ts`) — Runs before the handler. Checks system time; blocks the request if outside 06:00–22:00 (daytime only). Returns 403 otherwise.
+
+3. **`ArenaController.attack()`** — Extracts `{ weaponType: string }` from request body, delegates to `ArenaService.tomAttacksJerry(weaponType)`.
+
+4. **`ArenaService.tomAttacksJerry()`** (`arena-api/src/arena/arena.service.ts`) — Orchestrates the full attack logic:
+
+   a. **`TomClient.getStatus()`** (`arena-api/src/arena/tom.client.ts`)  
+      → `GET http://tom-api:3001/tom/status`  
+      → Returns `CharacterStatus` (id, name, health, speed)
+
+   b. **`JerryClient.getStatus()`** (`arena-api/src/arena/jerry.client.ts`)  
+      → `GET http://jerry-api:3002/jerry/status`  
+      → Passes through **`TrapInterceptor`** in jerry-api, which logs if a trap is active  
+      → Returns `CharacterStatus`
+
+   c. **`JerryClient.getTraps()`** (`arena-api/src/arena/jerry.client.ts`)  
+      → `GET http://jerry-api:3002/jerry/traps`  
+      → Again passes through **`TrapInterceptor`** in jerry-api  
+      → Returns active trap list
+
+   d. **Attack resolution logic** — Determines outcome:
+      - If active trap → `TRAP_TRIGGERED`, damage = 0
+      - Else if Jerry's speed > Tom's speed → `JERRY_DODGES`, damage = 0
+      - Else → `TOM_HITS`, damage = 25
+
+   e. **Prisma write** (`PrismaService`) — Creates a `BattleEvent` record in arena-api's SQLite DB with fields: `tomId`, `jerryId`, `weapon`, `trap`, `result`, `damage`
+
+   f. **`BattleResultProducer.publish()`** (`arena-api/src/arena/battle-result.producer.ts`) — Publishes a `BattleOutcome` message to Kafka topic **`battle-results`**
+
+5. **Response returned** — Battle event object enriched with Tom's and Jerry's names
+
+---
+
+## Cross-Service Calls
+
+| From | To | Method | Endpoint | Purpose |
+|---|---|---|---|---|
+| arena-api | tom-api | GET | `http://tom-api:3001/tom/status` | Fetch Tom's speed/health |
+| arena-api | jerry-api | GET | `http://jerry-api:3002/jerry/status` | Fetch Jerry's speed/health |
+| arena-api | jerry-api | GET | `http://jerry-api:3002/jerry/traps` | Check for active traps |
+
+All jerry-api calls pass through **`TrapInterceptor`** (`jerry-api/src/jerry/trap.interceptor.ts`), which intercepts at the jerry-api boundary and logs `"TRAP TRIGGERED! Tom is stunned!"` if a trap is found before the handler executes.
+
+Tom-api applies **`LoggingMiddleware`** (`tom-api/src/tom/logging.middleware.ts`) to all incoming requests, logging `[Tom API] METHOD URL - TIMESTAMP`.
+
+---
+
+## Async Side Effects
+
+### Kafka — `battle-results` topic
+
+- **Publisher:** `BattleResultProducer` in arena-api publishes a `BattleOutcome` event after every resolved attack
+- **Consumer:** `BattleResultConsumer` (`spectators-api/src/spectators/battle-result.consumer.ts`) subscribes via `@EventPattern('battle-results')`
+  - Calls `SpectatorService.recordBattle(event)` to update the in-memory leaderboard
+
+### Bull Queue — `battle-queue` (available but not wired to this endpoint directly)
+
+- `BattleQueueProducer` (`arena-api/src/arena/battle.queue.ts`) can enqueue delayed attack jobs (`addAttack`) or priority combo jobs (`addCombo`)
+- `@Process('attack')` and `@Process('combo')` consumers in the same file both re-invoke `ArenaService.tomAttacksJerry()` when jobs are processed
+- Not triggered by the current `POST /arena/attack` handler directly, but part of the arena module
+
+### Scheduled Task — spectators-api
+
+- `CleanupTask` (`spectators-api`) runs on a cron schedule to clean up old battle records from the leaderboard
+
+---
+
+## Data Models Touched
+
+### Written
+
+| Model | Service | Storage | Fields |
+|---|---|---|---|
+| `BattleEvent` | arena-api | Prisma/SQLite | `tomId`, `jerryId`, `weapon`, `trap`, `result` (`TOM_HITS`\|`JERRY_DODGES`\|`TRAP_TRIGGERED`), `damage` (0 or 25) |
+| Battle record (leaderboard) | spectators-api | In-memory map | `BattleOutcome` fields: `tomId`, `jerryId`, `weapon`, `result`, `damage`, `timestamp` |
+
+### Read
+
+| Model | Service | Source |
+|---|---|---|
+| `CharacterStatus` (Tom) | tom-api | In-memory / DB — `id`, `name`, `health`, `speed` |
+| `CharacterStatus` (Jerry) | jerry-api | In-memory / DB — `id`, `name`, `health`, `speed` |
+| Active traps | jerry-api | In-memory trap list |
+
+### Shared types (from `shared/src/`)
+
+- **`BattleOutcome`** — the canonical event shape flowing from arena-api → Kafka → spectators-api
+- **`CharacterStatus`** — used across arena-api, spectators-api for HTTP responses from tom-api/jerry-api
+- **`BATTLE_RESULTS_TOPIC`** constant (`'battle-results'`) — used by both producer and consumer

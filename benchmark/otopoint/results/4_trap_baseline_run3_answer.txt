@@ -1,0 +1,12 @@
+There is **no `InventoryService`** anywhere in the OtoPoint codebase. The codebase does not implement an inventory management system — this service does not exist.
+
+If you're looking for something related, here are the actual services in the backend:
+
+- `OrderService` — order lifecycle
+- `PrinterService` — lobby/printer management
+- `VoucherApplicationService` — voucher logic
+- `MenuService` — menu items and pricing
+- `AnonymousUserService` — anonymous user/token handling
+- `GroupManagementService` — group ordering
+
+Let me know if you meant one of these, or if you're looking for a specific domain (e.g., stock tracking, menu item availability) — I can check what actually handles that concern.

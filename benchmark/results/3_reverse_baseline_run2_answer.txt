@@ -1,0 +1,44 @@
+## Producers
+
+**`BattleResultProducer`** — `arena-api`
+- File: `arena-api/src/arena/battle-result.producer.ts`
+- Class: `BattleResultProducer` (injectable NestJS service using `kafkajs`)
+- Publishing is triggered inside `ArenaService.tomAttacksJerry()` (`arena-api/src/arena/arena.service.ts`) — called every time a battle attack is processed
+- Entry point: `POST /arena/attack` (handled by `ArenaController`)
+
+---
+
+## Consumers
+
+**`BattleResultConsumer`** — `spectators-api`
+- File: `spectators-api/src/spectators/battle-result.consumer.ts`
+- Class: `BattleResultConsumer`, uses `@EventPattern('battle-results')` from `@nestjs/microservices`
+- Handler method: `handleBattleResult(event)` → immediately delegates to `SpectatorService.recordBattle(event)`
+
+---
+
+## Downstream Flow
+
+After `spectators-api` consumes a message from `battle-results`:
+
+1. **`SpectatorService.recordBattle(event)`** appends the event to an in-memory battles array.
+
+2. That stored data then feeds three downstream operations:
+   - **`GET /stats/leaderboard`** — aggregates wins for Tom (`TOM_HITS`) and Jerry (`JERRY_DODGES`, `TRAP_TRIGGERED`)
+   - **`GET /stats/recent`** — returns the last 10 battle events
+   - **`CleanupTask` (cron job)** — runs on two schedules:
+     - Hourly: cleanup routine
+     - Daily at midnight: calls `getLeaderboard()` to generate a daily report
+
+The message payload itself (loosely typed as `any`) carries the structure created by `arena-api`'s Prisma `BattleEvent` record: `{ tomId, jerryId, weapon, trap, result, damage, id, createdAt }`.
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| **arena-api** | **Producer** — publishes to `battle-results` after each `POST /arena/attack` |
+| **spectators-api** | **Consumer** — listens via `@EventPattern`, stores events, exposes stats endpoints and cron reports |
+| **tom-api** | Not involved with this topic |
+| **jerry-api** | Not involved with this topic |

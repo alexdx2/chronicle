@@ -1,0 +1,111 @@
+## Request Chain (ordered)
+
+### 1. GraphQL Resolver — `order.resolver.ts`
+
+Three entry-point mutations, all gated by `GqlHybridAuthGuard`:
+
+| Mutation | Purpose | Downstream call |
+|---|---|---|
+| `createOrderWithVoucher(input, user)` | Standard path (mobile + web) | `OrderService.createOrderFromCart()` or `createOrderFromGroup()` if `groupId` present |
+| `createOrder(args, user)` | Legacy path | `OrderService.createOrderFromCart()` |
+| `createMerchantOrder(input, user)` | Offline / walk-in orders (merchant-initiated) | `OrderService.createOrderFromCart()` |
+
+### 2. `OrderService.createOrderFromCart()` — `order.service.ts`
+
+Executed in this sequence:
+
+1. **Correlation ID + logging** — generates a trace ID for the full request.
+2. **User context validation** — reads Redis (`PrinterRedisService`) to check the user is in the expected lobby/printer. Non-fatal.
+3. **Menu item fetch** — `PrismaService.menuItem.findMany()` — enriches cart items with real DB prices, categories, and option data.
+4. **Domain model creation** — `OrderModel.fromCart()` — builds an in-memory order with calculated subtotals.
+5. **Promotion evaluation** — `PromotionService.getActivePromotions()` → shared pricing engine `evaluatePromotions()` → prices adjusted in-memory; no DB write yet.
+6. **Voucher validation loop** — for each `userVoucherId` in input:
+   - `PrismaService.userVoucher.findMany()` (single batch query)
+   - `VoucherApplicationService.validateVoucherWithEntity()` — checks ownership, merchant, `status=AVAILABLE`, expiry, time schedule, target item for `FREE_ITEM` type
+   - `OrderModel.applyVouchers()` → shared pricing engine produces final discounted totals
+7. **Prisma transaction** (10 s timeout, 5 s maxWait — all-or-nothing):
+   - `prisma.order.create()` with nested `orderItems` — status=`PREPARING`, paymentStatus=`PENDING`
+   - `prisma.userVoucher.updateMany()` — status `AVAILABLE → PENDING`, sets `orderId` + `usedAt`
+   - `prisma.promotionAppliedItem.createMany()` — audit trail linking `promotionId → orderItemId + discountAmount`
+8. **Redis publish** — `OrderRedisService.publishOrderCreated(order)` — feeds `OrderPubSubService` which relays to Socket.io merchant room.
+9. **Voucher socket emissions** — three direct Socket.io emits (see Async section).
+10. **Order purchased event** — direct Socket.io emit to the user's room.
+11. **Chat placeholder** — `ChatService.createOrderPlaceholder()` — non-critical; failure is logged and swallowed.
+12. **Return** — fully hydrated `Order` with items back to resolver, serialised as GraphQL response.
+
+### 3. Group order variant — `OrderService.createOrderFromGroup()`
+
+Replaces step 2 with:
+- Validates the caller is the group owner
+- Collects `FREE_ITEM` vouchers from each member's Redis voucher queue
+- Merges all member carts; stores per-member item attribution in `order.participants`
+- After the transaction, emits `ORDER.PURCHASED` to **every** group member's room (not just the owner), with `isGroupOrder: true, groupId` in the payload
+
+---
+
+## Cross-Service Calls
+
+```
+OrderService
+ ├─ PrismaService                   (DB reads: menuItem, userVoucher, promotion; writes: order, orderItem, userVoucher, promotionAppliedItem)
+ ├─ PrinterRedisService             (read: user-printer context, voucher queue)
+ ├─ OrderRedisService               (publish: OrderCreatedEvent on Redis pub/sub channel)
+ ├─ PromotionService                (read active promotions → pricing engine)
+ ├─ VoucherApplicationService       (validate each voucher entity, apply to order model)
+ ├─ SocketService                   (direct .emit() for user + lobby + merchant rooms)
+ ├─ ChatService                     (create order placeholder message in chat thread)
+ ├─ NotificationService             (NOT called at creation; called on status transitions)
+ └─ PointsRewardService             (NOT called at creation; called when order → CLOSED + PAID)
+```
+
+`VoucherApplicationService` is stateless — it receives already-fetched entities and runs pure validation + the shared pricing engine. No additional DB calls inside it.
+
+---
+
+## Async Side Effects (queues, WebSocket, push)
+
+### Redis pub/sub (near-synchronous)
+| Channel / method | Payload | Consumer |
+|---|---|---|
+| `OrderRedisService.publishOrderCreated()` | `OrderCreatedEvent` | `OrderPubSubService` → emits `orders:new` to `merchant:{merchantId}:orders` Socket.io room |
+
+### Socket.io direct emits (synchronous, in-process)
+| Event constant | Room | Payload |
+|---|---|---|
+| `order:purchased` (`ORDER.PURCHASED`) | `user:{userId}` | `{ orderId, merchantId, printerId, total, itemCount, state, paymentStatus, createdAt }` |
+| `voucher_update` | `user:{userId}` | Updated available voucher list |
+| `lobby_voucher_update` | `lobby:{printerId}` | Same — all lobby members see voucher consumed |
+| `merchant_voucher_update` | `merchant:{merchantId}` | Voucher consumed notification for merchant staff |
+| (via pub/sub) `orders:new` | `merchant:{merchantId}:orders` | New order for kitchen / CRM |
+
+Group orders additionally emit `order:purchased` to every member in `user:{memberId}`.
+
+### Bull queues
+No Bull queue jobs are enqueued during order creation itself. Bull is used elsewhere in the system (e.g., notification delivery, scheduled tasks) but order creation does not enqueue any jobs.
+
+### Push notifications
+Not sent at creation time. `NotificationService.sendOrderStatusNotification()` fires on order state transitions (`PREPARING → READY_FOR_PICKUP`, `READY_FOR_PICKUP → CLOSED`, `CANCELLED`). It checks whether the user is actively in the chat before sending an Expo/FCMv1 push to avoid double-alerting.
+
+### Points / balance
+Not awarded at creation time. `PointsRewardService.awardPointsForOrder()` is called inside `updateOrderStatus()` and `updatePaymentStatus()` only when **both** `state=CLOSED` and `paymentStatus=PAID` are true simultaneously. It then calls `BalanceService.addPoints()` → creates an immutable `Transaction` event + emits `points_claimed` via Socket.io.
+
+---
+
+## Data Models Touched
+
+| Model | Operation | Fields written |
+|---|---|---|
+| `Order` | **CREATE** | `merchantId`, `userId`, `printerId`, `state` (PREPARING), `deliveryMode`, `paymentMethod`, `paymentStatus` (PENDING), `subtotal`, `voucherDiscount`, `total`, `participants` (group), `createdAt` |
+| `OrderItem` | **CREATE** (one per cart item) | `orderId`, `menuItemId`, `cartItemId`, `name`, `price`, `originalPrice`, `options`, `quantity`, `category`, `itemState` (PENDING), `isVoucherItem`, `appliedVoucherId` |
+| `UserVoucher` | **UPDATE** (applied vouchers only) | `status` AVAILABLE→PENDING, `orderId`, `usedAt` |
+| `PromotionAppliedItem` | **CREATE** (one per promo-discounted item) | `promotionId`, `orderItemId`, `discountAmount` |
+| `MenuItem` | **READ** | Enrichment: price, name, category, options |
+| `Promotion` | **READ** | Active promotions for merchant |
+| `UserVoucher` (pre-tx) | **READ** | Batch-fetched for validation before transaction opens |
+| `User` | **READ** (chat/notification path) | Push tokens, notification settings |
+| `Merchant` | **READ** (points path, deferred) | `pointsPerOrderEnabled`, `pointsPerOrderRate`, `pointsPerOrderMinimum` |
+
+**Redis keys touched (outside Prisma transaction):**
+- `printer:{printerId}:user:{userId}:context` — read to validate user-lobby binding
+- `printer:{printerId}:user:{userId}:vouchers` — voucher queue (member vouchers in group orders)
+- Redis pub/sub channel — `OrderCreatedEvent` published post-transaction

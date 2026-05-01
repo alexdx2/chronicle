@@ -1,0 +1,49 @@
+Here's the complete picture of how **spectators-api** and **tom-api** are connected, verified directly from the knowledge graph:
+
+---
+
+## Direct Connections
+
+There is **one direct HTTP call** from spectators-api to tom-api:
+
+| From | Edge Type | To | Endpoint | Confidence |
+|---|---|---|---|---|
+| `spectators-api` (`SpectatorService`) | `CALLS_SERVICE` → `CALLS_ENDPOINT` | `tom-api` | `GET /tom/status` | 0.95 (hard) |
+
+`SpectatorService` inside spectators-api calls tom-api's `GET /tom/status` endpoint directly — likely to enrich leaderboard/stats data with the current state of Tom.
+
+---
+
+## Indirect Connections (via other services)
+
+**Path 1 — via jerry-api and arena-api (depth 3):**
+
+```
+spectators-api ──CALLS_SERVICE──▶ jerry-api ◀──CALLS_SERVICE── arena-api ──CALLS_SERVICE──▶ tom-api
+```
+
+spectators-api and arena-api both call jerry-api, and arena-api also calls tom-api. While there's no single directed chain from spectators-api *through* a service *to* tom-api here, they share arena-api as a common peer that bridges both.
+
+**Path 2 — via the `battle-results` Kafka topic (event-driven):**
+
+```
+tom-api ◀──CALLS_SERVICE── arena-api
+                    │
+                    └──PUBLISHES_TOPIC──▶ [battle-results] ──CONSUMES_TOPIC──▶ spectators-api
+```
+
+arena-api calls tom-api (to check Tom's status during battles), then publishes battle outcomes to the **`battle-results`** Kafka topic. spectators-api's `BattleResultConsumer` consumes that topic — so tom-api's data flows to spectators-api indirectly through arena-api's Kafka pipeline.
+
+---
+
+## Shared Dependencies
+
+| Shared Resource | spectators-api usage | tom-api's role |
+|---|---|---|
+| **`GET /tom/status`** (tom-api endpoint) | `SpectatorService` calls it directly | tom-api exposes it via `TomController` |
+| **`GET /jerry/status`** (jerry-api endpoint) | `SpectatorService` calls it | `arena-api`'s `JerryClient` also calls it — both services query jerry's state |
+| **`battle-results` Kafka topic** | `BattleResultConsumer` consumes it | Produced by `arena-api` after it calls tom-api; tom-api's state is embedded in the event payload |
+
+---
+
+**Summary:** spectators-api has a **direct HTTP dependency on tom-api** (`GET /tom/status`) and an **indirect event-driven link** through arena-api's Kafka pipeline (`battle-results` topic). arena-api acts as the key intermediary — it orchestrates battles by calling both tom-api and jerry-api, then broadcasts results that spectators-api consumes for its stats/leaderboard.

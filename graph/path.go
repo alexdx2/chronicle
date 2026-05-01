@@ -122,6 +122,22 @@ func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult,
 			edges = append(edges, revEdges...)
 		}
 
+		// Pub/sub data flow: when on a topic node, follow reverse CONSUMES_TOPIC
+		// edges so that producer → topic → consumer paths are traversable in
+		// directed mode.
+		if opts.Mode != "connected" && isTopicNode(cur.nodeKey) {
+			revEdges, err := g.store.ListEdges(store.EdgeFilter{ToNodeID: cur.nodeID})
+			if err != nil {
+				return nil, fmt.Errorf("QueryPath ListEdges pubsub to %d: %w", cur.nodeID, err)
+			}
+			for _, re := range revEdges {
+				if re.EdgeType == "CONSUMES_TOPIC" {
+					// Flip direction: treat consumer→topic as topic→consumer.
+					edges = append(edges, re)
+				}
+			}
+		}
+
 		for _, e := range edges {
 			// Skip inactive edges.
 			if !e.Active {
@@ -268,6 +284,12 @@ func computePathCost(confs []float64, depth int) float64 {
 	}
 	cost := sum + 0.05*float64(depth)
 	return math.Round(cost*10000) / 10000
+}
+
+// isTopicNode checks if a node key represents a message topic (e.g. Kafka).
+// Topic nodes have the format "contract:topic:domain:name".
+func isTopicNode(nodeKey string) bool {
+	return strings.HasPrefix(nodeKey, "contract:topic:")
 }
 
 // computePathScore computes path_score = Π(edge_confidence) * 0.95^(depth-1).

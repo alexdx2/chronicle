@@ -1,0 +1,47 @@
+Here's the complete dependency map for the `battle-results` Kafka topic, verified directly from the source code:
+
+---
+
+## Producers
+
+**`BattleResultProducer`** — `arena-api`
+- File: `arena-api/src/arena/battle-result.producer.ts`
+- Method: `publish(event)`
+- Triggered by `ArenaService.tomAttacksJerry()` in `arena.service.ts`, which is invoked via **`POST /arena/attack`** (`arena.controller.ts`)
+- The event payload is a persisted `BattleEvent` record (written to Prisma/DB first, then published)
+
+---
+
+## Consumers
+
+**`BattleResultConsumer`** — `spectators-api`
+- File: `spectators-api/src/spectators/battle-result.consumer.ts`
+- Method: `handleBattleResult(event)` decorated with `@EventPattern('battle-results')`
+- Immediately delegates to `SpectatorService.recordBattle(event)`, storing the event in memory
+
+---
+
+## Downstream Flow
+
+1. **`POST /arena/attack`** is called → `ArenaService.tomAttacksJerry()` runs
+2. A `BattleEvent` is persisted to the Prisma DB in `arena-api`
+3. `BattleResultProducer.publish(event)` emits the event to the `battle-results` topic
+4. `spectators-api` receives it via `BattleResultConsumer.handleBattleResult()`
+5. `SpectatorService.recordBattle(event)` appends it to an in-memory `battles[]` array
+6. That array feeds two REST endpoints exposed by `StatsController`:
+   - **`GET /stats/leaderboard`** — tallies `TOM_HITS` vs `JERRY_DODGES`/`TRAP_TRIGGERED`
+   - **`GET /stats/recent`** — returns the last 10 battle events
+7. **`CleanupTask.handleDailyReport()`** (`cleanup.task.ts`) runs on a `@Cron('0 0 * * *')` schedule and calls `SpectatorService.getLeaderboard()` to log a daily summary
+
+The topic name `'battle-results'` is defined as the constant `BATTLE_TOPIC` in `shared/src/constants.ts`.
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| **`arena-api`** | Producer — owns the battle lifecycle, writes to DB, publishes events |
+| **`spectators-api`** | Consumer — receives events, aggregates stats, exposes leaderboard/recent APIs, runs daily cron report |
+
+`tom-api` and `jerry-api` are **not** directly involved in the `battle-results` topic flow.

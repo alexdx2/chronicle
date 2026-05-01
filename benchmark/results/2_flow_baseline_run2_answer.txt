@@ -1,0 +1,87 @@
+Now I have a complete, verified picture of the full request flow. Here's the precise trace:
+
+---
+
+## Request Chain (ordered)
+
+1. **`POST /arena/attack`** — HTTP request arrives at **arena-api** (port 3000)  
+   Body: `{ weaponType: string }`
+
+2. **`BattleGuard.canActivate()`** — Time-gate guard; rejects requests outside 06:00–21:59. No guard bypass mechanism exists.
+
+3. **`ArenaController.attack(body)`**  
+   File: `arena-api/src/arena/arena.controller.ts`  
+   Delegates to `ArenaService.tomAttacksJerry(weaponType)`.
+
+4. **`ArenaService.tomAttacksJerry(weaponType)`**  
+   File: `arena-api/src/arena/arena.service.ts`  
+   Orchestrates the full battle logic:
+
+   a. `TomClient.getStatus()` → HTTP GET to tom-api (see Cross-Service Calls)  
+   b. `JerryClient.getStatus()` → HTTP GET to jerry-api  
+   c. `JerryClient.getTraps()` → HTTP GET to jerry-api  
+   d. **Battle outcome logic:**
+      - `activeTrap` found → `result = TRAP_TRIGGERED`, `damage = 0`
+      - `jerry.speed > tom.speed + 20` → `result = JERRY_DODGES`, `damage = 0`
+      - Otherwise → `result = TOM_HITS`, `damage = 25`
+
+   e. `PrismaService.battleEvent.create(...)` → writes to arena-api's SQLite DB
+
+   f. `BattleResultProducer.publish(event)` → publishes to Kafka topic `battle-results`
+
+5. **Returns** `{ ...battleEvent, tom: tom.name, jerry: jerry.name }` to the HTTP caller.
+
+---
+
+## Cross-Service Calls
+
+| From | To | Method | Endpoint | Purpose |
+|---|---|---|---|---|
+| arena-api / `TomClient` | **tom-api** (`:3001`) | GET | `/tom/status` | Fetch Tom's `id`, `name`, `health`, `mood`, `weapons[]` |
+| arena-api / `JerryClient` | **jerry-api** (`:3002`) | GET | `/jerry/status` | Fetch Jerry's `id`, `name`, `health`, `speed`, `clever`, `traps[]` |
+| arena-api / `JerryClient` | **jerry-api** (`:3002`) | GET | `/jerry/traps` | Fetch active traps (`isSet: true`) |
+
+**tom-api** side: `LoggingMiddleware` fires on every request before `TomController` → `TomService.getStatus()` → Prisma reads `Cat` + `CatWeapon`.
+
+**jerry-api** side: `TrapInterceptor` wraps every request before/after `JerryController` → `JerryService.getStatus()` / `JerryService.getTraps()` → Prisma reads `Mouse` + `Trap`.
+
+---
+
+## Async Side Effects
+
+### Kafka → spectators-api
+
+1. **`BattleResultProducer.publish(event)`** in arena-api sends event to topic **`battle-results`**.
+
+2. **`BattleResultConsumer.handleBattleResult(event)`** in spectators-api subscribes via `@EventPattern('battle-results')`.
+
+3. Calls **`SpectatorService.recordBattle(event)`** — appends event to an in-memory `battles[]` array.
+
+> ⚠️ `NotificationService.notifySpectators()` (which would POST to `http://notifications:3005/push`) is **defined** in spectators-api but is **not called** from the consumer — it is not part of the attack flow as coded.
+
+### WebSocket (declared but not triggered by this flow)
+
+`BattleGateway.broadcastBattleResult()` exists in arena-api and would emit `battle-result` to all connected WebSocket clients, but **`ArenaService.tomAttacksJerry()` never calls it**. It is dead code in the attack path.
+
+### Bull Queue (parallel path, not triggered by HTTP endpoint)
+
+`BattleQueueProducer/Consumer` exist in arena-api and also call `arenaService.tomAttacksJerry()`, but the HTTP `POST /arena/attack` endpoint calls the service **directly** — it does not enqueue.
+
+### Cron Jobs (time-driven, independent)
+
+In spectators-api, `CleanupTask` runs:
+- **Every hour** — placeholder cleanup of old battle records
+- **Daily at midnight** — logs leaderboard from `SpectatorService.getLeaderboard()`
+
+---
+
+## Data Models Touched
+
+| Service | Model | Operation | Fields |
+|---|---|---|---|
+| **tom-api** (SQLite) | `Cat` | READ (`findFirst`) | `id`, `name`, `health` (default 9), `speed`, `mood` |
+| **tom-api** (SQLite) | `CatWeapon` | READ (via `include: { weapons }`) | `id`, `name`, `damage`, `type`, `ownerId` |
+| **jerry-api** (SQLite) | `Mouse` | READ (`findFirst`) | `id`, `name`, `health` (default 3), `speed` (default 90), `clever` |
+| **jerry-api** (SQLite) | `Trap` | READ (`findMany where isSet=true`) | `id`, `name`, `effect`, `isSet`, `ownerId` |
+| **arena-api** (SQLite) | `BattleEvent` | WRITE (`create`) | `tomId`, `jerryId`, `weapon`, `trap`, `result` (enum: `TOM_HITS` / `JERRY_DODGES` / `TRAP_TRIGGERED` / `MUTUAL_DESTRUCTION`), `damage`, `round`, `createdAt` |
+| **spectators-api** | in-memory `battles[]` | WRITE (push) | full event object from Kafka |

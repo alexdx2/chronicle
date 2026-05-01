@@ -1,0 +1,97 @@
+## Direct Dependencies
+
+### Core Services
+| File | Usage |
+|------|-------|
+| `api/src/services/order.service.ts` | `prisma.order.create`, `findMany`, `update`, `delete` — full CRUD. Also reads `OrderItem`, `Payment`, `UserVoucher` relations |
+| `api/src/models/order.model.ts` | Domain model — `toPrismaCreateInput()`, `toOrderItems()`, `validateStateTransition()`. Constructs exact Prisma shape |
+| `api/src/services/dashboard-action.service.ts` | Reads/writes `Order.state`, `Order.paymentStatus`, `Order.hasWarning`, `Order.estimatedTime` |
+| `api/src/services/payment.service.ts` | Creates `Payment` linked to Order via `orderId`; reads `Order.total`, `Order.merchantId` for Stripe charge |
+| `api/src/services/voucher-application.service.ts` | Validates `UserVoucher` against `Order.merchantId`, `Order.userId`, `Order.items` |
+| `api/src/services/chat.service.ts` | Creates `ChatMessage` with `orderId` FK (ORDER_PLACEHOLDER type) |
+| `api/src/services/notification.service.ts` | Receives `Order.id`, `Order.state`, `Order.merchantId` for push notifications |
+| `api/src/services/points-reward.service.ts` | Reads `Order.total`, `Order.userId`, `Order.merchantId` to create `Transaction` events |
+| `api/src/services/reddis/order.reddis.ts` | Publishes `{ orderId, merchantId, state, paymentStatus, estimatedTime, readyTime }` to Redis channels |
+
+### GraphQL Resolvers
+| File | Mutations/Queries |
+|------|------------------|
+| `api/src/graphql/resolvers/order.resolver.ts` | `simpleFindOrders`, `createOrder`, `createOrderWithVoucher`, `createOrderFromGroup` |
+| `api/src/graphql/resolvers/payment.resolver.ts` | `createPaymentIntent` → links Payment to Order |
+| `api/src/graphql/resolvers/dashboard.resolver.ts` | Dashboard actions mutating `Order.state` |
+
+### DTOs / Inputs
+| File | Purpose |
+|------|---------|
+| `api/src/graphql/dto/create-order-with-voucher.input.ts` | `CreateOrderWithVoucherInput` — fields map directly to Order columns |
+| `api/src/graphql/dto/create-merchant-order.input.ts` | CRM-initiated order creation DTO |
+| `api/src/graphql/dto/create-payment-intent.input.ts` | Stripe intent input with Order linkage |
+
+### Generated GraphQL Types (all auto-regenerated on schema change)
+- `api/src/@generated/order/` — **107 files** (model, where/create/update inputs, aggregation args, sort inputs, etc.)
+- `api/src/@generated/order-item/` — **107 files**
+- `api/src/@generated/payment/` — **80 files** (all reference `orderId` FK)
+
+---
+
+## Transitive Dependencies
+
+| File | How It's Reached |
+|------|-----------------|
+| `api/src/services/promotion.service.ts` | Called by `OrderService.evaluateAndApplyPromotions()` — receives cart items, returns `appliedPromotions[]` written to `OrderItem.appliedPromotions` |
+| `api/src/services/voucher-queue.service.ts` | Called by `OrderService` to drain temporary voucher queue into the order before finalization |
+| `api/src/services/socket.service.ts` | Called by `OrderService` and `DashboardActionService` to emit `ORDER.CREATED`, `ORDER.UPDATE`, `ORDER.PURCHASED` events |
+| `api/src/gateways/websocket.gateway.ts` | Hosts the Socket.io server; `SocketService` emits through it. Any change to Order's shape changes event payloads |
+| `api/src/services/pubsub/order.pubsub.ts` | Subscribes to Redis `order:created:{merchantId}` / `order:updated:{orderId}` channels; re-broadcasts to sockets |
+| `api/src/services/printer.service.ts` (Lobby) | Reads active `printerId` from Order; group context cleanup references Order state |
+| `api/src/services/reddis/printer.redis.service.ts` | Stores user context (cart, lobby) keyed partly by orderId |
+| `@otopoint/pricing-engine` (shared package) | Used by `OrderModel` and `VoucherApplicationService` to compute `subtotal`, `voucherDiscount`, `total` — field-name sensitive |
+| Integration tests (13+ files under `api/src/__tests__/`) | All test against real DB with real Order schema; a schema change will break them |
+
+---
+
+## Affected Endpoints
+
+### GraphQL Mutations
+| Mutation | Resolver File |
+|----------|--------------|
+| `createOrder` | `order.resolver.ts` |
+| `createOrderWithVoucher` | `order.resolver.ts` |
+| `createOrderFromGroup` | `order.resolver.ts` |
+| `createPaymentIntent` | `payment.resolver.ts` |
+| Dashboard action mutations (state transitions) | `dashboard.resolver.ts` |
+
+### GraphQL Queries
+| Query | Resolver File |
+|-------|--------------|
+| `simpleFindOrders` | `order.resolver.ts` |
+
+### REST Controllers
+Any REST endpoints in:
+- `api/src/controllers/` — search for controllers referencing `OrderService` or `prisma.order`; specifically the offline order endpoint and any merchant-initiated order REST routes. (The `/api/e2e/*` endpoints used in tests also hit Order creation flows.)
+
+---
+
+## External Systems
+
+| System | How It's Coupled to Order | What Breaks |
+|--------|--------------------------|-------------|
+| **PostgreSQL (Prisma)** | The Order table itself + FK constraints to `OrderItem`, `Payment`, `UserVoucher`, `ChatMessage`, `Printer` | Any field rename/removal requires migration; all `@generated` types must be regenerated with `prisma generate` |
+| **Redis** | `OrderRedisService` publishes `{ orderId, merchantId, state, paymentStatus, estimatedTime, readyTime }` to channels `order:created:{merchantId}` and `order:updated:{orderId}`. Cached user/cart contexts in `PrinterRedisService` reference orderId | Payload shape changes break all active subscribers (mobile clients, CRM dashboards) |
+| **Socket.io (WebSocket)** | `SocketService` emits `OrderUpdateEvent` and `OrderCreatedEvent` structs. Rooms: `order:{orderId}`, `merchant:{merchantId}:orders`, `{printerId}_client` | Event payload shape is consumed by mobile (`socket-lobby-consolidated.provider.tsx`) and CRM — any field change is a breaking API contract |
+| **Stripe** | `PaymentService` uses `Order.total`, `Order.merchantId` to create PaymentIntent; `Payment.stripePaymentIntentId` links back. Stripe webhook must reconcile payment back to Order via `orderId` | Removing/renaming `total`, `merchantId`, or `paymentStatus` breaks Stripe charge flow and webhook reconciliation |
+| **Centrifugo** | Chat messages (`ChatMessage.orderId`) and ORDER_PLACEHOLDER type reference Order. Centrifugo broadcasts chat events with order context | ORDER_PLACEHOLDER messages break if `orderId` FK is removed |
+| **Bull Queues** | `VoucherQueueService` uses queued jobs that reference Order creation pipeline | Job payloads referencing removed fields will fail silently or throw at runtime |
+| **FCM/Push Notifications** | `NotificationService` sends push with `orderId`, `state`, `merchantId` in payload | Notification payload will be malformed if fields are renamed |
+| **Loyalty/Event Store (PostgreSQL)** | `PointsRewardService` creates `Transaction` events with `orderId` as event source reference | Breaks event sourcing audit trail if `orderId` is modified |
+
+---
+
+## Confidence: 88/100
+
+**Reasoning:** The agent was able to read the actual schema and trace real file paths with high fidelity. The main sources of uncertainty:
+
+- The exact REST controller files for offline orders and merchant-initiated orders were identified by pattern but not fully enumerated (some may exist outside the searched paths).
+- Bull queue processor files were inferred from `VoucherQueueService` injection but their exact payload shapes weren't fully read.
+- The `@otopoint/pricing-engine` shared package internals weren't deeply read — if it hard-references field names from the Prisma type, those would also break.
+- There may be additional analytics/reporting queries in dashboard services not surfaced in this pass.

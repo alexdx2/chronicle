@@ -1,0 +1,82 @@
+Here are all verified connections between **spectators-api** and **tom-api**, based on the actual source files:
+
+---
+
+## Direct Connections
+
+**spectators-api → tom-api via HTTP**
+
+`SpectatorService.getTomName()` in `spectators-api/src/spectators/spectator.service.ts` makes a direct HTTP `fetch` call:
+
+```ts
+const TOM_API_URL = process.env.TOM_API_URL || 'http://tom-api:3001';
+
+async getTomName() {
+  const r = await fetch(`${TOM_API_URL}/tom/status`);
+  return r.ok ? (await r.json()).name : 'Tom';
+}
+```
+
+- **Endpoint called:** `GET /tom/status` on tom-api (port 3001)
+- **Direction:** spectators-api → tom-api (one-way; tom-api does not call spectators-api)
+- **Purpose:** Fetches Tom's display name for the leaderboard view
+
+---
+
+## Indirect Connections (via other services)
+
+**tom-api → arena-api → Kafka → spectators-api**
+
+This is the primary event-driven path:
+
+1. **arena-api calls tom-api** via `TomClient.getStatus()` (`arena-api/src/arena/tom.client.ts`):
+   ```ts
+   const response = await fetch(`${TOM_API_URL}/tom/status`); // GET /tom/status
+   ```
+
+2. **arena-api publishes battle results** via `BattleResultProducer` (`arena-api/src/arena/battle-result.producer.ts`):
+   ```ts
+   const TOPIC = 'battle-results';
+   // publishes BattleOutcome events to Kafka
+   ```
+
+3. **spectators-api consumes** those events via `BattleResultConsumer` (`spectators-api/src/spectators/battle-result.consumer.ts`):
+   ```ts
+   @EventPattern('battle-results')
+   handleBattleResult(event: any) {
+     this.spectatorService.recordBattle(event);
+   }
+   ```
+
+Full flow:
+```
+tom-api ──HTTP──► arena-api ──Kafka: 'battle-results'──► spectators-api
+```
+
+The `BattleOutcome` event payload carries a `tomId` field, so tom-api's identity flows through arena-api into the spectators-api battle log. spectators-api then filters results by `b.result === 'TOM_HITS'` to compute Tom's win count on the leaderboard.
+
+---
+
+## Shared Dependencies
+
+Both services depend on the `@tomandjerry/shared` package. Relevant shared artifacts:
+
+| Shared Export | File | Used by |
+|---|---|---|
+| `BattleOutcome` interface | `shared/src/interfaces.ts` | arena-api (producer), spectators-api (consumer); includes `tomId: string` |
+| `CharacterStatus` interface | `shared/src/interfaces.ts` | tom-api (response shape from `/tom/status`), spectators-api (via `getTomName`) |
+| `BATTLE_TOPIC = 'battle-results'` | `shared/src/constants.ts` | arena-api producer & spectators-api consumer (topic name contract) |
+| `MAX_HEALTH_TOM = 9` | `shared/src/constants.ts` | Constrains Tom's health model shared across services |
+| `GameEvent` enum | `shared/src/constants.ts` | `ATTACK`, `DODGE`, `TRAP`, `RESET` — game event vocabulary |
+
+The `TOM_API_URL` environment variable (`http://tom-api:3001` default) is independently referenced in **both** `spectator.service.ts` and `arena-api/src/arena/tom.client.ts` — no shared config object, just the same env var name and default.
+
+---
+
+### Summary
+
+| Path | Type | Direction |
+|---|---|---|
+| spectators-api → `GET /tom/status` → tom-api | HTTP REST | spectators → tom |
+| tom-api → arena-api → Kafka `battle-results` → spectators-api | Event (Kafka) | tom → arena → spectators |
+| `@tomandjerry/shared` interfaces & constants | Shared library | Both depend on it |

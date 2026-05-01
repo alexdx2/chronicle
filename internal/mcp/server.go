@@ -102,6 +102,15 @@ func jsonResult(v any) *mcp.CallToolResult {
 	return mcp.NewToolResultText(string(data))
 }
 
+// resolveKey resolves a node_key parameter — accepts either a full key or a name.
+func resolveKey(g *graph.Graph, raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("node_key is required")
+	}
+	return g.ResolveNodeKey(raw)
+}
+
+
 func errorResult(err error) *mcp.CallToolResult {
 	return mcp.NewToolResultError(err.Error())
 }
@@ -512,8 +521,8 @@ func importAllHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func queryDepsTool() mcp.Tool {
 	return mcp.NewTool("chronicle_query_deps",
-		mcp.WithDescription("Query forward dependencies of a node — what does this node depend on? BFS traversal of outgoing edges up to specified depth. Use --derivation to filter by confidence level."),
-		mcp.WithString("node_key", mcp.Required(), mcp.Description("Starting node key")),
+		mcp.WithDescription("Query forward dependencies — what does this node depend on? BFS traversal of outgoing edges. Accepts name or full node_key."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'OrderService')")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation kinds to follow")),
 		mcp.WithNumber("depth", mcp.Description("Maximum BFS depth (default 3)")),
 	)
@@ -522,9 +531,9 @@ func queryDepsTool() mcp.Tool {
 func queryDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
-		nodeKey := strParam(args, "node_key")
-		if nodeKey == "" {
-			return errorResult(fmt.Errorf("node_key is required")), nil
+		nodeKey, err := resolveKey(g, strParam(args, "node_key"))
+		if err != nil {
+			return errorResult(err), nil
 		}
 		depth := intParam(args, "depth")
 		if depth == 0 {
@@ -554,8 +563,8 @@ func queryDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func queryReverseDepsTool() mcp.Tool {
 	return mcp.NewTool("chronicle_query_reverse_deps",
-		mcp.WithDescription("Query reverse dependencies — who depends on this node? BFS traversal of incoming edges. Use to find all consumers of a service, endpoint, or topic."),
-		mcp.WithString("node_key", mcp.Required(), mcp.Description("Starting node key")),
+		mcp.WithDescription("Query reverse dependencies — who depends on this node? BFS traversal of incoming edges. Accepts name or full node_key."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'SocketService')")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation kinds to follow")),
 		mcp.WithNumber("depth", mcp.Description("Maximum BFS depth (default 3)")),
 	)
@@ -564,9 +573,9 @@ func queryReverseDepsTool() mcp.Tool {
 func queryReverseDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
-		nodeKey := strParam(args, "node_key")
-		if nodeKey == "" {
-			return errorResult(fmt.Errorf("node_key is required")), nil
+		nodeKey, err := resolveKey(g, strParam(args, "node_key"))
+		if err != nil {
+			return errorResult(err), nil
 		}
 		depth := intParam(args, "depth")
 		if depth == 0 {
@@ -779,9 +788,9 @@ func finalizeIncrementalScanHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func queryPathTool() mcp.Tool {
 	return mcp.NewTool("chronicle_query_path",
-		mcp.WithDescription("Find paths between two nodes. Default mode 'directed' follows edges in natural direction for dependency chains. Use 'connected' for undirected exploration. Structural edges (CONTAINS) excluded by default. Returns top-k paths ranked by path score."),
-		mcp.WithString("from_node_key", mcp.Required(), mcp.Description("Source node key")),
-		mcp.WithString("to_node_key", mcp.Required(), mcp.Description("Target node key")),
+		mcp.WithDescription("Find paths between two nodes. Traverses through Kafka/message topics automatically (producer → topic → consumer). Default mode 'directed' follows data flow. Use 'connected' for undirected exploration. Structural edges (CONTAINS) excluded by default. Returns top-k paths ranked by path score."),
+		mcp.WithString("from_node_key", mcp.Required(), mcp.Description("Source node key OR name (e.g. 'ArenaService')")),
+		mcp.WithString("to_node_key", mcp.Required(), mcp.Description("Target node key OR name (e.g. 'SpectatorService')")),
 		mcp.WithNumber("max_depth", mcp.Description("Max depth (default 6)")),
 		mcp.WithNumber("top_k", mcp.Description("Max paths (default 3)")),
 		mcp.WithString("mode", mcp.Description("directed or connected (default directed)")),
@@ -813,12 +822,21 @@ func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
 				}
 			}
 		}
-		result, err := g.QueryPath(strParam(args, "from_node_key"), strParam(args, "to_node_key"), graph.PathOptions{
+		fromKey, err := resolveKey(g, strParam(args, "from_node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		toKey, err := resolveKey(g, strParam(args, "to_node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		result, err := g.QueryPath(fromKey, toKey, graph.PathOptions{
 			MaxDepth: maxDepth, TopK: topK, Mode: mode, DerivationFilter: filter,
 		})
 		if err != nil {
 			return errorResult(err), nil
 		}
+
 		return jsonResult(result), nil
 	}
 }
@@ -829,8 +847,8 @@ func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func impactTool() mcp.Tool {
 	return mcp.NewTool("chronicle_impact",
-		mcp.WithDescription("Analyze blast radius of a node change. Reverse dependency traversal respecting traversal policy — structural edges excluded, EXPOSES_ENDPOINT doesn't propagate reverse. Returns scored impact list. Use to answer 'what breaks if I change X?'"),
-		mcp.WithString("node_key", mcp.Required(), mcp.Description("Changed node key")),
+		mcp.WithDescription("Analyze blast radius of a node change. Reverse dependency traversal with forward expansion to find affected endpoints and topics. Returns impacted components (with impact_score) and affected API surface. Trust scores >= 80. If result is empty or small, graph may be incomplete — search code."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'OrderService' or 'data:model:orders:order')")),
 		mcp.WithNumber("depth", mcp.Description("Max depth (default 4)")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation filter")),
 		mcp.WithNumber("min_score", mcp.Description("Minimum impact score (default 0.1)")),
@@ -859,12 +877,17 @@ func impactHandler(g *graph.Graph) server.ToolHandlerFunc {
 				}
 			}
 		}
-		result, err := g.QueryImpact(strParam(args, "node_key"), graph.ImpactOptions{
+		nodeKey, err := resolveKey(g, strParam(args, "node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		result, err := g.QueryImpact(nodeKey, graph.ImpactOptions{
 			MaxDepth: depth, MinScore: minScore, TopK: topK, DerivationFilter: filter,
 		})
 		if err != nil {
 			return errorResult(err), nil
 		}
+
 		return jsonResult(result), nil
 	}
 }

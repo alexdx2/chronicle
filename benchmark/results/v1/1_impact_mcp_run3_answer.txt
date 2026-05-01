@@ -1,0 +1,73 @@
+Now I have everything needed for a precise, evidence-backed answer.
+
+---
+
+## Direct Dependencies
+
+| Component | Type | File | Edge |
+|---|---|---|---|
+| **TomService** | `code:provider` (tom-api) | `src/tom/tom.service.ts` | `USES_MODEL` (hard, conf: 0.95) |
+| **CatWeapon** | `data:model` (tom-api) | `prisma/schema.prisma` | `REFERENCES_MODEL` — CatWeapon has `owner` field with `@relation(fields: [ownerId], references: [id])` back to Cat (hard, conf: 0.95) |
+| **TomAttacksJerry** | `flow:use_case` (arena-api) | `src/arena/arena.service.ts` | `REQUIRES` (hard, conf: 0.95) |
+
+> Note: Cat also owns a `USES_ENUM` forward edge to **CatMood** (`prisma/schema.prisma`, field: `mood`) and a `REFERENCES_MODEL` forward edge to **CatWeapon** (`field: weapons: CatWeapon[]`). Changes to Cat's `mood` field or the `weapons` relation would require changes to those nodes too.
+
+---
+
+## Transitive Dependencies
+
+**Depth 2 — via TomService:**
+
+| Component | Type | File | Path |
+|---|---|---|---|
+| **TomController** | `code:controller` (tom-api) | `src/tom/tom.controller.ts` | Cat → TomService `USES_MODEL` → TomController `INJECTS` |
+| **TomEventHandler** | `code:provider` (tom-api) | `src/tom/tom.events.ts` | Cat → TomService `USES_MODEL` → TomEventHandler `INJECTS` |
+
+**Depth 2 — via TomAttacksJerry:**
+
+| Component | Type | File | Path |
+|---|---|---|---|
+| **POST /arena/attack** | `contract:endpoint` (arena-api) | `src/arena/arena.controller.ts` | Cat → TomAttacksJerry `REQUIRES` → POST /arena/attack `TRIGGERS_FLOW` |
+
+**Depth 3 — via TomController (inferred from graph structure):**
+
+| Component | Type | File | Path |
+|---|---|---|---|
+| **GET /tom/status** | `contract:endpoint` (tom-api) | `src/tom/tom.controller.ts` | Cat → TomService → TomController → endpoint |
+| **GET /tom/weapons** | `contract:endpoint` (tom-api) | `src/tom/tom.controller.ts` | Cat → TomService → TomController → endpoint |
+| **POST /tom/arm** | `contract:endpoint` (tom-api) | `src/tom/tom.controller.ts` | Cat → TomService → TomController → endpoint |
+
+> The impact engine halted at depth 2 (`max_depth_reached: 2`). The depth-3 endpoint hits above are derived from the known graph structure (TomController exposes those endpoints and injects TomService).
+
+---
+
+## Affected Endpoints
+
+| Endpoint | Service | File | Depth | Confidence |
+|---|---|---|---|---|
+| `POST /arena/attack` | arena-api | `src/arena/arena.controller.ts` | 2 | High (0.90) |
+| `GET /tom/status` | tom-api | `src/tom/tom.controller.ts` | 3 | High (0.90) |
+| `GET /tom/weapons` | tom-api | `src/tom/tom.controller.ts` | 3 | High (0.90) |
+| `POST /tom/arm` | tom-api | `src/tom/tom.controller.ts` | 3 | High (0.90) |
+
+---
+
+## External Systems
+
+| System | Type | File | How |
+|---|---|---|---|
+| **Kafka topic `battle-results`** | `contract:topic` | `src/arena/battle-result.producer.ts` | `TomAttacksJerry` → `BattleResultProducer` `PRODUCES_OUTCOME` → publishes to this topic. Any structural change to Cat that alters the attack outcome shape propagates here. |
+| **spectators-api (consumer)** | downstream service | `src/spectators/battle-result.consumer.ts` | `BattleResultConsumer` subscribes to `battle-results`; indirectly affected if the battle outcome payload changes due to Cat model changes |
+
+No other external systems (e.g. third-party APIs, webhooks) are recorded in the graph as dependencies of this path.
+
+---
+
+## Confidence: **82 / 100**
+
+**Why not higher:**
+- The impact engine stopped at depth 2 (`max_depth_reached: 2`), so depth-3 endpoint hits are inferred from graph structure rather than returned directly by the traversal.
+- Two edges in the `TomAttacksJerry` use case (dependencies on `Mouse`, `Trap`, and `SpectatorWatchesBattle`) carry `inferred` derivation with 0.6 confidence — those paths were not included above since they don't trace back through Cat.
+- No schema contract (e.g. OpenAPI/Avro) nodes are present in the graph, so it's not possible to verify whether API response shapes are formally impacted.
+
+**Why not lower:** All direct and depth-2 edges are `hard`-derived with confidence ≥ 0.95, and the Cat model is cleanly scoped to tom-api's Prisma schema with a clear, bounded dependency chain.

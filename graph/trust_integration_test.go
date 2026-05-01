@@ -10,19 +10,25 @@ import (
 	"github.com/alexdx2/chronicle-core/validate"
 )
 
-func TestTrustLifecycle(t *testing.T) {
+func setupTrustGraph(t *testing.T) *Graph {
+	t.Helper()
 	dir := t.TempDir()
 	s, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	reg, err := registry.LoadDefaults()
 	if err != nil {
 		t.Fatalf("LoadDefaults: %v", err)
 	}
-	g := New(s, reg)
+	return New(s, reg)
+}
+
+func TestTrustLifecycle(t *testing.T) {
+	g := setupTrustGraph(t)
+	s := g.Store()
 
 	// === Phase 1: Full scan ===
 	revID, err := s.CreateRevision("orders", "", "abc123", "manual", "full", "{}")
@@ -187,5 +193,241 @@ func TestTrustLifecycle(t *testing.T) {
 				t.Errorf("Phase 6: trust_chain through contradicted edge = %v, want < 0.1", imp.TrustChain)
 			}
 		}
+	}
+}
+
+// TestIncrementalDependencyAdded verifies that adding a new node and edge
+// to an existing graph makes the new node reachable via deps traversal.
+func TestIncrementalDependencyAdded(t *testing.T) {
+	g := setupTrustGraph(t)
+	s := g.Store()
+
+	// Phase 1: import A→B
+	revID1, err := s.CreateRevision("orders", "", "abc123", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+
+	payload1 := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: "code:controller:orders:a", Layer: "code", NodeType: "controller", DomainKey: "orders", Name: "A"},
+			{NodeKey: "code:provider:orders:b", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "B"},
+		},
+		Edges: []ImportEdge{
+			{FromNodeKey: "code:controller:orders:a", ToNodeKey: "code:provider:orders:b", EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+		},
+	}
+	if _, err := g.ImportAll(payload1, revID1); err != nil {
+		t.Fatalf("ImportAll phase 1: %v", err)
+	}
+
+	// Verify: A has 1 dep (B)
+	deps, err := g.QueryDeps("code:controller:orders:a", 5, nil)
+	if err != nil {
+		t.Fatalf("QueryDeps phase 1: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("Phase 1: deps = %d, want 1", len(deps))
+	}
+
+	// Phase 2: add C, import A→C edge
+	revID2, err := s.CreateRevision("orders", "abc123", "def456", "manual", "incremental", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision2: %v", err)
+	}
+
+	payload2 := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: "code:module:orders:c", Layer: "code", NodeType: "module", DomainKey: "orders", Name: "C"},
+		},
+		Edges: []ImportEdge{
+			{FromNodeKey: "code:controller:orders:a", ToNodeKey: "code:module:orders:c", EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+		},
+	}
+	if _, err := g.ImportAll(payload2, revID2); err != nil {
+		t.Fatalf("ImportAll phase 2: %v", err)
+	}
+
+	// Verify: A now has 2 deps (B and C)
+	deps, err = g.QueryDeps("code:controller:orders:a", 5, nil)
+	if err != nil {
+		t.Fatalf("QueryDeps phase 2: %v", err)
+	}
+	if len(deps) != 2 {
+		t.Fatalf("Phase 2: deps = %d, want 2", len(deps))
+	}
+
+	foundB, foundC := false, false
+	for _, d := range deps {
+		switch d.NodeKey {
+		case "code:provider:orders:b":
+			foundB = true
+		case "code:module:orders:c":
+			foundC = true
+		}
+	}
+	if !foundB {
+		t.Error("Phase 2: B not found in deps")
+	}
+	if !foundC {
+		t.Error("Phase 2: C not found in deps")
+	}
+}
+
+// TestIncrementalFileDeleted verifies that invalidating a file marks
+// evidence from that file as stale, causing affected edges to lose trust.
+func TestIncrementalFileDeleted(t *testing.T) {
+	g := setupTrustGraph(t)
+	s := g.Store()
+
+	// Phase 1: import nodes with file_path and evidence
+	revID1, err := s.CreateRevision("orders", "", "abc123", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: "code:controller:orders:ctrl", Layer: "code", NodeType: "controller", DomainKey: "orders", Name: "Ctrl", FilePath: "src/ctrl.ts"},
+			{NodeKey: "code:provider:orders:svc", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Svc", FilePath: "src/svc.ts"},
+		},
+		Edges: []ImportEdge{
+			{FromNodeKey: "code:controller:orders:ctrl", ToNodeKey: "code:provider:orders:svc", EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+		},
+		Evidence: []ImportEvidence{
+			{TargetKind: "edge", EdgeKey: "code:controller:orders:ctrl->code:provider:orders:svc:INJECTS",
+				SourceKind: "file", FilePath: "src/ctrl.ts", LineStart: 10,
+				ExtractorID: "claude-code", ExtractorVersion: "1.0"},
+		},
+	}
+	if _, err := g.ImportAll(payload, revID1); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+
+	// Verify edge has trust before invalidation
+	edge, err := s.GetEdgeByKey("code:controller:orders:ctrl->code:provider:orders:svc:INJECTS")
+	if err != nil {
+		t.Fatalf("GetEdge: %v", err)
+	}
+	trustBefore := edge.TrustScore
+	if trustBefore < 0.5 {
+		t.Fatalf("Phase 1: edge trust = %v, want >= 0.5", trustBefore)
+	}
+
+	// Phase 2: invalidate the file
+	revID2, err := s.CreateRevision("orders", "abc123", "def456", "manual", "incremental", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision2: %v", err)
+	}
+
+	result, err := g.InvalidateChanged("orders", revID2, []string{"src/ctrl.ts"})
+	if err != nil {
+		t.Fatalf("InvalidateChanged: %v", err)
+	}
+	if result.StaleEvidence != 1 {
+		t.Errorf("Phase 2: stale evidence = %d, want 1", result.StaleEvidence)
+	}
+	if result.AffectedEdges != 1 {
+		t.Errorf("Phase 2: affected edges = %d, want 1", result.AffectedEdges)
+	}
+
+	// Verify: edge trust dropped after invalidation
+	edge, _ = s.GetEdgeByKey("code:controller:orders:ctrl->code:provider:orders:svc:INJECTS")
+	if edge.TrustScore >= trustBefore {
+		t.Errorf("Phase 2: edge trust = %v, should be < %v after invalidation", edge.TrustScore, trustBefore)
+	}
+
+	// Verify: the evidence is stale
+	evidence, _ := s.ListEvidenceByEdge(edge.EdgeID)
+	if len(evidence) == 0 {
+		t.Fatal("Phase 2: no evidence found")
+	}
+	if evidence[0].EvidenceStatus != "stale" {
+		t.Errorf("Phase 2: evidence status = %q, want stale", evidence[0].EvidenceStatus)
+	}
+}
+
+// TestIncrementalDependencyUnchanged verifies that after invalidation,
+// re-adding the same evidence restores trust to the original level.
+func TestIncrementalDependencyUnchanged(t *testing.T) {
+	g := setupTrustGraph(t)
+	s := g.Store()
+
+	// Phase 1: import with evidence
+	revID1, err := s.CreateRevision("orders", "", "abc123", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: "code:controller:orders:x", Layer: "code", NodeType: "controller", DomainKey: "orders", Name: "X", FilePath: "src/x.ts"},
+			{NodeKey: "code:provider:orders:y", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Y", FilePath: "src/y.ts"},
+		},
+		Edges: []ImportEdge{
+			{FromNodeKey: "code:controller:orders:x", ToNodeKey: "code:provider:orders:y", EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+		},
+		Evidence: []ImportEvidence{
+			{TargetKind: "edge", EdgeKey: "code:controller:orders:x->code:provider:orders:y:INJECTS",
+				SourceKind: "file", FilePath: "src/x.ts", LineStart: 5,
+				ExtractorID: "claude-code", ExtractorVersion: "1.0"},
+		},
+	}
+	if _, err := g.ImportAll(payload, revID1); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+
+	// Record original trust
+	edge, _ := s.GetEdgeByKey("code:controller:orders:x->code:provider:orders:y:INJECTS")
+	originalTrust := edge.TrustScore
+	t.Logf("Original trust: %.4f", originalTrust)
+
+	// Phase 2: invalidate file
+	revID2, err := s.CreateRevision("orders", "abc123", "def456", "manual", "incremental", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision2: %v", err)
+	}
+
+	_, err = g.InvalidateChanged("orders", revID2, []string{"src/x.ts"})
+	if err != nil {
+		t.Fatalf("InvalidateChanged: %v", err)
+	}
+
+	// Verify trust dropped
+	edge, _ = s.GetEdgeByKey("code:controller:orders:x->code:provider:orders:y:INJECTS")
+	if edge.TrustScore >= originalTrust {
+		t.Errorf("Phase 2: trust should have dropped, got %v >= %v", edge.TrustScore, originalTrust)
+	}
+
+	// Phase 3: re-add same evidence (simulating re-scan found same relationship)
+	evInput := validate.EvidenceInput{
+		TargetKind:       "edge",
+		SourceKind:       "file",
+		FilePath:         "src/x.ts",
+		LineStart:        5,
+		ExtractorID:      "claude-code",
+		ExtractorVersion: "1.0",
+		RevisionID:       revID2,
+	}
+	if _, err := g.AddEdgeEvidence("code:controller:orders:x->code:provider:orders:y:INJECTS", evInput); err != nil {
+		t.Fatalf("AddEdgeEvidence: %v", err)
+	}
+
+	// Verify: trust restored to original level
+	edge, _ = s.GetEdgeByKey("code:controller:orders:x->code:provider:orders:y:INJECTS")
+	if math.Abs(edge.TrustScore-originalTrust) > 0.02 {
+		t.Errorf("Phase 3: trust = %v, want ~%v (restored)", edge.TrustScore, originalTrust)
+	}
+
+	// Verify: evidence is revalidated
+	evidence, _ := s.ListEvidenceByEdge(edge.EdgeID)
+	hasRevalidated := false
+	for _, ev := range evidence {
+		if ev.EvidenceStatus == "revalidated" {
+			hasRevalidated = true
+		}
+	}
+	if !hasRevalidated {
+		t.Error("Phase 3: expected at least one revalidated evidence")
 	}
 }

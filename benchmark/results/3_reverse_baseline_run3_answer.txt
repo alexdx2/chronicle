@@ -1,0 +1,45 @@
+Here's a complete breakdown of the `battle-results` Kafka topic based on the actual source code:
+
+---
+
+## Producers
+
+**`BattleResultProducer`**
+- **File:** `arena-api/src/arena/battle-result.producer.ts`
+- **Service:** `arena-api`
+- Registered in `arena.module.ts` and injected into `ArenaService`
+- `publish()` is called inside `ArenaService.tomAttacksJerry()` — so a message is emitted every time Tom attacks Jerry
+
+---
+
+## Consumers
+
+**`BattleResultConsumer`**
+- **File:** `spectators-api/src/spectators/battle-result.consumer.ts`
+- **Service:** `spectators-api`
+- Registered in `spectators.module.ts`
+- Uses `@EventPattern('battle-results')` to subscribe
+- Handler: `handleBattleResult(event)` → delegates immediately to `SpectatorService.recordBattle(event)`
+
+---
+
+## Downstream Flow
+
+1. **`arena-api`** — `ArenaService.tomAttacksJerry()` executes a battle action, then calls `BattleResultProducer.publish(event)` → message lands on `battle-results`
+
+2. **`spectators-api`** — `BattleResultConsumer.handleBattleResult(event)` receives the message and calls `SpectatorService.recordBattle(event)`
+
+3. **`SpectatorService`** stores the event in an in-memory `battles[]` array, which powers two derived views:
+   - **`getLeaderboard()`** — tallies Tom wins (`TOM_HITS`) vs Jerry wins (`JERRY_DODGES`, `TRAP_TRIGGERED`) across all recorded battles
+   - **`getRecentBattles()`** — returns the last 10 battle events
+
+---
+
+## Services Involved
+
+| Service | Role |
+|---|---|
+| `arena-api` | **Producer** — publishes battle outcome events after each Tom-attacks-Jerry action |
+| `spectators-api` | **Consumer** — receives events, records them, and derives leaderboard + recent battle data |
+
+`tom-api` and `jerry-api` are **not directly involved** with this topic based on the source code.

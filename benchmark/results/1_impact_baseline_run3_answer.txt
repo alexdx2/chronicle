@@ -1,0 +1,79 @@
+Based on verified file exploration of the tom-and-jerry fixture codebase, here is the complete impact analysis:
+
+---
+
+## Direct Dependencies
+
+Components that directly read from or write to the `Cat` Prisma model:
+
+| Component | File | Nature of Dependency |
+|---|---|---|
+| **TomService** | `tom-api/src/tom/tom.service.ts` | `prisma.cat.findFirst()`, `prisma.catWeapon.create()`, `prisma.catWeapon.findMany()` — all Cat DB operations live here |
+| **PrismaService** | `tom-api/src/prisma/prisma.service.ts` | Generated Prisma client bound to the Cat schema; regeneration required on any model change |
+| **CatWeapon model** | `tom-api/prisma/schema.prisma` | Has a foreign-key relation (`ownerId → Cat.id`); adding/renaming/removing Cat fields cascades here |
+| **CatMood enum** | `tom-api/prisma/schema.prisma` | Used as a field type on `Cat.mood`; enum changes break the model |
+| **WeaponType enum** | `tom-api/prisma/schema.prisma` | Used on `CatWeapon.type`; indirectly tied to Cat via the CatWeapon relation |
+| **health.pipe.ts** | `tom-api/src/tom/health.pipe.ts` | Validates the `health` field range (0–9); hard-coded against Cat's schema contract |
+
+---
+
+## Transitive Dependencies
+
+Components that depend on Cat's shape *through* the direct dependencies above:
+
+**Depth 1 → 2:**
+
+| Component | File | Path |
+|---|---|---|
+| **TomController** | `tom-api/src/tom/tom.controller.ts` | Calls TomService → serialises Cat fields into HTTP responses (`GET /tom/status`, `GET /tom/weapons`, `POST /tom/arm`) |
+| **TomModule** | `tom-api/src/tom/tom.module.ts` | Wires TomController + TomService + PrismaService; module breaks if PrismaService regeneration fails |
+| **TomClient** (arena-api) | `arena-api/src/arena/tom.client.ts` | HTTP client that fetches `/tom/status`; deserialises the Cat JSON response — field renames/removals break it |
+
+**Depth 2 → 3:**
+
+| Component | File | Path |
+|---|---|---|
+| **ArenaService** | `arena-api/src/arena/arena.service.ts` | Calls TomClient → reads `tom.speed` and `tom.id` for battle logic; both field names are hard-coded |
+| **ArenaModule** | `arena-api/src/arena/arena.module.ts` | Wires ArenaService + TomClient; compilation breaks if ArenaService breaks |
+| **BattleResultProducer** | `arena-api/src/arena/battle-result.producer.ts` | ArenaService calls this after resolving tom; `tomId: tom.id || 'tom'` embeds Cat's id into every Kafka message payload |
+| **SpectatorService** | `spectators-api/src/spectators/spectator.service.ts` | Fetches `http://tom-api:3001/tom/status`, reads `tom.name` — field rename breaks leaderboard display |
+
+---
+
+## Affected Endpoints
+
+| Endpoint | Service | Why Affected |
+|---|---|---|
+| `GET /tom/status` | tom-api | Directly serialises a `Cat` DB record (health, speed, mood, weapons) |
+| `GET /tom/weapons` | tom-api | Returns `CatWeapon[]` rows (CatWeapon has FK to Cat) |
+| `POST /tom/arm` | tom-api | Creates a `CatWeapon` record tied to `Cat.id` |
+| `POST /arena/attack` | arena-api | Reads `tom.speed` + `tom.id` from `/tom/status` to resolve battle outcome |
+| `GET /arena/score` | arena-api | Battle score aggregated from attack results (indirect) |
+| `GET /arena/history` | arena-api | Battle history records embed `tomId` sourced from `Cat.id` |
+| `GET /stats/leaderboard` | spectators-api | Reads `tom.name` from `/tom/status` for display labels |
+| `GET /stats/recent` | spectators-api | Displays recent battle events whose shape includes Cat-sourced fields |
+
+---
+
+## External Systems
+
+| System | Location | How Cat Change Affects It |
+|---|---|---|
+| **SQLite DB** (`.depbot/chronicle.db` / Prisma DB) | `tom-api/prisma/schema.prisma` | Any field add/rename/remove requires `prisma migrate` + `prisma generate`; existing data must be migrated |
+| **Kafka topic `battle-results`** | `arena-api/src/arena/battle-result.producer.ts` + `spectators-api/src/spectators/battle-result.consumer.ts` | Message payloads embed `tomId` (from `Cat.id`); consumers (`spectators-api`) must be redeployed to handle payload schema changes |
+| **Jerry-API** (indirect) | `jerry-api/` | Does not directly use Cat, but arena-api fetches jerry+tom together in one attack flow — a Cat-side failure will break the combined attack response even for jerry-side consumers |
+| **Config / service discovery** | `shared/src/config.ts` | `TOM_API_URL` wires arena-api and spectators-api to tom-api; if Cat changes require tom-api redeployment, both downstream services must be coordinated |
+
+---
+
+## Confidence: 92/100
+
+**High confidence because:**
+- Cat model, all service files, controllers, Kafka producer/consumer, and HTTP client files were directly read and verified.
+- `expected-graph.json` confirmed the graph edges matching the code findings.
+- Field-level references (`tom.speed`, `tom.id`, `tom.name`, `tom.health`) were traced in actual source files.
+
+**Minor uncertainty (−8):**
+- `jerry-api` was not explored exhaustively — it's possible it references Cat indirectly in ways not surfaced by the search.
+- The `tom.events.ts` event handler in tom-api was identified but its full content wasn't deeply verified; it may add additional downstream blast radius.
+- Runtime Kafka consumer deserialization in spectators-api may have more field bindings than were visible at the surface level.
