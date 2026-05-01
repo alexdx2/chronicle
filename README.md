@@ -6,16 +6,17 @@
 
 Architecture memory for AI coding agents.
 
-**Stop re-explaining your codebase every session.**
+Stop re-explaining your codebase every session.
 
 ```
-"What breaks if I change the Order model?"
+You: "What breaks if I change the Order model?"
 
-→ OrderService (depth 1)
-→ PaymentService (depth 2)
-→ POST /orders (depth 3)
+Chronicle:
+  → OrderService (depth 1)
+  → PaymentService (depth 2)
+  → POST /orders (depth 3)
 
-3 services affected, 1 Kafka topic downstream.
+  3 services affected, 1 Kafka topic downstream.
 ```
 
 ## Quick Start
@@ -25,7 +26,7 @@ npm install -g @alexdx/chronicle-mcp
 claude mcp add chronicle -- chronicle mcp serve --open
 ```
 
-Then in Claude Code:
+In Claude Code:
 
 ```
 chronicle scan
@@ -33,8 +34,8 @@ chronicle scan
 
 ## What you can ask
 
-- What breaks if I change the Order model?
-- How does POST /orders reach the payment service?
+- What breaks if I change Order?
+- How does POST /orders reach payment service?
 - What depends on SocketService?
 - Show checkout flow diagram
 
@@ -59,23 +60,23 @@ chronicle status
 → suggestion: "Run chronicle update"
 ```
 
-Run `chronicle update` when the graph falls behind. It only re-scans changed files.
+Run `chronicle update` when the graph falls behind. Only changed files get re-scanned.
 
 ## Benchmark
 
-Chronicle vs raw code reading (grep + file reads):
+Chronicle vs raw code reading:
 
 - Finds cross-service dependencies grep misses
-- Zero hallucinations (baseline hallucinates)
+- Zero hallucinations (baseline: hallucinates)
 - Same performance on simple lookups
 
-Chronicle wins on real architecture reasoning. [Full methodology and data →](benchmark/)
+Better at real architecture reasoning. [Full methodology and data →](benchmark/)
 
 ## Docs
 
-- [How it works](docs/how-it-works.md) — layers, evidence, trust scores
-- [Commands](docs/commands.md) — full reference
-- [Benchmark](benchmark/README.md) — methodology and raw data
+- [How it works](docs/how-it-works.md)
+- [Commands](docs/commands.md)
+- [Benchmark](benchmark/README.md)
 
 ## Links
 
