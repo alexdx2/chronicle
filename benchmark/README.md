@@ -18,7 +18,7 @@ Same prompts, same model, same codebase. Only tool availability differs.
 |--------|:---:|:--------:|
 | Correctness | **51/52 (98%)** | 47/52 (90%) |
 | Speed | **259s** | 372s |
-| Cost | $0.77 | $0.75 |
+| Tokens | 666K | 533K |
 | Hallucinations | **0/15 runs** | 1/15 runs |
 
 ### Monolith (OtoPoint — 6000+ file NestJS, GraphQL, Bull, Stripe)
@@ -27,7 +27,7 @@ Same prompts, same model, same codebase. Only tool availability differs.
 |--------|:---:|:--------:|
 | Correctness | **64/64 (100%)** | 63/64 (98%) |
 | Speed | 596s | 557s |
-| Cost | $2.09 | $1.65 |
+| Tokens | 378K | 395K |
 | Hallucinations | **0/15 runs** | 1/15 runs |
 
 ### Where MCP wins
@@ -109,7 +109,7 @@ bash benchmark/agent-e2e.sh
 - Wrong positive edge → code change detected → edge killed
 - Partial coverage → Claude warns graph is incomplete
 
-Cost: ~$3-4 per run.
+Runs ~5 Claude sessions.
 
 ## Files
 
@@ -129,12 +129,3 @@ benchmark/
 └── otopoint/              # OtoPoint benchmark (separate project)
 ```
 
-## Cost
-
-| Item | Cost |
-|------|------|
-| Full scan (tom-and-jerry, 73 nodes) | ~$1.70 |
-| Full scan (otopoint, 264 nodes) | ~$5.50 |
-| Benchmark run (30 sessions) | ~$3-4 |
-| Agent E2E (5 tests) | ~$3-4 |
-| **Total to reproduce everything** | **~$15** |
