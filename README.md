@@ -196,7 +196,7 @@ Full methodology and raw data: [`benchmark/`](benchmark/)
 
 ## Multi-repo
 
-Need to connect graphs across repositories? [Chronicle Pro](https://github.com/alexdx2/chronicle-pro) adds federation — cross-repo impact analysis, external node resolution, and a combined dashboard.
+Need to connect graphs across repositories? Chronicle Pro adds federation — cross-repo impact analysis, external node resolution, and a combined dashboard. Contact for access.
 
 ## Development
 
