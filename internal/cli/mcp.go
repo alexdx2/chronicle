@@ -54,7 +54,7 @@ func newMCPCmd() *cobra.Command {
 			if debugMode {
 				cwd, _ := os.Getwd()
 				debugDir := filepath.Join(cwd, ".depbot", "debug")
-				dl, err := mcpserver.NewDebugLogger(debugDir, "0.3.0")
+				dl, err := mcpserver.NewDebugLogger(debugDir, "0.4.0")
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "debug mode init failed: %v\n", err)
 				} else {

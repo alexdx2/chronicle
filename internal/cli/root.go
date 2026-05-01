@@ -58,7 +58,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("chronicle v0.3.0")
+			fmt.Println("chronicle v0.4.0")
 		},
 	}
 }
