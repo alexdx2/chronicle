@@ -15,13 +15,7 @@ npm install -g @alexdx/chronicle-mcp
 claude mcp add chronicle -- chronicle mcp serve --open
 ```
 
-Then in Claude Code:
-
-```
-You: chronicle scan
-```
-
-Done. Chronicle reads your codebase, builds the graph, opens a dashboard. Every session after this, your agent has instant access to the full architecture.
+Then in Claude Code, say `chronicle scan`. Chronicle reads your codebase, builds the graph, opens a dashboard. Every session after this, your agent has instant access to the full architecture.
 
 ## What you can ask
 
@@ -46,31 +40,22 @@ Done. Chronicle reads your codebase, builds the graph, opens a dashboard. Every 
 
 ## Keeping the graph fresh
 
-Chronicle tracks how far behind the graph is:
+Chronicle tracks how far behind the graph is. Say `chronicle status`:
 
 ```
-You: chronicle status
-
-Chronicle:
-  status: stale
-  commits_behind: 4
-  files_changed: 17
-  suggestion: "Run chronicle update to rescan 4 commits"
+status: stale
+commits_behind: 4
+files_changed: 17
+suggestion: "Run chronicle update to rescan 4 commits"
 ```
 
 Run `chronicle update` when the graph falls behind. It only re-scans changed files — fast and incremental.
 
 ## Benchmark
 
-Tested against Claude Code without MCP (raw grep + file reads) on the same analysis tasks:
+We ran 5 architecture analysis tasks (impact analysis, flow tracing, dependency lookup, path finding, hallucination trap) on a 4-service NestJS codebase — with and without Chronicle. Each task scored against a ground-truth checklist. [Full methodology and raw data](benchmark/)
 
-| | Chronicle MCP | Baseline (grep) |
-|--|:---:|:---:|
-| Correctness | **98%** | 90% |
-| Hallucinations | **0** | 1 |
-| Speed | **30% faster** | — |
-
-Chronicle wins on cross-service dependencies, Kafka paths, and impact analysis. Both tie on simple lookups. Full methodology: [`benchmark/`](benchmark/)
+**Result:** Chronicle found cross-service Kafka paths and affected endpoints that baseline grep missed. Zero hallucinations across all runs (baseline hallucinated once). Both tied on simple single-service lookups.
 
 ## Docs
 
