@@ -62,8 +62,9 @@ func TestFullWorkflow(t *testing.T) {
 	if result.EdgesCreated != 5 {
 		t.Errorf("edges = %d, want 5", result.EdgesCreated)
 	}
-	if result.EvidenceCreated != 1 {
-		t.Errorf("evidence = %d, want 1", result.EvidenceCreated)
+	// 1 explicit + auto-generated from file_path on nodes/edges
+	if result.EvidenceCreated < 1 {
+		t.Errorf("evidence = %d, want >= 1", result.EvidenceCreated)
 	}
 
 	// 3. Query deps — controller should have 3 direct deps (ordersservice + 2 endpoints)

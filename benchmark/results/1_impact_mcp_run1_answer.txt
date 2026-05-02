@@ -1,76 +1,66 @@
-I now have everything needed to compile a comprehensive answer from the graph data.
+Here is the complete impact analysis, sourced directly from the knowledge graph:
 
 ---
 
 ## Direct Dependencies
 
-These nodes have a **depth-1 edge** to `data:model:tomandjerry:cat` (impact scores from the graph engine):
-
-| Component | Edge Type | Impact Score | File |
+| Component | Type | File | Edge |
 |---|---|---|---|
-| **TomService** | `USES_MODEL` | 95/100 | `tom-api/src/tom/tom.service.ts` |
-| **CatWeapon** (model) | `REFERENCES_MODEL` | 95/100 | `tom-api/prisma/schema.prisma` |
+| **TomService** | NestJS Provider | `tom-api/src/tom/tom.service.ts` (lines 4–27) | `USES_MODEL` |
+| **CatWeapon** | Prisma Model | `tom-api/prisma/schema.prisma` | `REFERENCES_MODEL` (Cat → CatWeapon, active) |
 
-- **TomService** is the sole Prisma-backed service managing Cat CRUD. Any field rename, type change, or removal on `Cat` breaks it directly.
-- **CatWeapon** has a relational reference to `Cat` in the Prisma schema. Schema changes (e.g. dropping a field `Cat` uses as FK) cascade here.
+> `TomService` is the sole direct consumer of the `Cat` model. `CatWeapon` is structurally referenced by `Cat` in the Prisma schema (one-to-many relation), so any change to `Cat`'s primary key or relational fields breaks `CatWeapon` too.
 
 ---
 
 ## Transitive Dependencies
 
-**Depth 2** (via TomService → INJECTS):
+**Depth 2**
 
-| Component | Path | Impact Score | File |
+| Component | Type | File | Path |
 |---|---|---|---|
-| **TomController** | Cat → TomService → TomController | 85.7/100 | `tom-api/src/tom/tom.controller.ts` |
-| **TomModule** | Cat → TomService → TomController → TomModule | — | `tom-api/src/tom/tom.module.ts` *(inferred)* |
+| **TomController** | NestJS Controller | `tom-api/src/tom/tom.controller.ts` (lines 4–23) | Cat → TomService → TomController (`INJECTS`) |
+| **TomModule** | NestJS Module | `tom-api/src/tom/tom.module.ts` | Cat → TomService → TomModule (contains TomController) |
 
-**Depth 3** (via TomController → consumed by arena-api's HTTP client):
+**Depth 3**
 
-| Component | Path | Note | File |
-|---|---|---|---|
-| **TomClient** (arena-api) | Cat → TomService → TomController → `GET /tom/status` → TomClient | Calls `GET /tom/status`; policy excludes endpoint consumers from formal impact chain | `arena-api/src/arena/tom.client.ts` |
-| **ArenaService** | Cat → … → TomClient → ArenaService | Orchestrates battles using TomClient | `arena-api/src/arena/arena.service.ts` |
+| Component | Type | Notes |
+|---|---|---|
+| **tom-api repository** | Service boundary | Full `tom-api` service is transitively affected |
+| **SpectatorService** (spectators-api) | NestJS Provider | Calls `GET /tom/status` via `CALLS_ENDPOINT` → TomController is the handler |
+| **TomClient** (arena-api) | HTTP client | Calls `GET /tom/status` via `CALLS_ENDPOINT` → same handler |
 
-> ⚠️ **Note:** Chronicle's impact traversal policy excludes reverse-propagation through `EXPOSES_ENDPOINT` edges (i.e., cross-service HTTP consumers are not formally scored). TomClient and ArenaService are verified via node metadata (`ArenaService` description: *"calls TomClient, JerryClient, BattleResultProducer"*) but not in the engine's scored output.
+> `SpectatorService` (`spectators-api/src/...`) and `TomClient` (`arena-api/src/...`) both call the `GET /tom/status` endpoint exposed by `TomController`. If a Cat model change causes `TomService` to return a different shape (or error), both of these callers are downstream-affected at runtime even though they have no compile-time dependency on Cat directly.
 
 ---
 
 ## Affected Endpoints
 
-All three are exposed by **TomController** (`tom-api`), which depends on TomService → Cat:
+All three endpoints are exposed by `TomController` (`tom-api/src/tom/tom.controller.ts`):
 
-| Endpoint | Method | Description | Guard/Pipe |
-|---|---|---|---|
-| `GET /tom/status` | GET | Returns Tom cat status including weapons | — |
-| `GET /tom/weapons` | GET | Returns all of Tom's weapons | — |
-| `POST /tom/arm` | POST | Equip Tom with a weapon (`body: weaponType:string`) | HealthCheckPipe (`tom-api/src/tom/health.pipe.ts`) |
-
-**Downstream consumer of these endpoints:**
-- `POST /arena/attack` (`arena-api`) — described as *"orchestrates full battle flow"*; it calls `GET /tom/status` via TomClient. If the Cat model breaks the status response shape, arena-api's attack flow breaks at runtime.
+| Endpoint | Risk |
+|---|---|
+| `GET /tom/status` | **High** — SpectatorService + TomClient both call this; Cat field changes affect response shape |
+| `GET /tom/weapons` | **Medium** — weapons are stored on CatWeapon (Cat relation); schema changes propagate here |
+| `POST /tom/arm` | **Medium** — mutates Cat/CatWeapon; field renames or constraint changes break writes |
 
 ---
 
 ## External Systems
 
-No `external` layer nodes are registered in the graph for the Cat model's chain. However, two real external integrations exist **downstream** (depth 3+ via arena-api):
+No external systems are **directly** in the Cat impact chain based on verified graph edges.
 
-| System | Direction | Path | File |
-|---|---|---|---|
-| **Kafka `battle-results` topic** | arena-api → spectators-api | Cat → TomService → TomController → arena-api battle flow → Kafka producer | `arena-api/src/arena/battle-result.producer.ts` |
-| **External Notifications Service** (`POST /push`, `POST /email/digest`) | spectators-api → external | … → Kafka → SpectatorService → NotificationService → external HTTP | `spectators-api/src/spectators/notification.service.ts` |
-
-These are not in the Cat model's formal impact chain but are real runtime risks if `GET /tom/status` starts returning malformed data, breaking the arena battle pipeline.
+However, one external system sits one hop further:
+- **`notifications` service** (`http://notifications:3005`, status: `unknown`) — reached via `spectators-api` → `NotificationService` → `CALLS_SERVICE` notifications. If a Cat change corrupts battle outcomes that feed `SpectatorService`, push notifications downstream could be affected. This edge is marked `inactive` in the current graph revision, so treat this as a **low-confidence risk**.
 
 ---
 
-## Confidence: **78 / 100**
+## Confidence: 82/100
 
 **Why not higher:**
-- The graph's impact engine intentionally stops at `EXPOSES_ENDPOINT` boundaries (cross-service HTTP consumers like TomClient/ArenaService are not scored, just noted via metadata).
-- `SpectatorService` metadata says it *"calls tom-api for names"* but no formal edge exists in the graph to Cat — that relationship is undocumented in the graph.
-- No evidence entries were found on the directly impacted nodes (evidence field was `null` on all), meaning the graph was imported but not annotated with inline evidence, reducing certainty about exact field-level impact.
+- The `USES_MODEL` and `INJECTS` edges on `TomService` → `TomController` are scored at 0.5 trust (hard-derived, not manually verified).
+- `SpectatorService` and `TomClient` calling `GET /tom/status` are `linked` derivation (confidence 0.4) — the graph inferred these calls but they weren't hand-confirmed.
+- The `CatMood` enum (`tom-api/prisma/schema.prisma`) is likely a field on `Cat` but no explicit `REFERENCES_ENUM` edge exists in the graph — if you change `CatMood`, the blast radius may be slightly wider.
+- The `notifications` service edge is inactive in the latest revision.
 
-**Why not lower:**
-- All depth-1 and depth-2 impacts are backed by explicit typed edges (`USES_MODEL`, `REFERENCES_MODEL`, `INJECTS`) with confidence `1.0`.
-- The entire `tom-api` stack (Cat → CatWeapon → TomService → TomController) is well-mapped and consistent with the Prisma schema file references.
+**Why not lower:** The core path (Cat → TomService → TomController → 3 endpoints) is well-evidenced with file references and line numbers from the latest scan.

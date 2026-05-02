@@ -206,6 +206,15 @@ func (r *Registry) IsValidSourceKind(kind string) bool {
 	return r.sourceKinds[kind]
 }
 
+// ValidSourceKinds returns the list of valid source kinds.
+func (r *Registry) ValidSourceKinds() []string {
+	result := make([]string, 0, len(r.sourceKinds))
+	for k := range r.sourceKinds {
+		result = append(result, k)
+	}
+	return result
+}
+
 func (r *Registry) IsValidStatus(status string) bool {
 	return r.statuses[status]
 }
@@ -268,6 +277,7 @@ var edgeSimilarity = map[string][]string{
 	"CALLS_ENDPOINT": {"TRIGGERS_FLOW", "INVOKES"},
 	"USES_MODEL":     {"REQUIRES", "DEPENDS_ON"},
 	"CALLS_SYMBOL":   {"INVOKES", "REQUIRES"},
+	"TRIGGERS_FLOW":  {"TRANSITIONS_TO", "PRECEDES", "INVOKES"},
 }
 
 // ToSchemaJSON serializes the registry into a filterable schema.

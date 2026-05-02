@@ -127,12 +127,22 @@ type ImportPayload struct {
 	Aliases  []ImportAlias    `json:"aliases,omitempty"`
 }
 
-// ImportResult holds the result counts after a successful import.
+// ImportResult holds the result counts after an import.
+// Valid items are written; invalid items are skipped and returned as errors with suggestions.
 type ImportResult struct {
-	NodesCreated    int `json:"nodes_created"`
-	EdgesCreated    int `json:"edges_created"`
-	EvidenceCreated int `json:"evidence_created"`
-	AliasesCreated  int `json:"aliases_created"`
+	NodesCreated    int              `json:"nodes_created"`
+	EdgesCreated    int              `json:"edges_created"`
+	EvidenceCreated int              `json:"evidence_created"`
+	AliasesCreated  int              `json:"aliases_created"`
+	Rejected        []RejectedItem   `json:"rejected,omitempty"`
+}
+
+// RejectedItem describes an item that failed validation with a suggested fix.
+type RejectedItem struct {
+	Index      int            `json:"index"`
+	Kind       string         `json:"kind"` // "node", "edge"
+	Error      string         `json:"error"`
+	Suggestion *SuggestedFix  `json:"suggestion,omitempty"`
 }
 
 // DryRunResult holds the validation results from a dry-run import.
@@ -299,14 +309,14 @@ func containsStr(slice []string, item string) bool {
 }
 
 // ImportAll imports nodes, edges, and evidence in a single transaction.
-// If any validation fails, the entire transaction is rolled back.
+// Valid items are written; invalid items are skipped and returned in Rejected with suggestions.
 func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResult, error) {
 	var result ImportResult
 
 	err := g.store.WithTx(func(tx *store.Store) error {
 		txGraph := New(tx, g.reg)
 
-		// Upsert nodes.
+		// Upsert nodes — skip invalid, collect rejections.
 		for i, n := range payload.Nodes {
 			input := validate.NodeInput{
 				NodeKey:       n.NodeKey,
@@ -326,12 +336,17 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				Metadata:      string(n.Metadata),
 			}
 			if _, err := txGraph.UpsertNode(input, revisionID); err != nil {
-				return fmt.Errorf("ImportAll node[%d]: %w", i, err)
+				result.Rejected = append(result.Rejected, RejectedItem{
+					Index: i,
+					Kind:  "node",
+					Error: fmt.Sprintf("node[%d]: %v", i, err),
+				})
+				continue
 			}
 			result.NodesCreated++
 		}
 
-		// Upsert edges.
+		// Upsert edges — skip invalid, collect rejections with suggestions.
 		for i, e := range payload.Edges {
 			fromLayer := e.FromLayer
 			if fromLayer == "" {
@@ -354,12 +369,52 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				Metadata:       string(e.Metadata),
 			}
 			if _, err := txGraph.UpsertEdge(input, revisionID); err != nil {
-				return fmt.Errorf("ImportAll edge[%d]: %w", i, err)
+				rejected := RejectedItem{
+					Index: i,
+					Kind:  "edge",
+					Error: fmt.Sprintf("edge[%d]: %v", i, err),
+				}
+				// Suggest fix for edge type issues
+				if fromLayer != "" || toLayer != "" {
+					similar := g.reg.SuggestSimilarEdgeTypes(e.EdgeType)
+					var best *registry.EdgeSuggestion
+					for j := range similar {
+						s := &similar[j]
+						fOk := fromLayer == "" || containsStr(s.FromLayers, fromLayer)
+						tOk := toLayer == "" || containsStr(s.ToLayers, toLayer)
+						if fOk && tOk {
+							best = s
+							break
+						}
+					}
+					if best == nil {
+						layerSugg := g.reg.SuggestEdgeTypes(fromLayer, toLayer)
+						for j := range layerSugg {
+							s := &layerSugg[j]
+							if s.EdgeType != "CONTAINS" {
+								best = s
+								break
+							}
+						}
+					}
+					if best != nil {
+						rejected.Suggestion = &SuggestedFix{
+							Index:  i,
+							Kind:   "edge",
+							Field:  "edge_type",
+							From:   e.EdgeType,
+							To:     best.EdgeType,
+							Reason: fmt.Sprintf("%s allows %s→%s — %s", best.EdgeType, fromLayer, toLayer, best.Intent),
+						}
+					}
+				}
+				result.Rejected = append(result.Rejected, rejected)
+				continue
 			}
 			result.EdgesCreated++
 		}
 
-		// Add evidence.
+		// Add evidence — skip silently on missing targets (already lenient).
 		for _, ev := range payload.Evidence {
 			evInput := validate.EvidenceInput{
 				TargetKind:       ev.TargetKind,
@@ -385,22 +440,92 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 			switch ev.TargetKind {
 			case "node":
 				if ev.NodeKey == "" {
-					continue // skip evidence without node_key
+					continue
 				}
 				if _, err := txGraph.AddNodeEvidence(ev.NodeKey, evInput); err != nil {
-					continue // skip if node doesn't exist — non-fatal
+					continue
 				}
 			case "edge":
 				if ev.EdgeKey == "" {
-					continue // skip evidence without edge_key
+					continue
 				}
 				if _, err := txGraph.AddEdgeEvidence(ev.EdgeKey, evInput); err != nil {
-					continue // skip if edge doesn't exist — non-fatal
+					continue
 				}
 			default:
-				continue // skip unknown target_kind
+				continue
 			}
 			result.EvidenceCreated++
+		}
+
+		// Auto-generate evidence for nodes with file_path that have no explicit evidence.
+		// This ensures nodes imported with file context get baseline confidence.
+		explicitNodeEvidence := make(map[string]bool)
+		for _, ev := range payload.Evidence {
+			if ev.TargetKind == "node" && ev.NodeKey != "" {
+				explicitNodeEvidence[ev.NodeKey] = true
+			}
+		}
+		for _, n := range payload.Nodes {
+			if n.FilePath == "" || explicitNodeEvidence[n.NodeKey] {
+				continue
+			}
+			evInput := validate.EvidenceInput{
+				TargetKind:       "node",
+				SourceKind:       "file",
+				FilePath:         n.FilePath,
+				ExtractorID:      "chronicle-auto",
+				ExtractorVersion: "1.0",
+				Confidence:       0.8,
+				RevisionID:       revisionID,
+			}
+			if _, err := txGraph.AddNodeEvidence(n.NodeKey, evInput); err == nil {
+				result.EvidenceCreated++
+			}
+		}
+
+		// Auto-generate evidence for edges between nodes from the same file.
+		explicitEdgeEvidence := make(map[string]bool)
+		for _, ev := range payload.Evidence {
+			if ev.TargetKind == "edge" && ev.EdgeKey != "" {
+				explicitEdgeEvidence[ev.EdgeKey] = true
+			}
+		}
+		// Build node_key → file_path map from payload
+		nodeFiles := make(map[string]string)
+		for _, n := range payload.Nodes {
+			if n.FilePath != "" {
+				nodeFiles[n.NodeKey] = n.FilePath
+			}
+		}
+		for _, e := range payload.Edges {
+			edgeKey := e.EdgeKey
+			if edgeKey == "" {
+				edgeKey = validate.BuildEdgeKey(e.FromNodeKey, e.ToNodeKey, e.EdgeType)
+			}
+			if explicitEdgeEvidence[edgeKey] {
+				continue
+			}
+			// Use from_node's file as evidence source if available
+			filePath := nodeFiles[e.FromNodeKey]
+			if filePath == "" {
+				filePath = nodeFiles[e.ToNodeKey]
+			}
+			if filePath == "" {
+				continue
+			}
+			evInput := validate.EvidenceInput{
+				TargetKind:       "edge",
+				SourceKind:       "file",
+				FilePath:         filePath,
+				ExtractorID:      "chronicle-auto",
+				ExtractorVersion: "1.0",
+				Confidence:       0.75,
+				RevisionID:       revisionID,
+			}
+			if _, err := txGraph.AddEdgeEvidence(edgeKey, evInput); err == nil {
+				result.EvidenceCreated++
+			}
 		}
 
 		// Import aliases.
@@ -410,7 +535,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 			}
 			nodeID, err := tx.GetNodeIDByKey(a.NodeKey)
 			if err != nil {
-				continue // skip if node doesn't exist
+				continue
 			}
 			if _, err := tx.AddAlias(store.AliasRow{
 				NodeID:     nodeID,
@@ -418,7 +543,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				AliasKind:  a.AliasKind,
 				Confidence: a.Confidence,
 			}); err != nil {
-				continue // skip duplicates
+				continue
 			}
 			result.AliasesCreated++
 		}

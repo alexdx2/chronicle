@@ -77,8 +77,8 @@ func TestTrustLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InvalidateChanged: %v", err)
 	}
-	if result.StaleEvidence != 1 {
-		t.Errorf("Phase 2: stale evidence = %d, want 1", result.StaleEvidence)
+	if result.StaleEvidence < 1 {
+		t.Errorf("Phase 2: stale evidence = %d, want >= 1", result.StaleEvidence)
 	}
 	if result.AffectedEdges != 1 {
 		t.Errorf("Phase 2: affected edges = %d, want 1", result.AffectedEdges)
@@ -324,8 +324,8 @@ func TestIncrementalFileDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InvalidateChanged: %v", err)
 	}
-	if result.StaleEvidence != 1 {
-		t.Errorf("Phase 2: stale evidence = %d, want 1", result.StaleEvidence)
+	if result.StaleEvidence < 1 {
+		t.Errorf("Phase 2: stale evidence = %d, want >= 1", result.StaleEvidence)
 	}
 	if result.AffectedEdges != 1 {
 		t.Errorf("Phase 2: affected edges = %d, want 1", result.AffectedEdges)

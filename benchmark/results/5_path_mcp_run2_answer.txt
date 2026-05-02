@@ -1,54 +1,54 @@
-I have everything I need. Here's the complete picture of how **spectators-api** and **tom-api** are connected.
+Now I have a comprehensive picture from the full edge list. Let me compile the complete analysis.
 
 ---
 
 ## Direct Connections
 
-**spectators-api → tom-api** via `CALLS_SERVICE` (confidence: 0.95, hard derivation)
+**spectators-api calls tom-api directly** via `SpectatorService`:
 
-`SpectatorService` (in `spectators-api/src/spectators/spectator.service.ts`) makes direct HTTP calls to tom-api to retrieve character names and status when building the leaderboard and recent-battle views. The specific tom-api endpoints available to it are:
+| From | Edge Type | To |
+|---|---|---|
+| `SpectatorService` (spectators-api) | `CALLS_SERVICE` | `tom-api` |
+| `SpectatorService` (spectators-api) | `CALLS_ENDPOINT` | `GET /tom/status` → `TomController` (tom-api) |
 
-| Endpoint | Description |
-|---|---|
-| `GET /tom/status` | Tom cat status including weapons |
-| `GET /tom/weapons` | All of Tom's weapons |
+The `SpectatorService` inside spectators-api makes an HTTP call to tom-api's `GET /tom/status` endpoint. This is recorded both as a service-level call (`CALLS_SERVICE`, edge 91) and as a precise endpoint call (`CALLS_ENDPOINT`, edge 64). Both are **active**.
 
-This is the only direct, one-hop edge between the two services — and it runs **one way** (spectators-api is the caller, tom-api is the provider).
+> Note: There is also a stale service-layer edge (`service:service:spectators-api → service:service:tom-api`, edge 68) from revision 1 that is now **inactive** — it was superseded by the more precise code-level edges discovered in revision 2.
 
 ---
 
 ## Indirect Connections (via other services)
 
-**One path found** at depth 3 (undirected traversal, score: 0.774):
+**Via arena-api (Kafka + HTTP hub):**
+
+arena-api sits between both services in two ways:
 
 ```
-spectators-api → jerry-api ← arena-api → tom-api
+spectators-api
+  └── BattleResultConsumer  ──[CONSUMES]──► battle-results (Kafka topic)
+                                                    ▲
+                                            [PUBLISHES]
+                                         BattleResultProducer
+                                              (arena-api)
+                                         ArenaService
+                                              │
+                                         TomClient ──[CALLS_SERVICE]──► tom-api
 ```
 
-| Hop | Edge | Direction |
-|---|---|---|
-| spectators-api → jerry-api | `CALLS_SERVICE` (hard, 0.95) | spectators-api queries jerry-api for character info |
-| arena-api → jerry-api | `CALLS_SERVICE` (hard, 0.95) | arena-api uses `JerryClient` to call `GET /jerry/status`, `GET /jerry/traps` |
-| arena-api → tom-api | `CALLS_SERVICE` (hard, 0.95) | arena-api uses `TomClient` to call `GET /tom/status` |
+- `BattleResultProducer` (arena-api) **publishes** to the `battle-results` Kafka topic (edge 55, active)
+- `BattleResultConsumer` (spectators-api) **consumes** from the `battle-results` Kafka topic (edge 56, active)
+- `TomClient` (arena-api) **calls** tom-api directly via `CALLS_SERVICE` (edge 89, active) and `GET /tom/status` endpoint (edge 61, active)
 
-Both spectators-api and tom-api are therefore downstream collaborators of **arena-api**, which acts as the battle orchestrator. Concretely:
-
-1. `POST /arena/attack` triggers `ArenaService`
-2. `ArenaService` calls `TomClient → tom-api` and `JerryClient → jerry-api`
-3. After the battle, `BattleResultProducer` publishes to the **`battle-results`** Kafka topic
-4. `BattleResultConsumer` in spectators-api consumes that topic to record results
-
-This means **arena-api is the runtime bridge** — events originating from tom-api's state flow through arena-api and eventually land in spectators-api's stats.
+So arena-api is a shared hub: it produces the Kafka events that spectators-api watches, **and** it directly calls tom-api for live data during battles.
 
 ---
 
 ## Shared Dependencies
 
-| Dependency | Type | How each service uses it |
+| Shared Resource | spectators-api role | tom-api role |
 |---|---|---|
-| **`shared` package** (`shared/src/interfaces.ts`) | Shared TypeScript library | Defines `CharacterStatus` (id, name, health, speed) and `BattleOutcome` interfaces used across service boundaries |
-| **`CharacterStatus` interface** | Shared data model (`shared/src/interfaces.ts`) | spectators-api calls tom-api's `/tom/status` endpoint whose response shape is defined by this interface |
-| **`BattleOutcome` interface** | Shared data model (`shared/src/interfaces.ts`) | Represents the battle result contract flowing from arena-api (producer) → spectators-api (consumer) — tom-api's state contributes to this outcome |
-| **`battle-results` Kafka topic** | Contract (Kafka) | arena-api **produces** (after calling tom-api); spectators-api **consumes** — tom-api is an indirect upstream source of every message on this topic |
+| `GET /tom/status` endpoint | **calls it** (SpectatorService → CALLS_ENDPOINT) | **exposes it** (TomController → EXPOSES_ENDPOINT) |
+| `battle-results` Kafka topic | **consumes** (BattleResultConsumer) | *(not directly involved — produced by arena-api)* |
+| arena-api as intermediary | receives Kafka events from it | is called by it (TomClient) |
 
-**Note:** tom-api and spectators-api each have their own isolated Prisma databases (`Cat`/`CatWeapon` in tom-api; no Prisma at all in spectators-api). They share no database, no Redis instance, and no Bull queue — all cross-service data flows through HTTP calls or the Kafka topic.
+The most concrete shared dependency is the **`GET /tom/status` endpoint**: tom-api owns and exposes it, and spectators-api's `SpectatorService` calls it directly (alongside `GET /jerry/status` for jerry-api). There are no shared Prisma data models between the two services — tom-api owns `Cat` and `CatWeapon`; spectators-api does not use them.

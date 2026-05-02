@@ -223,6 +223,8 @@ source_kinds:
   - webhook
   - runtime
   - manual_resolution
+  - user_feedback
+  - manual
 
 node_statuses:
   - active

@@ -74,7 +74,7 @@ func TestImportAll(t *testing.T) {
 	}
 }
 
-func TestImportAllValidationFailure(t *testing.T) {
+func TestImportAllPartialAccept(t *testing.T) {
 	g := setupGraph(t)
 	revID := makeRevision(t, g)
 
@@ -97,18 +97,87 @@ func TestImportAllValidationFailure(t *testing.T) {
 		},
 	}
 
-	_, err := g.ImportAll(payload, revID)
-	if err == nil {
-		t.Fatal("expected error for invalid node type")
+	result, err := g.ImportAll(payload, revID)
+	if err != nil {
+		t.Fatalf("ImportAll should not return error for partial accept: %v", err)
 	}
 
-	// Verify rollback: no nodes should exist.
+	// Valid node written, invalid node rejected
+	if result.NodesCreated != 1 {
+		t.Errorf("NodesCreated = %d, want 1", result.NodesCreated)
+	}
+	if len(result.Rejected) != 1 {
+		t.Fatalf("Rejected = %d, want 1", len(result.Rejected))
+	}
+	if result.Rejected[0].Kind != "node" {
+		t.Errorf("Rejected[0].Kind = %s, want node", result.Rejected[0].Kind)
+	}
+
+	// Valid node should be persisted
 	nodes, err := g.store.ListNodes(store.NodeFilter{Domain: "test-domain"})
 	if err != nil {
 		t.Fatalf("ListNodes: %v", err)
 	}
-	if len(nodes) != 0 {
-		t.Errorf("expected 0 nodes after rollback, got %d", len(nodes))
+	if len(nodes) != 1 {
+		t.Errorf("expected 1 node persisted, got %d", len(nodes))
+	}
+}
+
+func TestImportAllEdgeRejectedWithSuggestion(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{
+				NodeKey:   "flow:use_case:test-domain:order",
+				Layer:     "flow",
+				NodeType:  "use_case",
+				DomainKey: "test-domain",
+				Name:      "PlaceOrder",
+			},
+			{
+				NodeKey:   "flow:use_case:test-domain:payment",
+				Layer:     "flow",
+				NodeType:  "use_case",
+				DomainKey: "test-domain",
+				Name:      "ProcessPayment",
+			},
+		},
+		Edges: []ImportEdge{
+			{
+				FromNodeKey: "flow:use_case:test-domain:order",
+				ToNodeKey:   "flow:use_case:test-domain:payment",
+				EdgeType:    "TRIGGERS_FLOW", // wrong: flow→flow should be TRANSITIONS_TO
+			},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+
+	// Nodes accepted, edge rejected
+	if result.NodesCreated != 2 {
+		t.Errorf("NodesCreated = %d, want 2", result.NodesCreated)
+	}
+	if result.EdgesCreated != 0 {
+		t.Errorf("EdgesCreated = %d, want 0", result.EdgesCreated)
+	}
+	if len(result.Rejected) != 1 {
+		t.Fatalf("Rejected = %d, want 1", len(result.Rejected))
+	}
+
+	rej := result.Rejected[0]
+	if rej.Kind != "edge" {
+		t.Errorf("Rejected[0].Kind = %s, want edge", rej.Kind)
+	}
+	if rej.Suggestion == nil {
+		t.Fatal("expected suggestion for rejected edge")
+	}
+	if rej.Suggestion.To != "TRANSITIONS_TO" {
+		t.Errorf("expected suggestion TRANSITIONS_TO, got %s", rej.Suggestion.To)
 	}
 }
 

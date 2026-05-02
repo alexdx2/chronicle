@@ -1,52 +1,36 @@
-Here is the complete, verified breakdown of everything connected to the `battle-results` Kafka topic:
+Here's the complete picture of the `battle-results` Kafka topic:
 
 ---
 
 ## Producers
 
-**`BattleResultProducer`** — `arena-api/src/arena/battle-result.producer.ts`
-
-- Publishes to the topic via `publish(event)` after every attack resolution in `ArenaService.tomAttacksJerry()`.
-- The event payload is a persisted `BattleEvent` Prisma record containing: `tomId`, `jerryId`, `weapon`, `trap`, `result` (`TOM_HITS` | `JERRY_DODGES` | `TRAP_TRIGGERED`), `damage`, and `createdAt`.
-- Belongs to: **`arena-api`** (via `ArenaModule`)
+**`BattleResultProducer`** — `arena-api`
+- File: `arena-api/src/arena/battle-result.producer.ts`
+- Triggered by `ArenaService.tomAttacksJerry()` after a `BattleEvent` is persisted to the database via Prisma.
+- The event payload includes: `tomId`, `jerryId`, `weapon`, `trap`, `result` (e.g. `TOM_HITS`, `JERRY_DODGES`, `TRAP_TRIGGERED`), and `damage`.
 
 ---
 
 ## Consumers
 
-**`BattleResultConsumer`** — `spectators-api/src/spectators/battle-result.consumer.ts`
-
-- Decorated with `@EventPattern('battle-results')` — subscribes to every message on the topic.
-- Handler: `handleBattleResult(event)` → delegates immediately to `SpectatorService.recordBattle(event)`, which appends the event to an in-memory `battles[]` array.
-- Belongs to: **`spectators-api`** (via `SpectatorsModule`)
+**`BattleResultConsumer`** — `spectators-api`
+- File: `spectators-api/src/spectators/battle-result.consumer.ts`
+- Listens via `@EventPattern('battle-results')` (NestJS microservices decorator).
+- On receipt, calls `SpectatorService.recordBattle(event)`, which appends the event to an in-memory `battles[]` array.
 
 ---
 
 ## Downstream Flow
 
-```
-POST /arena/attack (arena-api)
-  └─► ArenaService.tomAttacksJerry()
-        ├─ Fetches Tom status (tom-api GET /tom/status)
-        ├─ Fetches Jerry status + traps (jerry-api GET /jerry/status, GET /jerry/traps)
-        ├─ Resolves outcome (TOM_HITS / JERRY_DODGES / TRAP_TRIGGERED)
-        ├─ Persists BattleEvent to Prisma (arena-api DB)
-        └─► BattleResultProducer.publish(event)
-              └─► Kafka topic: battle-results
-                    └─► BattleResultConsumer.handleBattleResult(event)  [spectators-api]
-                          └─► SpectatorService.recordBattle(event)
-                                └─ battles[] (in-memory store)
-                                      ├─► GET /stats/leaderboard  →  win counts for Tom & Jerry
-                                      └─► GET /stats/recent       →  last 10 battle events
-```
+1. **`ArenaService.tomAttacksJerry()`** resolves the battle outcome and saves a `BattleEvent` row via Prisma.
+2. **`BattleResultProducer.publish(event)`** is called, emitting the persisted event to the `battle-results` Kafka topic.
+3. **`BattleResultConsumer.handleBattleResult(event)`** in `spectators-api` receives the message.
+4. **`SpectatorService.recordBattle(event)`** stores it in an in-memory list.
+5. That list powers two read endpoints:
+   - **`getLeaderboard()`** — tallies Tom wins (`TOM_HITS`) vs Jerry wins (`JERRY_DODGES` + `TRAP_TRIGGERED`) plus total count.
+   - **`getRecentBattles()`** — returns the last 10 battle events.
 
-After a message is published:
-1. **`spectators-api`** receives it and stores it in memory.
-2. The aggregated data immediately becomes available via two HTTP endpoints:
-   - `GET /stats/leaderboard` — returns `{ tom: N, jerry: N, total: N }` (win counts computed by filtering `result` values)
-   - `GET /stats/recent` — returns the last 10 battle events
-
-Note: `arena-api` also has its own independent score/history endpoints (`GET /arena/score`, `GET /arena/history`) that read directly from Prisma — those do **not** go through the Kafka topic.
+There is no further fan-out — `spectators-api` is the sole consumer and does not re-publish downstream.
 
 ---
 
@@ -54,7 +38,7 @@ Note: `arena-api` also has its own independent score/history endpoints (`GET /ar
 
 | Service | Role |
 |---|---|
-| **`arena-api`** | **Producer** — triggers publish after resolving each attack; also owns the Prisma-backed `BattleEvent` table |
-| **`spectators-api`** | **Consumer** — ingests events, maintains in-memory leaderboard, exposes `/stats/*` endpoints |
-| **`tom-api`** | Upstream data source — queried by `arena-api` during attack resolution (not directly on the Kafka path) |
-| **`jerry-api`** | Upstream data source — queried by `arena-api` during attack resolution (not directly on the Kafka path) |
+| **`arena-api`** | Producer — orchestrates battles, writes to DB, publishes to `battle-results` |
+| **`spectators-api`** | Consumer — receives battle results, maintains leaderboard and recent-battle history |
+| **`tom-api`** | Indirectly involved — queried by `SpectatorService` for Tom's display name (HTTP, not Kafka) |
+| **`jerry-api`** | Indirectly involved — queried by `SpectatorService` for Jerry's display name (HTTP, not Kafka) |

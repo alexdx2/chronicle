@@ -78,10 +78,10 @@ func TestExtractionGuideHasFlowRules(t *testing.T) {
 	}
 }
 
-func TestExtractionGuideHasDryRunInfo(t *testing.T) {
+func TestExtractionGuideHasPartialAcceptInfo(t *testing.T) {
 	guide := ExtractionGuide("")
-	if !strings.Contains(guide, "dry_run") {
-		t.Error("guide should mention dry_run mode")
+	if !strings.Contains(guide, "rejected") {
+		t.Error("guide should mention partial accept / rejected items")
 	}
 }
 

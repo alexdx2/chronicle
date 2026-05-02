@@ -41,7 +41,7 @@ func ExtractionGuide(technology string) string {
 			"no_scripts":        "Do NOT write bash/grep scripts. READ files with Read tool. You understand code better than regex.",
 			"evidence":          "Every node needs evidence: target_kind, node_key, source_kind=file, file_path, line_start, extractor_id=claude-code, extractor_version=1.0",
 			"negative_evidence": "During incremental scans, if a relationship was confirmed removed (e.g. constructor no longer injects a service), create negative evidence via chronicle_evidence_add with polarity='negative'.",
-			"dry_run":           "Use chronicle_import_all with dry_run=true to validate payloads before writing. Fix suggested errors, then import for real.",
+			"partial_accept":    "chronicle_import_all writes valid items and skips invalid ones. Check the 'rejected' array in the response — each entry has the error and a suggested fix. Re-import rejected items after fixing.",
 		},
 		"layer_guide": map[string]string{
 			"data":     "Look for schema definitions (Prisma models, TypeORM entities, SQL DDL, GraphQL types). Each model → data:model, each enum → data:enum. Relations between models → REFERENCES_MODEL.",

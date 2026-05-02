@@ -1,77 +1,77 @@
+Now I have everything needed for a complete trace. Here's the full request flow:
+
+---
+
 ## Request Chain (ordered)
 
-1. **`BattleGuard`** — `arena-api/src/arena/battle.guard.ts`
-   Validates the request time: only allows attacks between 6 AM–10 PM. Returns 403 otherwise.
+1. **`POST /arena/attack`** — HTTP request hits **arena-api** (`ArenaController`)
+   - Body: `{ weaponType: string }`
 
-2. **`ArenaController.attack()`** — `arena-api/src/arena/arena.controller.ts`
-   Route handler for `POST /arena/attack`. Extracts `{ weaponType }` from the body, delegates to `ArenaService.tomAttacksJerry(weaponType)`.
+2. **`BattleGuard.canActivate()`** — time-based gate check runs before the handler
+   - Blocks requests if `hour < 6 || hour >= 22` (Tom sleeps at night)
+   - Returns `403` if outside allowed hours
 
-3. **`TomClient.getStatus()`** — `arena-api/src/arena/tom.client.ts`
-   Synchronous HTTP call → `GET http://tom-api:3001/tom/status`. Returns Tom's `{ id, name, speed, ... }`. Throws `HttpException` on failure.
+3. **`ArenaController.attack()`** — delegates to `ArenaService.tomAttacksJerry(weaponType)`
 
-4. **`JerryClient.getStatus()`** — `arena-api/src/arena/jerry.client.ts`
-   Synchronous HTTP call → `GET http://jerry-api:3002/jerry/status`. Returns Jerry's `{ id, name, speed, ... }`. Throws `HttpException` on failure.
+4. **`TomClient.getStatus()`** — HTTP GET to **tom-api** → `GET http://tom-api:3001/tom/status`
+   - **tom-api**: `TomController.getStatus()` → `TomService.getStatus()` → Prisma query on **tom-api DB**: `Cat.findFirst({ where: { name: 'Tom' }, include: { weapons: true } })`
+   - Returns: `{ id, name, health, speed, mood, weapons[] }`
 
-5. **`JerryClient.getTraps()`** — `arena-api/src/arena/jerry.client.ts`
-   Synchronous HTTP call → `GET http://jerry-api:3002/jerry/traps`. Returns array of trap objects. Returns `[]` on failure (non-throwing).
+5. **`JerryClient.getStatus()`** — HTTP GET to **jerry-api** → `GET http://jerry-api:3002/jerry/status`
+   - **jerry-api**: `JerryController.getStatus()` (wrapped by `TrapInterceptor`) → `JerryService.getStatus()` → Prisma query on **jerry-api DB**: `Mouse.findFirst({ where: { name: 'Jerry' }, include: { traps: true } })`
+   - Returns: `{ id, name, health, speed, clever, traps[] }`
 
-6. **Battle result calculation** — inline in `ArenaService.tomAttacksJerry()`
-   - If an active trap exists → `TRAP_TRIGGERED`, damage = 0
-   - Else if Jerry's speed > Tom's speed + 20 → `JERRY_DODGES`, damage = 0
-   - Else → `TOM_HITS`, damage = 25
+6. **`JerryClient.getTraps()`** — HTTP GET to **jerry-api** → `GET http://jerry-api:3002/jerry/traps`
+   - **jerry-api**: `JerryService.getTraps()` → Prisma query: `Trap.findMany({ where: { isSet: true } })`
+   - Returns: `Trap[]`
 
-7. **`PrismaService.battleEvent.create()`** — `arena-api/src/arena/arena.service.ts`
-   Persists a `BattleEvent` record to PostgreSQL with `tomId`, `jerryId`, `weapon`, `trap`, `result`, `damage`, `round`, `createdAt`.
+7. **Battle logic** — resolved in-memory in `ArenaService`:
+   - `activeTrap` found → result = `TRAP_TRIGGERED`, damage = 0
+   - `jerry.speed > tom.speed + 20` → result = `JERRY_DODGES`, damage = 0
+   - Otherwise → result = `TOM_HITS`, damage = 25
 
-8. **`BattleResultProducer.publish(event)`** — `arena-api/src/arena/battle-result.producer.ts`
-   Publishes the full `BattleEvent` record to the `battle-results` Kafka topic. (Currently stubbed as a `console.log`; wired for real Kafka via `this.kafka.producer.send()`.)
+8. **`PrismaService.battleEvent.create()`** — writes to **arena-api DB** (`BattleEvent` table) with `{ tomId, jerryId, weapon, trap, result, damage }`
 
-9. **Response** — `{ ...battleEvent, tom: tom.name, jerry: jerry.name }` returned to caller.
+9. **`BattleResultProducer.publish(event)`** — publishes the `BattleEvent` record to the `battle-results` Kafka topic
+
+10. **Response returned** — `{ ...event, tom: tom.name, jerry: jerry.name }` sent back to caller
 
 ---
 
 ## Cross-Service Calls
 
-| Call | From | To | Endpoint | Purpose |
-|------|------|----|----------|---------|
-| `TomClient.getStatus()` | arena-api | tom-api | `GET /tom/status` | Fetch Tom's speed/id/name |
-| `JerryClient.getStatus()` | arena-api | jerry-api | `GET /jerry/status` | Fetch Jerry's speed/id/name |
-| `JerryClient.getTraps()` | arena-api | jerry-api | `GET /jerry/traps` | Fetch active traps |
+| From | To | Protocol | Endpoint |
+|------|----|----------|----------|
+| arena-api | tom-api | HTTP GET | `GET /tom/status` |
+| arena-api | jerry-api | HTTP GET | `GET /jerry/status` |
+| arena-api | jerry-api | HTTP GET | `GET /jerry/traps` |
 
-All three are synchronous HTTP calls made before the battle result is computed. Base URLs are configurable via `TOM_API_URL` and `JERRY_API_URL` env vars (defaulting to `http://tom-api:3001` and `http://jerry-api:3002`).
+All HTTP calls are via native `fetch()`. No circuit breaker or retry logic is present in the code.
 
 ---
 
 ## Async Side Effects
 
-**Kafka topic: `battle-results`**
+**Kafka — `battle-results` topic**
+- `BattleResultProducer.publish(event)` publishes after every successful attack
+- **spectators-api** consumes this topic via `BattleResultConsumer` (`@EventPattern('battle-results')`)
+  - → `SpectatorService.recordBattle(event)` — appends event to an in-memory `battles[]` array
 
-- **Producer:** `BattleResultProducer` in `arena-api` publishes the full `BattleEvent` record immediately after the DB write.
-- **Consumer:** `BattleResultConsumer` in `spectators-api` (`spectators-api/src/spectators/battle-result.consumer.ts`) listens via `@EventPattern('battle-results')` and calls `SpectatorService.recordBattle(event)` to record battle statistics for spectators.
+**Note:** `BattleGateway` (WebSocket via socket.io) has a `broadcastBattleResult()` method defined, but it is **not called** from `ArenaService` — there is no wiring between `BattleResultProducer` and `BattleGateway` in the current code. The gateway only handles incoming `watch-battle` socket events.
 
-No webhooks or other async effects were found.
+**`NotificationService`** exists in spectators-api (calls `POST http://notifications:3005/push`) but is **not invoked** from the `battle-results` consumer path — there is no call to it in `BattleResultConsumer` or `SpectatorService.recordBattle()`.
 
 ---
 
 ## Data Models Touched
 
-**`BattleEvent`** (Prisma model, arena-api PostgreSQL)
-```prisma
-model BattleEvent {
-  id        String       @id @default(uuid())
-  tomId     String
-  jerryId   String
-  weapon    String           // weaponType from request body
-  trap      String?          // name of triggered trap, or null
-  result    BattleResult     // TOM_HITS | JERRY_DODGES | TRAP_TRIGGERED | MUTUAL_DESTRUCTION
-  damage    Int              // 0 or 25
-  round     Int          @default(1)
-  createdAt DateTime     @default(now())
-}
-```
+| Service | Model | DB | Operation |
+|---------|-------|----|-----------|
+| **tom-api** | `Cat` | tom-api PostgreSQL | `findFirst` (read) |
+| **tom-api** | `CatWeapon` | tom-api PostgreSQL | included in `Cat` query (read) |
+| **jerry-api** | `Mouse` | jerry-api PostgreSQL | `findFirst` (read) |
+| **jerry-api** | `Trap` | jerry-api PostgreSQL | `findMany(isSet: true)` (read) |
+| **arena-api** | `BattleEvent` | arena-api PostgreSQL | `create` (write) |
+| **spectators-api** | `battles[]` | in-memory only | append (write) — no DB persistence |
 
-**Enums:** `BattleResult { TOM_HITS, JERRY_DODGES, TRAP_TRIGGERED, MUTUAL_DESTRUCTION }`
-
-**Read (not written) during this request:**
-- Tom's status data (from tom-api — its own model, not directly touched by arena-api's DB)
-- Jerry's status + traps data (from jerry-api — same, read-only via HTTP)
+`BattleEvent` fields written: `tomId`, `jerryId`, `weapon`, `trap` (nullable), `result` (enum: `TOM_HITS` / `JERRY_DODGES` / `TRAP_TRIGGERED` / `MUTUAL_DESTRUCTION`), `damage` (int), `round` (defaults to 1), `createdAt`.

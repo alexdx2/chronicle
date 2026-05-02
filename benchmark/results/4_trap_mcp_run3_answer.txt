@@ -1,5 +1,5 @@
 `CacheInvalidator` **does not exist** in this codebase.
 
-I searched the entire `fixtures/tom-and-jerry` project — all four NestJS microservices (`tom-api`, `jerry-api`, `arena-api`, `spectators-api`) — and found **zero occurrences** of `CacheInvalidator`. There are no components that depend on it, no dependencies to list, and no affected endpoints.
+I searched all files across all four NestJS microservices — `tom-api`, `jerry-api`, `arena-api`, and `spectators-api` — and found **zero occurrences** of `CacheInvalidator`. There are no components that depend on it, no dependency chain to trace, and no affected endpoints to report.
 
-> **Note:** There *is* a `CacheService` in `arena-api` (`src/arena/cache.service.ts`), but that is a distinct component — it is not called `CacheInvalidator`. If that's what you meant, I'm happy to trace its dependents and related endpoints.
+> **Note:** There *is* a `CacheService` in `arena-api` (`src/arena/cache.service.ts`), but that is a distinct component with a different name. If that's what you had in mind, I can trace its dependents and any related endpoints.

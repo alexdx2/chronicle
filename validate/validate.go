@@ -214,7 +214,7 @@ func ValidateEvidenceInput(input EvidenceInput, reg *registry.Registry) error {
 		return fmt.Errorf("validation: target_kind must be 'node' or 'edge', got %q", input.TargetKind)
 	}
 	if !reg.IsValidSourceKind(input.SourceKind) {
-		return fmt.Errorf("validation: invalid source_kind %q", input.SourceKind)
+		return fmt.Errorf("validation: invalid source_kind %q. Valid: %v", input.SourceKind, reg.ValidSourceKinds())
 	}
 	if input.ExtractorID == "" {
 		return fmt.Errorf("validation: extractor_id is required")

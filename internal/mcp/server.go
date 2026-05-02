@@ -474,7 +474,7 @@ func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func importAllTool() mcp.Tool {
 	return mcp.NewTool("chronicle_import_all",
-		mcp.WithDescription("Import nodes, edges, evidence in a single transaction. All items must be schema-valid — no partial writes. KEEP PAYLOADS SMALL — max ~15 nodes per call. Use dry_run=true to validate before writing."),
+		mcp.WithDescription("Import nodes, edges, evidence. Valid items are written; invalid items are skipped and returned in 'rejected' array with error details and suggested fixes. Check 'rejected' in the response — if non-empty, fix and re-import the rejected items. KEEP PAYLOADS SMALL — max ~15 nodes per call."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
 		mcp.WithString("payload", mcp.Required(), mcp.Description("JSON string containing nodes, edges, and evidence arrays")),
 		mcp.WithBoolean("dry_run", mcp.Description("If true, validate the entire payload without writing. Returns errors and suggested fixes.")),
@@ -513,12 +513,16 @@ func importAllHandler(g *graph.Graph) server.ToolHandlerFunc {
 			if err != nil {
 				return errorResult(err), nil
 			}
-			return jsonResult(map[string]any{
+			resp := map[string]any{
 				"nodes_created":    result.NodesCreated,
 				"edges_created":    result.EdgesCreated,
 				"evidence_created": result.EvidenceCreated,
 				"warning":          fmt.Sprintf("Payload was %dKB — please use smaller batches (< 15 nodes per call). Read one file, import immediately, move on.", len(payloadStr)/1024),
-			}), nil
+			}
+			if len(result.Rejected) > 0 {
+				resp["rejected"] = result.Rejected
+			}
+			return jsonResult(resp), nil
 		}
 
 		result, err := g.ImportAll(payload, revisionID)

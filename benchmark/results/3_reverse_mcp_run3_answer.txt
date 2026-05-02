@@ -1,39 +1,40 @@
-Here's the complete dependency map for the `battle-results` Kafka topic, verified directly from the source code:
+Here is a precise breakdown based on the knowledge graph:
 
 ---
 
 ## Producers
 
-**`BattleResultProducer`** — `arena-api`
-- File: `arena-api/src/arena/battle-result.producer.ts`
-- Method: `publish(event)`
-- Triggered by `ArenaService.tomAttacksJerry()` in `arena.service.ts`, which is invoked via **`POST /arena/attack`** (`arena.controller.ts`)
-- The event payload is a persisted `BattleEvent` record (written to Prisma/DB first, then published)
+| Component | File | Service |
+|---|---|---|
+| **BattleResultProducer** | `src/arena/battle-result.producer.ts` | `arena-api` |
+
+`BattleResultProducer` has a single outgoing edge directly to the `battle-results` topic — it has no other dependencies, making it a dedicated publish-only producer.
 
 ---
 
 ## Consumers
 
-**`BattleResultConsumer`** — `spectators-api`
-- File: `spectators-api/src/spectators/battle-result.consumer.ts`
-- Method: `handleBattleResult(event)` decorated with `@EventPattern('battle-results')`
-- Immediately delegates to `SpectatorService.recordBattle(event)`, storing the event in memory
+| Component | File | Service |
+|---|---|---|
+| **BattleResultConsumer** | `src/spectators/battle-result.consumer.ts` | `spectators-api` |
+
+`BattleResultConsumer` is registered inside **SpectatorsModule** in `spectators-api`. It is the only confirmed active consumer of this topic.
 
 ---
 
 ## Downstream Flow
 
-1. **`POST /arena/attack`** is called → `ArenaService.tomAttacksJerry()` runs
-2. A `BattleEvent` is persisted to the Prisma DB in `arena-api`
-3. `BattleResultProducer.publish(event)` emits the event to the `battle-results` topic
-4. `spectators-api` receives it via `BattleResultConsumer.handleBattleResult()`
-5. `SpectatorService.recordBattle(event)` appends it to an in-memory `battles[]` array
-6. That array feeds two REST endpoints exposed by `StatsController`:
-   - **`GET /stats/leaderboard`** — tallies `TOM_HITS` vs `JERRY_DODGES`/`TRAP_TRIGGERED`
-   - **`GET /stats/recent`** — returns the last 10 battle events
-7. **`CleanupTask.handleDailyReport()`** (`cleanup.task.ts`) runs on a `@Cron('0 0 * * *')` schedule and calls `SpectatorService.getLeaderboard()` to log a daily summary
+When a message is published to `battle-results`:
 
-The topic name `'battle-results'` is defined as the constant `BATTLE_TOPIC` in `shared/src/constants.ts`.
+1. **`BattleResultConsumer`** (spectators-api) receives the message
+2. It delegates to **`SpectatorService`**, which then makes outbound HTTP calls:
+   - `GET /tom/status` → **tom-api**
+   - `GET /jerry/status` → **jerry-api**
+3. The results of those status calls are presumably used to update leaderboard/stats data, which is then exposed via:
+   - `GET /stats/leaderboard` (spectators-api)
+   - `GET /stats/recent` (spectators-api)
+
+On the producer side, within `arena-api` itself, `BattleResultProducer` is wired into **ArenaModule** alongside **ArenaService**, **ArenaController**, **BattleGateway**, and **BattleQueueConsumer** — meaning a battle result publication is likely triggered as part of the attack/trap processing pipeline (`POST /arena/attack`, `POST /arena/trap`).
 
 ---
 
@@ -41,7 +42,9 @@ The topic name `'battle-results'` is defined as the constant `BATTLE_TOPIC` in `
 
 | Service | Role |
 |---|---|
-| **`arena-api`** | Producer — owns the battle lifecycle, writes to DB, publishes events |
-| **`spectators-api`** | Consumer — receives events, aggregates stats, exposes leaderboard/recent APIs, runs daily cron report |
+| **arena-api** | Produces to `battle-results` via `BattleResultProducer` |
+| **spectators-api** | Consumes `battle-results` via `BattleResultConsumer` → `SpectatorService` |
+| **tom-api** | Called downstream by `SpectatorService` (`GET /tom/status`) |
+| **jerry-api** | Called downstream by `SpectatorService` (`GET /jerry/status`) |
 
-`tom-api` and `jerry-api` are **not** directly involved in the `battle-results` topic flow.
+All 4 services in the system are touched by this topic's event flow.

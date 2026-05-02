@@ -277,6 +277,10 @@ func makeSummary(toolName, resultJSON string) string {
 		n, _ := data["nodes_created"].(float64)
 		e, _ := data["edges_created"].(float64)
 		ev, _ := data["evidence_created"].(float64)
+		rej, _ := data["rejected"].([]any)
+		if len(rej) > 0 {
+			return fmt.Sprintf("%.0fn %.0fe %.0fev (%d rejected)", n, e, ev, len(rej))
+		}
 		return fmt.Sprintf("%.0fn %.0fe %.0fev", n, e, ev)
 	case "chronicle_revision_create":
 		id, _ := data["revision_id"].(float64)
