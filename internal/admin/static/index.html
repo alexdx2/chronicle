@@ -151,10 +151,20 @@ a{color:var(--primary);text-decoration:none}
 .graph-svg .arrow-head{fill:#b8a898}
 /* Filter sidebar */
 .filter-sidebar{width:200px;background:var(--card);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;font-size:11px;padding:10px}
-.filter-sidebar h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:10px 0 4px}
+.filter-sidebar h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:10px 0 4px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none}
+.filter-sidebar h4:hover{color:var(--text)}
+.filter-sidebar h4 .chevron{font-size:8px;transition:transform .15s}
 .filter-sidebar label{display:flex;align-items:center;gap:5px;padding:2px 0;cursor:pointer;color:var(--text)}
 .filter-sidebar label input[type=checkbox]{margin:0}
 .filter-sidebar .group{margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px}
+/* Floating legend panel */
+.graph-legend{position:absolute;bottom:10px;right:10px;background:rgba(250,246,239,0.92);border:1px solid var(--border);border-radius:8px;padding:8px 12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);z-index:10;min-width:140px;backdrop-filter:blur(4px);font-size:10px}
+.graph-legend .legend-title{font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:5px;font-weight:600}
+.graph-legend .legend-row{display:flex;align-items:center;gap:5px;margin-bottom:2px}
+.graph-legend .legend-color{width:12px;height:2px;border-radius:1px;flex-shrink:0}
+.graph-legend .legend-sep{border:none;border-top:1px solid var(--border);margin:6px 0}
+.graph-legend label{display:flex;align-items:center;gap:5px;padding:1px 0;cursor:pointer;color:var(--text)}
+.graph-legend label input{margin:0;width:11px;height:11px}
 /* Transitive edges */
 .graph-svg .edge-line.transitive{stroke:#b8963e;stroke-dasharray:6,3;stroke-width:1.5}
 .graph-svg .via-label{font-size:8px;fill:#b8963e;font-weight:500}
@@ -171,7 +181,9 @@ a{color:var(--primary);text-decoration:none}
 .ws-palette input[type=text]{width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;margin:8px;width:calc(100% - 16px)}
 .ws-palette .ws-item{display:flex;align-items:center;gap:6px;padding:5px 8px;margin:2px 8px;border:1px solid var(--border);border-radius:4px;cursor:grab;font-size:11px;user-select:none;-webkit-user-select:none}
 .ws-palette .ws-item:hover{background:var(--primary-light)}
-.ws-palette .ws-group-label{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);padding:6px 8px 2px}
+.ws-palette .ws-group-label{font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);padding:6px 8px 2px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none}
+.ws-palette .ws-group-label:hover{color:var(--text)}
+.ws-palette .ws-group-label .chevron{font-size:8px;transition:transform .15s}
 /* Workspace canvas indicators */
 .graph-svg .manual-dot{fill:#6b4423}
 .graph-svg .auto-badge{fill:#b8963e;rx:3}
@@ -543,7 +555,7 @@ a{color:var(--primary);text-decoration:none}
       <div class="mode-toggle">
         <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree</button>
         <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';history.pushState(null,'','/graph/explore');renderGraph()">Explore</button>
-        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;history.pushState(null,'','/graph/workspace');renderGraph()">Workspace</button>
+        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;graphPreset='all';layerFilters=[...allLayers];hideStructural=false;history.pushState(null,'','/graph/workspace');renderGraph()">Workspace</button>
       </div>
 
       <!-- Workspace layout toggle -->
@@ -628,16 +640,23 @@ a{color:var(--primary);text-decoration:none}
           <div style="flex:1;overflow-y:auto">
             <template x-for="group in getWorkspacePaletteGroups()" :key="group.type">
               <div>
-                <div class="ws-group-label" x-text="group.type + ' (' + group.nodes.length + ')'"></div>
-                <template x-for="n in group.nodes" :key="n.node_id">
-                  <div class="ws-item"
-                       :style="'border-left:3px solid '+layerColor(n.layer)"
-                       draggable="true"
-                       @dragstart="$event.dataTransfer.setData('text/plain', n.node_id); $event.dataTransfer.effectAllowed='copy'"
-                       :class="{'opacity-50': workspaceNodes.some(w => w.node_id === n.node_id)}">
-                    <span style="color:var(--text-muted);font-size:9px">⠿</span>
-                    <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
-                    <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
+                <div class="ws-group-label" @click="collapsedPaletteGroups[group.type] = !collapsedPaletteGroups[group.type]">
+                  <span x-text="group.type + ' (' + group.nodes.length + ')'"></span>
+                  <span class="chevron" x-text="collapsedPaletteGroups[group.type] ? '▼' : '▶'"></span>
+                </div>
+                <template x-if="collapsedPaletteGroups[group.type]">
+                  <div>
+                    <template x-for="n in group.nodes" :key="n.node_id">
+                      <div class="ws-item"
+                           :style="'border-left:3px solid '+layerColor(n.layer)"
+                           draggable="true"
+                           @dragstart="$event.dataTransfer.setData('text/plain', n.node_id); $event.dataTransfer.effectAllowed='copy'"
+                           :class="{'opacity-50': workspaceNodes.some(w => w.node_id === n.node_id)}">
+                        <span style="color:var(--text-muted);font-size:9px">⠿</span>
+                        <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
+                        <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
+                      </div>
+                    </template>
                   </div>
                 </template>
               </div>
@@ -646,10 +665,33 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </template>
 
-      <div id="graph-canvas" style="flex:1;overflow:auto"
+      <div id="graph-canvas" style="flex:1;overflow:auto;position:relative"
            @dragover.prevent="$event.dataTransfer.dropEffect='copy'"
            @drop.prevent="handleWorkspaceDrop($event)">
         <template x-if="loading.graph"><div class="loader" style="min-height:200px"><div class="spinner"></div> Loading graph data...</div></template>
+        <!-- Floating legend + display toggles -->
+        <template x-if="graphMode==='workspace' || graphMode==='tree' || graphMode==='explore'">
+          <div class="graph-legend">
+            <div class="legend-title">Legend</div>
+            <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
+              <div class="legend-row">
+                <span class="legend-color" :style="'background:'+def.color"></span>
+                <span x-text="cat" style="text-transform:capitalize"></span>
+              </div>
+            </template>
+            <hr class="legend-sep">
+            <label>
+              <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;renderGraph()">
+              <span>Edge labels</span>
+            </label>
+            <template x-if="graphMode==='workspace'">
+              <label>
+                <input type="checkbox" :checked="wsShowNeighbors" @change="wsShowNeighbors=!wsShowNeighbors;renderGraph()">
+                <span>Show linked nodes</span>
+              </label>
+            </template>
+          </div>
+        </template>
       </div>
       <!-- Side panel for selected node (Tree + Explore + Architecture mode) -->
       <div x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='workspace')" x-cloak
@@ -727,64 +769,87 @@ a{color:var(--primary);text-decoration:none}
 
           <!-- Group By -->
           <div class="group">
-            <h4>Group By</h4>
-            <select @change="groupByField=$event.target.value;renderGraph()" :value="groupByField" style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--card)">
-              <option value="">None</option>
-              <option value="domain_key">Domain</option>
-              <option value="layer">Layer</option>
-              <option value="node_type">Node Type</option>
-              <option value="repo_name">Repository</option>
-            </select>
+            <h4 @click="collapsedFilterSections.groupBy = !collapsedFilterSections.groupBy">
+              <span>Group By</span>
+              <span class="chevron" x-text="collapsedFilterSections.groupBy ? '▶' : '▼'"></span>
+            </h4>
+            <div x-show="!collapsedFilterSections.groupBy">
+              <select @change="groupByField=$event.target.value;renderGraph()" :value="groupByField" style="width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--card)">
+                <option value="">None</option>
+                <option value="domain_key">Domain</option>
+                <option value="layer">Layer</option>
+                <option value="node_type">Node Type</option>
+                <option value="repo_name">Repository</option>
+              </select>
+            </div>
           </div>
 
           <!-- Node types by layer -->
           <div class="group">
-            <h4>Node Types</h4>
-            <template x-for="layer in allLayers" :key="layer">
-              <div>
-                <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
-                <template x-for="nt in getNodeTypesForLayer(layer)" :key="nt">
-                  <label>
-                    <input type="checkbox"
-                           :checked="!hiddenNodeTypes.includes(nt)"
-                           @change="toggleNodeType(nt)">
-                    <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
-                  </label>
-                </template>
-              </div>
-            </template>
+            <h4 @click="collapsedFilterSections.nodeTypes = !collapsedFilterSections.nodeTypes">
+              <span>Node Types</span>
+              <span class="chevron" x-text="collapsedFilterSections.nodeTypes ? '▶' : '▼'"></span>
+            </h4>
+            <div x-show="!collapsedFilterSections.nodeTypes">
+              <template x-for="layer in allLayers" :key="layer">
+                <div>
+                  <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
+                  <template x-for="nt in getNodeTypesForLayer(layer)" :key="nt">
+                    <label>
+                      <input type="checkbox"
+                             :checked="!hiddenNodeTypes.includes(nt)"
+                             @change="toggleNodeType(nt)">
+                      <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
+                    </label>
+                  </template>
+                </div>
+              </template>
+            </div>
           </div>
 
           <!-- Domains -->
           <div class="group">
-            <h4>Domains</h4>
-            <template x-for="d in getAllDomains()" :key="d">
-              <label>
-                <input type="checkbox"
-                       :checked="!hiddenDomains.includes(d)"
-                       @change="toggleDomain(d)">
-                <span x-text="d === '_unassigned' ? 'Unassigned' : d"></span>
-              </label>
-            </template>
+            <h4 @click="collapsedFilterSections.domains = !collapsedFilterSections.domains">
+              <span>Domains</span>
+              <span class="chevron" x-text="collapsedFilterSections.domains ? '▶' : '▼'"></span>
+            </h4>
+            <div x-show="!collapsedFilterSections.domains">
+              <template x-for="d in getAllDomains()" :key="d">
+                <label>
+                  <input type="checkbox"
+                         :checked="!hiddenDomains.includes(d)"
+                         @change="toggleDomain(d)">
+                  <span x-text="d === '_unassigned' ? 'Unassigned' : d"></span>
+                </label>
+              </template>
+            </div>
           </div>
 
           <!-- Edge types -->
           <div class="group">
-            <h4>Edge Types</h4>
-            <template x-for="et in getAllEdgeTypes()" :key="et">
-              <label>
-                <input type="checkbox"
-                       :checked="!hiddenEdgeTypes.includes(et)"
-                       @change="toggleEdgeType(et)">
-                <span x-text="et"></span>
-              </label>
-            </template>
+            <h4 @click="collapsedFilterSections.edgeTypes = !collapsedFilterSections.edgeTypes">
+              <span>Edge Types</span>
+              <span class="chevron" x-text="collapsedFilterSections.edgeTypes ? '▶' : '▼'"></span>
+            </h4>
+            <div x-show="!collapsedFilterSections.edgeTypes">
+              <template x-for="et in getAllEdgeTypes()" :key="et">
+                <label>
+                  <input type="checkbox"
+                         :checked="!hiddenEdgeTypes.includes(et)"
+                         @change="toggleEdgeType(et)">
+                  <span x-text="et"></span>
+                </label>
+              </template>
+            </div>
           </div>
 
           <!-- Confidence slider -->
           <div class="group">
-            <h4>Min Confidence</h4>
-            <div style="display:flex;align-items:center;gap:6px">
+            <h4 @click="collapsedFilterSections.confidence = !collapsedFilterSections.confidence">
+              <span>Min Confidence</span>
+              <span class="chevron" x-text="collapsedFilterSections.confidence ? '▶' : '▼'"></span>
+            </h4>
+            <div x-show="!collapsedFilterSections.confidence" style="display:flex;align-items:center;gap:6px">
               <input type="range" min="0" max="100" step="5"
                      :value="minConfidence * 100"
                      @input="minConfidence = $event.target.value / 100; renderGraph()"
@@ -793,33 +858,6 @@ a{color:var(--primary);text-decoration:none}
             </div>
           </div>
 
-          <!-- Display toggle -->
-          <div class="group">
-            <h4>Display</h4>
-            <label>
-              <input type="checkbox"
-                     :checked="showEdgeLabels"
-                     @change="showEdgeLabels=!showEdgeLabels;renderGraph()">
-              <span>Edge labels</span>
-            </label>
-            <label>
-              <input type="checkbox"
-                     :checked="wsShowNeighbors"
-                     @change="wsShowNeighbors=!wsShowNeighbors;renderGraph()">
-              <span>Show linked nodes</span>
-            </label>
-          </div>
-
-          <!-- Edge Legend (edit in Settings tab) -->
-          <div class="group">
-            <h4>Edge Legend</h4>
-            <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
-              <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:11px">
-                <span :style="'display:inline-block;width:12px;height:3px;background:'+def.color+';border-radius:1px'"></span>
-                <span x-text="cat" style="text-transform:capitalize"></span>
-              </div>
-            </template>
-          </div>
         </div>
       </template>
     </div>
@@ -1062,17 +1100,24 @@ a{color:var(--primary);text-decoration:none}
         </template>
         <template x-for="group in getDiagramPaletteGroups()" :key="group.type">
           <div>
-            <div class="ws-group-label" x-text="group.type + ' (' + group.nodes.length + ')'"></div>
-            <template x-for="n in group.nodes" :key="n.node_id">
-              <div class="ws-item"
-                   :style="'border-left:3px solid '+layerColor(n.layer)"
-                   @click="addNodeToDiagram(n)"
-                   draggable="true"
-                   @dragstart="$event.dataTransfer.setData('text/plain', JSON.stringify(n)); $event.dataTransfer.effectAllowed='copy'"
-                   :class="{'opacity-50': (diagramData?.nodes||[]).some(d => d.node_id === n.node_id)}">
-                <span style="color:var(--text-muted);font-size:9px;cursor:grab">⠿</span>
-                <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
-                <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
+            <div class="ws-group-label" @click="collapsedPaletteGroups[group.type] = !collapsedPaletteGroups[group.type]">
+              <span x-text="group.type + ' (' + group.nodes.length + ')'"></span>
+              <span class="chevron" x-text="collapsedPaletteGroups[group.type] ? '▼' : '▶'"></span>
+            </div>
+            <template x-if="collapsedPaletteGroups[group.type]">
+              <div>
+                <template x-for="n in group.nodes" :key="n.node_id">
+                  <div class="ws-item"
+                       :style="'border-left:3px solid '+layerColor(n.layer)"
+                       @click="addNodeToDiagram(n)"
+                       draggable="true"
+                       @dragstart="$event.dataTransfer.setData('text/plain', JSON.stringify(n)); $event.dataTransfer.effectAllowed='copy'"
+                       :class="{'opacity-50': (diagramData?.nodes||[]).some(d => d.node_id === n.node_id)}">
+                    <span style="color:var(--text-muted);font-size:9px;cursor:grab">⠿</span>
+                    <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
+                    <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
+                  </div>
+                </template>
               </div>
             </template>
           </div>
@@ -1120,9 +1165,29 @@ a{color:var(--primary);text-decoration:none}
       </div>
 
       <!-- Diagram SVG canvas -->
-      <div id="diagram-canvas" style="flex:1;overflow:auto"
+      <div id="diagram-canvas" style="flex:1;overflow:auto;position:relative"
            @dragover.prevent="$event.dataTransfer.dropEffect='copy'"
-           @drop.prevent="handleDiagramDrop($event)"></div>
+           @drop.prevent="handleDiagramDrop($event)">
+        <!-- Floating legend + display toggles -->
+        <div class="graph-legend">
+          <div class="legend-title">Legend</div>
+          <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
+            <div class="legend-row">
+              <span class="legend-color" :style="'background:'+def.color"></span>
+              <span x-text="cat" style="text-transform:capitalize"></span>
+            </div>
+          </template>
+          <hr class="legend-sep">
+          <label>
+            <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;renderDiagram()">
+            <span>Edge labels</span>
+          </label>
+          <label>
+            <input type="checkbox" :checked="diagramShowNeighbors" @change="diagramShowNeighbors=!diagramShowNeighbors;renderDiagram()">
+            <span>Show linked nodes</span>
+          </label>
+        </div>
+      </div>
 
       <!-- Resizable description panel -->
       <template x-if="diagramData?.total_steps > 0">
@@ -1162,62 +1227,46 @@ a{color:var(--primary);text-decoration:none}
         </div>
 
         <div class="group">
-          <h4>Node Types</h4>
-          <template x-for="layer in getDiagramLayers()" :key="layer">
-            <div>
-              <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
-              <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt.type">
-                <label>
-                  <input type="checkbox"
-                         :checked="!hiddenNodeTypes.includes(nt.type)"
-                         @change="toggleNodeType(nt.type);renderDiagram()">
-                  <span :style="'color:'+layerColor(layer)" x-text="nt.type"></span>
-                  <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="nt.count"></span>
-                </label>
-              </template>
-            </div>
-          </template>
+          <h4 @click="collapsedFilterSections.diagNodeTypes = !collapsedFilterSections.diagNodeTypes">
+            <span>Node Types</span>
+            <span class="chevron" x-text="collapsedFilterSections.diagNodeTypes ? '▶' : '▼'"></span>
+          </h4>
+          <div x-show="!collapsedFilterSections.diagNodeTypes">
+            <template x-for="layer in getDiagramLayers()" :key="layer">
+              <div>
+                <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
+                <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt.type">
+                  <label>
+                    <input type="checkbox"
+                           :checked="!hiddenNodeTypes.includes(nt.type)"
+                           @change="toggleNodeType(nt.type);renderDiagram()">
+                    <span :style="'color:'+layerColor(layer)" x-text="nt.type"></span>
+                    <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="nt.count"></span>
+                  </label>
+                </template>
+              </div>
+            </template>
+          </div>
         </div>
 
         <div class="group">
-          <h4>Edge Types</h4>
-          <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
-            <label>
-              <input type="checkbox"
-                     :checked="!hiddenEdgeTypes.includes(et.type)"
-                     @change="toggleEdgeType(et.type);renderDiagram()">
-              <span x-text="et.type"></span>
-              <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="et.count"></span>
-            </label>
-          </template>
+          <h4 @click="collapsedFilterSections.diagEdgeTypes = !collapsedFilterSections.diagEdgeTypes">
+            <span>Edge Types</span>
+            <span class="chevron" x-text="collapsedFilterSections.diagEdgeTypes ? '▶' : '▼'"></span>
+          </h4>
+          <div x-show="!collapsedFilterSections.diagEdgeTypes">
+            <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
+              <label>
+                <input type="checkbox"
+                       :checked="!hiddenEdgeTypes.includes(et.type)"
+                       @change="toggleEdgeType(et.type);renderDiagram()">
+                <span x-text="et.type"></span>
+                <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="et.count"></span>
+              </label>
+            </template>
+          </div>
         </div>
 
-        <div class="group">
-          <h4>Display</h4>
-          <label>
-            <input type="checkbox"
-                   :checked="showEdgeLabels"
-                   @change="showEdgeLabels=!showEdgeLabels;renderDiagram()">
-            <span>Edge labels</span>
-          </label>
-          <label>
-            <input type="checkbox"
-                   :checked="diagramShowNeighbors"
-                   @change="diagramShowNeighbors=!diagramShowNeighbors;renderDiagram()">
-            <span>Show linked nodes</span>
-          </label>
-        </div>
-
-        <!-- Edge Legend (edit in Settings tab) -->
-        <div class="group">
-          <h4>Edge Legend</h4>
-          <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:11px">
-              <span :style="'display:inline-block;width:12px;height:3px;background:'+def.color+';border-radius:1px'"></span>
-              <span x-text="cat" style="text-transform:capitalize"></span>
-            </div>
-          </template>
-        </div>
       </div>
     </template>
   </div>
@@ -1303,6 +1352,8 @@ function dashboard() {
     workspaceNodes: [],       // [{node_id, x, y, manual: bool}]
     workspacePaths: [],       // [{from, to, path: [node_ids]}]
     workspaceSearch: '',
+    collapsedPaletteGroups: {},
+    collapsedFilterSections: {},
     // Diagram (live from Claude — single slot, auto-navigates)
     diagramSessionId: null,
     diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
@@ -2660,7 +2711,6 @@ function dashboard() {
 
     expandWorkspaceNode(nodeId) {
       const filtered = this.getFilteredData();
-      const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
       const neighbors = new Set();
       filtered.edges.forEach(e => {
         if (e.from_node_id === nodeId) neighbors.add(e.to_node_id);
@@ -2669,6 +2719,11 @@ function dashboard() {
       const existing = new Set(this.workspaceNodes.map(w => w.node_id));
       const nodeById = {};
       filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
+      // Promote the clicked node to a workspace node if it's just a neighbor
+      if (!existing.has(nodeId) && nodeById[nodeId]) {
+        this.workspaceNodes.push({ node_id: nodeId, x: 400, y: 300, manual: true });
+        existing.add(nodeId);
+      }
       // Find position of the node being expanded
       const source = this.workspaceNodes.find(w => w.node_id === nodeId);
       const sx = source ? source.x : 400;
