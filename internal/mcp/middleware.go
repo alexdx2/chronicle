@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/version"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -263,6 +265,15 @@ func makeSummary(toolName, resultJSON string) string {
 
 	switch toolName {
 	case "chronicle_import_all":
+		// Check if this is a dry_run result
+		if dryRun, ok := data["dry_run"].(bool); ok && dryRun {
+			valid, _ := data["valid"].(bool)
+			if valid {
+				return "dry_run: valid"
+			}
+			errs, _ := data["errors"].([]any)
+			return fmt.Sprintf("dry_run: %d errors", len(errs))
+		}
 		n, _ := data["nodes_created"].(float64)
 		e, _ := data["edges_created"].(float64)
 		ev, _ := data["evidence_created"].(float64)
@@ -301,6 +312,27 @@ func makeSummary(toolName, resultJSON string) string {
 		return fmt.Sprintf("%.0fn %.0fe", n, e)
 	case "chronicle_extraction_guide":
 		return "guide returned"
+	case "chronicle_extraction_hints":
+		tech, _ := data["technology"].(string)
+		if tech != "" {
+			return "hints: " + tech
+		}
+		return "hints returned"
+	case "chronicle_schema":
+		filter, _ := data["filter"].(map[string]any)
+		if filter != nil {
+			from, _ := filter["from_layer"].(string)
+			to, _ := filter["to_layer"].(string)
+			parts := []string{}
+			if from != "" {
+				parts = append(parts, "from="+from)
+			}
+			if to != "" {
+				parts = append(parts, "to="+to)
+			}
+			return "schema filtered: " + strings.Join(parts, " ")
+		}
+		return "full schema"
 	case "chronicle_scan_status":
 		domain, _ := data["domain"].(string)
 		if domain != "" {
@@ -341,7 +373,7 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	if GetDebugLogger() != nil {
 		serverOpts = append(serverOpts, server.WithInstructions(debugInstructions))
 	}
-	s := server.NewMCPServer("chronicle", "0.1.0", serverOpts...)
+	s := server.NewMCPServer("chronicle", version.Version, serverOpts...)
 
 	add := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {
 		s.AddTool(tool, loggingWrap(logStore, tool.Name, handler))

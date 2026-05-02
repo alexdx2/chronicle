@@ -10,6 +10,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/version"
 	"github.com/spf13/cobra"
 )
 
@@ -58,7 +59,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("chronicle v0.4.0")
+			fmt.Println("chronicle v" + version.Version)
 		},
 	}
 }

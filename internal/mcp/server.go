@@ -14,6 +14,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
+	"github.com/alexdx2/chronicle-core/version"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -26,7 +27,7 @@ func SetAdminPort(p int)       { adminPortValue = p }
 
 // NewServer creates a new MCP server exposing all graph operations as tools.
 func NewServer(g *graph.Graph) *server.MCPServer {
-	s := server.NewMCPServer("chronicle", "0.1.0")
+	s := server.NewMCPServer("chronicle", version.Version)
 
 	s.AddTool(revisionCreateTool(), revisionCreateHandler(g))
 	s.AddTool(nodeUpsertTool(), nodeUpsertHandler(g))
@@ -45,7 +46,9 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
 	s.AddTool(queryPathTool(), queryPathHandler(g))
 	s.AddTool(impactTool(), impactHandler(g))
+	s.AddTool(schemaTool(), schemaHandler(g))
 	s.AddTool(extractionGuideTool(), extractionGuideHandler())
+	s.AddTool(extractionHintsTool(), extractionHintsHandler())
 	s.AddTool(scanStatusTool(), scanStatusHandler(g))
 	s.AddTool(saveManifestTool(), saveManifestHandler())
 	s.AddTool(resetDBTool(), resetDBHandler(g))
@@ -95,6 +98,11 @@ func int64Param(args map[string]any, key string) int64 {
 
 func float64Param(args map[string]any, key string) float64 {
 	v, _ := args[key].(float64)
+	return v
+}
+
+func boolParam(args map[string]any, key string) bool {
+	v, _ := args[key].(bool)
 	return v
 }
 
@@ -466,9 +474,10 @@ func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func importAllTool() mcp.Tool {
 	return mcp.NewTool("chronicle_import_all",
-		mcp.WithDescription("Import nodes, edges, evidence in a single transaction. KEEP PAYLOADS SMALL — max ~15 nodes per call. Read one file → extract → import → move to next file. Do NOT accumulate."),
+		mcp.WithDescription("Import nodes, edges, evidence in a single transaction. All items must be schema-valid — no partial writes. KEEP PAYLOADS SMALL — max ~15 nodes per call. Use dry_run=true to validate before writing."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
 		mcp.WithString("payload", mcp.Required(), mcp.Description("JSON string containing nodes, edges, and evidence arrays")),
+		mcp.WithBoolean("dry_run", mcp.Description("If true, validate the entire payload without writing. Returns errors and suggested fixes.")),
 	)
 }
 
@@ -484,13 +493,22 @@ func importAllHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("payload is required")), nil
 		}
 
+		var payload graph.ImportPayload
+		if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
+			return errorResult(fmt.Errorf("invalid payload JSON: %w", err)), nil
+		}
+
+		// Dry run mode: validate only, no writes
+		if boolParam(args, "dry_run") {
+			result, err := g.ImportAllDryRun(payload, revisionID)
+			if err != nil {
+				return errorResult(err), nil
+			}
+			return jsonResult(result), nil
+		}
+
 		// Warn on large payloads — Claude should stream smaller batches
 		if len(payloadStr) > 15000 {
-			// Still accept it, but add warning to result
-			var payload graph.ImportPayload
-			if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
-				return errorResult(fmt.Errorf("invalid payload JSON: %w", err)), nil
-			}
 			result, err := g.ImportAll(payload, revisionID)
 			if err != nil {
 				return errorResult(err), nil
@@ -501,11 +519,6 @@ func importAllHandler(g *graph.Graph) server.ToolHandlerFunc {
 				"evidence_created": result.EvidenceCreated,
 				"warning":          fmt.Sprintf("Payload was %dKB — please use smaller batches (< 15 nodes per call). Read one file, import immediately, move on.", len(payloadStr)/1024),
 			}), nil
-		}
-
-		var payload graph.ImportPayload
-		if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
-			return errorResult(fmt.Errorf("invalid payload JSON: %w", err)), nil
 		}
 
 		result, err := g.ImportAll(payload, revisionID)
@@ -894,21 +907,80 @@ func impactHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
+// chronicle_schema
+// ---------------------------------------------------------------------------
+
+func schemaTool() mcp.Tool {
+	return mcp.NewTool("chronicle_schema",
+		mcp.WithDescription("Get the canonical type system: layers, node types, edge types with from/to layer constraints. This is the single source of truth for what's valid. Call before scanning or when unsure about valid types."),
+		mcp.WithString("from_layer", mcp.Description("Filter edge types to those allowing this from_layer")),
+		mcp.WithString("to_layer", mcp.Description("Filter edge types to those allowing this to_layer")),
+		mcp.WithString("include", mcp.Description("Comma-separated sections to include: edges, nodes, layers. Default: all")),
+	)
+}
+
+func schemaHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		fromLayer := strParam(args, "from_layer")
+		toLayer := strParam(args, "to_layer")
+		includeStr := strParam(args, "include")
+
+		var include []string
+		if includeStr != "" {
+			for _, part := range strings.Split(includeStr, ",") {
+				include = append(include, strings.TrimSpace(part))
+			}
+		}
+
+		schema := g.Registry().ToSchemaJSON(fromLayer, toLayer, include)
+		return jsonResult(schema), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
 // chronicle_extraction_guide
 // ---------------------------------------------------------------------------
 
 func extractionGuideTool() mcp.Tool {
 	return mcp.NewTool("chronicle_extraction_guide",
-		mcp.WithDescription("Get the extraction methodology guide. Call this before scanning a codebase to understand what entities and relationships to extract, how to structure the import payload, and the recommended workflow. Returns comprehensive JSON instructions for analyzing TypeScript/NestJS, OpenAPI, and other codebases."),
-		mcp.WithString("technology", mcp.Description("Filter guide to a specific technology: nestjs, openapi, or omit for full guide")),
+		mcp.WithDescription("Get the extraction methodology guide. Call this before scanning to learn HOW to extract entities and relationships. For valid types and constraints, call chronicle_schema()."),
+		mcp.WithString("technology", mcp.Description("DEPRECATED — ignored. Use chronicle_extraction_hints for framework-specific tips.")),
 	)
 }
+
+// technologyDeprecationWarned tracks whether the deprecation warning has been emitted this session.
+var technologyDeprecationWarned bool
 
 func extractionGuideHandler() server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		tech := strParam(req.GetArguments(), "technology")
-		guide := ExtractionGuide(tech)
+		if tech != "" && !technologyDeprecationWarned {
+			technologyDeprecationWarned = true
+			// Log deprecation but still return the universal guide
+			fmt.Fprintf(os.Stderr, "[chronicle] DEPRECATION: extraction_guide technology=%q param ignored. Use chronicle_schema() for types and chronicle_extraction_hints(technology=%q) for framework tips.\n", tech, tech)
+		}
+		guide := ExtractionGuide("")
 		return mcp.NewToolResultText(guide), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_extraction_hints
+// ---------------------------------------------------------------------------
+
+func extractionHintsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_extraction_hints",
+		mcp.WithDescription("Get optional framework-specific tips for mapping code patterns to Chronicle concepts. NOT authoritative — for valid types, call chronicle_schema()."),
+		mcp.WithString("technology", mcp.Required(), mcp.Description("Framework: nestjs, prisma, openapi, django, spring, etc.")),
+	)
+}
+
+func extractionHintsHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		tech := strParam(req.GetArguments(), "technology")
+		hints := ExtractionHints(tech)
+		return mcp.NewToolResultText(hints), nil
 	}
 }
 

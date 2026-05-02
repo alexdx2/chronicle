@@ -3,6 +3,7 @@ package registry
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -130,6 +131,19 @@ func (r *Registry) IsValidNodeType(layer, nodeType string) bool {
 	return types[nodeType]
 }
 
+// ValidNodeTypes returns the valid node types for a layer.
+func (r *Registry) ValidNodeTypes(layer string) []string {
+	types, ok := r.nodeTypes[layer]
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(types))
+	for t := range types {
+		result = append(result, t)
+	}
+	return result
+}
+
 func (r *Registry) IsValidEdgeType(edgeType string) bool {
 	_, ok := r.edgeTypes[edgeType]
 	return ok
@@ -138,27 +152,48 @@ func (r *Registry) IsValidEdgeType(edgeType string) bool {
 func (r *Registry) ValidateEdgeLayers(edgeType, fromLayer, toLayer string) error {
 	et, ok := r.edgeTypes[edgeType]
 	if !ok {
+		// Unknown edge type — suggest similar ones
+		suggestions := r.SuggestSimilarEdgeTypes(edgeType)
+		if len(suggestions) > 0 {
+			names := make([]string, 0, len(suggestions))
+			for _, s := range suggestions {
+				names = append(names, fmt.Sprintf("%s (%s)", s.EdgeType, s.Intent))
+			}
+			return fmt.Errorf("unknown edge type %q. Did you mean: %s", edgeType, strings.Join(names, ", "))
+		}
 		return fmt.Errorf("unknown edge type %q", edgeType)
 	}
-	fromOk := false
-	for _, l := range et.FromLayers {
-		if l == fromLayer {
-			fromOk = true
-			break
-		}
-	}
+	fromOk := containsStr(et.FromLayers, fromLayer)
 	if !fromOk {
-		return fmt.Errorf("edge type %q does not allow from_layer %q", edgeType, fromLayer)
-	}
-	toOk := false
-	for _, l := range et.ToLayers {
-		if l == toLayer {
-			toOk = true
-			break
+		msg := fmt.Sprintf("edge type %q does not allow from_layer %q (allowed from: %v)", edgeType, fromLayer, et.FromLayers)
+		suggestions := r.SuggestEdgeTypes(fromLayer, toLayer)
+		if len(suggestions) > 0 {
+			names := make([]string, 0, len(suggestions))
+			for _, s := range suggestions {
+				if len(names) >= 5 {
+					break
+				}
+				names = append(names, fmt.Sprintf("%s (%s)", s.EdgeType, s.Intent))
+			}
+			msg += fmt.Sprintf(". Edges from %q to %q: %s", fromLayer, toLayer, strings.Join(names, ", "))
 		}
+		return fmt.Errorf("%s", msg)
 	}
+	toOk := containsStr(et.ToLayers, toLayer)
 	if !toOk {
-		return fmt.Errorf("edge type %q does not allow to_layer %q", edgeType, toLayer)
+		msg := fmt.Sprintf("edge type %q does not allow to_layer %q (allowed to: %v)", edgeType, toLayer, et.ToLayers)
+		suggestions := r.SuggestEdgeTypes(fromLayer, toLayer)
+		if len(suggestions) > 0 {
+			names := make([]string, 0, len(suggestions))
+			for _, s := range suggestions {
+				if len(names) >= 5 {
+					break
+				}
+				names = append(names, fmt.Sprintf("%s (%s)", s.EdgeType, s.Intent))
+			}
+			msg += fmt.Sprintf(". Edges from %q to %q: %s", fromLayer, toLayer, strings.Join(names, ", "))
+		}
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }
@@ -177,6 +212,236 @@ func (r *Registry) IsValidStatus(status string) bool {
 
 func (r *Registry) IsValidTrigger(trigger string) bool {
 	return r.triggers[trigger]
+}
+
+// SchemaJSON is the serializable representation of the registry schema.
+type SchemaJSON struct {
+	Filter          map[string]string          `json:"filter,omitempty"`
+	Layers          []string                   `json:"layers,omitempty"`
+	NodeTypes       map[string][]string        `json:"node_types,omitempty"`
+	EdgeTypes       map[string]EdgeTypeDef     `json:"edge_types,omitempty"`
+	DerivationKinds []string                   `json:"derivation_kinds,omitempty"`
+	NodeStatuses    []string                   `json:"node_statuses,omitempty"`
+}
+
+// EdgeSuggestion is a suggested edge type with intent label.
+type EdgeSuggestion struct {
+	EdgeType   string `json:"edge_type"`
+	Intent     string `json:"intent"`
+	FromLayers []string `json:"from_layers"`
+	ToLayers   []string `json:"to_layers"`
+}
+
+// edgeIntentLabels provides semantic descriptions for edge types.
+var edgeIntentLabels = map[string]string{
+	"INVOKES":          "runtime call",
+	"REQUIRES":         "correctness dependency",
+	"DEPENDS_ON":       "structural/static dependency",
+	"INJECTS":          "DI constructor parameter",
+	"CALLS_SYMBOL":     "direct function/method call",
+	"IMPORTS":          "module import",
+	"CALLS_SERVICE":    "HTTP client call to service",
+	"CALLS_ENDPOINT":   "HTTP client call to endpoint",
+	"REFERENCES_MODEL": "FK / @relation",
+	"HAS_FIELD":        "field ownership",
+	"USES_ENUM":        "enum type usage",
+	"USES_MODEL":       "data model query",
+	"DEFINES_MODEL":    "schema definition",
+	"EXPOSES_ENDPOINT": "route handler",
+	"PUBLISHES_TOPIC":  "event producer",
+	"CONSUMES_TOPIC":   "event consumer",
+	"TRIGGERS_FLOW":    "entry point to business process",
+	"PRODUCES_OUTCOME": "flow output (event/state change)",
+	"PRECEDES":         "step ordering within flow",
+	"TRANSITIONS_TO":   "flow-to-flow via event",
+	"PART_OF_FLOW":     "flow step membership",
+	"EMITS_AFTER":      "event emission after flow step",
+	"CONTAINS":         "structural containment",
+	"OWNED_BY":         "ownership relation",
+	"USES_QUEUE":       "message queue usage",
+}
+
+// edgeSimilarity maps edge types to semantically similar alternatives.
+// Used for error suggestions when a valid edge type is used with wrong layers.
+var edgeSimilarity = map[string][]string{
+	"CALLS_SERVICE":  {"INVOKES", "REQUIRES", "DEPENDS_ON"},
+	"CALLS_ENDPOINT": {"TRIGGERS_FLOW", "INVOKES"},
+	"USES_MODEL":     {"REQUIRES", "DEPENDS_ON"},
+	"CALLS_SYMBOL":   {"INVOKES", "REQUIRES"},
+}
+
+// ToSchemaJSON serializes the registry into a filterable schema.
+// fromLayer/toLayer filter edge types. include filters sections (edges, nodes, layers).
+func (r *Registry) ToSchemaJSON(fromLayer, toLayer string, include []string) SchemaJSON {
+	filtered := fromLayer != "" || toLayer != ""
+	includeSet := toSet(include)
+	includeAll := len(include) == 0
+
+	schema := SchemaJSON{}
+
+	if filtered {
+		schema.Filter = make(map[string]string)
+		if fromLayer != "" {
+			schema.Filter["from_layer"] = fromLayer
+		}
+		if toLayer != "" {
+			schema.Filter["to_layer"] = toLayer
+		}
+	}
+
+	// Layers
+	if !filtered && (includeAll || includeSet["layers"]) {
+		layers := make([]string, 0, len(r.layers))
+		for l := range r.layers {
+			layers = append(layers, l)
+		}
+		schema.Layers = layers
+	}
+
+	// Node types
+	if includeAll || includeSet["nodes"] {
+		if filtered {
+			// Only include node types for filtered layers
+			schema.NodeTypes = make(map[string][]string)
+			if fromLayer != "" {
+				if types, ok := r.nodeTypes[fromLayer]; ok {
+					list := make([]string, 0, len(types))
+					for t := range types {
+						list = append(list, t)
+					}
+					schema.NodeTypes[fromLayer] = list
+				}
+			}
+			if toLayer != "" && toLayer != fromLayer {
+				if types, ok := r.nodeTypes[toLayer]; ok {
+					list := make([]string, 0, len(types))
+					for t := range types {
+						list = append(list, t)
+					}
+					schema.NodeTypes[toLayer] = list
+				}
+			}
+		} else {
+			schema.NodeTypes = make(map[string][]string)
+			for layer, types := range r.nodeTypes {
+				list := make([]string, 0, len(types))
+				for t := range types {
+					list = append(list, t)
+				}
+				schema.NodeTypes[layer] = list
+			}
+		}
+	}
+
+	// Edge types
+	if includeAll || includeSet["edges"] {
+		schema.EdgeTypes = make(map[string]EdgeTypeDef)
+		for name, et := range r.edgeTypes {
+			if fromLayer != "" && !containsStr(et.FromLayers, fromLayer) {
+				continue
+			}
+			if toLayer != "" && !containsStr(et.ToLayers, toLayer) {
+				continue
+			}
+			schema.EdgeTypes[name] = et
+		}
+	}
+
+	// Derivation kinds + statuses (full schema only)
+	if !filtered && (includeAll || includeSet["layers"]) {
+		derivations := make([]string, 0, len(r.derivations))
+		for d := range r.derivations {
+			derivations = append(derivations, d)
+		}
+		schema.DerivationKinds = derivations
+
+		statuses := make([]string, 0, len(r.statuses))
+		for s := range r.statuses {
+			statuses = append(statuses, s)
+		}
+		schema.NodeStatuses = statuses
+	}
+
+	return schema
+}
+
+// SuggestEdgeTypes returns edge types that allow the given from/to layer pair,
+// ranked by semantic proximity if a similarity map entry exists.
+func (r *Registry) SuggestEdgeTypes(fromLayer, toLayer string) []EdgeSuggestion {
+	var suggestions []EdgeSuggestion
+	for name, et := range r.edgeTypes {
+		if fromLayer != "" && !containsStr(et.FromLayers, fromLayer) {
+			continue
+		}
+		if toLayer != "" && !containsStr(et.ToLayers, toLayer) {
+			continue
+		}
+		intent := edgeIntentLabels[name]
+		if intent == "" {
+			intent = name
+		}
+		suggestions = append(suggestions, EdgeSuggestion{
+			EdgeType:   name,
+			Intent:     intent,
+			FromLayers: et.FromLayers,
+			ToLayers:   et.ToLayers,
+		})
+	}
+	return suggestions
+}
+
+// SuggestSimilarEdgeTypes returns edge types similar to the given one.
+// Uses the similarity map for known types, falls back to prefix/substring matching.
+func (r *Registry) SuggestSimilarEdgeTypes(edgeType string) []EdgeSuggestion {
+	// Check similarity map first
+	if similar, ok := edgeSimilarity[edgeType]; ok {
+		var suggestions []EdgeSuggestion
+		for _, name := range similar {
+			if et, exists := r.edgeTypes[name]; exists {
+				intent := edgeIntentLabels[name]
+				if intent == "" {
+					intent = name
+				}
+				suggestions = append(suggestions, EdgeSuggestion{
+					EdgeType:   name,
+					Intent:     intent,
+					FromLayers: et.FromLayers,
+					ToLayers:   et.ToLayers,
+				})
+			}
+		}
+		if len(suggestions) > 0 {
+			return suggestions
+		}
+	}
+
+	// Fallback: prefix/substring matching
+	var suggestions []EdgeSuggestion
+	upper := strings.ToUpper(edgeType)
+	for name, et := range r.edgeTypes {
+		if strings.Contains(name, upper) || strings.HasPrefix(name, upper) {
+			intent := edgeIntentLabels[name]
+			if intent == "" {
+				intent = name
+			}
+			suggestions = append(suggestions, EdgeSuggestion{
+				EdgeType:   name,
+				Intent:     intent,
+				FromLayers: et.FromLayers,
+				ToLayers:   et.ToLayers,
+			})
+		}
+	}
+	return suggestions
+}
+
+func containsStr(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func toSet(items []string) map[string]bool {

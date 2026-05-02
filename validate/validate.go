@@ -104,7 +104,8 @@ func ValidateNodeInput(input NodeInput, reg *registry.Registry) (*ValidatedNode,
 		return nil, fmt.Errorf("validation: invalid layer %q", input.Layer)
 	}
 	if !reg.IsValidNodeType(input.Layer, input.NodeType) {
-		return nil, fmt.Errorf("validation: invalid node_type %q for layer %q", input.NodeType, input.Layer)
+		valid := reg.ValidNodeTypes(input.Layer)
+		return nil, fmt.Errorf("validation: invalid node_type %q for layer %q. Valid types: %v", input.NodeType, input.Layer, valid)
 	}
 
 	confidence := input.Confidence

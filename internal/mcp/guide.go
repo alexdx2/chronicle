@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/store"
 )
@@ -12,34 +13,72 @@ var customGuideStore *store.Store
 // SetGuideStore sets the store for reading custom extraction prompts.
 func SetGuideStore(s *store.Store) { customGuideStore = s }
 
-// ExtractionGuide returns the extraction methodology.
-// If a custom prompt is stored in project settings, it's appended.
-func ExtractionGuide(technology string) string {
-	if technology != "" {
-		return detailedGuide(technology)
-	}
+// INVARIANT: This guide MUST NEVER enumerate full edge types or layer constraints.
+// Only illustrative examples are allowed. Schema is the single source of truth.
+// If you need to list valid types, tell Claude to call chronicle_schema().
 
-	// Default: compact workflow — just enough for Claude to start scanning
+// ExtractionGuide returns the universal extraction methodology.
+// The technology parameter is DEPRECATED and ignored — always returns the full guide.
+func ExtractionGuide(technology string) string {
 	guide := map[string]any{
+		"schema_reference": "For valid edge types, node types, and layer constraints, call chronicle_schema(). This guide uses illustrative examples only — schema is the single source of truth.",
 		"workflow": []string{
 			"1. Call chronicle_get_discoveries — learn from previous scans",
-			"2. Call chronicle_scan_status — check current graph state",
-			"3. If first scan: auto-discover project, call chronicle_save_manifest",
-			"4. Call chronicle_revision_create",
-			"5. For large projects (>= 5 modules): spawn Agent per service. Each agent reads files and imports IMMEDIATELY per file.",
-			"6. For each file: READ → extract → chronicle_import_all → move on. NEVER accumulate data in context.",
-			"7. Cross-service pass: read HTTP client files, create CALLS_SERVICE + CALLS_ENDPOINT edges (derivation: linked)",
-			"8. FLOW extraction: for each POST/PUT/DELETE endpoint that mutates state, trace the full call chain. Create flow:use_case with REQUIRES edges to ALL data models it touches (reads AND writes), ALL services it calls, TRIGGERS_FLOW from the endpoint, PRODUCES_OUTCOME for created records/events, TRANSITIONS_TO between flows connected via events/topics. Flows are how entities connect — every model should be reachable through a flow. Call chronicle_extraction_guide(technology='flow') for detailed rules.",
-			"9. chronicle_snapshot_create + chronicle_stale_mark",
-			"10. Domain language: chronicle_get_glossary → chronicle_define_term → chronicle_check_language",
-			"11. chronicle_report_discovery with severity (critical/warning/insight) and suggested_action",
+			"2. Call chronicle_schema — learn what layers, types, and edges exist",
+			"3. Call chronicle_extraction_guide — learn how to extract (you're reading this now)",
+			"4. Auto-discover project, call chronicle_save_manifest",
+			"4.5. Call chronicle_resolve_context(domain) — if no context exists, it auto-creates \"main\"",
+			"5. Create revision (include context_id)",
+			"6. Scan in passes: data models → code structure → contracts/endpoints → cross-service edges → flows",
+			"7. For each file: READ → extract → chronicle_import_all → move on. NEVER accumulate data in context. Max ~10-15 nodes per call.",
+			"8. chronicle_snapshot_create + chronicle_stale_mark",
+			"9. Domain language: chronicle_get_glossary → chronicle_define_term → chronicle_check_language",
+			"10. chronicle_report_discovery with severity (critical/warning/insight) and suggested_action",
 		},
 		"key_rules": map[string]string{
-			"format":          "node_key = layer:type:domain:name (all lowercase)",
-			"import":          "STREAM: read 1 file → import immediately → forget. Max ~10 nodes per import call.",
-			"no_scripts":      "Do NOT write bash/grep scripts. READ files with Read tool. You understand code better than regex.",
-			"evidence":        "Every node needs evidence: target_kind, node_key, source_kind=file, file_path, line_start, extractor_id=claude-code, extractor_version=1.0",
+			"format":            "node_key = layer:type:domain:name (all lowercase)",
+			"import":            "STREAM: read 1 file → import immediately → forget. Max ~10 nodes per import call.",
+			"no_scripts":        "Do NOT write bash/grep scripts. READ files with Read tool. You understand code better than regex.",
+			"evidence":          "Every node needs evidence: target_kind, node_key, source_kind=file, file_path, line_start, extractor_id=claude-code, extractor_version=1.0",
 			"negative_evidence": "During incremental scans, if a relationship was confirmed removed (e.g. constructor no longer injects a service), create negative evidence via chronicle_evidence_add with polarity='negative'.",
+			"dry_run":           "Use chronicle_import_all with dry_run=true to validate payloads before writing. Fix suggested errors, then import for real.",
+		},
+		"layer_guide": map[string]string{
+			"data":     "Look for schema definitions (Prisma models, TypeORM entities, SQL DDL, GraphQL types). Each model → data:model, each enum → data:enum. Relations between models → REFERENCES_MODEL.",
+			"code":     "Look for modules, controllers/handlers, services/providers, resolvers, gateways. DI constructor params → INJECTS. Route decorators/handlers → EXPOSES_ENDPOINT. Module membership → CONTAINS.",
+			"contract": "Endpoints from route handlers (POST /orders → contract:endpoint). Topics from pub/sub patterns. GraphQL operations from schema files.",
+			"flow":     "See flow_extraction_rules below.",
+			"service":  "Deployable services. Usually one per package.json/go.mod/Dockerfile. External services (Stripe, Redis) → service:external_system.",
+		},
+		"flow_extraction_rules": map[string]any{
+			"create_when": []string{
+				"An endpoint mutates state (POST/PUT/PATCH/DELETE handler)",
+				"An async handler processes events or jobs (Kafka consumer, Bull processor, cron)",
+				"Multi-step orchestration exists across services (service A calls service B calls service C)",
+			},
+			"skip": []string{
+				"Trivial CRUD with a single repository call and no branching/side effects",
+				"Pure GET endpoints that only read data",
+			},
+			"edge_routing": map[string]string{
+				"TRIGGERS_FLOW":    "Only from entry-point nodes (contract:endpoint, contract:topic, code:provider) to flow:use_case. NEVER between flows.",
+				"REQUIRES":         "flow:use_case → every service and data:model it depends on for correctness",
+				"PRODUCES_OUTCOME": "flow:use_case → every record, event, or notification it creates",
+				"PRECEDES":         "Between flow:flow_step nodes within the same use case (ordering)",
+				"TRANSITIONS_TO":   "Between flow:use_case nodes when one flow leads to another via events/topics",
+			},
+		},
+		"edge_intent": map[string]string{
+			"INVOKES":    "runtime call — the flow/code actively calls this service/function at runtime",
+			"REQUIRES":   "correctness dependency — the flow cannot complete without this service/model",
+			"DEPENDS_ON": "structural/static dependency — references this but doesn't directly call it (config, shared types)",
+			"INJECTS":    "DI constructor parameter — framework injects this dependency",
+			"USES_MODEL": "data model query — service queries this Prisma/ORM model",
+		},
+		"edge_derivation": map[string]string{
+			"hard":     "Direct evidence: import statement, constructor param, decorator, schema FK. Use for most edges.",
+			"linked":   "Indirect but strong: HTTP client URL matches endpoint path, env var points to service. Cross-service edges.",
+			"inferred": "LLM guess or heuristic match. Low confidence. Needs verification.",
 		},
 		"trust_aware_queries": map[string]string{
 			"description": "Query results include trust_score (0-1) and freshness (0-1) for each node/edge.",
@@ -54,37 +93,8 @@ func ExtractionGuide(technology string) string {
 			"what_happens": "Strong negative evidence (>=0.8) marks edge as 'contradicted', removed from queries.",
 		},
 		"user_commands": "When user says 'chronicle scan', 'chronicle data', etc — call chronicle_command(command='scan') and follow the instructions.",
-		"onboarding": "ALWAYS call chronicle_scan_status first. If response contains 'onboarding.is_first_run=true', ask the user: 'This project hasn't been scanned yet. Would you like me to scan it and build a knowledge graph?' If yes, call chronicle_command(command='scan').",
-		"layers": map[string]string{
-			"data":     "Prisma models, entities, enums → data:model, data:enum",
-			"code":     "modules, controllers, providers, resolvers, guards → code:module, code:controller, code:provider",
-			"contract": "HTTP endpoints, Kafka topics, GraphQL operations → contract:endpoint, contract:topic",
-			"service":  "Deployable services → service:service",
-			"flow":     "Business use cases, processes → flow:use_case, flow:flow_step, flow:trigger, flow:outcome",
-		},
-		"edge_types": map[string]string{
-			"CONTAINS":          "module → providers (structural, hard)",
-			"INJECTS":           "constructor DI, @UseGuards, @UseInterceptors (hard)",
-			"EXPOSES_ENDPOINT":  "controller → @Get/@Post route (hard)",
-			"CALLS_SERVICE":     "HTTP client → service via env URL (linked)",
-			"CALLS_ENDPOINT":    "HTTP client → specific endpoint (linked)",
-			"PUBLISHES_TOPIC":   "producer → Kafka topic (hard)",
-			"CONSUMES_TOPIC":    "consumer ← Kafka topic (hard)",
-			"USES_MODEL":        "service → Prisma model it queries (hard)",
-			"REFERENCES_MODEL":  "model → model via @relation/FK (hard)",
-			"DEFINES_MODEL":     "repo → model it defines (hard)",
-		},
-		"flow_edge_types": map[string]any{
-			"WARNING":          "Use ONLY these edge types for flows. Do NOT invent types like 'CALLS', 'USES', 'INVOKES'. Those will be rejected.",
-			"TRIGGERS_FLOW":    "endpoint/event → flow:use_case (what triggers this business process)",
-			"REQUIRES":         "flow → code/data/service (what the flow depends on — use this instead of CALLS/USES/DEPENDS_ON)",
-			"INVOKES":          "flow → code/service (alternative to REQUIRES — flow calls a service)",
-			"PRODUCES_OUTCOME": "flow → contract/data (what the flow produces: events, state changes)",
-			"PRECEDES":         "flow_step → flow_step (ordering within a flow)",
-			"TRANSITIONS_TO":   "flow → flow (one use case leads to another)",
-			"node_type":        "MUST be 'use_case' or 'flow' (not 'usecase' — underscore required, though both are now accepted)",
-		},
-		"call_chronicle_extraction_guide_with_technology": "For detailed rules, call again with technology='nestjs', 'prisma', 'openapi', or 'flow'",
+		"onboarding":    "ALWAYS call chronicle_scan_status first. If response contains 'onboarding.is_first_run=true', ask the user: 'This project hasn't been scanned yet. Would you like me to scan it and build a knowledge graph?' If yes, call chronicle_command(command='scan').",
+		"hints":         "For framework-specific tips (NestJS decorators, Prisma patterns, etc), call chronicle_extraction_hints(technology='nestjs').",
 		"diagrams": map[string]any{
 			"when": "When explaining architecture, dependencies, impact, or flows to the user, offer to show a live diagram",
 			"how":  "Call chronicle_diagram_create() to get a URL, share it, then chronicle_diagram_update() with {nodes, edges} payload",
@@ -110,172 +120,94 @@ func ExtractionGuide(technology string) string {
 	return string(data)
 }
 
-func detailedGuide(technology string) string {
-	sections := map[string]any{}
+// ExtractionHints returns optional framework-specific tips.
+// These are patterns, not rules — for valid types, call chronicle_schema().
+func ExtractionHints(technology string) string {
+	tech := strings.ToLower(strings.TrimSpace(technology))
 
-	switch technology {
-	case "nestjs", "typescript", "ts", "code":
-		sections = map[string]any{
-			"modules": map[string]string{
-				"identify": "@Module decorator",
-				"key":      "code:module:domain:modulename",
-				"edges":    "CONTAINS → every provider/controller in @Module({providers:[...], controllers:[...]})",
+	var hints map[string]any
+
+	switch tech {
+	case "nestjs", "typescript", "ts":
+		hints = map[string]any{
+			"technology": "nestjs",
+			"hints": map[string]string{
+				"@Controller('prefix')":              "code:controller — combine prefix with method decorators for endpoint paths",
+				"@Injectable()":                      "code:provider — services, guards, interceptors, pipes, gateways",
+				"@Module({ providers, controllers })": "code:module — CONTAINS edge to each provider/controller listed",
+				"constructor(private svc: X)":         "INJECTS edge from this provider to X",
+				"@UseGuards(X)":                       "INJECTS edge from controller to guard",
+				"@Get/@Post/@Put/@Delete('path')":     "EXPOSES_ENDPOINT from controller to contract:endpoint:domain:method:/prefix/path",
+				"@WebSocketGateway":                   "code:provider — @SubscribeMessage creates contract:topic",
+				"@Cron, @OnEvent, @Process":           "code:provider with relevant trigger pattern",
+				"PrismaService.model.findMany()":      "USES_MODEL edge to the data:model",
+				"@Resolver(() => Type)":               "code:resolver — treat like controller for GraphQL",
 			},
-			"controllers": map[string]any{
-				"identify": "@Controller('prefix') decorator",
-				"key":      "code:controller:domain:controllername",
-				"endpoints": map[string]string{
-					"how":     "For EACH @Get/@Post/@Put/@Delete/@Patch method, create contract:endpoint node",
-					"key":     "contract:endpoint:domain:method:/prefix/path",
-					"edge":    "EXPOSES_ENDPOINT from controller to endpoint (hard)",
-					"example": "@Controller('users') + @Post(':id/verify') → contract:endpoint:domain:post:/users/:id/verify",
-				},
-			},
-			"providers": map[string]string{
-				"identify": "@Injectable() — services, guards, interceptors, pipes, gateways",
-				"key":      "code:provider:domain:servicename",
-				"di":       "Constructor params → INJECTS edge to each injected provider",
-			},
-			"guards_interceptors": map[string]string{
-				"guards":       "@UseGuards(X) on controller/method → INJECTS from controller to guard",
-				"interceptors": "@UseInterceptors(X) → INJECTS from controller to interceptor",
-				"middleware":   "configure(consumer) { consumer.apply(X) } → INJECTS from module to middleware",
-			},
-			"special": map[string]string{
-				"websocket":      "@WebSocketGateway → code:provider. @SubscribeMessage → contract topic.",
-				"cron":           "@Cron → code:provider (extract as provider)",
-				"event_emitter":  "@OnEvent → code:provider",
-				"bull_queue":     "@Processor/@Process → code:provider",
-				"shared_lib":     "packages/ dirs → code:package node",
-			},
+			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
 		}
 
 	case "prisma", "data", "models":
-		sections = map[string]any{
-			"models": map[string]any{
-				"identify": "model X { ... } blocks in schema.prisma",
-				"key":      "data:model:domain:modelname (lowercase)",
-				"evidence": "schema file + line number of model declaration",
+		hints = map[string]any{
+			"technology": "prisma",
+			"hints": map[string]string{
+				"model X { ... }":        "data:model:domain:x — lowercase model name",
+				"enum X { ... }":         "data:enum:domain:x — USES_ENUM from models that reference it",
+				"@relation(fields:[fk])":  "REFERENCES_MODEL from this model to the related model",
+				"Array field (X[])":       "REFERENCES_MODEL from parent to child model",
+				"prisma.x.findMany()":     "USES_MODEL from service provider to data:model",
+				"@@map / @@unique / @@id": "Metadata on the data:model node, not separate nodes",
 			},
-			"enums": map[string]any{
-				"identify": "enum X { ... } blocks",
-				"key":      "data:enum:domain:enumname",
-				"edges":    "Create USES_ENUM edge from each model that has a field of this enum type. E.g. Character has 'mood CatMood' → Character USES_ENUM CatMood",
-			},
-			"relations": map[string]any{
-				"how": "Look for @relation directive and array fields",
-				"examples": []string{
-					"owner Cat @relation(fields:[ownerId]) → CatWeapon REFERENCES_MODEL Cat",
-					"weapons CatWeapon[] → Cat REFERENCES_MODEL CatWeapon",
-					"tomId String (no @relation but refers to Cat) → BattleEvent REFERENCES_MODEL Cat (derivation: linked)",
-				},
-			},
-			"usage": map[string]string{
-				"how":     "Services that call prisma.model.findMany() etc → USES_MODEL edge",
-				"edge":    "code:provider → data:model (hard)",
-				"define":  "Repo that contains the schema → DEFINES_MODEL edge to each model",
-			},
+			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
 		}
 
 	case "openapi":
-		sections = map[string]any{
-			"endpoints": map[string]string{
-				"identify": "Each method+path under 'paths' in openapi.yaml",
-				"key":      "contract:endpoint:domain:method:/path",
+		hints = map[string]any{
+			"technology": "openapi",
+			"hints": map[string]string{
+				"paths./x.get":   "contract:endpoint:domain:get:/x",
+				"paths./x.post":  "contract:endpoint:domain:post:/x",
+				"info.title":     "service or contract:http_api name",
+				"$ref components": "May indicate data:model or contract:graphql_type",
 			},
-			"api": map[string]string{
-				"identify": "Top-level 'info' section",
-				"key":      "contract:http_api:domain:apiname",
-			},
+			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
 		}
 
-	case "flow", "flows", "use_cases", "usecases":
-		sections = map[string]any{
-			"what": "Business use cases — the WHY behind the code. Not code structure, but what the system DOES.",
-			"how_to_extract": map[string]any{
-				"step_1": "Read endpoint handler methods. Each handler that MUTATES state or triggers side effects is a potential use case.",
-				"step_2": "Trace the call chain from the handler: controller → service method → what it reads, writes, calls, publishes.",
-				"step_3": "Name the flow after the BUSINESS ACTION, not the code: 'Tom Attacks Jerry' not 'ArenaService.tomAttacksJerry'.",
-				"step_4": "Connect ALL data models the flow touches — reads AND writes. Flows are how entities connect to each other.",
-				"step_5": "If flow A produces an event that flow B consumes, add TRANSITIONS_TO edge between them.",
+	case "django", "python":
+		hints = map[string]any{
+			"technology": "django",
+			"hints": map[string]string{
+				"class X(models.Model)":    "data:model:domain:x",
+				"class X(APIView)":         "code:controller:domain:x",
+				"class X(ViewSet)":         "code:controller:domain:x — each action is an endpoint",
+				"@action(detail=...)":      "EXPOSES_ENDPOINT from viewset to endpoint",
+				"path('url', view)":        "contract:endpoint:domain:method:/url",
+				"class X(serializers.Serializer)": "Metadata on related model, not a separate node",
 			},
-			"rules": map[string]string{
-				"one_flow_per_business_action": "A flow = one user-facing action with a clear outcome. POST /arena/attack = one flow. Don't split into sub-flows unless the action has genuinely independent phases.",
-				"read_endpoints_are_not_flows":  "GET endpoints that just return data are NOT flows. Only state-changing or side-effect-producing actions are flows.",
-				"trace_data_models":             "The main purpose of flows is to show HOW data models connect. A flow REQUIRES every model it reads and PRODUCES_OUTCOME for every model it creates/updates.",
-				"cross_service_flows":           "When a flow calls another service (via HTTP client), add REQUIRES edges to both the client provider AND the remote service:service node.",
-				"chain_flows_via_events":         "If flow A publishes to a topic and flow B consumes from that topic, add TRANSITIONS_TO from A to B.",
+			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
+		}
+
+	case "spring", "java":
+		hints = map[string]any{
+			"technology": "spring",
+			"hints": map[string]string{
+				"@RestController":       "code:controller",
+				"@Service":              "code:provider",
+				"@Repository":           "code:provider — USES_MODEL to the entity it manages",
+				"@GetMapping/@PostMapping": "EXPOSES_ENDPOINT from controller to endpoint",
+				"@Autowired / constructor": "INJECTS edge from this bean to injected bean",
+				"@Entity":                  "data:model",
+				"@KafkaListener":           "CONSUMES_TOPIC from provider to contract:topic",
 			},
-			"node_types": map[string]any{
-				"use_case": map[string]string{
-					"key":     "flow:use_case:domain:placeorder",
-					"what":    "A complete business process triggered by a user action or event",
-					"example": "PlaceOrder, UserSignup, ProcessRefund, SendDailyReport",
-				},
-				"flow_step": map[string]string{
-					"key":     "flow:flow_step:domain:placeorder.validate-cart",
-					"what":    "A step within a use case",
-					"example": "ValidateCart, ChargePayment, CreateOrderRecord, SendConfirmation",
-				},
-				"trigger": map[string]string{
-					"key":     "flow:trigger:domain:post:/orders",
-					"what":    "What initiates the use case (endpoint, event, cron)",
-				},
-				"outcome": map[string]string{
-					"key":     "flow:outcome:domain:order-created-event",
-					"what":    "What the use case produces (event, state change, notification)",
-				},
-			},
-			"edge_types": map[string]any{
-				"TRIGGERS_FLOW": map[string]string{
-					"from":    "contract:endpoint or contract:topic",
-					"to":      "flow:use_case",
-					"meaning": "This endpoint/event starts this business process",
-					"example": "POST /orders → TRIGGERS_FLOW → PlaceOrder",
-				},
-				"REQUIRES": map[string]string{
-					"from":    "flow:use_case",
-					"to":      "code:provider or data:model or service:service",
-					"meaning": "The use case depends on this service/model/service",
-					"example": "PlaceOrder REQUIRES OrderService, REQUIRES Product model",
-				},
-				"PRODUCES_OUTCOME": map[string]string{
-					"from":    "flow:use_case",
-					"to":      "contract:topic or data:model",
-					"meaning": "The use case produces this event or state change",
-					"example": "PlaceOrder PRODUCES_OUTCOME order-created topic",
-				},
-				"PRECEDES": map[string]string{
-					"from":    "flow:flow_step",
-					"to":      "flow:flow_step",
-					"meaning": "This step happens before that step",
-				},
-			},
-			"example_flow": map[string]any{
-				"name":    "PlaceOrder",
-				"trigger": "POST /orders endpoint",
-				"steps": []string{
-					"1. ValidateCart → reads Cart model, checks MenuItem prices",
-					"2. ChargePayment → calls PaymentService → calls external payment-api",
-					"3. CreateOrder → writes Order model, OrderItem models",
-					"4. SendConfirmation → publishes order-created topic",
-				},
-				"requires": []string{"OrderService", "PaymentService", "Cart model", "Order model", "MenuItem model"},
-				"produces": []string{"order-created event", "Order record in DB"},
-			},
+			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
 		}
 
 	default:
-		return ExtractionGuide("") // fallback to compact guide
+		hints = map[string]any{
+			"technology": tech,
+			"message":    "No specific hints for " + tech + ". Use chronicle_schema() for valid types and chronicle_extraction_guide() for methodology. Chronicle works with any technology — read the code and map to layers (code/data/contract/flow/service).",
+		}
 	}
 
-	sections["common_mistakes"] = map[string]string{
-		"missing_endpoints":    "Every @Get/@Post method MUST create an endpoint node",
-		"missing_guard_edges":  "@UseGuards(X) MUST create INJECTS from controller to guard",
-		"missing_contains":     "Every provider in @Module({providers:[...]}) MUST have CONTAINS edge",
-		"accumulating_context": "Do NOT read many files then build one giant payload. Import after EACH file.",
-	}
-
-	data, _ := json.MarshalIndent(sections, "", "  ")
+	data, _ := json.MarshalIndent(hints, "", "  ")
 	return string(data)
 }

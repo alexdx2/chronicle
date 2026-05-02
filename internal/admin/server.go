@@ -21,6 +21,7 @@ import (
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
+	"github.com/alexdx2/chronicle-core/version"
 )
 
 // findModuleRoot walks up from the current executable (or working dir) to find go.mod.
@@ -409,6 +410,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"domain":        domain,
 		"manifest_path": s.manifestPath,
 		"port":          s.port,
+		"version":       version.Version,
 	})
 }
 

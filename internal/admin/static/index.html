@@ -215,7 +215,7 @@ a{color:var(--primary);text-decoration:none}
     <img src="/logo-128.png" alt="Chronicle">
     <div class="logo-text">
       <h1>Chronicle</h1>
-      <span class="logo-subtitle">Knowledge Graph</span>
+      <span class="logo-subtitle">Knowledge Graph <template x-if="version"><span x-text="'v' + version" style="opacity:0.6"></span></template></span>
     </div>
   </div>
   <div class="meta">
@@ -1228,6 +1228,7 @@ function dashboard() {
   return {
     tab: 'overview',
     domain: '',
+    version: '',
     revision: '',
     lastScan: '',
     wsConnected: false,
@@ -1405,6 +1406,9 @@ function dashboard() {
           if (data.error) localStorage.removeItem('chronicle_current_project');
         } catch(e) {}
       }
+
+      // Fetch version
+      try { const info = await (await fetch('/api/info')).json(); this.version = info.version || ''; } catch(e) {}
 
       // Only load stats on init — everything else is lazy
       await this.fetchStats();

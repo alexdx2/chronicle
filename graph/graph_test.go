@@ -25,6 +25,21 @@ func setupGraph(t *testing.T) *Graph {
 	return New(s, reg)
 }
 
+func setupGraphDefaults(t *testing.T) *Graph {
+	t.Helper()
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	reg, err := registry.LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	return New(s, reg)
+}
+
 func makeRevision(t *testing.T, g *Graph) int64 {
 	t.Helper()
 	id, err := g.store.CreateRevision("test-domain", "", "abc123", "full_scan", "full", "{}")

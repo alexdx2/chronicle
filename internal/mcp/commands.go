@@ -22,21 +22,22 @@ var UserCommands = map[string]string{
 var CommandInstructions = map[string]string{
 	"scan": `Full project scan:
 1. Call chronicle_get_discoveries to learn from previous scans
-2. Call chronicle_extraction_guide for methodology
-3. Auto-discover project, save manifest
-3.5. Call chronicle_resolve_context(domain) — if no context exists, it auto-creates "main"
-4. Create revision (include context_id)
-5. Scan in passes: data models → code structure → contracts/endpoints → cross-service edges
-6. For each file: read → extract → chronicle_import_all immediately (max 10-15 nodes per call)
-7. Snapshot + stale mark
-8. Define domain language terms (chronicle_define_term) + check violations
-9. Report discoveries
+2. Call chronicle_schema — learn what layers, types, and edges exist
+3. Call chronicle_extraction_guide — learn how to extract
+4. Auto-discover project, save manifest
+4.5. Call chronicle_resolve_context(domain) — if no context exists, it auto-creates "main"
+5. Create revision (include context_id)
+6. Scan in passes: data models → code structure → contracts/endpoints → cross-service edges → flows
+7. For each file: read → extract → chronicle_import_all immediately (max 10-15 nodes per call)
+8. Snapshot + stale mark
+9. Define domain language terms (chronicle_define_term) + check violations
+10. Report discoveries
 
 Incremental scan (when user says "update the graph" or "rescan changes"):
 → Use the "update" command instead.`,
 
 	"data": `Analyze data models:
-1. Call chronicle_extraction_guide(technology='prisma')
+1. Call chronicle_schema({ from_layer: 'code', to_layer: 'data', include: 'edges' }) to see valid data edge types
 2. Find schema files: Glob for prisma/schema.prisma, *.entity.ts
 3. Read each schema file
 4. Extract: models → data:model nodes, enums → data:enum nodes
@@ -85,8 +86,9 @@ Incremental scan (when user says "update the graph" or "rescan changes"):
 7. Explain the path with edge types`,
 
 	"flows": `Business flow / use case analysis:
-1. Call chronicle_extraction_guide(technology='flow') for detailed instructions
-2. Read the main service files to identify key business processes
+1. Call chronicle_schema({ from_layer: 'flow', include: 'edges' }) to see valid flow edge types
+2. Call chronicle_extraction_guide for flow extraction rules
+3. Read the main service files to identify key business processes
 3. For each use case (e.g. PlaceOrder, UserSignup):
    a. Create flow:use_case node
    b. Find which endpoint triggers it → TRIGGERS_FLOW edge
@@ -242,7 +244,7 @@ Context management tools (called directly, not via commands):
    → closes old evidence validity, inserts stale versions, writes changelog
    → returns stale_evidence count and files_to_rescan
 8. Read ONLY the files listed in files_to_rescan (skip deleted files)
-9. For each file: extract nodes/edges following chronicle_extraction_guide methodology
+9. For each file: extract nodes/edges following chronicle_schema types and chronicle_extraction_guide methodology
    → chronicle_import_all for re-extracted facts (positive evidence, max 10-15 nodes per call)
 10. For relationships confirmed removed (e.g. deleted imports, removed dependencies):
     create negative evidence via chronicle_evidence_add(polarity="negative")
