@@ -404,7 +404,9 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
 	add(queryPathTool(), queryPathHandler(g))
 	add(impactTool(), impactHandler(g))
+	add(schemaTool(), schemaHandler(g))
 	add(extractionGuideTool(), extractionGuideHandler())
+	add(extractionHintsTool(), extractionHintsHandler())
 	add(scanStatusTool(), scanStatusHandler(g))
 	add(saveManifestTool(), saveManifestHandler())
 	add(resetDBTool(), resetDBHandler(g))
@@ -418,6 +420,11 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(diagramCreateTool(), diagramCreateHandler())
 	add(diagramUpdateTool(), diagramUpdateHandler())
 	add(diagramAnnotateTool(), diagramAnnotateHandler())
+	add(resolveContextTool(), resolveContextHandler(g))
+	add(contextListTool(), contextListHandler(g))
+	add(contextCreateTool(), contextCreateHandler(g))
+	add(contextArchiveTool(), contextArchiveHandler(g))
+	add(changelogQueryTool(), changelogQueryHandler(g))
 
 	// Debug mode: register chronicle_debug_log tool
 	if GetDebugLogger() != nil {
