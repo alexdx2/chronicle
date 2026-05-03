@@ -36,6 +36,10 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(edgeUpsertTool(), edgeUpsertHandler(g))
 	s.AddTool(edgeListTool(), edgeListHandler(g))
 	s.AddTool(evidenceAddTool(), evidenceAddHandler(g))
+	s.AddTool(evidenceVerifyTool(), evidenceVerifyHandler(g))
+	s.AddTool(resolveReviewTool(), resolveReviewHandler(g))
+	s.AddTool(fileExtractedTool(), fileExtractedHandler(g))
+	s.AddTool(resolveExtractionsTool(), resolveExtractionsHandler(g))
 	s.AddTool(importAllTool(), importAllHandler(g))
 	s.AddTool(queryDepsTool(), queryDepsHandler(g))
 	s.AddTool(queryReverseDepsTool(), queryReverseDepsHandler(g))
@@ -412,6 +416,8 @@ func evidenceAddTool() mcp.Tool {
 		mcp.WithNumber("confidence", mcp.Description("Confidence [0,1]")),
 		mcp.WithString("polarity", mcp.Description("Evidence polarity: positive (default) or negative. Use negative to explicitly record that a relationship was confirmed removed.")),
 		mcp.WithNumber("revision_id", mcp.Description("Revision ID for this evidence")),
+		mcp.WithString("assertion", mcp.Description("JSON assertion object describing what was observed (e.g. {\"package\": \"@foo/bar\", \"sections\": [\"dependencies\"]})")),
+		mcp.WithString("assertion_kind", mcp.Description("Assertion kind: manifest_dependency, import_specifier, call_expression, decorator, yaml_key_exists, prisma_model, text_contains")),
 	)
 }
 
@@ -440,6 +446,8 @@ func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
 			Confidence:       float64Param(args, "confidence"),
 			Polarity:         strParam(args, "polarity"),
 			RevisionID:       int64Param(args, "revision_id"),
+			Assertion:        strParam(args, "assertion"),
+			AssertionKind:    strParam(args, "assertion_kind"),
 		}
 
 		nodeKey := strParam(args, "node_key")
@@ -465,6 +473,153 @@ func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 		return jsonResult(map[string]any{"evidence_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_evidence_verify
+// ---------------------------------------------------------------------------
+
+func evidenceVerifyTool() mcp.Tool {
+	return mcp.NewTool("chronicle_evidence_verify",
+		mcp.WithDescription("Mechanically verify stale evidence in a file using native parsers and tree-sitter. Checks whether evidence assertions still hold without needing Claude to re-read the file. Auto-repairs moved locators. Returns per-evidence results. Call this on files returned by invalidate_changed before deciding whether to re-read them."),
+		mcp.WithString("file_path", mcp.Required(), mcp.Description("File path to verify evidence for")),
+		mcp.WithNumber("revision_id", mcp.Description("Current revision ID (for tracking)")),
+		mcp.WithString("domain", mcp.Description("Domain key")),
+	)
+}
+
+func evidenceVerifyHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filePath := strParam(args, "file_path")
+		if filePath == "" {
+			return errorResult(fmt.Errorf("file_path is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+
+		result, err := g.VerifyFileEvidence(filePath, revisionID, domain)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_resolve_review
+// ---------------------------------------------------------------------------
+
+func resolveReviewTool() mcp.Tool {
+	return mcp.NewTool("chronicle_resolve_review",
+		mcp.WithDescription("Resolve a needs_review edge or node. Use after mechanical verification identifies edges that lost all evidence. Resolution options: confirmed_valid (edge still exists, provide new positive evidence with assertion), confirmed_removed (edge gone, requires negative evidence with checked_scope), replaced_by (dependency moved, requires replacement_target_key), deferred (will check later, requires reason)."),
+		mcp.WithString("target_kind", mcp.Required(), mcp.Description("Target kind: edge or node")),
+		mcp.WithString("target_key", mcp.Required(), mcp.Description("Edge key or node key to resolve")),
+		mcp.WithString("resolution", mcp.Required(), mcp.Description("Resolution: confirmed_valid, confirmed_removed, replaced_by, deferred")),
+		mcp.WithString("reason", mcp.Required(), mcp.Description("Reason for the resolution")),
+		mcp.WithString("evidence", mcp.Description("JSON evidence object (required for confirmed_valid, confirmed_removed, replaced_by)")),
+		mcp.WithString("replacement_target_key", mcp.Description("New edge/node key that replaces this one (required for replaced_by)")),
+		mcp.WithNumber("revision_id", mcp.Description("Current revision ID")),
+	)
+}
+
+func resolveReviewHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		targetKind := strParam(args, "target_kind")
+		targetKey := strParam(args, "target_key")
+		resolution := strParam(args, "resolution")
+		reason := strParam(args, "reason")
+		evidenceJSON := strParam(args, "evidence")
+		replacementKey := strParam(args, "replacement_target_key")
+		revisionID := int64Param(args, "revision_id")
+
+		if targetKind == "" || targetKey == "" || resolution == "" || reason == "" {
+			return errorResult(fmt.Errorf("target_kind, target_key, resolution, and reason are all required")), nil
+		}
+
+		result, err := g.ResolveReview(targetKind, targetKey, resolution, reason, evidenceJSON, replacementKey, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_file_extracted
+// ---------------------------------------------------------------------------
+
+func fileExtractedTool() mcp.Tool {
+	return mcp.NewTool("chronicle_file_extracted",
+		mcp.WithDescription("Report extraction results for a single file. Called by scan agents after reading a file. Status: 'extracted' (found architecture facts), 'no_architecture' (file read, nothing relevant), 'skipped' (intentionally skipped), 'error' (couldn't process). Facts is a JSON array of observations."),
+		mcp.WithString("file_path", mcp.Required(), mcp.Description("File path that was processed")),
+		mcp.WithString("status", mcp.Required(), mcp.Description("Result status: extracted, no_architecture, skipped, error")),
+		mcp.WithString("facts", mcp.Description("JSON array of extracted facts (for status=extracted)")),
+		mcp.WithString("error_message", mcp.Description("Error description (for status=error)")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filePath := strParam(args, "file_path")
+		status := strParam(args, "status")
+		factsJSON := strParam(args, "facts")
+		errorMsg := strParam(args, "error_message")
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+
+		if filePath == "" || status == "" || revisionID == 0 || domain == "" {
+			return errorResult(fmt.Errorf("file_path, status, revision_id, and domain are required")), nil
+		}
+
+		id, err := g.SaveFileExtraction(revisionID, domain, filePath, status, factsJSON, errorMsg)
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Satisfy the obligation for this file
+		_ = g.SatisfyFileObligation(revisionID, filePath)
+
+		return jsonResult(map[string]any{
+			"extraction_id": id,
+			"file_path":     filePath,
+			"status":        status,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_resolve_extractions
+// ---------------------------------------------------------------------------
+
+func resolveExtractionsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_resolve_extractions",
+		mcp.WithDescription("Resolve all pending file extractions into graph nodes, edges, and evidence. Call after all scan agents have reported their findings. MCP builds the graph from collected facts — deduplicates entities, resolves cross-file references, creates evidence with assertions. Returns what was created and what needs review."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+
+		if revisionID == 0 || domain == "" {
+			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
+		}
+
+		result, err := g.ResolveExtractions(domain, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
 	}
 }
 

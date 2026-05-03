@@ -108,6 +108,12 @@ func (s *Store) migrate() error {
 		// Evidence gets stable identity + context
 		`ALTER TABLE graph_evidence ADD COLUMN evidence_uid TEXT`,
 		`ALTER TABLE graph_evidence ADD COLUMN context_id INTEGER`,
+		// Evidence verification system (assertion-based)
+		`ALTER TABLE graph_evidence ADD COLUMN assertion TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE graph_evidence ADD COLUMN assertion_kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE graph_evidence ADD COLUMN assertion_version TEXT NOT NULL DEFAULT 'v1'`,
+		`ALTER TABLE graph_evidence ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'unverified'`,
+		`ALTER TABLE graph_evidence ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
@@ -454,6 +460,59 @@ CREATE TABLE IF NOT EXISTS node_aliases (
 
 CREATE INDEX IF NOT EXISTS idx_node_aliases_normalized ON node_aliases(normalized_alias, alias_kind);
 CREATE INDEX IF NOT EXISTS idx_node_aliases_node_id ON node_aliases(node_id);
+
+CREATE TABLE IF NOT EXISTS scan_obligations (
+    obligation_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id     INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
+    domain_key      TEXT NOT NULL,
+    obligation_type TEXT NOT NULL,
+    target_key      TEXT NOT NULL,
+    reason          TEXT,
+    status          TEXT NOT NULL DEFAULT 'open'
+                      CHECK (status IN ('open','satisfied','skipped','deferred')),
+    defer_reason    TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    resolved_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_obligations_revision ON scan_obligations(revision_id, status);
+CREATE INDEX IF NOT EXISTS idx_scan_obligations_target ON scan_obligations(target_key);
+
+CREATE TABLE IF NOT EXISTS evidence_verification_runs (
+    run_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id       INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
+    domain_key        TEXT NOT NULL,
+    file_path         TEXT NOT NULL,
+    verifier_id       TEXT NOT NULL,
+    verifier_version  TEXT NOT NULL,
+    status            TEXT NOT NULL
+                        CHECK (status IN ('succeeded','failed','skipped','unsupported')),
+    evidence_checked  INTEGER NOT NULL DEFAULT 0,
+    valid_count       INTEGER NOT NULL DEFAULT 0,
+    moved_count       INTEGER NOT NULL DEFAULT 0,
+    missing_count     INTEGER NOT NULL DEFAULT 0,
+    changed_count     INTEGER NOT NULL DEFAULT 0,
+    ambiguous_count   INTEGER NOT NULL DEFAULT 0,
+    started_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    finished_at       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_verification_runs_revision ON evidence_verification_runs(revision_id, file_path);
+
+CREATE TABLE IF NOT EXISTS scan_extractions (
+    extraction_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id     INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
+    domain_key      TEXT NOT NULL,
+    file_path       TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'extracted'
+                      CHECK (status IN ('extracted','no_architecture','skipped','error','resolved')),
+    facts_json      TEXT NOT NULL DEFAULT '[]',
+    error_message   TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_extractions_revision ON scan_extractions(revision_id, domain_key);
+CREATE INDEX IF NOT EXISTS idx_scan_extractions_file ON scan_extractions(file_path, revision_id);
 `
 
 // SaveDiagramSession upserts a diagram session as a JSON blob.

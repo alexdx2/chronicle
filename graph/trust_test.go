@@ -75,7 +75,7 @@ func TestFreshnessScore(t *testing.T) {
 	t.Run("all valid", func(t *testing.T) {
 		evidence := []store.EvidenceRow{
 			{EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.95},
-			{EvidencePolarity: "positive", EvidenceStatus: "revalidated", Confidence: 0.80},
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.80},
 		}
 		got := FreshnessScore(evidence)
 		if math.Abs(got-1.0) > 0.001 {

@@ -187,6 +187,9 @@ func (g *Graph) AddNodeEvidence(nodeKey string, input validate.EvidenceInput) (i
 		Confidence:              confidence,
 		EvidencePolarity:        polarity,
 		ValidFromRevisionID:     input.RevisionID,
+		Assertion:               input.Assertion,
+		AssertionKind:           input.AssertionKind,
+		AssertionVersion:        input.AssertionVersion,
 		Metadata:                metadata,
 	}
 	id, err := g.store.AddEvidence(row)
@@ -240,6 +243,9 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 		Confidence:              confidence,
 		EvidencePolarity:        polarity,
 		ValidFromRevisionID:     input.RevisionID,
+		Assertion:               input.Assertion,
+		AssertionKind:           input.AssertionKind,
+		AssertionVersion:        input.AssertionVersion,
 		Metadata:                metadata,
 	}
 	id, err := g.store.AddEvidence(row)

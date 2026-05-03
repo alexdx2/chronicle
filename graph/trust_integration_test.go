@@ -115,8 +115,8 @@ func TestTrustLifecycle(t *testing.T) {
 	if len(evidence) == 0 {
 		t.Fatal("Phase 3: no evidence found")
 	}
-	if evidence[0].EvidenceStatus != "revalidated" {
-		t.Errorf("Phase 3: evidence status = %q, want revalidated", evidence[0].EvidenceStatus)
+	if evidence[0].EvidenceStatus != "valid" {
+		t.Errorf("Phase 3: evidence status = %q, want valid (re-observation returns to valid)", evidence[0].EvidenceStatus)
 	}
 
 	// === Phase 4: Negative evidence kills the edge ===
@@ -419,15 +419,15 @@ func TestIncrementalDependencyUnchanged(t *testing.T) {
 		t.Errorf("Phase 3: trust = %v, want ~%v (restored)", edge.TrustScore, originalTrust)
 	}
 
-	// Verify: evidence is revalidated
+	// Verify: evidence returns to valid (revalidation is an event, not a durable status)
 	evidence, _ := s.ListEvidenceByEdge(edge.EdgeID)
-	hasRevalidated := false
+	hasValid := false
 	for _, ev := range evidence {
-		if ev.EvidenceStatus == "revalidated" {
-			hasRevalidated = true
+		if ev.EvidenceStatus == "valid" {
+			hasValid = true
 		}
 	}
-	if !hasRevalidated {
-		t.Error("Phase 3: expected at least one revalidated evidence")
+	if !hasValid {
+		t.Error("Phase 3: expected at least one valid evidence after re-observation")
 	}
 }

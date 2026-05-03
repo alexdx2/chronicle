@@ -38,6 +38,12 @@ type EvidenceRow struct {
 	InvalidatedByRevisionID  int64  `json:"invalidated_by_revision_id,omitempty"`
 	InvalidatedReason        string `json:"invalidated_reason,omitempty"`
 	Metadata         string  `json:"metadata"`
+	// Assertion-based verification fields
+	Assertion          string `json:"assertion,omitempty"`
+	AssertionKind      string `json:"assertion_kind,omitempty"`
+	AssertionVersion   string `json:"assertion_version,omitempty"`
+	VerificationStatus string `json:"verification_status,omitempty"`
+	VerificationReason string `json:"verification_reason,omitempty"`
 }
 
 // AddEvidence deduplicates by (target_kind, node_id/edge_id, source_kind, repo_name, file_path,
@@ -83,13 +89,11 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 	}
 
 	if err == nil {
-		// Update existing — if it was stale, mark as revalidated; otherwise keep valid.
+		// Update existing — return to valid (revalidation is an event, not a state).
 		newStatus := "valid"
 		var oldStatus string
 		s.db.QueryRow("SELECT evidence_status FROM graph_evidence WHERE evidence_id=?", existingID).Scan(&oldStatus)
-		if oldStatus == "stale" {
-			newStatus = "revalidated"
-		}
+		_ = oldStatus // stale → valid on re-observation
 
 		const updQ = `
 			UPDATE graph_evidence
@@ -115,6 +119,19 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		status = "valid"
 	}
 
+	assertionKind := e.AssertionKind
+	if assertionKind == "" {
+		assertionKind = ""
+	}
+	assertionVersion := e.AssertionVersion
+	if assertionVersion == "" {
+		assertionVersion = "v1"
+	}
+	assertion := e.Assertion
+	if assertion == "" {
+		assertion = "{}"
+	}
+
 	const insQ = `
 		INSERT INTO graph_evidence
 		  (target_kind, node_id, edge_id, source_kind, repo_name, file_path,
@@ -123,8 +140,9 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		   confidence, evidence_status, evidence_polarity,
 		   valid_from_revision_id, last_verified_revision_id,
 		   context_id, evidence_uid,
+		   assertion, assertion_kind, assertion_version,
 		   metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`
 	res, err := s.db.Exec(insQ,
 		e.TargetKind, nodeID, edgeID,
@@ -138,6 +156,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		e.Confidence, status, polarity,
 		nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ValidFromRevisionID),
 		nullableInt64(e.ContextID), nullableStr(e.EvidenceUID),
+		assertion, assertionKind, assertionVersion,
 		e.Metadata,
 	)
 	if err != nil {
@@ -173,6 +192,8 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0),
 		       COALESCE(last_verified_revision_id,0), COALESCE(invalidated_by_revision_id,0),
 		       COALESCE(invalidated_reason,''),
+		       COALESCE(assertion,'{}'), COALESCE(assertion_kind,''), COALESCE(assertion_version,'v1'),
+		       COALESCE(verification_status,'unverified'), COALESCE(verification_reason,''),
 		       metadata
 		FROM graph_evidence
 		WHERE ` + col + ` = ?
@@ -198,6 +219,8 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 			&r.ValidFromRevisionID, &r.ValidToRevisionID,
 			&r.LastVerifiedRevisionID, &r.InvalidatedByRevisionID,
 			&r.InvalidatedReason,
+			&r.Assertion, &r.AssertionKind, &r.AssertionVersion,
+			&r.VerificationStatus, &r.VerificationReason,
 			&r.Metadata,
 		); err != nil {
 			return nil, fmt.Errorf("listEvidence scan: %w", err)
@@ -205,6 +228,80 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ListStaleEvidenceByFile returns all stale evidence for a given file path.
+func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) {
+	q := `
+		SELECT evidence_id, target_kind,
+		       COALESCE(node_id,0), COALESCE(edge_id,0),
+		       source_kind,
+		       COALESCE(repo_name,''), COALESCE(file_path,''),
+		       COALESCE(line_start,0), COALESCE(line_end,0),
+		       COALESCE(column_start,0), COALESCE(column_end,0),
+		       COALESCE(locator,''),
+		       extractor_id, extractor_version,
+		       COALESCE(ast_rule,''), COALESCE(snippet_hash,''), COALESCE(commit_sha,''),
+		       observed_at, COALESCE(verified_at,''),
+		       confidence, evidence_status, evidence_polarity,
+		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0),
+		       COALESCE(last_verified_revision_id,0), COALESCE(invalidated_by_revision_id,0),
+		       COALESCE(invalidated_reason,''),
+		       COALESCE(assertion,'{}'), COALESCE(assertion_kind,''), COALESCE(assertion_version,'v1'),
+		       COALESCE(verification_status,'unverified'), COALESCE(verification_reason,''),
+		       metadata
+		FROM graph_evidence
+		WHERE file_path = ? AND evidence_status = 'stale'
+		ORDER BY evidence_id
+	`
+	rows, err := s.db.Query(q, filePath)
+	if err != nil {
+		return nil, fmt.Errorf("ListStaleEvidenceByFile: %w", err)
+	}
+	defer rows.Close()
+
+	var out []EvidenceRow
+	for rows.Next() {
+		var r EvidenceRow
+		if err := rows.Scan(
+			&r.EvidenceID, &r.TargetKind, &r.NodeID, &r.EdgeID,
+			&r.SourceKind, &r.RepoName, &r.FilePath,
+			&r.LineStart, &r.LineEnd, &r.ColumnStart, &r.ColumnEnd,
+			&r.Locator, &r.ExtractorID, &r.ExtractorVersion,
+			&r.ASTRule, &r.SnippetHash, &r.CommitSHA,
+			&r.ObservedAt, &r.VerifiedAt,
+			&r.Confidence, &r.EvidenceStatus, &r.EvidencePolarity,
+			&r.ValidFromRevisionID, &r.ValidToRevisionID,
+			&r.LastVerifiedRevisionID, &r.InvalidatedByRevisionID,
+			&r.InvalidatedReason,
+			&r.Assertion, &r.AssertionKind, &r.AssertionVersion,
+			&r.VerificationStatus, &r.VerificationReason,
+			&r.Metadata,
+		); err != nil {
+			return nil, fmt.Errorf("ListStaleEvidenceByFile scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UpdateEvidenceVerification updates an evidence row after mechanical verification.
+func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificationStatus, verificationReason string, lineStart, lineEnd int, revisionID int64) error {
+	_, err := s.db.Exec(`
+		UPDATE graph_evidence
+		SET evidence_status = ?,
+		    verification_status = ?,
+		    verification_reason = ?,
+		    line_start = CASE WHEN ? > 0 THEN ? ELSE line_start END,
+		    line_end = CASE WHEN ? > 0 THEN ? ELSE line_end END,
+		    last_verified_revision_id = CASE WHEN ? > 0 THEN ? ELSE last_verified_revision_id END,
+		    verified_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE evidence_id = ?
+	`, status, verificationStatus, verificationReason,
+		lineStart, lineStart, lineEnd, lineEnd,
+		revisionID, revisionID,
+		evidenceID)
+	return err
 }
 
 // MarkEvidenceStaleByFiles marks all valid/revalidated evidence from the given file paths as stale.
@@ -288,6 +385,22 @@ func (s *Store) CountEvidenceByStatus(domainKey string) (map[string]int, error) 
 		result[status] = count
 	}
 	return result, rows.Err()
+}
+
+// CountRecentlyVerifiedEvidence counts evidence that was re-confirmed in a specific revision
+// (evidence_status='valid' AND last_verified_revision_id=revisionID).
+func (s *Store) CountRecentlyVerifiedEvidence(domainKey string, revisionID int64) (int, error) {
+	q := `SELECT COUNT(*)
+		FROM graph_evidence e
+		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+		LEFT JOIN graph_nodes en ON ed.from_node_id = en.node_id
+		WHERE COALESCE(n.domain_key, en.domain_key) = ?
+		  AND e.evidence_status = 'valid'
+		  AND e.last_verified_revision_id = ?`
+	var count int
+	err := s.db.QueryRow(q, domainKey, revisionID).Scan(&count)
+	return count, err
 }
 
 // StaleFilePaths returns distinct file paths that have stale evidence.

@@ -249,6 +249,56 @@ func (s *Store) UpdateEdgeTrust(edgeID int64, confidence, freshness, trustScore 
 	return nil
 }
 
+// UpdateEdgeVerificationStatus updates the verification_status field on an edge by key.
+func (s *Store) UpdateEdgeVerificationStatus(edgeKey, verificationStatus string) error {
+	_, err := s.db.Exec(`UPDATE graph_edges SET verification_status=? WHERE edge_key=?`, verificationStatus, edgeKey)
+	return err
+}
+
+// GetEdgesWithNoValidEvidence returns active edges that have no valid positive evidence.
+// These are candidates for needs_review status. Checks edges that have at least one
+// evidence record (to exclude edges that were never evidenced) but no currently valid positive evidence.
+func (s *Store) GetEdgesWithNoValidEvidence(domainKey string) ([]EdgeRow, error) {
+	q := `
+		SELECT e.edge_id, e.edge_key, e.from_node_id, e.to_node_id, e.edge_type,
+		       e.derivation_kind, COALESCE(e.context_key,''), e.active,
+		       COALESCE(e.first_seen_revision_id,0), COALESCE(e.last_seen_revision_id,0),
+		       e.confidence, e.freshness, e.trust_score, e.metadata
+		FROM graph_edges e
+		LEFT JOIN graph_nodes n ON e.from_node_id = n.node_id
+		WHERE (n.domain_key = ? OR ? = '')
+		  AND e.active = 1
+		  AND NOT EXISTS (
+			SELECT 1 FROM graph_evidence ev
+			WHERE ev.edge_id = e.edge_id
+			  AND ev.evidence_polarity = 'positive'
+			  AND ev.evidence_status IN ('valid','revalidated')
+		  )
+		  AND EXISTS (
+			SELECT 1 FROM graph_evidence ev2
+			WHERE ev2.edge_id = e.edge_id
+		  )
+	`
+	rows, err := s.db.Query(q, domainKey, domainKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []EdgeRow
+	for rows.Next() {
+		var r EdgeRow
+		if err := rows.Scan(&r.EdgeID, &r.EdgeKey, &r.FromNodeID, &r.ToNodeID, &r.EdgeType,
+			&r.DerivationKind, &r.ContextKey, &r.Active,
+			&r.FirstSeenRevisionID, &r.LastSeenRevisionID,
+			&r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // MarkStaleEdges marks active edges (from nodes in domainKey) with last_seen < revisionID as inactive.
 func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error) {
 	res, err := s.db.Exec(`

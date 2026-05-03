@@ -85,6 +85,10 @@ type EvidenceInput struct {
 	Polarity         string
 	RevisionID       int64
 	Metadata         string
+	// Assertion-based verification
+	Assertion        string
+	AssertionKind    string
+	AssertionVersion string
 }
 
 func ValidateNodeInput(input NodeInput, reg *registry.Registry) (*ValidatedNode, error) {
