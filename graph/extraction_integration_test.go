@@ -169,22 +169,25 @@ func TestExtractionWithHTTPCall(t *testing.T) {
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
 
-	t.Logf("Unresolved: %d", len(result.Unresolved))
-	for _, u := range result.Unresolved {
-		t.Logf("  [%s] %s → %s: %s", u.Kind, u.FromFile, u.Target, u.Reason)
+	t.Logf("Edges: %d, Evidence: %d, Unresolved: %d", result.EdgesCreated, result.EvidenceCreated, len(result.Unresolved))
+
+	// HTTP calls now create external_system nodes + CALLS_SERVICE edges with evidence
+	if result.EdgesCreated == 0 {
+		t.Error("expected edge created for HTTP call to stripe-api")
+	}
+	if result.EvidenceCreated == 0 {
+		t.Error("expected evidence with assertion for HTTP call")
 	}
 
-	if len(result.Unresolved) == 0 {
-		t.Error("expected HTTP call to be reported as unresolved")
-	}
-
-	found := false
-	for _, u := range result.Unresolved {
-		if u.Kind == "http_call" && u.Target == "http://stripe-api:3000/charge" {
-			found = true
+	// Verify the external system node was created
+	nodes, _ := s.ListNodes(store.NodeFilter{Domain: "myapp"})
+	foundExternal := false
+	for _, n := range nodes {
+		if n.Name == "stripe-api" {
+			foundExternal = true
 		}
 	}
-	if !found {
-		t.Error("expected unresolved HTTP call to stripe-api")
+	if !foundExternal {
+		t.Error("expected external_system node 'stripe-api' to be created")
 	}
 }

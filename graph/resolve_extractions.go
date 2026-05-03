@@ -232,18 +232,195 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "http_call":
-		// External HTTP dependency — may be unresolved
-		return counts, &UnresolvedRef{
-			FromFile: filePath,
-			Kind:     "http_call",
-			Target:   fact.Target,
-			Reason:   "external HTTP dependency — needs service mapping",
+		// External HTTP call — create external system node + edge + evidence
+		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		targetName := inferExternalSystemName(fact.Target)
+		toNodeKey := "service:external_system:" + domainKey + ":" + strings.ToLower(targetName)
+		g.ensureNode(domainKey, revisionID, toNodeKey, targetName, "")
+
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "CALLS_SERVICE", DerivationKind: "linked", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
 		}
 
-	case "call", "decorator", "model", "endpoint", "produces", "consumes":
-		// These create evidence but resolution is more complex
-		// For now, store as-is and let Claude handle during review
-		return counts, nil
+		// Evidence: text_contains assertion for the URL
+		assertion, _ := json.Marshal(map[string]any{
+			"substring": fact.Target,
+			"context":   "fetch",
+		})
+		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.85, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		})
+		counts.evidence++
+
+	case "call":
+		// Method call — evidence for the call expression
+		if fact.Method == "" && fact.Object == "" {
+			return counts, nil
+		}
+		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		assertion, _ := json.Marshal(map[string]any{
+			"callee_object": fact.Object,
+			"callee_method": fact.Method,
+		})
+
+		// If there's enough info to create an edge, do it
+		if fact.Object != "" {
+			toNodeKey := "code:provider:" + domainKey + ":" + strings.ToLower(fact.Object)
+			edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
+			// Only add evidence to existing edge — don't create edges from call facts alone
+			_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				Confidence: 0.80, RevisionID: revisionID,
+				AssertionKind: "call_expression", Assertion: string(assertion),
+			})
+			counts.evidence++
+		}
+
+	case "decorator":
+		// Decorator — evidence for decorator on class/method
+		if fact.Decorator == "" {
+			return counts, nil
+		}
+		assertion, _ := json.Marshal(map[string]any{
+			"decorator_name": fact.Decorator,
+			"target_name":    fact.From,
+		})
+
+		// Add evidence to the node (not edge)
+		nodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
+			TargetKind: "node", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.90, RevisionID: revisionID,
+			AssertionKind: "decorator", Assertion: string(assertion),
+		})
+		counts.evidence++
+
+	case "produces":
+		// Produces to topic/queue
+		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
+		g.ensureNode(domainKey, revisionID, toNodeKey, fact.To, "")
+
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":PUBLISHES_TOPIC"
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "PUBLISHES_TOPIC", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
+
+		assertion, _ := json.Marshal(map[string]any{
+			"substring": fact.To,
+		})
+		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		})
+		counts.evidence++
+
+	case "consumes":
+		// Consumes from topic/queue
+		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
+		g.ensureNode(domainKey, revisionID, toNodeKey, fact.To, "")
+
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONSUMES_TOPIC"
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "CONSUMES_TOPIC", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
+
+		assertion, _ := json.Marshal(map[string]any{
+			"substring": fact.To,
+		})
+		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		})
+		counts.evidence++
+
+	case "endpoint":
+		// HTTP/WS/GraphQL endpoint — contract node + evidence
+		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		endpointName := fact.To
+		if fact.Method != "" {
+			endpointName = fact.Method + " " + fact.To
+		}
+		toNodeKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(endpointName, " ", "_"), "/", "_"))
+		g.ensureNode(domainKey, revisionID, toNodeKey, endpointName, "")
+
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":EXPOSES_ENDPOINT"
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "EXPOSES_ENDPOINT", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
+
+		assertion, _ := json.Marshal(map[string]any{
+			"substring": fact.To,
+		})
+		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.90, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		})
+		counts.evidence++
+
+	case "model":
+		// Data model — node + evidence
+		nodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
+		g.ensureNode(domainKey, revisionID, nodeKey, fact.To, filePath)
+
+		assertion, _ := json.Marshal(map[string]any{
+			"model": fact.To,
+		})
+		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
+			TargetKind: "node", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "prisma_model", Assertion: string(assertion),
+		})
+		counts.nodes++
+		counts.evidence++
 	}
 
 	return counts, nil
@@ -328,6 +505,24 @@ func inferNameFromImport(module string) string {
 // SaveFileExtraction stores extraction results from a scan agent.
 func (g *Graph) SaveFileExtraction(revisionID int64, domain, filePath, status, factsJSON, errorMsg string) (int64, error) {
 	return g.store.SaveExtraction(revisionID, domain, filePath, status, factsJSON, errorMsg)
+}
+
+func inferExternalSystemName(url string) string {
+	// "http://notifications:3005/push" → "notifications"
+	// "https://hooks.example.com/battles" → "hooks.example.com"
+	u := url
+	for _, prefix := range []string{"https://", "http://"} {
+		u = strings.TrimPrefix(u, prefix)
+	}
+	// Take host part
+	if idx := strings.Index(u, "/"); idx > 0 {
+		u = u[:idx]
+	}
+	// Remove port
+	if idx := strings.Index(u, ":"); idx > 0 {
+		u = u[:idx]
+	}
+	return u
 }
 
 func normalizePackageName(pkg string) string {
