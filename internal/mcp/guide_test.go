@@ -28,8 +28,8 @@ func TestExtractionGuideUniversalIsValidJSON(t *testing.T) {
 		t.Error("guide should NOT contain flow_edge_types — use chronicle_schema() instead")
 	}
 
-	if len(guide) > 7000 {
-		t.Errorf("guide is %d bytes, want < 7000", len(guide))
+	if len(guide) > 12000 {
+		t.Errorf("guide is %d bytes, want < 12000", len(guide))
 	}
 	t.Logf("Universal guide: %d bytes (~%d tokens)", len(guide), len(guide)/4)
 }
@@ -95,8 +95,8 @@ func TestExtractionHintsNestJS(t *testing.T) {
 	if parsed["technology"] != "nestjs" {
 		t.Errorf("expected technology=nestjs, got %v", parsed["technology"])
 	}
-	if _, ok := parsed["hints"]; !ok {
-		t.Error("missing hints section")
+	if _, ok := parsed["recognition_patterns"]; !ok {
+		t.Error("missing recognition_patterns section")
 	}
 	if _, ok := parsed["note"]; !ok {
 		t.Error("missing note about chronicle_schema()")

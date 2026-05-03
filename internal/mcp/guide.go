@@ -22,6 +22,7 @@ func SetGuideStore(s *store.Store) { customGuideStore = s }
 func ExtractionGuide(technology string) string {
 	guide := map[string]any{
 		"schema_reference": "For valid edge types, node types, and layer constraints, call chronicle_schema(). This guide uses illustrative examples only — schema is the single source of truth.",
+
 		"workflow": []string{
 			"1. Call chronicle_get_discoveries — learn from previous scans",
 			"2. Call chronicle_schema — learn what layers, types, and edges exist",
@@ -35,77 +36,119 @@ func ExtractionGuide(technology string) string {
 			"9. Domain language: chronicle_get_glossary → chronicle_define_term → chronicle_check_language",
 			"10. chronicle_report_discovery with severity (critical/warning/insight) and suggested_action",
 		},
+
 		"key_rules": map[string]string{
 			"format":            "node_key = layer:type:domain:name (all lowercase)",
 			"import":            "STREAM: read 1 file → import immediately → forget. Max ~10 nodes per import call.",
 			"no_scripts":        "Do NOT write bash/grep scripts. READ files with Read tool. You understand code better than regex.",
-			"evidence":          "Every node needs evidence: target_kind, node_key, source_kind=file, file_path, line_start, extractor_id=claude-code, extractor_version=1.0",
-			"negative_evidence": "During incremental scans, if a relationship was confirmed removed (e.g. constructor no longer injects a service), create negative evidence via chronicle_evidence_add with polarity='negative'.",
-			"partial_accept":    "chronicle_import_all writes valid items and skips invalid ones. Check the 'rejected' array in the response — each entry has the error and a suggested fix. Re-import rejected items after fixing.",
+			"evidence":          "Every edge needs evidence with assertion: file_path, assertion_kind, assertion JSON. This enables mechanical verification.",
+			"negative_evidence": "During incremental scans, if a relationship was confirmed removed, create negative evidence via chronicle_evidence_add with polarity='negative' and checked_scope.",
+			"partial_accept":    "chronicle_import_all writes valid items and skips invalid ones. Check the 'rejected' array — each entry has error and suggested fix.",
 		},
+
+		"universal_extraction": map[string]any{
+			"principle": "You are looking for ARCHITECTURAL FACTS, not code patterns. Don't search for specific decorators or syntax — understand what the code DOES and extract the relationships.",
+
+			"what_to_extract": map[string]string{
+				"boundaries":    "What are the separately deployable units? (services, apps, packages, containers). Each → service layer node.",
+				"data_models":   "What are the persistent data structures? (database models, schemas, entities). Each → data layer node. FK/relations → REFERENCES_MODEL edges.",
+				"code_units":    "What are the key code components? (modules, controllers, services, resolvers, handlers, gateways). Each → code layer node.",
+				"contracts":     "What does this system expose to the outside? (HTTP endpoints, GraphQL operations, WebSocket events, message queue topics, gRPC methods). Each → contract layer node.",
+				"dependencies":  "What depends on what? (constructor injection, imports of internal modules, service-to-service calls). Each → appropriate edge.",
+				"external":      "What external systems does this call? (payment APIs, push notification services, 3rd party APIs, managed databases). Each → service:external_system node.",
+				"flows":         "What are the key business processes? (order creation, payment processing, user registration). Each → flow layer node.",
+			},
+
+			"how_to_read_a_file": []string{
+				"1. WHAT IS THIS FILE? Identify its role: is it a service, controller, model, config, gateway, consumer, producer, utility?",
+				"2. WHAT DOES IT RECEIVE? Any incoming requests, events, messages, scheduled triggers? → contract layer nodes.",
+				"3. WHAT DOES IT DEPEND ON? Constructor params, imported modules, injected services? → INJECTS/DEPENDS_ON edges.",
+				"4. WHAT DOES IT CALL? Other services, external APIs, databases, message queues, event emitters? → edges to targets.",
+				"5. WHAT DOES IT SEND OUT? HTTP responses, emitted events, published messages, push notifications? → contract layer or CALLS_SERVICE.",
+				"6. DOES IT DELEGATE? If it calls a factory, strategy, or handler that does the real work — FOLLOW that delegation. Read that file too.",
+				"7. WHAT BUSINESS PROCESS DOES IT IMPLEMENT? If it orchestrates multiple steps (validate → save → notify → respond) — that's a flow.",
+			},
+
+			"delegation_rule": "CRITICAL: If a file delegates behavior to another class/function (factory.create(), handler.process(), service.register()), you MUST follow that chain. The delegated code contains the real architectural relationships. Don't stop at the surface.",
+
+			"evidence_with_assertions": map[string]string{
+				"why":    "Evidence without assertions is just a line number. When the file changes, line numbers break. Assertions describe WHAT was observed and can be mechanically verified.",
+				"how":    "When adding evidence, include assertion_kind and assertion JSON. Example: assertion_kind='go_module_require', assertion='{\"module\": \"github.com/foo/bar\"}'",
+				"kinds":  "manifest_dependency (package.json/go.mod deps), import_specifier (import statements), call_expression (method calls), decorator (class/method decorators), yaml_key_exists (config keys), prisma_model (schema models), text_contains (fallback substring match)",
+			},
+		},
+
 		"layer_guide": map[string]string{
-			"data":     "Look for schema definitions (Prisma models, TypeORM entities, SQL DDL, GraphQL types). Each model → data:model, each enum → data:enum. Relations between models → REFERENCES_MODEL.",
-			"code":     "Look for modules, controllers/handlers, services/providers, resolvers, gateways. DI constructor params → INJECTS. Route decorators/handlers → EXPOSES_ENDPOINT. Module membership → CONTAINS.",
-			"contract": "Endpoints from route handlers (POST /orders → contract:endpoint). Topics from pub/sub patterns. GraphQL operations from schema files.",
-			"flow":     "See flow_extraction_rules below.",
-			"service":  "Deployable services. Usually one per package.json/go.mod/Dockerfile. External services (Stripe, Redis) → service:external_system.",
+			"data":     "Persistent data structures. Look for: schema definitions, model declarations, entity classes, migration files. NOT DTOs, NOT request/response types — only what's stored.",
+			"code":     "Code components that implement logic. Look for: anything with constructor injection, anything that processes requests, anything that orchestrates business logic. The key signal is DEPENDENCIES — what does this class need to work?",
+			"contract": "System boundaries — what goes in, what comes out. Look for: ANY way the system receives requests (HTTP, WebSocket, GraphQL, gRPC, message queue, cron) and ANY way it sends responses or events. The key signal is EXTERNAL COMMUNICATION.",
+			"flow":     "Business processes that span multiple components. Look for: methods that call multiple services in sequence, orchestration logic, saga/workflow patterns. See flow_extraction_rules.",
+			"service":  "Deployable units and external systems. Look for: docker-compose services, Dockerfile definitions, separate package.json apps, and ANY external system the code calls (payment APIs, notification services, search engines, etc).",
 		},
+
 		"flow_extraction_rules": map[string]any{
 			"create_when": []string{
 				"An endpoint mutates state (POST/PUT/PATCH/DELETE handler)",
-				"An async handler processes events or jobs (Kafka consumer, Bull processor, cron)",
+				"An async handler processes events or jobs (message consumer, scheduled task)",
 				"Multi-step orchestration exists across services (service A calls service B calls service C)",
 			},
 			"skip": []string{
 				"Trivial CRUD with a single repository call and no branching/side effects",
 				"Pure GET endpoints that only read data",
 			},
-			"edge_routing": map[string]string{
-				"TRIGGERS_FLOW":    "Only from entry-point nodes (contract:endpoint, contract:topic, code:provider) to flow:use_case. NEVER between flows.",
-				"REQUIRES":         "flow:use_case → every service and data:model it depends on for correctness",
-				"PRODUCES_OUTCOME": "flow:use_case → every record, event, or notification it creates",
-				"PRECEDES":         "Between flow:flow_step nodes within the same use case (ordering)",
-				"TRANSITIONS_TO":   "Between flow:use_case nodes when one flow leads to another via events/topics",
+			"connection_rules": "A use_case MUST connect to ALL THREE layers: code (providers it calls), data (models it reads/writes), and contract (endpoint that triggers it). A flow connected only to other flows is incomplete — trace the implementation.",
+			"how_to_trace": []string{
+				"1. Find the entry point: which endpoint or event triggers this flow? → TRIGGERS_FLOW from contract to flow:use_case",
+				"2. Trace the code: which providers/services execute this flow? → REQUIRES from flow to each code:provider",
+				"3. Trace the data: which models does each provider read or write? → REQUIRES from flow to each data:model",
+				"4. Trace outcomes: what records are created, events emitted? → PRODUCES_OUTCOME from flow to data:model or contract:topic",
+				"5. Chain flows: does this flow trigger another flow via events? → TRANSITIONS_TO between flows",
 			},
 		},
+
 		"edge_intent": map[string]string{
 			"INVOKES":    "runtime call — the flow/code actively calls this service/function at runtime",
 			"REQUIRES":   "correctness dependency — the flow cannot complete without this service/model",
 			"DEPENDS_ON": "structural/static dependency — references this but doesn't directly call it (config, shared types)",
-			"INJECTS":    "DI constructor parameter — framework injects this dependency",
-			"USES_MODEL": "data model query — service queries this Prisma/ORM model",
+			"INJECTS":    "constructor/DI parameter — framework injects this dependency",
+			"USES_MODEL": "data model query — service queries this database model",
 		},
+
 		"edge_derivation": map[string]string{
-			"hard":     "Direct evidence: import statement, constructor param, decorator, schema FK. Use for most edges.",
-			"linked":   "Indirect but strong: HTTP client URL matches endpoint path, env var points to service. Cross-service edges.",
-			"inferred": "LLM guess or heuristic match. Low confidence. Needs verification.",
+			"hard":     "Direct evidence: import statement, constructor param, schema FK, explicit config. Use for most edges.",
+			"linked":   "Indirect but strong: HTTP URL matches endpoint, env var points to service. Cross-service edges.",
+			"inferred": "LLM guess or heuristic. Low confidence. Needs verification.",
 		},
+
+		"common_mistakes": []string{
+			"STOP: Don't only look for framework-specific decorators. socket.on('event') is the same as @SubscribeMessage('event') — both are incoming event handlers.",
+			"STOP: Don't skip factory/strategy patterns. If a constructor receives a Factory and calls factory.create(), the REAL dependencies are inside that factory.",
+			"STOP: Don't create edges to infrastructure libraries (@nestjs/common, express, lodash). These appear everywhere and add no architectural insight.",
+			"STOP: Don't create 50 edges from every file to PrismaService. One INJECTS edge per class is enough.",
+			"STOP: Don't ignore authentication/authorization middleware. Auth flows are architectural — they define access patterns.",
+			"STOP: Don't ignore event EMITTERS. code that calls emit('event', data) or publish('topic', message) is creating an architectural contract, even without a decorator.",
+		},
+
 		"trust_aware_queries": map[string]string{
 			"description": "Query results include trust_score (0-1) and freshness (0-1) for each node/edge.",
 			"trust_high":  "trust >= 0.8: use directly in your answer",
-			"trust_mid":   "trust 0.4-0.8: mention uncertainty ('based on last scan, but file has changed...')",
+			"trust_mid":   "trust 0.4-0.8: mention uncertainty",
 			"trust_low":   "trust < 0.4: read the source file to verify before answering",
-			"impact":      "When running impact analysis, note if trust_chain < 0.7 — the path may be broken",
 		},
+
 		"user_corrections": map[string]string{
 			"description":  "When user says a graph fact is wrong, create negative evidence to correct it.",
-			"how":          "chronicle_evidence_add with polarity='negative', source_kind='user_feedback', confidence=0.95. Include reason in metadata.",
-			"what_happens": "Strong negative evidence (>=0.8) marks edge as 'contradicted', removed from queries.",
+			"how":          "chronicle_evidence_add with polarity='negative', source_kind='user_feedback', confidence=0.95.",
+			"what_happens": "Strong negative evidence (>=0.8) marks edge as 'contradicted'.",
 		},
+
 		"user_commands": "When user says 'chronicle scan', 'chronicle data', etc — call chronicle_command(command='scan') and follow the instructions.",
-		"onboarding":    "ALWAYS call chronicle_scan_status first. If response contains 'onboarding.is_first_run=true', ask the user: 'This project hasn't been scanned yet. Would you like me to scan it and build a knowledge graph?' If yes, call chronicle_command(command='scan').",
-		"hints":         "For framework-specific tips (NestJS decorators, Prisma patterns, etc), call chronicle_extraction_hints(technology='nestjs').",
+		"onboarding":    "ALWAYS call chronicle_scan_status first. If response contains 'onboarding.is_first_run=true', ask the user if they want to scan.",
+		"hints":         "For framework-specific tips, call chronicle_extraction_hints(). But hints are OPTIONAL — the universal extraction rules above work for any codebase.",
+
 		"diagrams": map[string]any{
-			"when": "When explaining architecture, dependencies, impact, or flows to the user, offer to show a live diagram",
-			"how":  "Call chronicle_diagram_create() to get a URL, share it, then chronicle_diagram_update() with {nodes, edges} payload",
-			"tips": []string{
-				"Start simple — 3-5 key nodes, add detail incrementally",
-				"Use chronicle_diagram_annotate to highlight what you're talking about",
-				"Pull nodes from chronicle_node_list or chronicle_query_deps results",
-				"Update the diagram as the conversation evolves",
-				"For custom explanatory diagrams, invent node_keys like custom:box:explain:name",
-				"Use layer to control color: service=red, data=purple, code=blue, flow=pink, contract=green",
-			},
+			"when": "When explaining architecture, offer to show a live diagram",
+			"how":  "chronicle_diagram_create() → share URL → chronicle_diagram_update() with {nodes, edges}",
 		},
 	}
 
@@ -121,91 +164,71 @@ func ExtractionGuide(technology string) string {
 }
 
 // ExtractionHints returns optional framework-specific tips.
-// These are patterns, not rules — for valid types, call chronicle_schema().
+// These are recognition patterns, not extraction rules.
+// The universal extraction guide above works without hints.
 func ExtractionHints(technology string) string {
 	tech := strings.ToLower(strings.TrimSpace(technology))
 
-	var hints map[string]any
+	hints := map[string]any{
+		"note": "These are RECOGNITION PATTERNS to help you spot architectural elements in specific frameworks. The universal extraction rules in chronicle_extraction_guide() work for any codebase — hints just help you recognize patterns faster.",
+	}
 
 	switch tech {
 	case "nestjs", "typescript", "ts":
-		hints = map[string]any{
-			"technology": "nestjs",
-			"hints": map[string]string{
-				"@Controller('prefix')":              "code:controller — combine prefix with method decorators for endpoint paths",
-				"@Injectable()":                      "code:provider — services, guards, interceptors, pipes, gateways",
-				"@Module({ providers, controllers })": "code:module — CONTAINS edge to each provider/controller listed",
-				"constructor(private svc: X)":         "INJECTS edge from this provider to X",
-				"@UseGuards(X)":                       "INJECTS edge from controller to guard",
-				"@Get/@Post/@Put/@Delete('path')":     "EXPOSES_ENDPOINT from controller to contract:endpoint:domain:method:/prefix/path",
-				"@WebSocketGateway":                   "code:provider — @SubscribeMessage creates contract:topic",
-				"@Cron, @OnEvent, @Process":           "code:provider with relevant trigger pattern",
-				"PrismaService.model.findMany()":      "USES_MODEL edge to the data:model",
-				"@Resolver(() => Type)":               "code:resolver — treat like controller for GraphQL",
-			},
-			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
+		hints["technology"] = "nestjs"
+		hints["recognition_patterns"] = map[string]string{
+			"DI injection":     "constructor(private x: ServiceName) — but also @Inject('TOKEN') for non-class providers",
+			"HTTP endpoints":   "@Get/@Post/@Put/@Delete — but also custom method decorators, Express middleware routes",
+			"WebSocket events": "@SubscribeMessage('name') — BUT ALSO socket.on('name', handler) for programmatic registration. FOLLOW delegation to factories/services that register handlers.",
+			"GraphQL":          "@Query/@Mutation/@Subscription — resolvers are like controllers for GraphQL",
+			"Modules":          "@Module imports/providers/controllers define the DI container structure",
+			"Async":            "@Cron, @OnEvent, @Process (Bull) — scheduled and event-driven handlers",
+			"Guards/pipes":     "@UseGuards, @UsePipes — define access control and validation chains",
 		}
 
 	case "prisma", "data", "models":
-		hints = map[string]any{
-			"technology": "prisma",
-			"hints": map[string]string{
-				"model X { ... }":        "data:model:domain:x — lowercase model name",
-				"enum X { ... }":         "data:enum:domain:x — USES_ENUM from models that reference it",
-				"@relation(fields:[fk])":  "REFERENCES_MODEL from this model to the related model",
-				"Array field (X[])":       "REFERENCES_MODEL from parent to child model",
-				"prisma.x.findMany()":     "USES_MODEL from service provider to data:model",
-				"@@map / @@unique / @@id": "Metadata on the data:model node, not separate nodes",
-			},
-			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
+		hints["technology"] = "prisma"
+		hints["recognition_patterns"] = map[string]string{
+			"models":    "model X { ... } — each is a data:model node",
+			"relations": "@relation(fields:[fk], references:[pk]) — REFERENCES_MODEL edge",
+			"enums":     "enum X { ... } — only track if used across multiple services/modules",
 		}
 
-	case "openapi":
-		hints = map[string]any{
-			"technology": "openapi",
-			"hints": map[string]string{
-				"paths./x.get":   "contract:endpoint:domain:get:/x",
-				"paths./x.post":  "contract:endpoint:domain:post:/x",
-				"info.title":     "service or contract:http_api name",
-				"$ref components": "May indicate data:model or contract:graphql_type",
-			},
-			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
+	case "go", "golang":
+		hints["technology"] = "go"
+		hints["recognition_patterns"] = map[string]string{
+			"DI":         "Struct fields or constructor params (func NewService(db *sql.DB, cache *redis.Client))",
+			"HTTP":       "http.HandleFunc, gin.GET, echo.POST, chi.Route — any HTTP handler registration",
+			"gRPC":       "RegisterXxxServer, pb.UnimplementedXxxServer — gRPC service implementations",
+			"interfaces": "Type implementing an interface = injectable dependency",
+			"goroutines": "go func() with channel/select = async processing pattern",
 		}
 
 	case "django", "python":
-		hints = map[string]any{
-			"technology": "django",
-			"hints": map[string]string{
-				"class X(models.Model)":    "data:model:domain:x",
-				"class X(APIView)":         "code:controller:domain:x",
-				"class X(ViewSet)":         "code:controller:domain:x — each action is an endpoint",
-				"@action(detail=...)":      "EXPOSES_ENDPOINT from viewset to endpoint",
-				"path('url', view)":        "contract:endpoint:domain:method:/url",
-				"class X(serializers.Serializer)": "Metadata on related model, not a separate node",
-			},
-			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
+		hints["technology"] = "django"
+		hints["recognition_patterns"] = map[string]string{
+			"models":     "class X(models.Model) — data layer",
+			"views":      "class X(APIView), class X(ViewSet), def view(request) — code layer",
+			"urls":       "path('url', view) — contract layer endpoints",
+			"signals":    "post_save.connect, @receiver(post_save) — async event handlers",
+			"celery":     "@app.task, @shared_task — async job handlers",
+			"middleware":  "classes in MIDDLEWARE setting — cross-cutting concerns",
 		}
 
 	case "spring", "java":
-		hints = map[string]any{
-			"technology": "spring",
-			"hints": map[string]string{
-				"@RestController":       "code:controller",
-				"@Service":              "code:provider",
-				"@Repository":           "code:provider — USES_MODEL to the entity it manages",
-				"@GetMapping/@PostMapping": "EXPOSES_ENDPOINT from controller to endpoint",
-				"@Autowired / constructor": "INJECTS edge from this bean to injected bean",
-				"@Entity":                  "data:model",
-				"@KafkaListener":           "CONSUMES_TOPIC from provider to contract:topic",
-			},
-			"note": "These are patterns, not rules. For valid types and constraints, call chronicle_schema().",
+		hints["technology"] = "spring"
+		hints["recognition_patterns"] = map[string]string{
+			"DI":         "@Autowired, constructor injection, @Qualifier",
+			"HTTP":       "@RestController + @GetMapping/@PostMapping — endpoints",
+			"JPA":        "@Entity — data models, @Repository — data access",
+			"messaging":  "@KafkaListener, @RabbitListener, @JmsListener — async consumers",
+			"scheduling": "@Scheduled — cron/periodic tasks",
+			"events":     "ApplicationEventPublisher, @EventListener — internal event system",
 		}
 
 	default:
-		hints = map[string]any{
-			"technology": tech,
-			"message":    "No specific hints for " + tech + ". Use chronicle_schema() for valid types and chronicle_extraction_guide() for methodology. Chronicle works with any technology — read the code and map to layers (code/data/contract/flow/service).",
-		}
+		hints["technology"] = tech
+		hints["message"] = "No specific hints for " + tech + ". Use the universal extraction rules in chronicle_extraction_guide() — they work for any technology."
 	}
 
 	data, _ := json.MarshalIndent(hints, "", "  ")
