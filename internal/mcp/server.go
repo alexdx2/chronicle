@@ -38,6 +38,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(evidenceAddTool(), evidenceAddHandler(g))
 	s.AddTool(evidenceVerifyTool(), evidenceVerifyHandler(g))
 	s.AddTool(resolveReviewTool(), resolveReviewHandler(g))
+	s.AddTool(discoverFilesTool(), discoverFilesHandler(g))
 	s.AddTool(fileExtractedTool(), fileExtractedHandler(g))
 	s.AddTool(resolveExtractionsTool(), resolveExtractionsHandler(g))
 	s.AddTool(importAllTool(), importAllHandler(g))
@@ -548,6 +549,37 @@ func resolveReviewHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
+// chronicle_discover_files
+// ---------------------------------------------------------------------------
+
+func discoverFilesTool() mcp.Tool {
+	return mcp.NewTool("chronicle_discover_files",
+		mcp.WithDescription("Discover all architecture-relevant files in the project. Returns categorized file list (manifests, schemas, services, controllers, resolvers, gateways, modules, configs, clients, async handlers). Creates scan obligations for each file — finalize will warn about any unprocessed files. Call this BEFORE scanning to get the complete file list."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+		if revisionID == 0 || domain == "" {
+			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
+		}
+
+		// Use current working directory as project root
+		rootDir, _ := os.Getwd()
+		result, err := g.DiscoverFiles(rootDir, domain, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
 // chronicle_file_extracted
 // ---------------------------------------------------------------------------
 
@@ -582,8 +614,9 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		// Satisfy the obligation for this file
+		// Satisfy obligations for this file (both scan_file and verify_file)
 		_ = g.SatisfyFileObligation(revisionID, filePath)
+		_ = g.Store().SatisfyObligation(revisionID, "scan_file", filePath)
 
 		return jsonResult(map[string]any{
 			"extraction_id": id,

@@ -27,19 +27,22 @@ var CommandInstructions = map[string]string{
 4. Auto-discover project, save manifest
 4.5. Call chronicle_resolve_context(domain) — if no context exists, it auto-creates "main"
 5. Create revision (include context_id)
-6. For EVERY architecture-relevant file: read it and call chronicle_file_extracted with structured facts.
-   Facts format: [{"kind": "import", "from": "X", "to": "./y", "symbols": ["Y"]}, {"kind": "call", ...}, {"kind": "flow", "flow_name": "...", ...}]
+6. Call chronicle_discover_files — get the COMPLETE list of architecture-relevant files with categories.
+   This creates obligations for EVERY file. You MUST process them all.
+7. Work through the file list by category (manifests first, then schemas, then services, etc):
+   For EACH file: read it and call chronicle_file_extracted with structured facts.
+   Facts format: [{"kind": "import", "from": "X", "to": "./y", "symbols": ["Y"]}, ...]
    Fact kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
-   Status: "extracted" (found facts), "no_architecture" (nothing relevant), "skipped" (test/generated file)
+   Status: "extracted" (found facts), "no_architecture" (nothing relevant), "skipped" (test/generated)
    CRITICAL: Follow delegation chains — if code calls factory.register(), read that factory file too.
-7. After ALL files processed: call chronicle_resolve_extractions — MCP builds the graph with verified evidence.
-   Every edge gets assertion-based evidence that is mechanically verified at creation time.
-   If an assertion is wrong (hallucination), it's marked "rejected" with 0.10 confidence.
-8. Call chronicle_finalize_incremental_scan — check scan_status.
-   If "review_required": look at rejected_evidence and needs_review_edges, fix them.
+   DO NOT STOP until every file from discover_files has been processed.
+8. After ALL files processed: call chronicle_resolve_extractions — MCP builds the graph with verified evidence.
+9. Call chronicle_finalize_incremental_scan — check scan_status.
+   If "review_required": look at rejected_evidence, needs_review_edges, and uncovered_files. Fix them.
+   If uncovered_files exist: you missed files — go back and process them.
    If "clean": scan complete.
-9. Snapshot + stale mark
-10. Define domain language terms + check violations + report discoveries
+10. Snapshot + stale mark
+11. Define domain language terms + check violations + report discoveries
 
 Incremental scan (when user says "update the graph" or "rescan changes"):
 → Use the "update" command instead.`,

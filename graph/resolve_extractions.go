@@ -207,11 +207,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			return counts, nil
 		}
 
-		// Package manifest dependency
-		assertion, _ := json.Marshal(map[string]any{
-			"package":  fact.To,
-			"sections": []string{"dependencies", "devDependencies"},
-		})
+		// Pick assertion kind based on file type
+		assertionKind, assertion := buildDependencyAssertion(filePath, fact)
 
 		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
 		toNodeKey := "code:module:" + domainKey + ":" + normalizePackageName(fact.To)
@@ -222,8 +219,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":DEPENDS_ON"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			FromNodeID:          fromID,
-			ToNodeID:            toID,
+			FromNodeID: fromID, ToNodeID: toID,
 			EdgeType: "DEPENDS_ON", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: revisionID,
@@ -236,7 +232,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
-			AssertionKind: "manifest_dependency", Assertion: string(assertion),
+			AssertionKind: assertionKind, Assertion: assertion,
 		})
 		counts.evidence++
 
@@ -623,6 +619,49 @@ func inferExternalSystemName(url string) string {
 		u = u[:idx]
 	}
 	return u
+}
+
+// buildDependencyAssertion picks the right assertion kind based on file extension.
+// Claude often reports "dependency" facts from .ts files (should be import_specifier)
+// or .yml files (should be yaml_key_exists). We derive the correct kind from the file type.
+func buildDependencyAssertion(filePath string, fact Fact) (assertionKind string, assertionJSON string) {
+	ext := strings.ToLower(filePath)
+	switch {
+	case strings.HasSuffix(ext, ".json"):
+		a, _ := json.Marshal(map[string]any{
+			"package":  fact.To,
+			"sections": []string{"dependencies", "devDependencies", "peerDependencies"},
+		})
+		return "manifest_dependency", string(a)
+	case strings.HasSuffix(ext, ".ts") || strings.HasSuffix(ext, ".tsx") ||
+		strings.HasSuffix(ext, ".js") || strings.HasSuffix(ext, ".jsx"):
+		a, _ := json.Marshal(map[string]any{
+			"module":  fact.To,
+			"symbols": fact.Symbols,
+		})
+		return "import_specifier", string(a)
+	case strings.HasSuffix(ext, ".yml") || strings.HasSuffix(ext, ".yaml"):
+		a, _ := json.Marshal(map[string]any{
+			"path": fact.To,
+		})
+		return "yaml_key_exists", string(a)
+	case strings.HasSuffix(ext, ".mod"):
+		a, _ := json.Marshal(map[string]any{
+			"module": fact.To,
+		})
+		return "go_module_require", string(a)
+	case strings.HasSuffix(ext, ".prisma"):
+		a, _ := json.Marshal(map[string]any{
+			"model": fact.To,
+		})
+		return "prisma_model", string(a)
+	default:
+		// Fallback: text search
+		a, _ := json.Marshal(map[string]any{
+			"substring": fact.To,
+		})
+		return "text_contains", string(a)
+	}
 }
 
 func normalizePackageName(pkg string) string {

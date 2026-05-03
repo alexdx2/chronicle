@@ -180,15 +180,21 @@ func (g *Graph) FinalizeIncrementalScan(domainKey string, revisionID int64) (*Fi
 			}
 		}
 
-		// Find uncovered files (open verify_file obligations)
+		// Find uncovered files (open verify_file OR scan_file obligations)
 		openObligations, _ := g.store.ListOpenObligations(revisionID)
 		for _, ob := range openObligations {
-			if ob.ObligationType == "verify_file" {
+			switch ob.ObligationType {
+			case "verify_file":
 				staleCount := countStaleEvidenceForFile(g.store, ob.TargetKey)
 				result.UncoveredFiles = append(result.UncoveredFiles, UncoveredFile{
 					File:               ob.TargetKey,
 					Reason:             "verify_file obligation still open",
 					StaleEvidenceCount: staleCount,
+				})
+			case "scan_file":
+				result.UncoveredFiles = append(result.UncoveredFiles, UncoveredFile{
+					File:   ob.TargetKey,
+					Reason: "file discovered but never scanned — call chronicle_file_extracted for this file",
 				})
 			}
 		}
