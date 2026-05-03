@@ -13,11 +13,17 @@ type Repository struct {
 	Tags []string `yaml:"tags"`
 }
 
+type ScanConfig struct {
+	Include []string `yaml:"include,omitempty"` // glob patterns for files to scan
+	Exclude []string `yaml:"exclude,omitempty"` // glob patterns to skip
+}
+
 type Manifest struct {
 	Domain       string       `yaml:"domain"`
 	Description  string       `yaml:"description"`
 	Repositories []Repository `yaml:"repositories"`
 	Owner        string       `yaml:"owner"`
+	Scan         ScanConfig   `yaml:"scan,omitempty"`
 }
 
 func LoadFile(path string) (*Manifest, error) {

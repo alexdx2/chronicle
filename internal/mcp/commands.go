@@ -26,10 +26,28 @@ SETUP:
 1. chronicle_get_discoveries — learn from previous scans
 2. chronicle_schema — learn valid layers, types, edges
 3. chronicle_extraction_guide — READ the universal extraction rules
-4. Auto-discover project, save manifest
+4. Auto-discover project. Save manifest with scan config:
+   chronicle_save_manifest with YAML that includes scan.include and scan.exclude.
+   Example:
+     scan:
+       include:
+         - "api/src/**/*.ts"
+         - "packages/*/src/**/*.ts"
+         - "**/prisma/*.prisma"
+         - "docker-compose*.yml"
+         - "**/package.json"
+       exclude:
+         - "**/*.test.ts"
+         - "**/*.spec.ts"
+         - "**/*.stories.*"
+         - "**/__tests__/**"
+         - "**/dist/**"
+         - "**/generated/**"
+   Analyze the project structure FIRST (look at top-level dirs, package.json workspaces)
+   to write the right include patterns. Be thorough — every source directory with architecture.
 5. chronicle_resolve_context(domain) — create context if needed
 6. Create revision
-7. chronicle_discover_files — MCP discovers ALL architecture-relevant files
+7. chronicle_discover_files — MCP returns git-tracked files filtered by manifest scan config
 
 SCAN LOOP (repeat until done):
 8. chronicle_scan_next_file — get ONE unprocessed file

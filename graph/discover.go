@@ -1,164 +1,150 @@
 package graph
 
 import (
-	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/alexdx2/chronicle-core/internal/manifest"
 )
 
 // DiscoverResult holds files found during project discovery.
 type DiscoverResult struct {
-	Files         []DiscoveredFile `json:"files"`
-	TotalFiles    int              `json:"total_files"`
-	ByCategory    map[string]int   `json:"by_category"`
+	Files      []string       `json:"files"`
+	TotalFiles int            `json:"total_files"`
+	ScanConfig map[string]any `json:"scan_config"`
 }
 
-// DiscoveredFile is a file found during discovery.
-type DiscoveredFile struct {
-	Path     string `json:"path"`
-	Category string `json:"category"` // manifest, schema, service, controller, resolver, gateway, module, config, source
-}
+// DiscoverFiles finds all scannable files using git ls-files + manifest include/exclude rules.
+// Only git-tracked files are considered — no temp files, no untracked junk.
+// If manifest has no scan config, returns ALL git-tracked files (Claude decides per-file).
+func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, scanCfg *manifest.ScanConfig) (*DiscoverResult, error) {
+	// Get git-tracked files
+	gitFiles, err := gitTrackedFiles(rootDir)
+	if err != nil {
+		return nil, err
+	}
 
-// DiscoverFiles walks the project directory and finds all architecture-relevant files.
-// Creates scan obligations for each discovered file.
-func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64) (*DiscoverResult, error) {
+	// Apply include/exclude filters from manifest
+	var filtered []string
+	for _, f := range gitFiles {
+		if shouldInclude(f, scanCfg) {
+			filtered = append(filtered, f)
+		}
+	}
+
 	result := &DiscoverResult{
-		ByCategory: make(map[string]int),
+		Files:      filtered,
+		TotalFiles: len(filtered),
 	}
 
-	skipDirs := map[string]bool{
-		"node_modules": true, "dist": true, ".next": true, "coverage": true,
-		".git": true, ".depbot": true, "build": true, "out": true,
-		"__pycache__": true, ".venv": true, "vendor": true, "target": true,
+	if scanCfg != nil {
+		result.ScanConfig = map[string]any{
+			"include": scanCfg.Include,
+			"exclude": scanCfg.Exclude,
+		}
 	}
 
-	filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			if skipDirs[info.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		relPath, _ := filepath.Rel(rootDir, path)
-		category := categorizeFile(relPath, info.Name())
-		if category == "" {
-			return nil // not architecture-relevant
-		}
-
-		// Skip test/spec/story files
-		name := strings.ToLower(info.Name())
-		if strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") ||
-			strings.Contains(name, ".stories.") || strings.Contains(name, "__test") {
-			return nil
-		}
-
-		// Skip generated files
-		if strings.Contains(relPath, "generated") || strings.Contains(relPath, "/__generated__/") {
-			return nil
-		}
-
-		result.Files = append(result.Files, DiscoveredFile{
-			Path:     relPath,
-			Category: category,
-		})
-		result.ByCategory[category]++
-		result.TotalFiles++
-
-		// Create obligation for this file
+	// Create scan_file obligation for each discovered file
+	for _, f := range filtered {
 		if revisionID > 0 {
-			g.store.CreateObligation(revisionID, domainKey, "scan_file", relPath, "discovered during project scan")
+			g.store.CreateObligation(revisionID, domainKey, "scan_file", f, "git-tracked, matches scan config")
 		}
-
-		return nil
-	})
+	}
 
 	return result, nil
 }
 
-func categorizeFile(relPath, name string) string {
-	lower := strings.ToLower(name)
-
-	// Manifests — always scan
-	switch lower {
-	case "package.json", "go.mod", "go.sum", "cargo.toml", "pyproject.toml", "requirements.txt":
-		return "manifest"
+// gitTrackedFiles returns all files tracked by git in the given directory.
+func gitTrackedFiles(rootDir string) ([]string, error) {
+	cmd := exec.Command("git", "ls-files")
+	cmd.Dir = rootDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
 	}
 
-	// Config files
-	if strings.HasSuffix(lower, "docker-compose.yml") || strings.HasSuffix(lower, "docker-compose.yaml") ||
-		lower == "dockerfile" || lower == ".env" || lower == ".env.example" {
-		return "config"
-	}
-
-	// Schema/data files
-	if strings.HasSuffix(lower, ".prisma") || strings.HasSuffix(lower, ".graphql") ||
-		strings.HasSuffix(lower, ".gql") || lower == "schema.gql" {
-		return "schema"
-	}
-
-	// Source files — categorize by name pattern
-	ext := strings.ToLower(filepath.Ext(name))
-	sourceExts := map[string]bool{
-		".ts": true, ".tsx": true, ".js": true, ".jsx": true,
-		".go": true, ".py": true, ".java": true, ".rs": true,
-		".rb": true, ".cs": true, ".kt": true, ".swift": true,
-	}
-
-	if !sourceExts[ext] {
-		// YAML config files
-		if ext == ".yml" || ext == ".yaml" {
-			if strings.Contains(relPath, "docker") || strings.Contains(relPath, "deploy") ||
-				strings.Contains(relPath, "k8s") || strings.Contains(relPath, "config") {
-				return "config"
-			}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			files = append(files, line)
 		}
-		return ""
+	}
+	return files, nil
+}
+
+// shouldInclude checks if a file matches the manifest scan config.
+// If no config → include everything (Claude decides per-file).
+// If include patterns exist → file must match at least one.
+// If exclude patterns exist → file must NOT match any.
+func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
+	if cfg == nil || (len(cfg.Include) == 0 && len(cfg.Exclude) == 0) {
+		return true // no config = include all
 	}
 
-	// Categorize source files by name patterns
-	lowerPath := strings.ToLower(relPath)
-	switch {
-	case strings.Contains(lowerPath, ".module."):
-		return "module"
-	case strings.Contains(lowerPath, ".controller.") || strings.Contains(lowerPath, "/controllers/"):
-		return "controller"
-	case strings.Contains(lowerPath, ".resolver.") || strings.Contains(lowerPath, "/resolvers/"):
-		return "resolver"
-	case strings.Contains(lowerPath, ".gateway.") || strings.Contains(lowerPath, "/gateways/"):
-		return "gateway"
-	case strings.Contains(lowerPath, ".service.") || strings.Contains(lowerPath, "/services/"):
-		return "service"
-	case strings.Contains(lowerPath, ".guard.") || strings.Contains(lowerPath, ".interceptor.") ||
-		strings.Contains(lowerPath, ".pipe.") || strings.Contains(lowerPath, ".middleware.") ||
-		strings.Contains(lowerPath, ".decorator.") || strings.Contains(lowerPath, ".filter."):
-		return "middleware"
-	case strings.Contains(lowerPath, ".consumer.") || strings.Contains(lowerPath, ".producer.") ||
-		strings.Contains(lowerPath, ".subscriber.") || strings.Contains(lowerPath, ".listener.") ||
-		strings.Contains(lowerPath, ".handler.") || strings.Contains(lowerPath, ".queue.") ||
-		strings.Contains(lowerPath, ".task.") || strings.Contains(lowerPath, ".cron.") ||
-		strings.Contains(lowerPath, ".job."):
-		return "async"
-	case strings.Contains(lowerPath, ".client.") || strings.Contains(lowerPath, ".adapter.") ||
-		strings.Contains(lowerPath, ".proxy.") || strings.Contains(lowerPath, ".connector."):
-		return "client"
-	case strings.Contains(lowerPath, "prisma") && strings.Contains(lowerPath, ".service."):
-		return "service"
-	case strings.Contains(lowerPath, ".events.") || strings.Contains(lowerPath, ".event."):
-		return "async"
-	case strings.Contains(lowerPath, ".factory.") || strings.Contains(lowerPath, ".strategy."):
-		return "service"
-	// App entry points (NOT index.ts — those are barrel re-exports)
-	case lower == "app.ts" || lower == "app.tsx" || lower == "main.ts" ||
-		lower == "server.ts" || lower == "main.go":
-		return "source"
+	// Check excludes first
+	for _, pattern := range cfg.Exclude {
+		if matchGlob(filePath, pattern) {
+			return false
+		}
 	}
 
-	// NOT included: React components, hooks, screens, pages, utils, helpers, types, constants.
-	// These rarely contain architectural facts. If they do, the delegation rule will catch them
-	// (the service/controller that calls them will be scanned, and delegation chains are followed).
-	return ""
+	// If no includes specified, everything passes (after excludes)
+	if len(cfg.Include) == 0 {
+		return true
+	}
+
+	// Must match at least one include
+	for _, pattern := range cfg.Include {
+		if matchGlob(filePath, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchGlob does simple glob matching supporting ** and *.
+func matchGlob(filePath, pattern string) bool {
+	// Handle ** (any directory depth)
+	if strings.Contains(pattern, "**") {
+		parts := strings.SplitN(pattern, "**", 2)
+		prefix := parts[0]
+		suffix := ""
+		if len(parts) > 1 {
+			suffix = strings.TrimPrefix(parts[1], "/")
+		}
+
+		// Prefix must match start of path
+		if prefix != "" && !strings.HasPrefix(filePath, prefix) {
+			return false
+		}
+
+		// Suffix must match end of path (as glob)
+		if suffix == "" {
+			return true
+		}
+
+		// Check if any part of the remaining path matches suffix
+		remaining := filePath
+		if prefix != "" {
+			remaining = strings.TrimPrefix(filePath, prefix)
+		}
+		// Simple: check if the filename matches the suffix pattern
+		matched, _ := filepath.Match(suffix, filepath.Base(remaining))
+		if matched {
+			return true
+		}
+		// Also try matching the full remaining path
+		matched, _ = filepath.Match(suffix, remaining)
+		return matched
+	}
+
+	// Simple glob
+	matched, _ := filepath.Match(pattern, filePath)
+	if matched {
+		return true
+	}
+	// Also try matching just the filename
+	matched, _ = filepath.Match(pattern, filepath.Base(filePath))
+	return matched
 }

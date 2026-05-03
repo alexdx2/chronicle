@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/internal/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
 	"github.com/alexdx2/chronicle-core/version"
@@ -570,12 +572,24 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
 		}
 
-		// Use current working directory as project root
+		// Load manifest for scan config
 		rootDir, _ := os.Getwd()
-		result, err := g.DiscoverFiles(rootDir, domain, revisionID)
+		var scanCfg *manifest.ScanConfig
+		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
+			scanCfg = &m.Scan
+		}
+
+		result, err := g.DiscoverFiles(rootDir, domain, revisionID, scanCfg)
 		if err != nil {
 			return errorResult(err), nil
 		}
+
+		if scanCfg == nil || (len(scanCfg.Include) == 0 && len(scanCfg.Exclude) == 0) {
+			result.ScanConfig = map[string]any{
+				"warning": "No scan.include/exclude in chronicle.domain.yaml. ALL git-tracked files returned. Add scan config to manifest to filter.",
+			}
+		}
+
 		return jsonResult(result), nil
 	}
 }
