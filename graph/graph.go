@@ -1,12 +1,15 @@
 package graph
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
+	"github.com/alexdx2/chronicle-core/verify"
 )
 
 // Graph wraps the store with validation via the registry.
@@ -168,6 +171,22 @@ func (g *Graph) AddNodeEvidence(nodeKey string, input validate.EvidenceInput) (i
 		polarity = "positive"
 	}
 
+	// Verify assertion at creation time if possible
+	verificationStatus := "unverified"
+	verificationReason := ""
+	if input.AssertionKind != "" && input.Assertion != "" && input.FilePath != "" {
+		vResult := verifyAssertionAtCreation(input.FilePath, input.AssertionKind, input.Assertion)
+		verificationStatus = vResult.status
+		verificationReason = vResult.reason
+		if vResult.status == "verified" && vResult.locator != nil {
+			input.LineStart = vResult.locator.LineStart
+			input.LineEnd = vResult.locator.LineEnd
+		}
+		if vResult.confidence > 0 {
+			confidence = vResult.confidence
+		}
+	}
+
 	row := store.EvidenceRow{
 		TargetKind:              "node",
 		NodeID:                  nodeID,
@@ -190,6 +209,8 @@ func (g *Graph) AddNodeEvidence(nodeKey string, input validate.EvidenceInput) (i
 		Assertion:               input.Assertion,
 		AssertionKind:           input.AssertionKind,
 		AssertionVersion:        input.AssertionVersion,
+		VerificationStatus:      verificationStatus,
+		VerificationReason:      verificationReason,
 		Metadata:                metadata,
 	}
 	id, err := g.store.AddEvidence(row)
@@ -224,6 +245,23 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 		polarity = "positive"
 	}
 
+	// Verify assertion at creation time if possible
+	verificationStatus := "unverified"
+	verificationReason := ""
+	if input.AssertionKind != "" && input.Assertion != "" && input.FilePath != "" {
+		vResult := verifyAssertionAtCreation(input.FilePath, input.AssertionKind, input.Assertion)
+		verificationStatus = vResult.status
+		verificationReason = vResult.reason
+		if vResult.status == "verified" && vResult.locator != nil {
+			// Use verified locator instead of Claude's claimed location
+			input.LineStart = vResult.locator.LineStart
+			input.LineEnd = vResult.locator.LineEnd
+		}
+		if vResult.confidence > 0 {
+			confidence = vResult.confidence
+		}
+	}
+
 	row := store.EvidenceRow{
 		TargetKind:              "edge",
 		EdgeID:                  edge.EdgeID,
@@ -246,6 +284,8 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 		Assertion:               input.Assertion,
 		AssertionKind:           input.AssertionKind,
 		AssertionVersion:        input.AssertionVersion,
+		VerificationStatus:      verificationStatus,
+		VerificationReason:      verificationReason,
 		Metadata:                metadata,
 	}
 	id, err := g.store.AddEvidence(row)
@@ -256,4 +296,59 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 		return id, fmt.Errorf("AddEdgeEvidence recalc: %w", err)
 	}
 	return id, nil
+}
+
+// creationVerifyResult holds the result of verifying an assertion at evidence creation time.
+type creationVerifyResult struct {
+	status     string // "verified", "unverified", "rejected"
+	reason     string
+	confidence float64
+	locator    *verify.Locator
+}
+
+// verifyAssertionAtCreation checks an assertion against the actual file content
+// at the time evidence is being created. This catches Claude hallucinations early.
+func verifyAssertionAtCreation(filePath, assertionKind, assertion string) creationVerifyResult {
+	if assertionKind == "" || assertion == "" || assertion == "{}" {
+		return creationVerifyResult{status: "unverified", reason: "no assertion to verify"}
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		// File not readable — can't verify, but don't reject
+		return creationVerifyResult{status: "unverified", reason: "file not readable: " + err.Error()}
+	}
+
+	reg := verify.DefaultRegistry()
+	result, err := reg.Verify(assertionKind, content, json.RawMessage(assertion), nil)
+	if err != nil {
+		return creationVerifyResult{status: "unverified", reason: "verifier error: " + err.Error()}
+	}
+
+	switch result.Status {
+	case "valid":
+		return creationVerifyResult{
+			status:     "verified",
+			reason:     "verified at creation",
+			confidence: result.Confidence,
+			locator:    result.NewLocator,
+		}
+	case "missing":
+		// Claude claimed something that doesn't exist — store but mark as rejected
+		return creationVerifyResult{
+			status:     "rejected",
+			reason:     "assertion not found in file: " + result.Reason,
+			confidence: 0.1,
+		}
+	case "ambiguous":
+		return creationVerifyResult{
+			status: "unverified",
+			reason: "ambiguous match: " + result.Reason,
+		}
+	default: // "unsupported"
+		return creationVerifyResult{
+			status: "unverified",
+			reason: "no verifier for " + assertionKind,
+		}
+	}
 }

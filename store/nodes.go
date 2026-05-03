@@ -332,3 +332,10 @@ func nullableStr(s string) any {
 	}
 	return s
 }
+
+func defaultStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}

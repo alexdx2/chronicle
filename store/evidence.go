@@ -141,8 +141,9 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		   valid_from_revision_id, last_verified_revision_id,
 		   context_id, evidence_uid,
 		   assertion, assertion_kind, assertion_version,
+		   verification_status, verification_reason,
 		   metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`
 	res, err := s.db.Exec(insQ,
 		e.TargetKind, nodeID, edgeID,
@@ -157,6 +158,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ValidFromRevisionID),
 		nullableInt64(e.ContextID), nullableStr(e.EvidenceUID),
 		assertion, assertionKind, assertionVersion,
+		defaultStr(e.VerificationStatus, "unverified"), defaultStr(e.VerificationReason, ""),
 		e.Metadata,
 	)
 	if err != nil {
