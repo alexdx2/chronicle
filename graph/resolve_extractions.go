@@ -11,17 +11,22 @@ import (
 
 // Fact represents a single extracted observation from a source file.
 type Fact struct {
-	Kind       string `json:"kind"`                  // import, call, decorator, http_call, dependency, model, endpoint, produces, consumes
-	FromFile   string `json:"from_file,omitempty"`   // source file (usually implicit from extraction context)
-	From       string `json:"from,omitempty"`        // source entity name/identifier
-	To         string `json:"to"`                    // target module/service/entity
-	Symbols    []string `json:"symbols,omitempty"`   // imported symbols
-	Method     string `json:"method,omitempty"`      // HTTP method or called method name
-	Object     string `json:"object,omitempty"`      // callee object
-	Decorator  string `json:"decorator,omitempty"`   // decorator name
-	Target     string `json:"target,omitempty"`      // URL or target identifier
-	Confidence float64 `json:"confidence,omitempty"` // agent confidence [0,1]
-	Note       string `json:"note,omitempty"`        // agent uncertainty/note
+	Kind       string   `json:"kind"`                  // import, call, decorator, http_call, dependency, model, endpoint, produces, consumes, flow
+	FromFile   string   `json:"from_file,omitempty"`   // source file (usually implicit from extraction context)
+	From       string   `json:"from,omitempty"`        // source entity name/identifier
+	To         string   `json:"to"`                    // target module/service/entity
+	Symbols    []string `json:"symbols,omitempty"`     // imported symbols
+	Method     string   `json:"method,omitempty"`      // HTTP method or called method name
+	Object     string   `json:"object,omitempty"`      // callee object
+	Decorator  string   `json:"decorator,omitempty"`   // decorator name
+	Target     string   `json:"target,omitempty"`      // URL or target identifier
+	Confidence float64  `json:"confidence,omitempty"`  // agent confidence [0,1]
+	Note       string   `json:"note,omitempty"`        // agent uncertainty/note
+	// Flow-specific fields
+	FlowName   string   `json:"flow_name,omitempty"`   // use case name (e.g. "Tom attacks Jerry")
+	Trigger    string   `json:"trigger,omitempty"`      // what triggers this flow (endpoint, event, cron)
+	Steps      []string `json:"steps,omitempty"`        // ordered list of steps in the flow
+	Requires   []string `json:"requires,omitempty"`     // services/models this flow depends on
 }
 
 // ResolveExtractionsResult is returned by ResolveExtractions.
@@ -432,6 +437,80 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		counts.nodes++
 		counts.evidence++
+
+	case "flow":
+		// Business flow / use case — creates flow node + edges to triggers and requirements
+		if fact.FlowName == "" {
+			return counts, nil
+		}
+		flowKey := "flow:use_case:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.FlowName, " ", "_"))
+		g.ensureNode(domainKey, revisionID, flowKey, fact.FlowName, filePath)
+		counts.nodes++
+
+		// Evidence: the orchestrating method exists in the file
+		// Use text_contains for the method name or flow name
+		methodName := fact.Method
+		if methodName == "" {
+			methodName = fact.FlowName
+		}
+		assertion, _ := json.Marshal(map[string]any{
+			"substring": methodName,
+		})
+		_, _ = g.AddNodeEvidence(flowKey, validate.EvidenceInput{
+			TargetKind: "node", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.85, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		})
+		counts.evidence++
+
+		// Trigger → TRIGGERS_FLOW edge
+		if fact.Trigger != "" {
+			triggerKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(fact.Trigger, " ", "_"), "/", "_"))
+			triggerID := g.ensureNodeID(domainKey, revisionID, triggerKey, fact.Trigger, "")
+			flowID, _ := g.store.GetNodeIDByKey(flowKey)
+			edgeKey := triggerKey + "->" + flowKey + ":TRIGGERS_FLOW"
+			_, err := g.store.UpsertEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: triggerID, ToNodeID: flowID,
+				FromNodeKey: triggerKey, ToNodeKey: flowKey,
+				EdgeType: "TRIGGERS_FLOW", DerivationKind: "hard", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
+				Metadata: "{}", ValidFromRevisionID: revisionID,
+			})
+			if err == nil {
+				counts.edges++
+			}
+		}
+
+		// Requirements → REQUIRES edges
+		flowID, _ := g.store.GetNodeIDByKey(flowKey)
+		for _, req := range fact.Requires {
+			reqKey := "code:provider:" + domainKey + ":" + strings.ToLower(req)
+			reqID := g.ensureNodeID(domainKey, revisionID, reqKey, req, "")
+			edgeKey := flowKey + "->" + reqKey + ":REQUIRES"
+			_, err := g.store.UpsertEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: flowID, ToNodeID: reqID,
+				FromNodeKey: flowKey, ToNodeKey: reqKey,
+				EdgeType: "REQUIRES", DerivationKind: "hard", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
+				Metadata: "{}", ValidFromRevisionID: revisionID,
+			})
+			if err == nil {
+				counts.edges++
+			}
+
+			// Evidence: the required service is referenced in this file (use original case)
+			reqAssertion, _ := json.Marshal(map[string]any{
+				"substring": req,
+			})
+			_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				Confidence: 0.80, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(reqAssertion),
+			})
+			counts.evidence++
+		}
 	}
 
 	return counts, nil
