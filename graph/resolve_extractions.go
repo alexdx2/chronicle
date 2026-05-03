@@ -151,13 +151,15 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		toNodeKey := inferNodeKeyFromImport(domainKey, fact.To)
 
 		// Ensure nodes exist
-		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
-		g.ensureNode(domainKey, revisionID, toNodeKey, inferNameFromImport(fact.To), "")
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, inferNameFromImport(fact.To), "")
 
 		// Create edge
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":DEPENDS_ON"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey:             edgeKey,
+			FromNodeID:          fromID,
+			ToNodeID:            toID,
 			FromNodeKey:         fromNodeKey,
 			ToNodeKey:           toNodeKey,
 			EdgeType:            "DEPENDS_ON",
@@ -209,12 +211,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
 		toNodeKey := "code:module:" + domainKey + ":" + normalizePackageName(fact.To)
 
-		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
-		g.ensureNode(domainKey, revisionID, toNodeKey, fact.To, "")
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":DEPENDS_ON"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			FromNodeID:          fromID,
+			ToNodeID:            toID,
 			EdgeType: "DEPENDS_ON", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: revisionID,
@@ -234,15 +238,17 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "http_call":
 		// External HTTP call — create external system node + edge + evidence
 		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
-		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		targetName := inferExternalSystemName(fact.Target)
 		toNodeKey := "service:external_system:" + domainKey + ":" + strings.ToLower(targetName)
-		g.ensureNode(domainKey, revisionID, toNodeKey, targetName, "")
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			FromNodeID:          fromID,
+			ToNodeID:            toID,
 			EdgeType: "CALLS_SERVICE", DerivationKind: "linked", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
 			Metadata: "{}", ValidFromRevisionID: revisionID,
@@ -277,7 +283,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			"callee_method": fact.Method,
 		})
 
-		// If there's enough info to create an edge, do it
+		// Add evidence to existing edge — don't create edges from call facts alone
 		if fact.Object != "" {
 			toNodeKey := "code:provider:" + domainKey + ":" + strings.ToLower(fact.Object)
 			edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
@@ -314,14 +320,15 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "produces":
 		// Produces to topic/queue
 		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
-		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
-		g.ensureNode(domainKey, revisionID, toNodeKey, fact.To, "")
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":PUBLISHES_TOPIC"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			FromNodeID: fromID, ToNodeID: toID,
 			EdgeType: "PUBLISHES_TOPIC", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: revisionID,
@@ -344,14 +351,16 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "consumes":
 		// Consumes from topic/queue
 		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
-		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
-		g.ensureNode(domainKey, revisionID, toNodeKey, fact.To, "")
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONSUMES_TOPIC"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			FromNodeID:          fromID,
+			ToNodeID:            toID,
 			EdgeType: "CONSUMES_TOPIC", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: revisionID,
@@ -374,18 +383,20 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "endpoint":
 		// HTTP/WS/GraphQL endpoint — contract node + evidence
 		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
-		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		endpointName := fact.To
 		if fact.Method != "" {
 			endpointName = fact.Method + " " + fact.To
 		}
 		toNodeKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(endpointName, " ", "_"), "/", "_"))
-		g.ensureNode(domainKey, revisionID, toNodeKey, endpointName, "")
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, endpointName, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":EXPOSES_ENDPOINT"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			FromNodeID:          fromID,
+			ToNodeID:            toID,
 			EdgeType: "EXPOSES_ENDPOINT", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: revisionID,
@@ -426,8 +437,18 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	return counts, nil
 }
 
+// ensureNodeID ensures a node exists and returns its ID.
+func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, filePath string) int64 {
+	id, err := g.store.GetNodeIDByKey(nodeKey)
+	if err == nil {
+		return id
+	}
+	g.ensureNode(domainKey, revisionID, nodeKey, name, filePath)
+	id, _ = g.store.GetNodeIDByKey(nodeKey)
+	return id
+}
+
 func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, filePath string) {
-	// Try to get existing — if not found, create
 	_, err := g.store.GetNodeIDByKey(nodeKey)
 	if err != nil {
 		parts := strings.SplitN(nodeKey, ":", 4)
