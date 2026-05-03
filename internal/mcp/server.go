@@ -401,7 +401,7 @@ func edgeListHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func evidenceAddTool() mcp.Tool {
 	return mcp.NewTool("chronicle_evidence_add",
-		mcp.WithDescription("Add provenance evidence for a node or edge. For code evidence: include file_path and line_start, source_kind='file'. For user corrections: use source_kind='user_feedback', polarity='negative', confidence=0.95, and include the user's reason in metadata. Negative evidence with high confidence contradicts the fact and effectively removes it from the graph. Extractor_id should be 'claude-code'."),
+		mcp.WithDescription("Add provenance evidence for a node or edge. Include assertion_kind and assertion JSON for mechanical verification — evidence is verified at creation time against the actual file. If the assertion is not found, evidence is marked 'rejected' with low confidence. For user corrections: use polarity='negative' with checked_scope. Extractor_id should be 'claude-code'."),
 		mcp.WithString("extractor_id", mcp.Required(), mcp.Description("Extractor ID")),
 		mcp.WithString("extractor_version", mcp.Required(), mcp.Description("Extractor version")),
 		mcp.WithString("target_kind", mcp.Description("Target kind: node or edge")),
@@ -887,7 +887,7 @@ func staleMarkHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func invalidateChangedTool() mcp.Tool {
 	return mcp.NewTool("chronicle_invalidate_changed",
-		mcp.WithDescription("Mark evidence from changed files as stale and recalculate trust scores. Call during incremental scans after getting changed files from git diff. Returns list of files to rescan."),
+		mcp.WithDescription("Mark evidence from changed files as stale, auto-verify assertions using native parsers and tree-sitter, and recalculate trust scores. Returns auto_verified results (what was mechanically confirmed) and needs_claude (files requiring Claude to re-read). Most evidence is re-verified without Claude intervention."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("changed_files", mcp.Required(), mcp.Description("JSON array of changed file paths")),
@@ -929,7 +929,7 @@ func invalidateChangedHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func finalizeIncrementalScanTool() mcp.Tool {
 	return mcp.NewTool("chronicle_finalize_incremental_scan",
-		mcp.WithDescription("Complete an incremental scan. Counts revalidated/stale/contradicted evidence and recalculates trust scores. Stale evidence stays stale — only negative evidence causes invalidation."),
+		mcp.WithDescription("Complete an incremental scan. Returns scan_status (clean/review_required/incomplete), revalidated/stale/contradicted counts, needs_review_edges (edges that lost all evidence), rejected_evidence (assertions that failed verification — Claude hallucinations), uncovered_files, and obligation summary. If scan_status is not 'clean', Claude must resolve the listed issues."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 	)

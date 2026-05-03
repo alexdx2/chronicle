@@ -53,14 +53,22 @@ func (v *TSCallVerifier) Verify(fileContent []byte, assertion json.RawMessage, o
 			(#eq? @fn_name "%s")
 		) @call`, a.CalleeMethod)
 	} else {
-		// Method call: obj.method(...)
-		querySource = fmt.Sprintf(`(call_expression
-			function: (member_expression
-				object: (identifier) @obj
-				property: (property_identifier) @method
-			)
-			(#eq? @method "%s")
-		) @call`, a.CalleeMethod)
+		// Method call: obj.method(...) or this.obj.method(...)
+		// First try direct: obj.method()
+		// Then try nested: this.obj.method()
+		querySource = fmt.Sprintf(`[
+			(call_expression
+				function: (member_expression
+					object: (identifier) @obj
+					property: (property_identifier) @method)
+				(#eq? @method "%s"))
+			(call_expression
+				function: (member_expression
+					object: (member_expression
+						property: (property_identifier) @obj)
+					property: (property_identifier) @method)
+				(#eq? @method "%s"))
+		] @call`, a.CalleeMethod, a.CalleeMethod)
 	}
 
 	query, err := sitter.NewQuery(lang, querySource)
