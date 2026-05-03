@@ -34,11 +34,15 @@ SETUP:
 SCAN LOOP (repeat until done):
 8. chronicle_scan_next_file — get ONE unprocessed file
 9. If done=true → go to RESOLVE
-10. Read the file. Extract facts. Call chronicle_file_extracted.
+10. Spawn a SUBAGENT (via Agent tool) to process this ONE file. The subagent:
+    a. Reads the file
+    b. Extracts architectural facts following the extraction guide
+    c. Calls chronicle_file_extracted(file_path, status, facts, revision_id, domain)
+    d. If code delegates to a factory/handler — reads THAT file too
+    Each file = fresh agent context. No context pollution between files.
     Facts: [{"kind":"import","to":"./x","symbols":["X"]}, {"kind":"flow","flow_name":"...","requires":["X","Y"]}, ...]
     Kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
     Status: "extracted" | "no_architecture" | "skipped"
-    If code delegates to another class — read THAT file too.
 11. Go back to step 8
 
 RESOLVE:
