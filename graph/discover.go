@@ -147,9 +147,18 @@ func categorizeFile(relPath, name string) string {
 		return "client"
 	case strings.Contains(lowerPath, "prisma") && strings.Contains(lowerPath, ".service."):
 		return "service"
-	case strings.Contains(lowerPath, "/src/") || strings.Contains(lowerPath, "/lib/"):
+	case strings.Contains(lowerPath, ".events.") || strings.Contains(lowerPath, ".event."):
+		return "async"
+	case strings.Contains(lowerPath, ".factory.") || strings.Contains(lowerPath, ".strategy."):
+		return "service"
+	// App entry points (NOT index.ts — those are barrel re-exports)
+	case lower == "app.ts" || lower == "app.tsx" || lower == "main.ts" ||
+		lower == "server.ts" || lower == "main.go":
 		return "source"
 	}
 
+	// NOT included: React components, hooks, screens, pages, utils, helpers, types, constants.
+	// These rarely contain architectural facts. If they do, the delegation rule will catch them
+	// (the service/controller that calls them will be scanned, and delegation chains are followed).
 	return ""
 }
