@@ -32,16 +32,13 @@ SETUP:
 7. chronicle_discover_files — MCP discovers ALL architecture-relevant files
 
 SCAN LOOP (repeat until done):
-8. chronicle_scan_next_batch — get next batch of unprocessed files
-9. If batch is empty (done=true) → go to RESOLVE
-10. For each file in batch:
-    a. Read the file
-    b. Extract facts following the extraction guide rules
-    c. Call chronicle_file_extracted(file_path, status, facts, revision_id, domain)
-       Facts: [{"kind":"import","to":"./x","symbols":["X"]}, {"kind":"flow","flow_name":"...","requires":["X","Y"]}, ...]
-       Kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
-       Status: "extracted" | "no_architecture" | "skipped"
-    d. If code delegates to another class (factory, handler) — read THAT file too
+8. chronicle_scan_next_file — get ONE unprocessed file
+9. If done=true → go to RESOLVE
+10. Read the file. Extract facts. Call chronicle_file_extracted.
+    Facts: [{"kind":"import","to":"./x","symbols":["X"]}, {"kind":"flow","flow_name":"...","requires":["X","Y"]}, ...]
+    Kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
+    Status: "extracted" | "no_architecture" | "skipped"
+    If code delegates to another class — read THAT file too.
 11. Go back to step 8
 
 RESOLVE:
@@ -53,7 +50,7 @@ RESOLVE:
 14. Snapshot + stale mark
 15. Domain language + discoveries
 
-You do NOT decide when scanning is done. MCP decides — when scan_next_batch returns done=true.`,
+You do NOT decide when scanning is done. MCP decides — when chronicle_scan_next_file returns done=true.`,
 
 	"data": `Analyze data models:
 1. Call chronicle_schema({ from_layer: 'code', to_layer: 'data', include: 'edges' }) to see valid data edge types
