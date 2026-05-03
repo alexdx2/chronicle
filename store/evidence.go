@@ -405,6 +405,63 @@ func (s *Store) CountRecentlyVerifiedEvidence(domainKey string, revisionID int64
 	return count, err
 }
 
+// ListRejectedEvidence returns evidence with verification_status='rejected' for a domain.
+func (s *Store) ListRejectedEvidence(domainKey string) ([]EvidenceRow, error) {
+	q := `SELECT e.evidence_id, e.target_kind,
+	             COALESCE(e.node_id,0), COALESCE(e.edge_id,0),
+	             e.source_kind,
+	             COALESCE(e.repo_name,''), COALESCE(e.file_path,''),
+	             COALESCE(e.line_start,0), COALESCE(e.line_end,0),
+	             COALESCE(e.column_start,0), COALESCE(e.column_end,0),
+	             COALESCE(e.locator,''),
+	             e.extractor_id, e.extractor_version,
+	             COALESCE(e.ast_rule,''), COALESCE(e.snippet_hash,''), COALESCE(e.commit_sha,''),
+	             e.observed_at, COALESCE(e.verified_at,''),
+	             e.confidence, e.evidence_status, e.evidence_polarity,
+	             COALESCE(e.valid_from_revision_id,0), COALESCE(e.valid_to_revision_id,0),
+	             COALESCE(e.last_verified_revision_id,0), COALESCE(e.invalidated_by_revision_id,0),
+	             COALESCE(e.invalidated_reason,''),
+	             COALESCE(e.assertion,'{}'), COALESCE(e.assertion_kind,''), COALESCE(e.assertion_version,'v1'),
+	             COALESCE(e.verification_status,'unverified'), COALESCE(e.verification_reason,''),
+	             e.metadata
+	      FROM graph_evidence e
+	      LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+	      LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+	      LEFT JOIN graph_nodes en ON ed.from_node_id = en.node_id
+	      WHERE COALESCE(n.domain_key, en.domain_key, ?) = ?
+	        AND e.verification_status = 'rejected'
+	      ORDER BY e.evidence_id`
+	rows, err := s.db.Query(q, domainKey, domainKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []EvidenceRow
+	for rows.Next() {
+		var r EvidenceRow
+		if err := rows.Scan(
+			&r.EvidenceID, &r.TargetKind, &r.NodeID, &r.EdgeID,
+			&r.SourceKind, &r.RepoName, &r.FilePath,
+			&r.LineStart, &r.LineEnd, &r.ColumnStart, &r.ColumnEnd,
+			&r.Locator, &r.ExtractorID, &r.ExtractorVersion,
+			&r.ASTRule, &r.SnippetHash, &r.CommitSHA,
+			&r.ObservedAt, &r.VerifiedAt,
+			&r.Confidence, &r.EvidenceStatus, &r.EvidencePolarity,
+			&r.ValidFromRevisionID, &r.ValidToRevisionID,
+			&r.LastVerifiedRevisionID, &r.InvalidatedByRevisionID,
+			&r.InvalidatedReason,
+			&r.Assertion, &r.AssertionKind, &r.AssertionVersion,
+			&r.VerificationStatus, &r.VerificationReason,
+			&r.Metadata,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // StaleFilePaths returns distinct file paths that have stale evidence.
 func (s *Store) StaleFilePaths() ([]string, error) {
 	q := `SELECT DISTINCT file_path FROM graph_evidence WHERE evidence_status='stale' AND file_path != ''`

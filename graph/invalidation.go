@@ -21,7 +21,20 @@ type FinalizeResult struct {
 	EdgesStatusChanged int                 `json:"edges_status_changed"`
 	UncoveredFiles     []UncoveredFile     `json:"uncovered_files,omitempty"`
 	NeedsReviewEdges   []NeedsReviewEdge   `json:"needs_review_edges,omitempty"`
+	RejectedEvidence   []RejectedEvidence  `json:"rejected_evidence,omitempty"`
 	Obligations        ObligationSummary   `json:"obligations"`
+}
+
+// RejectedEvidence is evidence that failed verification at creation time.
+// Claude claimed something that the verifier couldn't confirm.
+type RejectedEvidence struct {
+	EvidenceID    int64  `json:"evidence_id"`
+	EdgeKey       string `json:"edge_key,omitempty"`
+	NodeKey       string `json:"node_key,omitempty"`
+	FilePath      string `json:"file_path"`
+	AssertionKind string `json:"assertion_kind"`
+	Reason        string `json:"reason"`
+	Action        string `json:"action"` // "re-read file and verify", "remove edge", "update assertion"
 }
 
 // UncoveredFile is a file with stale evidence that was not verified or rescanned.
@@ -193,11 +206,34 @@ func (g *Graph) FinalizeIncrementalScan(domainKey string, revisionID int64) (*Fi
 	}
 	result.EdgesStatusChanged = len(needsReview)
 
+	// Find rejected evidence (Claude hallucinations caught at creation time)
+	rejected, _ := g.store.ListRejectedEvidence(domainKey)
+	for _, ev := range rejected {
+		edgeKey := ""
+		if ev.EdgeID > 0 {
+			edges, _ := g.store.ListEdges(store.EdgeFilter{})
+			for _, e := range edges {
+				if e.EdgeID == ev.EdgeID {
+					edgeKey = e.EdgeKey
+					break
+				}
+			}
+		}
+		result.RejectedEvidence = append(result.RejectedEvidence, RejectedEvidence{
+			EvidenceID:    ev.EvidenceID,
+			EdgeKey:       edgeKey,
+			FilePath:      ev.FilePath,
+			AssertionKind: ev.AssertionKind,
+			Reason:        ev.VerificationReason,
+			Action:        "re-read file and verify — assertion was not found at creation time",
+		})
+	}
+
 	// Compute scan status
 	switch {
-	case result.Obligations.Open == 0 && len(result.NeedsReviewEdges) == 0:
+	case result.Obligations.Open == 0 && len(result.NeedsReviewEdges) == 0 && len(result.RejectedEvidence) == 0:
 		result.ScanStatus = "clean"
-	case result.Obligations.Open == 0 && len(result.NeedsReviewEdges) > 0:
+	case result.Obligations.Open == 0 && (len(result.NeedsReviewEdges) > 0 || len(result.RejectedEvidence) > 0):
 		result.ScanStatus = "review_required"
 	default:
 		result.ScanStatus = "incomplete"
