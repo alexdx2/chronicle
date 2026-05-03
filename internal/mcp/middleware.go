@@ -393,6 +393,7 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(evidenceVerifyTool(), evidenceVerifyHandler(g))
 	add(resolveReviewTool(), resolveReviewHandler(g))
 	add(discoverFilesTool(), discoverFilesHandler(g))
+	add(scanNextBatchTool(), scanNextBatchHandler(g))
 	add(fileExtractedTool(), fileExtractedHandler(g))
 	add(resolveExtractionsTool(), resolveExtractionsHandler(g))
 	add(importAllTool(), importAllHandler(g))

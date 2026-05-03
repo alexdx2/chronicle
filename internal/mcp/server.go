@@ -39,6 +39,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(evidenceVerifyTool(), evidenceVerifyHandler(g))
 	s.AddTool(resolveReviewTool(), resolveReviewHandler(g))
 	s.AddTool(discoverFilesTool(), discoverFilesHandler(g))
+	s.AddTool(scanNextBatchTool(), scanNextBatchHandler(g))
 	s.AddTool(fileExtractedTool(), fileExtractedHandler(g))
 	s.AddTool(resolveExtractionsTool(), resolveExtractionsHandler(g))
 	s.AddTool(importAllTool(), importAllHandler(g))
@@ -577,6 +578,69 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 		return jsonResult(result), nil
 	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_scan_next_batch
+// ---------------------------------------------------------------------------
+
+func scanNextBatchTool() mcp.Tool {
+	return mcp.NewTool("chronicle_scan_next_batch",
+		mcp.WithDescription("Get the next batch of files to scan. Returns up to batch_size unprocessed files from the discovery list. Call this in a loop: read files → chronicle_file_extracted for each → call this again. When it returns empty files list, all files are processed and you can proceed to chronicle_resolve_extractions."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("batch_size", mcp.Description("Files per batch (default 10)")),
+	)
+}
+
+func scanNextBatchHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+		batchSize := intParam(args, "batch_size")
+		if batchSize == 0 {
+			batchSize = 10
+		}
+
+		if revisionID == 0 || domain == "" {
+			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
+		}
+
+		// Get open scan_file obligations (files not yet processed)
+		open, _ := g.Store().ListOpenObligations(revisionID)
+		var pending []map[string]string
+		for _, ob := range open {
+			if ob.ObligationType == "scan_file" {
+				pending = append(pending, map[string]string{
+					"file": ob.TargetKey,
+					"reason": ob.Reason,
+				})
+			}
+		}
+
+		// Return batch
+		total := len(pending)
+		if total > batchSize {
+			pending = pending[:batchSize]
+		}
+
+		return jsonResult(map[string]any{
+			"files":           pending,
+			"batch_size":      len(pending),
+			"remaining":       total - len(pending),
+			"total_remaining": total,
+			"done":            total == 0,
+			"next_action":     nextAction(total),
+		}), nil
+	}
+}
+
+func nextAction(remaining int) string {
+	if remaining == 0 {
+		return "All files processed. Call chronicle_resolve_extractions to build the graph, then chronicle_finalize_incremental_scan to check results."
+	}
+	return fmt.Sprintf("Read each file, call chronicle_file_extracted, then call chronicle_scan_next_batch again. %d files remaining.", remaining)
 }
 
 // ---------------------------------------------------------------------------

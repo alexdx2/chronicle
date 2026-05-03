@@ -21,31 +21,39 @@ var UserCommands = map[string]string{
 
 var CommandInstructions = map[string]string{
 	"scan": `Full project scan:
-1. Call chronicle_get_discoveries to learn from previous scans
-2. Call chronicle_schema — learn what layers, types, and edges exist
-3. Call chronicle_extraction_guide — learn the universal extraction rules (READ CAREFULLY)
-4. Auto-discover project, save manifest
-4.5. Call chronicle_resolve_context(domain) — if no context exists, it auto-creates "main"
-5. Create revision (include context_id)
-6. Call chronicle_discover_files — get the COMPLETE list of architecture-relevant files with categories.
-   This creates obligations for EVERY file. You MUST process them all.
-7. Work through the file list by category (manifests first, then schemas, then services, etc):
-   For EACH file: read it and call chronicle_file_extracted with structured facts.
-   Facts format: [{"kind": "import", "from": "X", "to": "./y", "symbols": ["Y"]}, ...]
-   Fact kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
-   Status: "extracted" (found facts), "no_architecture" (nothing relevant), "skipped" (test/generated)
-   CRITICAL: Follow delegation chains — if code calls factory.register(), read that factory file too.
-   DO NOT STOP until every file from discover_files has been processed.
-8. After ALL files processed: call chronicle_resolve_extractions — MCP builds the graph with verified evidence.
-9. Call chronicle_finalize_incremental_scan — check scan_status.
-   If "review_required": look at rejected_evidence, needs_review_edges, and uncovered_files. Fix them.
-   If uncovered_files exist: you missed files — go back and process them.
-   If "clean": scan complete.
-10. Snapshot + stale mark
-11. Define domain language terms + check violations + report discoveries
 
-Incremental scan (when user says "update the graph" or "rescan changes"):
-→ Use the "update" command instead.`,
+SETUP:
+1. chronicle_get_discoveries — learn from previous scans
+2. chronicle_schema — learn valid layers, types, edges
+3. chronicle_extraction_guide — READ the universal extraction rules
+4. Auto-discover project, save manifest
+5. chronicle_resolve_context(domain) — create context if needed
+6. Create revision
+7. chronicle_discover_files — MCP discovers ALL architecture-relevant files
+
+SCAN LOOP (repeat until done):
+8. chronicle_scan_next_batch — get next batch of unprocessed files
+9. If batch is empty (done=true) → go to RESOLVE
+10. For each file in batch:
+    a. Read the file
+    b. Extract facts following the extraction guide rules
+    c. Call chronicle_file_extracted(file_path, status, facts, revision_id, domain)
+       Facts: [{"kind":"import","to":"./x","symbols":["X"]}, {"kind":"flow","flow_name":"...","requires":["X","Y"]}, ...]
+       Kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
+       Status: "extracted" | "no_architecture" | "skipped"
+    d. If code delegates to another class (factory, handler) — read THAT file too
+11. Go back to step 8
+
+RESOLVE:
+12. chronicle_resolve_extractions — MCP builds graph from all facts, verifies evidence at creation
+13. chronicle_finalize_incremental_scan — check scan_status
+    If "clean" → done
+    If "review_required" → fix rejected_evidence and needs_review_edges
+    If uncovered_files exist → go back to step 8 (more files to process)
+14. Snapshot + stale mark
+15. Domain language + discoveries
+
+You do NOT decide when scanning is done. MCP decides — when scan_next_batch returns done=true.`,
 
 	"data": `Analyze data models:
 1. Call chronicle_schema({ from_layer: 'code', to_layer: 'data', include: 'edges' }) to see valid data edge types
