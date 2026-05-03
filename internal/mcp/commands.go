@@ -23,15 +23,23 @@ var CommandInstructions = map[string]string{
 	"scan": `Full project scan:
 1. Call chronicle_get_discoveries to learn from previous scans
 2. Call chronicle_schema — learn what layers, types, and edges exist
-3. Call chronicle_extraction_guide — learn how to extract
+3. Call chronicle_extraction_guide — learn the universal extraction rules (READ CAREFULLY)
 4. Auto-discover project, save manifest
 4.5. Call chronicle_resolve_context(domain) — if no context exists, it auto-creates "main"
 5. Create revision (include context_id)
-6. Scan in passes: data models → code structure → contracts/endpoints → cross-service edges → flows
-7. For each file: read → extract → chronicle_import_all immediately (max 10-15 nodes per call)
-8. Snapshot + stale mark
-9. Define domain language terms (chronicle_define_term) + check violations
-10. Report discoveries
+6. For EVERY architecture-relevant file: read it and call chronicle_file_extracted with structured facts.
+   Facts format: [{"kind": "import", "from": "X", "to": "./y", "symbols": ["Y"]}, {"kind": "call", ...}, {"kind": "flow", "flow_name": "...", ...}]
+   Fact kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
+   Status: "extracted" (found facts), "no_architecture" (nothing relevant), "skipped" (test/generated file)
+   CRITICAL: Follow delegation chains — if code calls factory.register(), read that factory file too.
+7. After ALL files processed: call chronicle_resolve_extractions — MCP builds the graph with verified evidence.
+   Every edge gets assertion-based evidence that is mechanically verified at creation time.
+   If an assertion is wrong (hallucination), it's marked "rejected" with 0.10 confidence.
+8. Call chronicle_finalize_incremental_scan — check scan_status.
+   If "review_required": look at rejected_evidence and needs_review_edges, fix them.
+   If "clean": scan complete.
+9. Snapshot + stale mark
+10. Define domain language terms + check violations + report discoveries
 
 Incremental scan (when user says "update the graph" or "rescan changes"):
 → Use the "update" command instead.`,
