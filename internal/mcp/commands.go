@@ -43,8 +43,18 @@ SETUP:
          - "**/__tests__/**"
          - "**/dist/**"
          - "**/generated/**"
-   Analyze the project structure FIRST (look at top-level dirs, package.json workspaces)
-   to write the right include patterns. Be thorough — every source directory with architecture.
+         - "**/components/**"
+         - "**/hooks/**"
+         - "**/pages/**"
+         - "**/screens/**"
+         - "**/assets/**"
+         - "**/styles/**"
+   Analyze the project structure FIRST (look at top-level dirs, package.json workspaces).
+   IMPORTANT: For frontend apps (React, Vue, mobile), include ONLY service/provider/lib files,
+   NOT UI components, hooks, pages, screens. Those are presentation layer, not architecture.
+   Include: api/*, packages/*, lib/services/*, lib/providers/*
+   Exclude: components/*, hooks/*, pages/*, screens/*, assets/*, styles/*
+   Target: under 500 files total. If discover_files returns more, tighten your patterns.
 5. chronicle_resolve_context(domain) — create context if needed
 6. Create revision
 7. chronicle_discover_files — MCP returns git-tracked files filtered by manifest scan config
