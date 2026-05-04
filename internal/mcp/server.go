@@ -590,6 +590,15 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
+		// Guard: too many files means patterns are too broad
+		if result.TotalFiles > 500 {
+			return jsonResult(map[string]any{
+				"error":       "TOO_MANY_FILES",
+				"total_files": result.TotalFiles,
+				"message":     fmt.Sprintf("Discovered %d files — too many. Maximum is 500. Your scan.include patterns are too broad. Add more scan.exclude patterns (e.g. **/components/**, **/hooks/**, **/pages/**, **/screens/**, **/*.test.*) or narrow your includes. Then call chronicle_discover_files again.", result.TotalFiles),
+			}), nil
+		}
+
 		return jsonResult(result), nil
 	}
 }
