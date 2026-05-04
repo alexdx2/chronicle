@@ -590,6 +590,15 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
+		// Create or update scan run — transition to phase1_extract
+		run, _ := g.Store().GetActiveScanRun(domain)
+		if run == nil {
+			runID, _ := g.Store().CreateScanRun(revisionID, domain)
+			g.Store().TransitionScanRun(runID, "phase1_extract", result.TotalFiles)
+		} else {
+			g.Store().TransitionScanRun(run.RunID, "phase1_extract", result.TotalFiles)
+		}
+
 		return jsonResult(result), nil
 	}
 }
@@ -657,6 +666,11 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 		// Satisfy obligations for this file (both scan_file and verify_file)
 		_ = g.SatisfyFileObligation(revisionID, filePath)
 		_ = g.Store().SatisfyObligation(revisionID, "scan_file", filePath)
+
+		// Increment scan run progress
+		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
+			g.Store().IncrementScanRunExtracted(run.RunID)
+		}
 
 		return jsonResult(map[string]any{
 			"extraction_id": id,
