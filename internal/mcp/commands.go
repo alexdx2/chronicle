@@ -56,18 +56,17 @@ SETUP:
 7. chronicle_discover_files — MCP returns git-tracked files filtered by manifest scan config
 
 SCAN LOOP (repeat until done):
-8. chronicle_scan_next_file — get ONE unprocessed file
+8. chronicle_scan_next_file — returns up to 10 unprocessed files
 9. If done=true → go to RESOLVE
-10. Spawn a SUBAGENT (via Agent tool) to process this ONE file. The subagent:
-    a. Reads the file
-    b. Extracts architectural facts following the extraction guide
+10. Spawn PARALLEL SUBAGENTS — one per file in the batch. Each subagent:
+    a. Reads its ONE file (fresh context, no pollution)
+    b. Extracts architectural facts
     c. Calls chronicle_file_extracted(file_path, status, facts, revision_id, domain)
     d. If code delegates to a factory/handler — reads THAT file too
-    Each file = fresh agent context. No context pollution between files.
     Facts: [{"kind":"import","to":"./x","symbols":["X"]}, {"kind":"flow","flow_name":"...","requires":["X","Y"]}, ...]
     Kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
     Status: "extracted" | "no_architecture" | "skipped"
-11. Go back to step 8
+11. Wait for all agents to finish, then go back to step 8
 
 RESOLVE:
 12. chronicle_resolve_extractions — MCP builds graph from all facts, verifies evidence at creation

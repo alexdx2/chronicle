@@ -600,7 +600,7 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func scanNextBatchTool() mcp.Tool {
 	return mcp.NewTool("chronicle_scan_next_file",
-		mcp.WithDescription("Get the next file to scan. Returns one unprocessed file. Call in a loop: get file → read it → chronicle_file_extracted → call this again. When done=true, proceed to chronicle_resolve_extractions."),
+		mcp.WithDescription("Get the next batch of unprocessed files. Returns up to 10 files. For each file, spawn a parallel subagent to read and extract. After all agents complete, call this again. When done=true, proceed to chronicle_resolve_extractions."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 	)
@@ -627,16 +627,23 @@ func scanNextBatchHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if len(pending) == 0 {
 			return jsonResult(map[string]any{
 				"done":        true,
+				"files":       []string{},
 				"remaining":   0,
 				"next_action": "All files processed. Call chronicle_resolve_extractions to build the graph.",
 			}), nil
 		}
 
+		// Return batch of up to 10 files
+		batch := pending
+		if len(batch) > 10 {
+			batch = batch[:10]
+		}
+
 		return jsonResult(map[string]any{
-			"file":        pending[0],
-			"remaining":   len(pending) - 1,
+			"files":       batch,
+			"remaining":   len(pending) - len(batch),
 			"done":        false,
-			"next_action": fmt.Sprintf("Read this file, call chronicle_file_extracted, then call chronicle_scan_next_file again. %d files after this one.", len(pending)-1),
+			"next_action": fmt.Sprintf("Spawn a parallel subagent for EACH file. After all agents finish, call chronicle_scan_next_file again. %d files remaining after this batch.", len(pending)-len(batch)),
 		}), nil
 	}
 }
