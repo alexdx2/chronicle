@@ -706,6 +706,15 @@ func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
+
+		// Transition scan run from phase1_resolve to phase2_select
+		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
+			if run.Phase == "phase1_resolve" {
+				g.Store().SetScanRunResolved(run.RunID, result.NodesCreated+result.EdgesCreated)
+				g.Store().TransitionScanRun(run.RunID, "phase2_select", 0)
+			}
+		}
+
 		return jsonResult(result), nil
 	}
 }
@@ -1032,6 +1041,17 @@ func finalizeIncrementalScanHandler(g *graph.Graph) server.ToolHandlerFunc {
 		revisionID := int64Param(args, "revision_id")
 		if revisionID == 0 {
 			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+
+		// Hard block: reject if unresolved extractions exist
+		unresolved, _ := g.Store().ListUnresolvedExtractions(revisionID, domain)
+		if len(unresolved) > 0 {
+			return jsonResult(map[string]any{
+				"error":            "Cannot finalize: unresolved extractions exist",
+				"blocked":          true,
+				"unresolved_count": len(unresolved),
+				"required_action":  "Call chronicle_resolve_extractions first.",
+			}), nil
 		}
 
 		result, err := g.FinalizeIncrementalScan(domain, revisionID)
