@@ -40,6 +40,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(evidenceAddTool(), evidenceAddHandler(g))
 	s.AddTool(evidenceVerifyTool(), evidenceVerifyHandler(g))
 	s.AddTool(resolveReviewTool(), resolveReviewHandler(g))
+	s.AddTool(fileGroupsTool(), fileGroupsHandler(g))
 	s.AddTool(discoverFilesTool(), discoverFilesHandler(g))
 	s.AddTool(scanNextFileTool(), scanNextFileHandler(g))
 	s.AddTool(fileExtractedTool(), fileExtractedHandler(g))
@@ -548,6 +549,30 @@ func resolveReviewHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_file_groups
+// ---------------------------------------------------------------------------
+
+func fileGroupsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_file_groups",
+		mcp.WithDescription("List git-tracked files grouped by directory with counts. Use during setup to show the user which directories to include or exclude from scanning."),
+	)
+}
+
+func fileGroupsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		rootDir, _ := os.Getwd()
+		groups, total, err := graph.GroupFilesByDirectory(rootDir)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{
+			"groups":      groups,
+			"total_files": total,
+		}), nil
 	}
 }
 

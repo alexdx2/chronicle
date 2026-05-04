@@ -17,6 +17,7 @@ var UserCommands = map[string]string{
 	"verify":  "Verify low-confidence edges — find code evidence to confirm or reject inferred relationships",
 	"help":    "Show available Chronicle commands",
 	"diagram": "Show a live diagram to explain architecture",
+	"setup":   "Configure which directories to scan — interactive manifest builder",
 }
 
 var CommandInstructions = map[string]string{
@@ -201,6 +202,21 @@ Node cap: All data models (typically <20).
 - Node payload must include: node_id, node_key, name, layer, node_type.
 - Highlight colors must match the diagram type visual language.
 - When in doubt, use single step. Multi-step only when there's a clear sequential narrative.`,
+
+	"setup": `Project setup — configure scan scope:
+1. Call chronicle_file_groups — shows all git-tracked files grouped by directory with counts
+2. Present the groups to the user, organized by role:
+   - Backend (services, controllers, resolvers, gateways, modules)
+   - Data (schemas, migrations, prisma)
+   - Config (docker-compose, Dockerfiles, configs)
+   - Frontend presentation (components, hooks, pages, screens) — exclude by default
+   - Tests, generated, dist — exclude
+3. Ask user which directories to EXCLUDE
+4. Write scan.include and scan.exclude patterns to the manifest
+5. Call chronicle_discover_files to validate the final count
+6. Show: "X files will be scanned. Ready to scan?"
+
+User makes DIRECTORY-level decisions, not file-level.`,
 
 	"help": `Show all available Chronicle commands:
 - /chronicle-scan — Full project scan
