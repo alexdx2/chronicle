@@ -26,35 +26,31 @@ SETUP:
 1. chronicle_get_discoveries — learn from previous scans
 2. chronicle_schema — learn valid layers, types, edges
 3. chronicle_extraction_guide — READ the universal extraction rules
-4. Auto-discover project. Save manifest with scan config:
-   chronicle_save_manifest with YAML that includes scan.include and scan.exclude.
-   Example:
-     scan:
-       include:
-         - "api/src/**/*.ts"
-         - "packages/*/src/**/*.ts"
-         - "**/prisma/*.prisma"
-         - "docker-compose*.yml"
-         - "**/package.json"
-       exclude:
-         - "**/*.test.ts"
-         - "**/*.spec.ts"
-         - "**/*.stories.*"
-         - "**/__tests__/**"
-         - "**/dist/**"
-         - "**/generated/**"
-         - "**/components/**"
-         - "**/hooks/**"
-         - "**/pages/**"
-         - "**/screens/**"
-         - "**/assets/**"
-         - "**/styles/**"
-   Analyze the project structure FIRST (look at top-level dirs, package.json workspaces).
-   IMPORTANT: For frontend apps (React, Vue, mobile), include ONLY service/provider/lib files,
-   NOT UI components, hooks, pages, screens. Those are presentation layer, not architecture.
-   Include: api/*, packages/*, lib/services/*, lib/providers/*
-   Exclude: components/*, hooks/*, pages/*, screens/*, assets/*, styles/*
-   Target: under 500 files total. If discover_files returns more, tighten your patterns.
+4. Auto-discover project. Save manifest with scan.include and scan.exclude patterns.
+   chronicle_save_manifest with YAML including scan config.
+
+   WHAT TO INCLUDE — files that define architecture:
+     Backend: services, controllers, resolvers, gateways, modules, middleware, guards, consumers, producers
+     Data: schema files (prisma, SQL, GraphQL schema definitions)
+     Config: docker-compose, Dockerfile, deployment configs
+     Shared: packages, libraries with business logic
+     Manifests: package.json, go.mod (for dependency tracking)
+
+   WHAT TO EXCLUDE — files that DON'T define architecture:
+     Presentation layer: UI components, views, pages, screens, layouts, widgets
+     Styling: CSS, SCSS, styled-components, tailwind configs
+     UI utilities: hooks, contexts (unless they wrap external services), formatters, validators
+     Assets: images, fonts, icons, animations
+     Tests: *.test.*, *.spec.*, __tests__/, e2e/
+     Generated: auto-generated types, compiled output, dist/, build/
+     Documentation: docs, README, storybook
+
+   RULE: If a file's primary purpose is rendering UI or formatting data for display,
+   EXCLUDE it. If it communicates with backends, manages state across features,
+   or defines system boundaries, INCLUDE it.
+
+   Target: 100-500 files. If chronicle_discover_files returns more, your patterns are too broad.
+   Check the count and tighten excludes before starting the scan loop.
 5. chronicle_resolve_context(domain) — create context if needed
 6. Create revision
 7. chronicle_discover_files — MCP returns git-tracked files filtered by manifest scan config
