@@ -41,7 +41,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(evidenceVerifyTool(), evidenceVerifyHandler(g))
 	s.AddTool(resolveReviewTool(), resolveReviewHandler(g))
 	s.AddTool(discoverFilesTool(), discoverFilesHandler(g))
-	s.AddTool(scanNextBatchTool(), scanNextBatchHandler(g))
+	s.AddTool(scanNextFileTool(), scanNextFileHandler(g))
 	s.AddTool(fileExtractedTool(), fileExtractedHandler(g))
 	s.AddTool(resolveExtractionsTool(), resolveExtractionsHandler(g))
 	s.AddTool(importAllTool(), importAllHandler(g))
@@ -590,70 +590,32 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
-		// Guard: too many files means patterns are too broad
-		if result.TotalFiles > 500 {
-			return jsonResult(map[string]any{
-				"error":       "TOO_MANY_FILES",
-				"total_files": result.TotalFiles,
-				"message":     fmt.Sprintf("Discovered %d files — too many. Maximum is 500. Your scan.include patterns are too broad. Add more scan.exclude patterns (e.g. **/components/**, **/hooks/**, **/pages/**, **/screens/**, **/*.test.*) or narrow your includes. Then call chronicle_discover_files again.", result.TotalFiles),
-			}), nil
-		}
-
 		return jsonResult(result), nil
 	}
 }
 
 // ---------------------------------------------------------------------------
-// chronicle_scan_next_batch
+// chronicle_scan_next_file
 // ---------------------------------------------------------------------------
 
-func scanNextBatchTool() mcp.Tool {
+func scanNextFileTool() mcp.Tool {
 	return mcp.NewTool("chronicle_scan_next_file",
-		mcp.WithDescription("Get the next batch of unprocessed files. Returns up to 10 files. For each file, spawn a parallel subagent to read and extract. After all agents complete, call this again. When done=true, proceed to chronicle_resolve_extractions."),
-		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithDescription("Get the next scan action. Returns what to do: extract files, resolve, trace flows, or done. Call in a loop until done=true. MCP controls the workflow — just follow the action."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 	)
 }
 
-func scanNextBatchHandler(g *graph.Graph) server.ToolHandlerFunc {
+func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args := req.GetArguments()
-		revisionID := int64Param(args, "revision_id")
-		domain := strParam(args, "domain")
-
-		if revisionID == 0 || domain == "" {
-			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
+		domain := strParam(req.GetArguments(), "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
 		}
-
-		open, _ := g.Store().ListOpenObligations(revisionID)
-		var pending []string
-		for _, ob := range open {
-			if ob.ObligationType == "scan_file" {
-				pending = append(pending, ob.TargetKey)
-			}
+		action, err := g.ScanNextAction(domain)
+		if err != nil {
+			return errorResult(err), nil
 		}
-
-		if len(pending) == 0 {
-			return jsonResult(map[string]any{
-				"done":        true,
-				"files":       []string{},
-				"remaining":   0,
-				"next_action": "All files processed. Call chronicle_resolve_extractions to build the graph.",
-			}), nil
-		}
-
-		// Return batch of up to 10 files
-		batch := pending
-		if len(batch) > 10 {
-			batch = batch[:10]
-		}
-
-		return jsonResult(map[string]any{
-			"files":       batch,
-			"remaining":   len(pending) - len(batch),
-			"done":        false,
-			"next_action": fmt.Sprintf("Spawn a parallel subagent for EACH file. After all agents finish, call chronicle_scan_next_file again. %d files remaining after this batch.", len(pending)-len(batch)),
-		}), nil
+		return jsonResult(action), nil
 	}
 }
 

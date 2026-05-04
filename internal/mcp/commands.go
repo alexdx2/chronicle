@@ -20,64 +20,18 @@ var UserCommands = map[string]string{
 }
 
 var CommandInstructions = map[string]string{
-	"scan": `Full project scan:
+	"scan": `Scan this project:
+1. Call chronicle_scan_next_file(domain) in a loop
+2. Follow the action it returns:
+   - "start_scan": call chronicle_discover_files to start
+   - "extract_files": spawn parallel subagents, one per file in the files array
+   - "call_resolve_extractions": call chronicle_resolve_extractions
+   - "trace_flow": read the trigger file and trace the business flow
+   - "none" with done=true: scan complete
+3. For file extraction, each subagent reads ONE file and calls chronicle_file_extracted
+4. Keep calling chronicle_scan_next_file until done=true
 
-SETUP:
-1. chronicle_get_discoveries — learn from previous scans
-2. chronicle_schema — learn valid layers, types, edges
-3. chronicle_extraction_guide — READ the universal extraction rules
-4. Auto-discover project. Save manifest with scan.include and scan.exclude patterns.
-   chronicle_save_manifest with YAML including scan config.
-
-   WHAT TO INCLUDE — files that define architecture:
-     Backend: services, controllers, resolvers, gateways, modules, middleware, guards, consumers, producers
-     Data: schema files (prisma, SQL, GraphQL schema definitions)
-     Config: docker-compose, Dockerfile, deployment configs
-     Shared: packages, libraries with business logic
-     Manifests: package.json, go.mod (for dependency tracking)
-
-   WHAT TO EXCLUDE — files that DON'T define architecture:
-     Presentation layer: UI components, views, pages, screens, layouts, widgets
-     Styling: CSS, SCSS, styled-components, tailwind configs
-     UI utilities: hooks, contexts (unless they wrap external services), formatters, validators
-     Assets: images, fonts, icons, animations
-     Tests: *.test.*, *.spec.*, __tests__/, e2e/
-     Generated: auto-generated types, compiled output, dist/, build/
-     Documentation: docs, README, storybook
-
-   RULE: If a file's primary purpose is rendering UI or formatting data for display,
-   EXCLUDE it. If it communicates with backends, manages state across features,
-   or defines system boundaries, INCLUDE it.
-
-   Target: 100-500 files. If chronicle_discover_files returns more, your patterns are too broad.
-   Check the count and tighten excludes before starting the scan loop.
-5. chronicle_resolve_context(domain) — create context if needed
-6. Create revision
-7. chronicle_discover_files — MCP returns git-tracked files filtered by manifest scan config
-
-SCAN LOOP (repeat until done):
-8. chronicle_scan_next_file — returns up to 10 unprocessed files
-9. If done=true → go to RESOLVE
-10. Spawn PARALLEL SUBAGENTS — one per file in the batch. Each subagent:
-    a. Reads its ONE file (fresh context, no pollution)
-    b. Extracts architectural facts
-    c. Calls chronicle_file_extracted(file_path, status, facts, revision_id, domain)
-    d. If code delegates to a factory/handler — reads THAT file too
-    Facts: [{"kind":"import","to":"./x","symbols":["X"]}, {"kind":"flow","flow_name":"...","requires":["X","Y"]}, ...]
-    Kinds: import, dependency, call, decorator, http_call, produces, consumes, endpoint, model, flow
-    Status: "extracted" | "no_architecture" | "skipped"
-11. Wait for all agents to finish, then go back to step 8
-
-RESOLVE:
-12. chronicle_resolve_extractions — MCP builds graph from all facts, verifies evidence at creation
-13. chronicle_finalize_incremental_scan — check scan_status
-    If "clean" → done
-    If "review_required" → fix rejected_evidence and needs_review_edges
-    If uncovered_files exist → go back to step 8 (more files to process)
-14. Snapshot + stale mark
-15. Domain language + discoveries
-
-You do NOT decide when scanning is done. MCP decides — when chronicle_scan_next_file returns done=true.`,
+MCP controls the workflow. You just execute what it tells you.`,
 
 	"data": `Analyze data models:
 1. Call chronicle_schema({ from_layer: 'code', to_layer: 'data', include: 'edges' }) to see valid data edge types
