@@ -513,6 +513,23 @@ CREATE TABLE IF NOT EXISTS scan_extractions (
 
 CREATE INDEX IF NOT EXISTS idx_scan_extractions_revision ON scan_extractions(revision_id, domain_key);
 CREATE INDEX IF NOT EXISTS idx_scan_extractions_file ON scan_extractions(file_path, revision_id);
+
+CREATE TABLE IF NOT EXISTS scan_runs (
+    run_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id     INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
+    domain_key      TEXT NOT NULL,
+    phase           TEXT NOT NULL DEFAULT 'setup'
+                      CHECK (phase IN ('setup','phase1_extract','phase1_resolve','phase2_select','phase2_extract','phase2_resolve','finalized')),
+    status          TEXT NOT NULL DEFAULT 'running'
+                      CHECK (status IN ('running','paused','blocked','completed','failed')),
+    total_files     INTEGER NOT NULL DEFAULT 0,
+    extracted_files INTEGER NOT NULL DEFAULT 0,
+    resolved        INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_runs_domain_status ON scan_runs(domain_key, status);
 `
 
 // SaveDiagramSession upserts a diagram session as a JSON blob.
