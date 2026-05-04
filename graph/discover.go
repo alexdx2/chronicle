@@ -103,48 +103,51 @@ func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
 	return false
 }
 
-// matchGlob does simple glob matching supporting ** and *.
+// matchGlob matches a file path against a glob pattern with ** support.
+// "api/src/**/*.ts" matches "api/src/services/order.service.ts"
+// "**/package.json" matches "api/package.json" and "packages/x/package.json"
+// "docker-compose*.yml" matches "docker-compose.yml" and "docker-compose.dev.yml"
 func matchGlob(filePath, pattern string) bool {
-	// Handle ** (any directory depth)
+	// Split pattern on ** to get prefix and suffix
 	if strings.Contains(pattern, "**") {
 		parts := strings.SplitN(pattern, "**", 2)
-		prefix := parts[0]
+		prefix := strings.TrimSuffix(parts[0], "/")
 		suffix := ""
 		if len(parts) > 1 {
 			suffix = strings.TrimPrefix(parts[1], "/")
 		}
 
+		// ** at start means "anywhere in path"
+		if prefix == "" {
+			if suffix == "" {
+				return true
+			}
+			// Match suffix against filename
+			matched, _ := filepath.Match(suffix, filepath.Base(filePath))
+			return matched
+		}
+
 		// Prefix must match start of path
-		if prefix != "" && !strings.HasPrefix(filePath, prefix) {
+		if !strings.HasPrefix(filePath, prefix+"/") && filePath != prefix {
 			return false
 		}
 
-		// Suffix must match end of path (as glob)
+		// No suffix means "everything under prefix"
 		if suffix == "" {
 			return true
 		}
 
-		// Check if any part of the remaining path matches suffix
-		remaining := filePath
-		if prefix != "" {
-			remaining = strings.TrimPrefix(filePath, prefix)
-		}
-		// Simple: check if the filename matches the suffix pattern
-		matched, _ := filepath.Match(suffix, filepath.Base(remaining))
-		if matched {
-			return true
-		}
-		// Also try matching the full remaining path
-		matched, _ = filepath.Match(suffix, remaining)
+		// Suffix: match against filename (most common: *.ts, *.json)
+		matched, _ := filepath.Match(suffix, filepath.Base(filePath))
 		return matched
 	}
 
-	// Simple glob
+	// No ** — try exact filepath.Match
 	matched, _ := filepath.Match(pattern, filePath)
 	if matched {
 		return true
 	}
-	// Also try matching just the filename
+	// Also try against just the filename for patterns like "Dockerfile"
 	matched, _ = filepath.Match(pattern, filepath.Base(filePath))
 	return matched
 }
