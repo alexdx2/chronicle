@@ -15,21 +15,29 @@ type ScanAction struct {
 	FactSchema   string        `json:"fact_schema,omitempty"` // included with extract_files/trace_flow to guide agents
 }
 
-const factSchemaGuide = `Facts must be a JSON array of objects with "kind" field. Supported kinds:
-- {"kind":"import","to":"./module","symbols":["Name"],"from_type":"controller|provider|module","to_type":"controller|provider|module"}
-- {"kind":"dependency","to":"package-name"}
-- {"kind":"endpoint","method":"GET|POST|PUT|DELETE|WS","target":"/path","from_type":"controller"}
-- {"kind":"http_call","method":"GET|POST","target":"http://service:port/path","from_type":"provider"}
-- {"kind":"model","to":"ModelName","from_type":"provider"} (only from .service.ts, not .prisma)
-- {"kind":"enum","to":"EnumName"} (from .prisma schema files)
-- {"kind":"model_relation","from":"ModelA","to":"ModelB"}
-- {"kind":"produces","to":"topic-name","method":"methodName","from_type":"provider"}
-- {"kind":"consumes","to":"topic-name","method":"handlerName","from_type":"provider"}
-- {"kind":"call","object":"serviceName","method":"methodName"}
-- {"kind":"decorator","decorator":"DecoratorName"}
-- {"kind":"flow","flow_name":"Use case name","trigger":"POST /path","method":"entryMethod","requires":["ServiceA","ServiceB"],"steps":["step1","step2"]}
-- {"kind":"delegates","to":"./other-file.ts","method":"methodName"}
-Status values: extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed`
+const factSchemaGuide = `EXTRACTION RULES — follow every step, skip nothing.
+
+Read the file. Determine what role this file plays by reading its code (not filename):
+- Does it define HTTP/WS/GraphQL endpoints? → from_type="controller"
+- Does it wire together other components (DI container, module registry)? → from_type="module"
+- Everything else (services, clients, producers, consumers, helpers) → from_type="provider"
+- Schema/manifest files (prisma, protobuf, openapi, package.json) → extract models/deps directly
+
+Extract ALL of the following that appear in the code:
+1. EVERY import/require → {"kind":"import","to":"./path","symbols":["Name"],"from_type":"...","to_type":"controller|provider|module"}
+2. EVERY HTTP/WS/RPC endpoint definition → {"kind":"endpoint","method":"GET|POST|PUT|DELETE|WS","target":"/path","from_type":"..."}
+3. EVERY outbound HTTP/RPC call → {"kind":"http_call","method":"GET|POST","target":"http://host:port/path","from_type":"provider"}
+4. EVERY database model/table access → {"kind":"model","to":"ModelName","from_type":"provider"}
+5. EVERY event/message publish → {"kind":"produces","to":"topic-name","method":"methodName","from_type":"provider"}
+6. EVERY event/message subscribe/consume → {"kind":"consumes","to":"topic-name","method":"handlerName","from_type":"provider"}
+7. EVERY package dependency (from manifest) → {"kind":"dependency","to":"package-name"}
+8. EVERY schema model/entity definition → {"kind":"model","to":"Name"}
+9. EVERY schema enum definition → {"kind":"enum","to":"Name"}
+10. EVERY schema relation/FK → {"kind":"model_relation","from":"ModelA","to":"ModelB"}
+
+Status: "extracted" if any facts, "no_runtime_architecture" if file has no endpoints/imports/calls, "type_only" for pure types/interfaces/constants, "config_only" for config files, "generated" for auto-generated.
+
+CRITICAL: facts MUST be a JSON array of objects. Every object MUST have a "kind" field. NEVER use plain strings.`
 
 // ScanProgress tracks extraction progress within a scan run.
 type ScanProgress struct {
