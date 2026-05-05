@@ -1,0 +1,1567 @@
+{
+  "nodes": [
+    {
+      "node_key": "code:controller:tom-and-jerry:arena.controller",
+      "domain_key": "tom-and-jerry",
+      "name": "arena.controller",
+      "layer": "code",
+      "node_type": "controller",
+      "status": "active"
+    },
+    {
+      "node_key": "code:controller:tom-and-jerry:jerry.controller",
+      "domain_key": "tom-and-jerry",
+      "name": "jerry.controller",
+      "layer": "code",
+      "node_type": "controller",
+      "status": "active"
+    },
+    {
+      "node_key": "code:controller:tom-and-jerry:stats.controller",
+      "domain_key": "tom-and-jerry",
+      "name": "stats.controller",
+      "layer": "code",
+      "node_type": "controller",
+      "status": "active"
+    },
+    {
+      "node_key": "code:controller:tom-and-jerry:tom.controller",
+      "domain_key": "tom-and-jerry",
+      "name": "tom.controller",
+      "layer": "code",
+      "node_type": "controller",
+      "status": "active"
+    },
+    {
+      "node_key": "code:module:tom-and-jerry:arena.module",
+      "domain_key": "tom-and-jerry",
+      "name": "arena.module",
+      "layer": "code",
+      "node_type": "module",
+      "status": "active"
+    },
+    {
+      "node_key": "code:module:tom-and-jerry:jerry.module",
+      "domain_key": "tom-and-jerry",
+      "name": "jerry.module",
+      "layer": "code",
+      "node_type": "module",
+      "status": "active"
+    },
+    {
+      "node_key": "code:module:tom-and-jerry:spectators.module",
+      "domain_key": "tom-and-jerry",
+      "name": "spectators.module",
+      "layer": "code",
+      "node_type": "module",
+      "status": "active"
+    },
+    {
+      "node_key": "code:module:tom-and-jerry:tom.module",
+      "domain_key": "tom-and-jerry",
+      "name": "tom.module",
+      "layer": "code",
+      "node_type": "module",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:arenaservice",
+      "domain_key": "tom-and-jerry",
+      "name": "ArenaService",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:battleresultproducer",
+      "domain_key": "tom-and-jerry",
+      "name": "BattleResultProducer",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:jerryclient",
+      "domain_key": "tom-and-jerry",
+      "name": "JerryClient",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:jerryservice",
+      "domain_key": "tom-and-jerry",
+      "name": "JerryService",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:prismaservice",
+      "domain_key": "tom-and-jerry",
+      "name": "PrismaService",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:spectatorservice",
+      "domain_key": "tom-and-jerry",
+      "name": "SpectatorService",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:tomclient",
+      "domain_key": "tom-and-jerry",
+      "name": "TomClient",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:tomeventhandler",
+      "domain_key": "tom-and-jerry",
+      "name": "TomEventHandler",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:tomservice",
+      "domain_key": "tom-and-jerry",
+      "name": "TomService",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:arena.service",
+      "domain_key": "tom-and-jerry",
+      "name": "arena.service",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:battle-result.consumer",
+      "domain_key": "tom-and-jerry",
+      "name": "battle-result.consumer",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:battle-result.producer",
+      "domain_key": "tom-and-jerry",
+      "name": "battle-result.producer",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:battle.gateway",
+      "domain_key": "tom-and-jerry",
+      "name": "battle.gateway",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:battle.guard",
+      "domain_key": "tom-and-jerry",
+      "name": "battle.guard",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:battle.queue",
+      "domain_key": "tom-and-jerry",
+      "name": "battle.queue",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:cleanup.task",
+      "domain_key": "tom-and-jerry",
+      "name": "cleanup.task",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:jerry.client",
+      "domain_key": "tom-and-jerry",
+      "name": "jerry.client",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:jerry.service",
+      "domain_key": "tom-and-jerry",
+      "name": "jerry.service",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:logging.middleware",
+      "domain_key": "tom-and-jerry",
+      "name": "logging.middleware",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:notification.service",
+      "domain_key": "tom-and-jerry",
+      "name": "notification.service",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:prisma.service",
+      "domain_key": "tom-and-jerry",
+      "name": "prisma.service",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:spectator.service",
+      "domain_key": "tom-and-jerry",
+      "name": "spectator.service",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:tom.client",
+      "domain_key": "tom-and-jerry",
+      "name": "tom.client",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:tom.events",
+      "domain_key": "tom-and-jerry",
+      "name": "tom.events",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:tom.service",
+      "domain_key": "tom-and-jerry",
+      "name": "tom.service",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:provider:tom-and-jerry:trap.interceptor",
+      "domain_key": "tom-and-jerry",
+      "name": "trap.interceptor",
+      "layer": "code",
+      "node_type": "provider",
+      "status": "active"
+    },
+    {
+      "node_key": "code:repository:tom-and-jerry:arena-api",
+      "domain_key": "tom-and-jerry",
+      "name": "arena-api",
+      "layer": "code",
+      "node_type": "repository",
+      "status": "active"
+    },
+    {
+      "node_key": "code:repository:tom-and-jerry:jerry-api",
+      "domain_key": "tom-and-jerry",
+      "name": "jerry-api",
+      "layer": "code",
+      "node_type": "repository",
+      "status": "active"
+    },
+    {
+      "node_key": "code:repository:tom-and-jerry:spectators-api",
+      "domain_key": "tom-and-jerry",
+      "name": "spectators-api",
+      "layer": "code",
+      "node_type": "repository",
+      "status": "active"
+    },
+    {
+      "node_key": "code:repository:tom-and-jerry:tom-api",
+      "domain_key": "tom-and-jerry",
+      "name": "tom-api",
+      "layer": "code",
+      "node_type": "repository",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__arena_history",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /arena/history",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__arena_score",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /arena/score",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__jerry_status",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /jerry/status",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__jerry_traps",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /jerry/traps",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__stats_leaderboard",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /stats/leaderboard",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__stats_recent",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /stats/recent",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__tom_status",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /tom/status",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:get__tom_weapons",
+      "domain_key": "tom-and-jerry",
+      "name": "GET /tom/weapons",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:post__arena_attack",
+      "domain_key": "tom-and-jerry",
+      "name": "POST /arena/attack",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:post__arena_trap",
+      "domain_key": "tom-and-jerry",
+      "name": "POST /arena/trap",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:post__jerry_set-trap",
+      "domain_key": "tom-and-jerry",
+      "name": "POST /jerry/set-trap",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:post__tom_arm",
+      "domain_key": "tom-and-jerry",
+      "name": "POST /tom/arm",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:ws_watch-battle",
+      "domain_key": "tom-and-jerry",
+      "name": "WS watch-battle",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:battle-results",
+      "domain_key": "tom-and-jerry",
+      "name": "battle-results",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:battle.result",
+      "domain_key": "tom-and-jerry",
+      "name": "battle.result",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:endpoint:tom-and-jerry:tom.weapon.equipped",
+      "domain_key": "tom-and-jerry",
+      "name": "tom.weapon.equipped",
+      "layer": "contract",
+      "node_type": "endpoint",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:topic:tom-and-jerry:battle-queue",
+      "domain_key": "tom-and-jerry",
+      "name": "battle-queue",
+      "layer": "contract",
+      "node_type": "topic",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:topic:tom-and-jerry:battle-results",
+      "domain_key": "tom-and-jerry",
+      "name": "battle-results",
+      "layer": "contract",
+      "node_type": "topic",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:topic:tom-and-jerry:battle.result",
+      "domain_key": "tom-and-jerry",
+      "name": "battle.result",
+      "layer": "contract",
+      "node_type": "topic",
+      "status": "active"
+    },
+    {
+      "node_key": "contract:topic:tom-and-jerry:tom.weapon.equipped",
+      "domain_key": "tom-and-jerry",
+      "name": "tom.weapon.equipped",
+      "layer": "contract",
+      "node_type": "topic",
+      "status": "active"
+    },
+    {
+      "node_key": "data:enum:tom-and-jerry:battleresult",
+      "domain_key": "tom-and-jerry",
+      "name": "BattleResult",
+      "layer": "data",
+      "node_type": "enum",
+      "status": "active"
+    },
+    {
+      "node_key": "data:enum:tom-and-jerry:catmood",
+      "domain_key": "tom-and-jerry",
+      "name": "CatMood",
+      "layer": "data",
+      "node_type": "enum",
+      "status": "active"
+    },
+    {
+      "node_key": "data:enum:tom-and-jerry:trapeffect",
+      "domain_key": "tom-and-jerry",
+      "name": "TrapEffect",
+      "layer": "data",
+      "node_type": "enum",
+      "status": "active"
+    },
+    {
+      "node_key": "data:enum:tom-and-jerry:weapontype",
+      "domain_key": "tom-and-jerry",
+      "name": "WeaponType",
+      "layer": "data",
+      "node_type": "enum",
+      "status": "active"
+    },
+    {
+      "node_key": "data:model:tom-and-jerry:battleevent",
+      "domain_key": "tom-and-jerry",
+      "name": "BattleEvent",
+      "layer": "data",
+      "node_type": "model",
+      "status": "active"
+    },
+    {
+      "node_key": "data:model:tom-and-jerry:battleresult",
+      "domain_key": "tom-and-jerry",
+      "name": "BattleResult",
+      "layer": "data",
+      "node_type": "model",
+      "status": "active"
+    },
+    {
+      "node_key": "data:model:tom-and-jerry:cat",
+      "domain_key": "tom-and-jerry",
+      "name": "Cat",
+      "layer": "data",
+      "node_type": "model",
+      "status": "active"
+    },
+    {
+      "node_key": "data:model:tom-and-jerry:catweapon",
+      "domain_key": "tom-and-jerry",
+      "name": "CatWeapon",
+      "layer": "data",
+      "node_type": "model",
+      "status": "active"
+    },
+    {
+      "node_key": "data:model:tom-and-jerry:mouse",
+      "domain_key": "tom-and-jerry",
+      "name": "Mouse",
+      "layer": "data",
+      "node_type": "model",
+      "status": "active"
+    },
+    {
+      "node_key": "data:model:tom-and-jerry:trap",
+      "domain_key": "tom-and-jerry",
+      "name": "Trap",
+      "layer": "data",
+      "node_type": "model",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:arm_tom",
+      "domain_key": "tom-and-jerry",
+      "name": "Arm Tom",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:battle_result_reaction",
+      "domain_key": "tom-and-jerry",
+      "name": "Battle result reaction",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_jerry_status",
+      "domain_key": "tom-and-jerry",
+      "name": "Get Jerry status",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_jerry_traps",
+      "domain_key": "tom-and-jerry",
+      "name": "Get Jerry traps",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_tom_status",
+      "domain_key": "tom-and-jerry",
+      "name": "Get Tom status",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_tom_weapons",
+      "domain_key": "tom-and-jerry",
+      "name": "Get Tom weapons",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_battle_history",
+      "domain_key": "tom-and-jerry",
+      "name": "Get battle history",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_battle_score",
+      "domain_key": "tom-and-jerry",
+      "name": "Get battle score",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_leaderboard",
+      "domain_key": "tom-and-jerry",
+      "name": "Get leaderboard",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:get_recent_battles",
+      "domain_key": "tom-and-jerry",
+      "name": "Get recent battles",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:jerry_sets_a_trap",
+      "domain_key": "tom-and-jerry",
+      "name": "Jerry sets a trap",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:jerry_sets_trap",
+      "domain_key": "tom-and-jerry",
+      "name": "Jerry sets trap",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:process_battle_result",
+      "domain_key": "tom-and-jerry",
+      "name": "Process battle result",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry",
+      "domain_key": "tom-and-jerry",
+      "name": "Tom attacks Jerry",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:watch_battle_live",
+      "domain_key": "tom-and-jerry",
+      "name": "Watch battle live",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "flow:use_case:tom-and-jerry:weapon_equipped_event",
+      "domain_key": "tom-and-jerry",
+      "name": "Weapon equipped event",
+      "layer": "flow",
+      "node_type": "use_case",
+      "status": "active"
+    },
+    {
+      "node_key": "service:external_system:tom-and-jerry:jerry-api",
+      "domain_key": "tom-and-jerry",
+      "name": "jerry-api",
+      "layer": "service",
+      "node_type": "external_system",
+      "status": "active"
+    },
+    {
+      "node_key": "service:external_system:tom-and-jerry:notifications",
+      "domain_key": "tom-and-jerry",
+      "name": "notifications",
+      "layer": "service",
+      "node_type": "external_system",
+      "status": "active"
+    },
+    {
+      "node_key": "service:external_system:tom-and-jerry:tom-api",
+      "domain_key": "tom-and-jerry",
+      "name": "tom-api",
+      "layer": "service",
+      "node_type": "external_system",
+      "status": "active"
+    },
+    {
+      "node_key": "service:service:tom-and-jerry:arena-api",
+      "domain_key": "tom-and-jerry",
+      "name": "arena-api",
+      "layer": "service",
+      "node_type": "service",
+      "status": "active"
+    },
+    {
+      "node_key": "service:service:tom-and-jerry:jerry-api",
+      "domain_key": "tom-and-jerry",
+      "name": "jerry-api",
+      "layer": "service",
+      "node_type": "service",
+      "status": "active"
+    },
+    {
+      "node_key": "service:service:tom-and-jerry:spectators-api",
+      "domain_key": "tom-and-jerry",
+      "name": "spectators-api",
+      "layer": "service",
+      "node_type": "service",
+      "status": "active"
+    },
+    {
+      "node_key": "service:service:tom-and-jerry:tom-api",
+      "domain_key": "tom-and-jerry",
+      "name": "tom-api",
+      "layer": "service",
+      "node_type": "service",
+      "status": "active"
+    }
+  ],
+  "edges": [
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->contract:endpoint:tom-and-jerry:get__tom_status:CALLS_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__tom_status",
+      "edge_type": "CALLS_ENDPOINT",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->contract:endpoint:tom-and-jerry:get__jerry_status:CALLS_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__jerry_status",
+      "edge_type": "CALLS_ENDPOINT",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:jerry.client->contract:endpoint:tom-and-jerry:get__jerry_status:CALLS_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:jerry.client",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__jerry_status",
+      "edge_type": "CALLS_ENDPOINT",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:jerry.client->contract:endpoint:tom-and-jerry:get__jerry_traps:CALLS_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:jerry.client",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__jerry_traps",
+      "edge_type": "CALLS_ENDPOINT",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:spectator.service->contract:endpoint:tom-and-jerry:get__tom_status:CALLS_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__tom_status",
+      "edge_type": "CALLS_ENDPOINT",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:spectator.service->contract:endpoint:tom-and-jerry:get__jerry_status:CALLS_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__jerry_status",
+      "edge_type": "CALLS_ENDPOINT",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.client->contract:endpoint:tom-and-jerry:get__tom_status:CALLS_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:tom.client",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__tom_status",
+      "edge_type": "CALLS_ENDPOINT",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->service:external_system:tom-and-jerry:tom-api:CALLS_SERVICE",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "service:external_system:tom-and-jerry:tom-api",
+      "edge_type": "CALLS_SERVICE",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->service:external_system:tom-and-jerry:jerry-api:CALLS_SERVICE",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "service:external_system:tom-and-jerry:jerry-api",
+      "edge_type": "CALLS_SERVICE",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:jerry.client->service:external_system:tom-and-jerry:jerry-api:CALLS_SERVICE",
+      "from_node_key": "code:provider:tom-and-jerry:jerry.client",
+      "to_node_key": "service:external_system:tom-and-jerry:jerry-api",
+      "edge_type": "CALLS_SERVICE",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:notification.service->service:external_system:tom-and-jerry:notifications:CALLS_SERVICE",
+      "from_node_key": "code:provider:tom-and-jerry:notification.service",
+      "to_node_key": "service:external_system:tom-and-jerry:notifications",
+      "edge_type": "CALLS_SERVICE",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:spectator.service->service:external_system:tom-and-jerry:tom-api:CALLS_SERVICE",
+      "from_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "to_node_key": "service:external_system:tom-and-jerry:tom-api",
+      "edge_type": "CALLS_SERVICE",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:spectator.service->service:external_system:tom-and-jerry:jerry-api:CALLS_SERVICE",
+      "from_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "to_node_key": "service:external_system:tom-and-jerry:jerry-api",
+      "edge_type": "CALLS_SERVICE",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.client->service:external_system:tom-and-jerry:tom-api:CALLS_SERVICE",
+      "from_node_key": "code:provider:tom-and-jerry:tom.client",
+      "to_node_key": "service:external_system:tom-and-jerry:tom-api",
+      "edge_type": "CALLS_SERVICE",
+      "derivation_kind": "linked"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:battle-result.consumer->contract:topic:tom-and-jerry:battle-results:CONSUMES_TOPIC",
+      "from_node_key": "code:provider:tom-and-jerry:battle-result.consumer",
+      "to_node_key": "contract:topic:tom-and-jerry:battle-results",
+      "edge_type": "CONSUMES_TOPIC",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:battle.queue->contract:topic:tom-and-jerry:battle-queue:CONSUMES_TOPIC",
+      "from_node_key": "code:provider:tom-and-jerry:battle.queue",
+      "to_node_key": "contract:topic:tom-and-jerry:battle-queue",
+      "edge_type": "CONSUMES_TOPIC",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.events->contract:topic:tom-and-jerry:tom.weapon.equipped:CONSUMES_TOPIC",
+      "from_node_key": "code:provider:tom-and-jerry:tom.events",
+      "to_node_key": "contract:topic:tom-and-jerry:tom.weapon.equipped",
+      "edge_type": "CONSUMES_TOPIC",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.events->contract:topic:tom-and-jerry:battle.result:CONSUMES_TOPIC",
+      "from_node_key": "code:provider:tom-and-jerry:tom.events",
+      "to_node_key": "contract:topic:tom-and-jerry:battle.result",
+      "edge_type": "CONSUMES_TOPIC",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:controller:tom-and-jerry:arena.controller:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:controller:tom-and-jerry:arena.controller",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:provider:tom-and-jerry:arena.service:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:provider:tom-and-jerry:arena.service",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:provider:tom-and-jerry:tom.client:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:provider:tom-and-jerry:tom.client",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:provider:tom-and-jerry:jerry.client:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:provider:tom-and-jerry:jerry.client",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:provider:tom-and-jerry:battle-result.producer:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:provider:tom-and-jerry:battle-result.producer",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:provider:tom-and-jerry:battle.gateway:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:provider:tom-and-jerry:battle.gateway",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:provider:tom-and-jerry:battle.guard:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:provider:tom-and-jerry:battle.guard",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:arena.module->code:provider:tom-and-jerry:prisma.service:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:arena.module",
+      "to_node_key": "code:provider:tom-and-jerry:prisma.service",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:jerry.module->code:controller:tom-and-jerry:jerry.controller:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:jerry.module",
+      "to_node_key": "code:controller:tom-and-jerry:jerry.controller",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:jerry.module->code:provider:tom-and-jerry:jerry.service:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:jerry.module",
+      "to_node_key": "code:provider:tom-and-jerry:jerry.service",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:jerry.module->code:provider:tom-and-jerry:prisma.service:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:jerry.module",
+      "to_node_key": "code:provider:tom-and-jerry:prisma.service",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:spectators.module->code:controller:tom-and-jerry:stats.controller:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:spectators.module",
+      "to_node_key": "code:controller:tom-and-jerry:stats.controller",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:spectators.module->code:provider:tom-and-jerry:spectator.service:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:spectators.module",
+      "to_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:spectators.module->code:provider:tom-and-jerry:battle-result.consumer:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:spectators.module",
+      "to_node_key": "code:provider:tom-and-jerry:battle-result.consumer",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:spectators.module->code:provider:tom-and-jerry:cleanup.task:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:spectators.module",
+      "to_node_key": "code:provider:tom-and-jerry:cleanup.task",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:tom.module->code:controller:tom-and-jerry:tom.controller:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:tom.module",
+      "to_node_key": "code:controller:tom-and-jerry:tom.controller",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:tom.module->code:provider:tom-and-jerry:tom.service:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:tom.module",
+      "to_node_key": "code:provider:tom-and-jerry:tom.service",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:tom.module->code:provider:tom-and-jerry:prisma.service:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:tom.module",
+      "to_node_key": "code:provider:tom-and-jerry:prisma.service",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:module:tom-and-jerry:tom.module->code:provider:tom-and-jerry:logging.middleware:CONTAINS",
+      "from_node_key": "code:module:tom-and-jerry:tom.module",
+      "to_node_key": "code:provider:tom-and-jerry:logging.middleware",
+      "edge_type": "CONTAINS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:arena.controller->contract:endpoint:tom-and-jerry:post__arena_attack:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:arena.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:post__arena_attack",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:arena.controller->contract:endpoint:tom-and-jerry:post__arena_trap:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:arena.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:post__arena_trap",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:arena.controller->contract:endpoint:tom-and-jerry:get__arena_history:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:arena.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__arena_history",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:arena.controller->contract:endpoint:tom-and-jerry:get__arena_score:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:arena.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__arena_score",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:jerry.controller->contract:endpoint:tom-and-jerry:get__jerry_status:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:jerry.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__jerry_status",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:jerry.controller->contract:endpoint:tom-and-jerry:get__jerry_traps:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:jerry.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__jerry_traps",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:jerry.controller->contract:endpoint:tom-and-jerry:post__jerry_set-trap:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:jerry.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:post__jerry_set-trap",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:stats.controller->contract:endpoint:tom-and-jerry:get__stats_leaderboard:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:stats.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__stats_leaderboard",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:stats.controller->contract:endpoint:tom-and-jerry:get__stats_recent:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:stats.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__stats_recent",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:tom.controller->contract:endpoint:tom-and-jerry:get__tom_status:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:tom.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__tom_status",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:tom.controller->contract:endpoint:tom-and-jerry:get__tom_weapons:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:tom.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:get__tom_weapons",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:tom.controller->contract:endpoint:tom-and-jerry:post__tom_arm:EXPOSES_ENDPOINT",
+      "from_node_key": "code:controller:tom-and-jerry:tom.controller",
+      "to_node_key": "contract:endpoint:tom-and-jerry:post__tom_arm",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:battle.gateway->contract:endpoint:tom-and-jerry:ws_watch-battle:EXPOSES_ENDPOINT",
+      "from_node_key": "code:provider:tom-and-jerry:battle.gateway",
+      "to_node_key": "contract:endpoint:tom-and-jerry:ws_watch-battle",
+      "edge_type": "EXPOSES_ENDPOINT",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:arena.controller->code:provider:tom-and-jerry:arena.service:INJECTS",
+      "from_node_key": "code:controller:tom-and-jerry:arena.controller",
+      "to_node_key": "code:provider:tom-and-jerry:arena.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:arena.controller->code:provider:tom-and-jerry:battle.guard:INJECTS",
+      "from_node_key": "code:controller:tom-and-jerry:arena.controller",
+      "to_node_key": "code:provider:tom-and-jerry:battle.guard",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:jerry.controller->code:provider:tom-and-jerry:jerry.service:INJECTS",
+      "from_node_key": "code:controller:tom-and-jerry:jerry.controller",
+      "to_node_key": "code:provider:tom-and-jerry:jerry.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:jerry.controller->code:provider:tom-and-jerry:trap.interceptor:INJECTS",
+      "from_node_key": "code:controller:tom-and-jerry:jerry.controller",
+      "to_node_key": "code:provider:tom-and-jerry:trap.interceptor",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:stats.controller->code:provider:tom-and-jerry:spectator.service:INJECTS",
+      "from_node_key": "code:controller:tom-and-jerry:stats.controller",
+      "to_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:controller:tom-and-jerry:tom.controller->code:provider:tom-and-jerry:tom.service:INJECTS",
+      "from_node_key": "code:controller:tom-and-jerry:tom.controller",
+      "to_node_key": "code:provider:tom-and-jerry:tom.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->code:provider:tom-and-jerry:prisma.service:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "code:provider:tom-and-jerry:prisma.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->code:provider:tom-and-jerry:tom.client:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "code:provider:tom-and-jerry:tom.client",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->code:provider:tom-and-jerry:jerry.client:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "code:provider:tom-and-jerry:jerry.client",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:arena.service->code:provider:tom-and-jerry:battle-result.producer:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:arena.service",
+      "to_node_key": "code:provider:tom-and-jerry:battle-result.producer",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:battle-result.consumer->code:provider:tom-and-jerry:spectator.service:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:battle-result.consumer",
+      "to_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:battle.gateway->code:provider:tom-and-jerry:arena.service:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:battle.gateway",
+      "to_node_key": "code:provider:tom-and-jerry:arena.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:battle.queue->code:provider:tom-and-jerry:arena.service:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:battle.queue",
+      "to_node_key": "code:provider:tom-and-jerry:arena.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:cleanup.task->code:provider:tom-and-jerry:spectator.service:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:cleanup.task",
+      "to_node_key": "code:provider:tom-and-jerry:spectator.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:jerry.service->code:provider:tom-and-jerry:prisma.service:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:jerry.service",
+      "to_node_key": "code:provider:tom-and-jerry:prisma.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.service->code:provider:tom-and-jerry:prisma.service:INJECTS",
+      "from_node_key": "code:provider:tom-and-jerry:tom.service",
+      "to_node_key": "code:provider:tom-and-jerry:prisma.service",
+      "edge_type": "INJECTS",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:battle-result.producer->contract:topic:tom-and-jerry:battle-results:PUBLISHES_TOPIC",
+      "from_node_key": "code:provider:tom-and-jerry:battle-result.producer",
+      "to_node_key": "contract:topic:tom-and-jerry:battle-results",
+      "edge_type": "PUBLISHES_TOPIC",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.events->contract:topic:tom-and-jerry:tom.weapon.equipped:PUBLISHES_TOPIC",
+      "from_node_key": "code:provider:tom-and-jerry:tom.events",
+      "to_node_key": "contract:topic:tom-and-jerry:tom.weapon.equipped",
+      "edge_type": "PUBLISHES_TOPIC",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "data:model:tom-and-jerry:battleevent->data:model:tom-and-jerry:battleresult:REFERENCES_MODEL",
+      "from_node_key": "data:model:tom-and-jerry:battleevent",
+      "to_node_key": "data:model:tom-and-jerry:battleresult",
+      "edge_type": "REFERENCES_MODEL",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "data:model:tom-and-jerry:cat->data:model:tom-and-jerry:catweapon:REFERENCES_MODEL",
+      "from_node_key": "data:model:tom-and-jerry:cat",
+      "to_node_key": "data:model:tom-and-jerry:catweapon",
+      "edge_type": "REFERENCES_MODEL",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "data:model:tom-and-jerry:mouse->data:model:tom-and-jerry:trap:REFERENCES_MODEL",
+      "from_node_key": "data:model:tom-and-jerry:mouse",
+      "to_node_key": "data:model:tom-and-jerry:trap",
+      "edge_type": "REFERENCES_MODEL",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:arm_tom->code:provider:tom-and-jerry:tomservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:arm_tom",
+      "to_node_key": "code:provider:tom-and-jerry:tomservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:arm_tom->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:arm_tom",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:battle_result_reaction->code:provider:tom-and-jerry:tomeventhandler:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:battle_result_reaction",
+      "to_node_key": "code:provider:tom-and-jerry:tomeventhandler",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_battle_history->code:provider:tom-and-jerry:arenaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_battle_history",
+      "to_node_key": "code:provider:tom-and-jerry:arenaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_battle_history->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_battle_history",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_battle_score->code:provider:tom-and-jerry:arenaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_battle_score",
+      "to_node_key": "code:provider:tom-and-jerry:arenaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_battle_score->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_battle_score",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_jerry_status->code:provider:tom-and-jerry:jerryservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_jerry_status",
+      "to_node_key": "code:provider:tom-and-jerry:jerryservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_jerry_status->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_jerry_status",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_jerry_traps->code:provider:tom-and-jerry:jerryservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_jerry_traps",
+      "to_node_key": "code:provider:tom-and-jerry:jerryservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_jerry_traps->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_jerry_traps",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_leaderboard->code:provider:tom-and-jerry:spectatorservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_leaderboard",
+      "to_node_key": "code:provider:tom-and-jerry:spectatorservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_recent_battles->code:provider:tom-and-jerry:spectatorservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_recent_battles",
+      "to_node_key": "code:provider:tom-and-jerry:spectatorservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_tom_status->code:provider:tom-and-jerry:tomservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_tom_status",
+      "to_node_key": "code:provider:tom-and-jerry:tomservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_tom_status->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_tom_status",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_tom_weapons->code:provider:tom-and-jerry:tomservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_tom_weapons",
+      "to_node_key": "code:provider:tom-and-jerry:tomservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:get_tom_weapons->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:get_tom_weapons",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:jerry_sets_a_trap->code:provider:tom-and-jerry:jerryservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:jerry_sets_a_trap",
+      "to_node_key": "code:provider:tom-and-jerry:jerryservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:jerry_sets_a_trap->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:jerry_sets_a_trap",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:jerry_sets_trap->code:provider:tom-and-jerry:arenaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:jerry_sets_trap",
+      "to_node_key": "code:provider:tom-and-jerry:arenaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:process_battle_result->code:provider:tom-and-jerry:spectatorservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:process_battle_result",
+      "to_node_key": "code:provider:tom-and-jerry:spectatorservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry->code:provider:tom-and-jerry:arenaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry",
+      "to_node_key": "code:provider:tom-and-jerry:arenaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry->code:provider:tom-and-jerry:tomclient:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry",
+      "to_node_key": "code:provider:tom-and-jerry:tomclient",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry->code:provider:tom-and-jerry:jerryclient:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry",
+      "to_node_key": "code:provider:tom-and-jerry:jerryclient",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry->code:provider:tom-and-jerry:prismaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry",
+      "to_node_key": "code:provider:tom-and-jerry:prismaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry->code:provider:tom-and-jerry:battleresultproducer:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry",
+      "to_node_key": "code:provider:tom-and-jerry:battleresultproducer",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:watch_battle_live->code:provider:tom-and-jerry:arenaservice:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:watch_battle_live",
+      "to_node_key": "code:provider:tom-and-jerry:arenaservice",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "flow:use_case:tom-and-jerry:weapon_equipped_event->code:provider:tom-and-jerry:tomeventhandler:REQUIRES",
+      "from_node_key": "flow:use_case:tom-and-jerry:weapon_equipped_event",
+      "to_node_key": "code:provider:tom-and-jerry:tomeventhandler",
+      "edge_type": "REQUIRES",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:battle-results->flow:use_case:tom-and-jerry:process_battle_result:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:battle-results",
+      "to_node_key": "flow:use_case:tom-and-jerry:process_battle_result",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:battle.result->flow:use_case:tom-and-jerry:battle_result_reaction:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:battle.result",
+      "to_node_key": "flow:use_case:tom-and-jerry:battle_result_reaction",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__arena_history->flow:use_case:tom-and-jerry:get_battle_history:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__arena_history",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_battle_history",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__arena_score->flow:use_case:tom-and-jerry:get_battle_score:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__arena_score",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_battle_score",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__jerry_status->flow:use_case:tom-and-jerry:get_jerry_status:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__jerry_status",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_jerry_status",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__jerry_traps->flow:use_case:tom-and-jerry:get_jerry_traps:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__jerry_traps",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_jerry_traps",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__stats_leaderboard->flow:use_case:tom-and-jerry:get_leaderboard:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__stats_leaderboard",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_leaderboard",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__stats_recent->flow:use_case:tom-and-jerry:get_recent_battles:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__stats_recent",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_recent_battles",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__tom_status->flow:use_case:tom-and-jerry:get_tom_status:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__tom_status",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_tom_status",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:get__tom_weapons->flow:use_case:tom-and-jerry:get_tom_weapons:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:get__tom_weapons",
+      "to_node_key": "flow:use_case:tom-and-jerry:get_tom_weapons",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:post__arena_attack->flow:use_case:tom-and-jerry:tom_attacks_jerry:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:post__arena_attack",
+      "to_node_key": "flow:use_case:tom-and-jerry:tom_attacks_jerry",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:post__arena_trap->flow:use_case:tom-and-jerry:jerry_sets_trap:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:post__arena_trap",
+      "to_node_key": "flow:use_case:tom-and-jerry:jerry_sets_trap",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:post__jerry_set-trap->flow:use_case:tom-and-jerry:jerry_sets_a_trap:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:post__jerry_set-trap",
+      "to_node_key": "flow:use_case:tom-and-jerry:jerry_sets_a_trap",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:post__tom_arm->flow:use_case:tom-and-jerry:arm_tom:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:post__tom_arm",
+      "to_node_key": "flow:use_case:tom-and-jerry:arm_tom",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:tom.weapon.equipped->flow:use_case:tom-and-jerry:weapon_equipped_event:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:tom.weapon.equipped",
+      "to_node_key": "flow:use_case:tom-and-jerry:weapon_equipped_event",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "contract:endpoint:tom-and-jerry:ws_watch-battle->flow:use_case:tom-and-jerry:watch_battle_live:TRIGGERS_FLOW",
+      "from_node_key": "contract:endpoint:tom-and-jerry:ws_watch-battle",
+      "to_node_key": "flow:use_case:tom-and-jerry:watch_battle_live",
+      "edge_type": "TRIGGERS_FLOW",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:jerry.service->data:model:tom-and-jerry:mouse:USES_MODEL",
+      "from_node_key": "code:provider:tom-and-jerry:jerry.service",
+      "to_node_key": "data:model:tom-and-jerry:mouse",
+      "edge_type": "USES_MODEL",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:jerry.service->data:model:tom-and-jerry:trap:USES_MODEL",
+      "from_node_key": "code:provider:tom-and-jerry:jerry.service",
+      "to_node_key": "data:model:tom-and-jerry:trap",
+      "edge_type": "USES_MODEL",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.service->data:model:tom-and-jerry:cat:USES_MODEL",
+      "from_node_key": "code:provider:tom-and-jerry:tom.service",
+      "to_node_key": "data:model:tom-and-jerry:cat",
+      "edge_type": "USES_MODEL",
+      "derivation_kind": "hard"
+    },
+    {
+      "edge_key": "code:provider:tom-and-jerry:tom.service->data:model:tom-and-jerry:catweapon:USES_MODEL",
+      "from_node_key": "code:provider:tom-and-jerry:tom.service",
+      "to_node_key": "data:model:tom-and-jerry:catweapon",
+      "edge_type": "USES_MODEL",
+      "derivation_kind": "hard"
+    }
+  ]
+}

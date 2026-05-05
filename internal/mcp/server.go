@@ -600,8 +600,10 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 		// Load manifest for scan config
 		rootDir, _ := os.Getwd()
 		var scanCfg *manifest.ScanConfig
+		var manifestRepos []manifest.Repository
 		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
 			scanCfg = &m.Scan
+			manifestRepos = m.Repositories
 		}
 
 		result, err := g.DiscoverFiles(rootDir, domain, revisionID, scanCfg)
@@ -613,6 +615,22 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			result.ScanConfig = map[string]any{
 				"warning": "No scan.include/exclude in chronicle.domain.yaml. ALL git-tracked files returned. Add scan config to manifest to filter.",
 			}
+		}
+
+		// Create repository and service nodes from manifest
+		for _, repo := range manifestRepos {
+			repoKey := "code:repository:" + domain + ":" + repo.Name
+			g.Store().UpsertNode(store.NodeRow{
+				NodeKey: repoKey, DomainKey: domain, Name: repo.Name,
+				Layer: "code", NodeType: "repository", Status: "active",
+				LastSeenRevisionID: revisionID,
+			})
+			svcKey := "service:service:" + domain + ":" + repo.Name
+			g.Store().UpsertNode(store.NodeRow{
+				NodeKey: svcKey, DomainKey: domain, Name: repo.Name,
+				Layer: "service", NodeType: "service", Status: "active",
+				LastSeenRevisionID: revisionID,
+			})
 		}
 
 		// Create or update scan run — transition to phase1_extract
@@ -659,11 +677,11 @@ func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func fileExtractedTool() mcp.Tool {
 	return mcp.NewTool("chronicle_file_extracted",
-		mcp.WithDescription("Report extraction results for a single file. Called by scan agents after reading a file. Status: 'extracted' (found architecture facts), 'no_architecture' (file read, nothing relevant), 'skipped' (intentionally skipped), 'error' (couldn't process). Facts is a JSON array of observations."),
+		mcp.WithDescription("Report extraction results for a single file. Called by scan agents after reading a file. Status: 'extracted' (found architecture facts), 'no_runtime_architecture' (file read, no runtime architecture), 'config_only' (only config/env), 'type_only' (only type definitions), 'generated' (auto-generated file), 'skipped' (intentionally skipped), 'failed' (couldn't process). Facts is a JSON array of observations."),
 		mcp.WithString("file_path", mcp.Required(), mcp.Description("File path that was processed")),
-		mcp.WithString("status", mcp.Required(), mcp.Description("Result status: extracted, no_architecture, skipped, error")),
+		mcp.WithString("status", mcp.Required(), mcp.Description("Result status: extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed")),
 		mcp.WithString("facts", mcp.Description("JSON array of extracted facts (for status=extracted)")),
-		mcp.WithString("error_message", mcp.Description("Error description (for status=error)")),
+		mcp.WithString("error_message", mcp.Description("Error description (for status=failed)")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 	)
@@ -688,9 +706,10 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		// Satisfy obligations for this file (both scan_file and verify_file)
+		// Satisfy obligations for this file (scan_file, trace_flow, verify_file)
 		_ = g.SatisfyFileObligation(revisionID, filePath)
 		_ = g.Store().SatisfyObligation(revisionID, "scan_file", filePath)
+		_ = g.Store().SatisfyObligation(revisionID, "trace_flow", filePath)
 
 		// Increment scan run progress
 		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
@@ -732,11 +751,14 @@ func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		// Transition scan run from phase1_resolve to phase2_select
+		// Transition scan run based on current phase
 		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
-			if run.Phase == "phase1_resolve" {
+			switch run.Phase {
+			case "phase1_resolve":
 				g.Store().SetScanRunResolved(run.RunID, result.NodesCreated+result.EdgesCreated)
 				g.Store().TransitionScanRun(run.RunID, "phase2_select", 0)
+			case "phase2_resolve":
+				g.Store().CompleteScanRun(run.RunID)
 			}
 		}
 

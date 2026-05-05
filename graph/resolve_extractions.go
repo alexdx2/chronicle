@@ -3,6 +3,8 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -11,10 +13,12 @@ import (
 
 // Fact represents a single extracted observation from a source file.
 type Fact struct {
-	Kind       string   `json:"kind"`                  // import, call, decorator, http_call, dependency, model, endpoint, produces, consumes, flow
+	Kind       string   `json:"kind"`                  // import, call, decorator, http_call, dependency, model, enum, model_relation, endpoint, produces, consumes, flow, declares
 	FromFile   string   `json:"from_file,omitempty"`   // source file (usually implicit from extraction context)
 	From       string   `json:"from,omitempty"`        // source entity name/identifier
+	FromType   string   `json:"from_type,omitempty"`   // node type of source: controller, provider, module, repository, service
 	To         string   `json:"to"`                    // target module/service/entity
+	ToType     string   `json:"to_type,omitempty"`     // node type of target: controller, provider, module, model, enum, topic, endpoint
 	Symbols    []string `json:"symbols,omitempty"`     // imported symbols
 	Method     string   `json:"method,omitempty"`      // HTTP method or called method name
 	Object     string   `json:"object,omitempty"`      // callee object
@@ -79,9 +83,19 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 	// Build a set of known entity names for resolution
 	knownEntities := g.collectKnownEntities(allFiles)
 
+	// Sort: files with endpoints first (they expose endpoints that others call)
+	sort.SliceStable(allFiles, func(i, j int) bool {
+		return fileTypeOrderFromFacts(allFiles[i].facts) < fileTypeOrderFromFacts(allFiles[j].facts)
+	})
+
 	// Phase 2: Create nodes and edges from facts
 	for _, ff := range allFiles {
+		// Determine file's node type from its facts (first from_type found wins)
+		fileNodeType := fileNodeTypeFromFacts(ff.facts)
 		for _, fact := range ff.facts {
+			if fact.FromType == "" {
+				fact.FromType = fileNodeType
+			}
 			created, unresolved := g.resolveOneFact(domainKey, revisionID, ff.filePath, fact, knownEntities)
 			result.NodesCreated += created.nodes
 			result.EdgesCreated += created.edges
@@ -151,23 +165,24 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion := buildImportAssertion(fact)
 		assertionJSON, _ := json.Marshal(assertion)
 
-		// Try to find or create the edge
-		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
-		toNodeKey := inferNodeKeyFromImport(domainKey, fact.To)
+		// Try to find or create the edge — use fact-provided types
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		toNodeKey := typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
 
 		// Ensure nodes exist
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, inferNameFromImport(fact.To), "")
 
-		// Create edge
-		edgeKey := fromNodeKey + "->" + toNodeKey + ":DEPENDS_ON"
+		// Determine edge type based on from/to node types
+		edgeType := inferImportEdgeType(fromNodeKey, toNodeKey)
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":" + edgeType
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey:             edgeKey,
 			FromNodeID:          fromID,
 			ToNodeID:            toID,
 			FromNodeKey:         fromNodeKey,
 			ToNodeKey:           toNodeKey,
-			EdgeType:            "DEPENDS_ON",
+			EdgeType:            edgeType,
 			DerivationKind:      "hard",
 			Active:              true,
 			LastSeenRevisionID:  revisionID,
@@ -210,7 +225,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Pick assertion kind based on file type
 		assertionKind, assertion := buildDependencyAssertion(filePath, fact)
 
-		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		toNodeKey := "code:module:" + domainKey + ":" + normalizePackageName(fact.To)
 
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -238,7 +253,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 	case "http_call":
 		// External HTTP call — create external system node + edge + evidence
-		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		targetName := inferExternalSystemName(fact.Target)
@@ -271,12 +286,36 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		counts.evidence++
 
+		// Also create CALLS_ENDPOINT edge if we can extract a path from the URL
+		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" {
+			method := strings.ToUpper(fact.Method)
+			if method == "" {
+				method = "GET"
+			}
+			endpointName := method + " " + endpointPath
+			epNodeKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(endpointName, " ", "_"), "/", "_"))
+			// Only create edge if the endpoint node already exists (was exposed by another file)
+			if epID, err2 := g.store.GetNodeIDByKey(epNodeKey); err2 == nil {
+				callEpEdgeKey := fromNodeKey + "->" + epNodeKey + ":CALLS_ENDPOINT"
+				_, err3 := g.store.UpsertEdge(store.EdgeRow{
+					EdgeKey: callEpEdgeKey, FromNodeID: fromID, ToNodeID: epID,
+					FromNodeKey: fromNodeKey, ToNodeKey: epNodeKey,
+					EdgeType: "CALLS_ENDPOINT", DerivationKind: "linked", Active: true,
+					LastSeenRevisionID: revisionID, Confidence: 0.80, Freshness: 1.0, TrustScore: 0.80,
+					Metadata: "{}", ValidFromRevisionID: revisionID,
+				})
+				if err3 == nil {
+					counts.edges++
+				}
+			}
+		}
+
 	case "call":
 		// Method call — evidence for the call expression
 		if fact.Method == "" && fact.Object == "" {
 			return counts, nil
 		}
-		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		assertion, _ := json.Marshal(map[string]any{
@@ -309,7 +348,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 
 		// Add evidence to the node (not edge)
-		nodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		nodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
 			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
@@ -320,7 +359,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 	case "produces":
 		// Produces to topic/queue
-		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
@@ -351,7 +390,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 	case "consumes":
 		// Consumes from topic/queue
-		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
@@ -383,12 +422,16 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 	case "endpoint":
 		// HTTP/WS/GraphQL endpoint — contract node + evidence
-		fromNodeKey := inferNodeKeyFromFile(domainKey, filePath)
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
-		endpointName := fact.To
+		path := fact.Target
+		if path == "" {
+			path = fact.To
+		}
+		endpointName := path
 		if fact.Method != "" {
-			endpointName = fact.Method + " " + fact.To
+			endpointName = fact.Method + " " + path
 		}
 		toNodeKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(endpointName, " ", "_"), "/", "_"))
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, endpointName, "")
@@ -407,7 +450,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 
 		assertion, _ := json.Marshal(map[string]any{
-			"substring": fact.To,
+			"substring": path,
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
@@ -418,9 +461,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "model":
-		// Data model — node + evidence
+		// Data model — node + USES_MODEL edge from source file
 		nodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
-		g.ensureNode(domainKey, revisionID, nodeKey, fact.To, filePath)
+		modelID := g.ensureNodeID(domainKey, revisionID, nodeKey, fact.To, "")
 
 		assertion, _ := json.Marshal(map[string]any{
 			"model": fact.To,
@@ -433,6 +476,58 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		counts.nodes++
 		counts.evidence++
+
+		// Create USES_MODEL edge if source is a service/provider (not schema file)
+		if !strings.HasSuffix(filePath, ".prisma") {
+			fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+			fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+			edgeKey := fromNodeKey + "->" + nodeKey + ":USES_MODEL"
+			_, err := g.store.UpsertEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: modelID,
+				FromNodeKey: fromNodeKey, ToNodeKey: nodeKey,
+				EdgeType: "USES_MODEL", DerivationKind: "hard", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: 0.90, Freshness: 1.0, TrustScore: 0.90,
+				Metadata: "{}", ValidFromRevisionID: revisionID,
+			})
+			if err == nil {
+				counts.edges++
+			}
+		}
+
+	case "enum":
+		// Enum/type defined in schema — data:enum node
+		nodeKey := "data:enum:" + domainKey + ":" + strings.ToLower(fact.To)
+		g.ensureNodeID(domainKey, revisionID, nodeKey, fact.To, "")
+		assertion, _ := json.Marshal(map[string]any{"enum": fact.To})
+		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
+			TargetKind: "node", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "schema_enum", Assertion: string(assertion),
+		})
+		counts.nodes++
+		counts.evidence++
+
+	case "model_relation":
+		// FK relationship between models — REFERENCES_MODEL edge
+		if fact.From == "" || fact.To == "" {
+			return counts, nil
+		}
+		fromNodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.From)
+		toNodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, fact.From, "")
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":REFERENCES_MODEL"
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
+			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "REFERENCES_MODEL", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
 
 	case "flow":
 		// Business flow / use case — creates flow node + edges to triggers and requirements
@@ -507,6 +602,25 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			})
 			counts.evidence++
 		}
+	case "delegates":
+		// Record delegation — creates obligation for delegated file if not already scanned
+		if fact.To == "" {
+			return counts, nil
+		}
+		delegatedFile := fact.To
+		if !strings.HasPrefix(delegatedFile, "/") {
+			delegatedFile = filepath.Join(filepath.Dir(filePath), fact.To)
+		}
+		// Create obligation if not already satisfied
+		if revisionID > 0 {
+			g.store.CreateObligation(revisionID, domainKey, "scan_file", delegatedFile, "delegation from "+filePath)
+		}
+		return counts, &UnresolvedRef{
+			FromFile: filePath,
+			Kind:     "delegation",
+			Target:   delegatedFile,
+			Reason:   fmt.Sprintf("delegates to %s via %s — ensure this file is also scanned", delegatedFile, fact.Method),
+		}
 	}
 
 	return counts, nil
@@ -559,8 +673,6 @@ func buildImportAssertion(fact Fact) map[string]any {
 }
 
 func inferNodeKeyFromFile(domain, filePath string) string {
-	// Convert file path to a node key
-	// e.g. "src/orders/order.service.ts" → "code:module:domain:orders"
 	name := inferNameFromPath(filePath)
 	return "code:module:" + domain + ":" + strings.ToLower(name)
 }
@@ -568,6 +680,49 @@ func inferNodeKeyFromFile(domain, filePath string) string {
 func inferNodeKeyFromImport(domain, module string) string {
 	name := inferNameFromImport(module)
 	return "code:module:" + domain + ":" + strings.ToLower(name)
+}
+
+// typedNodeKey creates a node key using the type provided by Claude in the fact.
+// Falls back to "module" if empty.
+func typedNodeKey(domain, name, nodeType string) string {
+	if nodeType == "" {
+		nodeType = "module"
+	}
+	return "code:" + nodeType + ":" + domain + ":" + strings.ToLower(name)
+}
+
+func typedNodeKeyFromFile(domain, filePath, nodeType string) string {
+	name := inferNameFromPath(filePath)
+	return typedNodeKey(domain, name, nodeType)
+}
+
+func typedNodeKeyFromImport(domain, module, nodeType string) string {
+	name := inferNameFromImport(module)
+	return typedNodeKey(domain, name, nodeType)
+}
+
+func inferImportEdgeType(fromKey, toKey string) string {
+	fromType := extractNodeType(fromKey)
+	toType := extractNodeType(toKey)
+
+	// Module importing controllers/providers → CONTAINS
+	if fromType == "module" && (toType == "controller" || toType == "provider") {
+		return "CONTAINS"
+	}
+	// Controller/provider importing a provider → INJECTS (DI)
+	if (fromType == "controller" || fromType == "provider") && toType == "provider" {
+		return "INJECTS"
+	}
+	return "DEPENDS_ON"
+}
+
+func extractNodeType(nodeKey string) string {
+	// "code:controller:domain:name" → "controller"
+	parts := strings.SplitN(nodeKey, ":", 4)
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return ""
 }
 
 func inferNameFromPath(filePath string) string {
@@ -601,6 +756,41 @@ func inferNameFromImport(module string) string {
 // SaveFileExtraction stores extraction results from a scan agent.
 func (g *Graph) SaveFileExtraction(revisionID int64, domain, filePath, status, factsJSON, errorMsg string) (int64, error) {
 	return g.store.SaveExtraction(revisionID, domain, filePath, status, factsJSON, errorMsg)
+}
+
+func fileNodeTypeFromFacts(facts []Fact) string {
+	for _, f := range facts {
+		if f.FromType != "" {
+			return f.FromType
+		}
+	}
+	return "module"
+}
+
+func fileTypeOrderFromFacts(facts []Fact) int {
+	for _, f := range facts {
+		if f.Kind == "endpoint" {
+			return 0 // files that expose endpoints first
+		}
+	}
+	for _, f := range facts {
+		if f.Kind == "produces" || f.Kind == "consumes" {
+			return 1 // async handlers second
+		}
+	}
+	return 2 // everything else last
+}
+
+func extractPathFromURL(url string) string {
+	// "http://tom-api:3001/tom/status" → "/tom/status"
+	u := url
+	for _, prefix := range []string{"https://", "http://"} {
+		u = strings.TrimPrefix(u, prefix)
+	}
+	if idx := strings.Index(u, "/"); idx >= 0 {
+		return u[idx:]
+	}
+	return ""
 }
 
 func inferExternalSystemName(url string) string {

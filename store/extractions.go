@@ -8,7 +8,7 @@ type ExtractionRow struct {
 	RevisionID   int64  `json:"revision_id"`
 	DomainKey    string `json:"domain_key"`
 	FilePath     string `json:"file_path"`
-	Status       string `json:"status"` // extracted, no_architecture, skipped, error, resolved
+	Status       string `json:"status"` // extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed, resolved
 	FactsJSON    string `json:"facts_json"`
 	ErrorMessage string `json:"error_message,omitempty"`
 	CreatedAt    string `json:"created_at"`
@@ -107,11 +107,11 @@ func (s *Store) GetScanCoverage(revisionID int64, domainKey string) (total, extr
 		switch status {
 		case "extracted", "resolved":
 			extracted += count
-		case "no_architecture":
+		case "no_runtime_architecture", "config_only", "type_only", "generated":
 			noArch += count
 		case "skipped":
 			skipped += count
-		case "error":
+		case "failed":
 			errored += count
 		}
 	}

@@ -45,12 +45,10 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, scanC
 		}
 	}
 
-	// Create scan_file obligation for each discovered file (only if count is reasonable)
-	if len(filtered) <= 500 {
-		for _, f := range filtered {
-			if revisionID > 0 {
-				g.store.CreateObligation(revisionID, domainKey, "scan_file", f, "git-tracked, matches scan config")
-			}
+	// Create scan_file obligation for each discovered file
+	for _, f := range filtered {
+		if revisionID > 0 {
+			g.store.CreateObligation(revisionID, domainKey, "scan_file", f, "git-tracked, matches scan config")
 		}
 	}
 

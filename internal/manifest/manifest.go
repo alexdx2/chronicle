@@ -8,9 +8,10 @@ import (
 )
 
 type Repository struct {
-	Name string   `yaml:"name"`
-	Path string   `yaml:"path"`
-	Tags []string `yaml:"tags"`
+	Name        string   `yaml:"name"`
+	Path        string   `yaml:"path"`
+	Tags        []string `yaml:"tags"`
+	Description string   `yaml:"description,omitempty"`
 }
 
 type ScanConfig struct {
@@ -22,6 +23,8 @@ type Manifest struct {
 	Domain       string       `yaml:"domain"`
 	Description  string       `yaml:"description"`
 	Repositories []Repository `yaml:"repositories"`
+	Repos        []Repository `yaml:"repos,omitempty"`    // alias for repositories (legacy)
+	Services     []Repository `yaml:"services,omitempty"` // service definitions
 	Owner        string       `yaml:"owner"`
 	Scan         ScanConfig   `yaml:"scan,omitempty"`
 }
@@ -42,16 +45,14 @@ func Load(data []byte) (*Manifest, error) {
 	if m.Domain == "" {
 		return nil, fmt.Errorf("manifest validation: domain is required")
 	}
-	if len(m.Repositories) == 0 {
-		return nil, fmt.Errorf("manifest validation: at least one repository is required")
+	// Merge repos → repositories (legacy alias)
+	if len(m.Repositories) == 0 && len(m.Repos) > 0 {
+		m.Repositories = m.Repos
 	}
-	for i, r := range m.Repositories {
-		if r.Name == "" {
-			return nil, fmt.Errorf("manifest validation: repository[%d].name is required", i)
-		}
-		if r.Path == "" {
-			return nil, fmt.Errorf("manifest validation: repository[%d].path is required", i)
-		}
+	// Merge services → repositories if no repos defined
+	if len(m.Repositories) == 0 && len(m.Services) > 0 {
+		m.Repositories = m.Services
 	}
+	// Repositories are optional — scan config alone is enough
 	return &m, nil
 }

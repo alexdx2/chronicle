@@ -16,6 +16,7 @@ import (
 
 	"sync"
 
+	dashboard "github.com/alexdx2/chronicle-core/admin"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/internal/mcp"
 	"github.com/alexdx2/chronicle-core/registry"
@@ -163,26 +164,38 @@ func (s *Server) mergedEdgeCategories() map[string]EdgeCategory {
 
 // Server is the admin dashboard HTTP server.
 type Server struct {
-	mu           sync.RWMutex
-	graph        *graph.Graph
-	store        *store.Store
-	hub          *Hub
-	port         int
-	manifestPath string
-	devMode      bool
-	projectPath  string
-	originalPath string
-	diagrams     map[string]*DiagramSession
+	mu            sync.RWMutex
+	graph         *graph.Graph
+	store         *store.Store
+	hub           *Hub
+	port          int
+	manifestPath  string
+	devMode       bool
+	projectPath   string
+	originalPath  string
+	diagrams      map[string]*DiagramSession
+	dashboardHTML string // rendered dashboard HTML (from slots)
 }
 
 // NewServer creates a new admin Server.
 func NewServer(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool, projectDir string) *Server {
+	return NewServerWithSlots(g, s, port, manifestPath, devMode, projectDir, dashboard.DashboardSlots{})
+}
+
+// NewServerWithSlots creates a server with custom dashboard slots (used by Pro).
+func NewServerWithSlots(g *graph.Graph, s *store.Store, port int, manifestPath string, devMode bool, projectDir string, slots dashboard.DashboardSlots) *Server {
 	if projectDir == "" {
 		projectDir, _ = os.Getwd()
 	} else {
 		projectDir, _ = filepath.Abs(projectDir)
 	}
-	srv := &Server{graph: g, store: s, hub: NewHub(), port: port, manifestPath: manifestPath, devMode: devMode, projectPath: projectDir, originalPath: projectDir, diagrams: make(map[string]*DiagramSession)}
+	srv := &Server{
+		graph: g, store: s, hub: NewHub(), port: port,
+		manifestPath: manifestPath, devMode: devMode,
+		projectPath: projectDir, originalPath: projectDir,
+		diagrams:      make(map[string]*DiagramSession),
+		dashboardHTML: dashboard.RenderDashboard(slots),
+	}
 	srv.loadDiagramSessions()
 	return srv
 }
@@ -342,6 +355,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/diagram/", s.handleDiagram)
 	mux.HandleFunc("/api/diagram", s.handleDiagram)
 
+	dashboardBytes := []byte(s.dashboardHTML)
+
 	if s.devMode {
 		staticDir := filepath.Join(findModuleRoot(), "internal", "admin", "static")
 		fmt.Fprintf(os.Stderr, "Dev mode: serving static files from %s\n", staticDir)
@@ -361,14 +376,18 @@ func (s *Server) Start() error {
 		}
 		fileServer := http.FileServer(http.FS(staticContent))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Serve static assets (favicon, logos) from embed
 			f, err := staticContent.Open(strings.TrimPrefix(r.URL.Path, "/"))
 			if err == nil {
 				f.Close()
-				fileServer.ServeHTTP(w, r)
-				return
+				if r.URL.Path != "/" && r.URL.Path != "/index.html" {
+					fileServer.ServeHTTP(w, r)
+					return
+				}
 			}
-			r.URL.Path = "/"
-			fileServer.ServeHTTP(w, r)
+			// SPA: serve rendered dashboard HTML for all routes
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(dashboardBytes)
 		}))
 	}
 

@@ -28,14 +28,60 @@ func (s *Store) CreateObligation(revisionID int64, domainKey, obligationType, ta
 	return res.LastInsertId()
 }
 
-// SatisfyObligation marks an obligation as satisfied.
+// SatisfyObligation marks an obligation as satisfied and clears claim fields.
 func (s *Store) SatisfyObligation(revisionID int64, obligationType, targetKey string) error {
 	_, err := s.db.Exec(`
 		UPDATE scan_obligations
-		SET status = 'satisfied', resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		SET status = 'satisfied',
+		    claimed_at = NULL, claim_expires_at = NULL,
+		    resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
 		WHERE revision_id = ? AND obligation_type = ? AND target_key = ? AND status = 'open'
 	`, revisionID, obligationType, targetKey)
 	return err
+}
+
+// ClaimObligations atomically claims up to `limit` unclaimed (or expired) open obligations.
+// Returns the target keys of claimed obligations. Concurrent callers get different rows
+// because the UPDATE changes claimed_at, excluding those rows from subsequent subselects.
+// Self-healing: expired claims are reclaimed in the same query.
+func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit int) ([]string, error) {
+	rows, err := s.db.Query(`
+		UPDATE scan_obligations
+		SET claimed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+		    claim_expires_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+15 minutes')
+		WHERE obligation_id IN (
+			SELECT obligation_id FROM scan_obligations
+			WHERE revision_id = ? AND obligation_type = ? AND status = 'open'
+			  AND (claimed_at IS NULL OR claim_expires_at < strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+			ORDER BY obligation_id
+			LIMIT ?
+		)
+		RETURNING target_key
+	`, revisionID, obligationType, limit)
+	if err != nil {
+		return nil, fmt.Errorf("ClaimObligations: %w", err)
+	}
+	defer rows.Close()
+
+	var targets []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		targets = append(targets, key)
+	}
+	return targets, rows.Err()
+}
+
+// CountPendingObligations returns the count of open obligations (claimed or unclaimed).
+func (s *Store) CountPendingObligations(revisionID int64, obligationType string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM scan_obligations
+		WHERE revision_id = ? AND obligation_type = ? AND status = 'open'
+	`, revisionID, obligationType).Scan(&count)
+	return count, err
 }
 
 // DeferObligation marks an obligation as deferred with a reason.

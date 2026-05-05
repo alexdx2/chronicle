@@ -17,8 +17,9 @@ type DBTX interface {
 }
 
 type Store struct {
-	conn *sql.DB // the underlying connection, nil for tx-based stores
-	db   DBTX    // the active executor (db or tx)
+	conn   *sql.DB // the underlying connection, nil for tx-based stores
+	db     DBTX    // the active executor (db or tx)
+	dbPath string  // path to the database file (for reconnect on reset)
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -27,17 +28,21 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=10000")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+
+	// SQLite WAL allows concurrent reads but single writer.
+	// Multiple connections fine — busy_timeout handles write contention.
+	db.SetMaxOpenConns(0) // unlimited (default)
 
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
-	s := &Store{conn: db, db: db}
+	s := &Store{conn: db, db: db, dbPath: dbPath}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrating database: %w", err)
@@ -114,6 +119,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE graph_evidence ADD COLUMN assertion_version TEXT NOT NULL DEFAULT 'v1'`,
 		`ALTER TABLE graph_evidence ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'unverified'`,
 		`ALTER TABLE graph_evidence ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
+		// Parallel agent support: claim columns for obligations
+		`ALTER TABLE scan_obligations ADD COLUMN claimed_at TEXT`,
+		`ALTER TABLE scan_obligations ADD COLUMN claim_expires_at TEXT`,
 	}
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
@@ -211,8 +219,29 @@ func (s *Store) backfillContexts() {
 }
 
 // ResetDB drops all data and recreates the schema. Use when schema changes.
+// If the DB file was deleted externally, this reopens the connection.
+// Refuses to reset if a scan is actively running.
 func (s *Store) ResetDB() error {
-	tables := []string{"node_aliases", "graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts"}
+	// Guard: refuse if a scan is running
+	var runningCount int
+	if err := s.db.QueryRow("SELECT count(*) FROM scan_runs WHERE status='running'").Scan(&runningCount); err == nil && runningCount > 0 {
+		return fmt.Errorf("cannot reset: %d scan(s) currently running — wait for completion or mark them failed first", runningCount)
+	}
+
+	// Try a ping first — if the connection is dead (file deleted), reopen
+	if s.conn != nil {
+		if err := s.conn.Ping(); err != nil && s.dbPath != "" {
+			s.conn.Close()
+			db, err := sql.Open("sqlite", s.dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
+			if err != nil {
+				return fmt.Errorf("reopening database: %w", err)
+			}
+			s.conn = db
+			s.db = db
+		}
+	}
+
+	tables := []string{"scan_runs", "scan_extractions", "scan_obligations", "evidence_verification_runs", "node_aliases", "graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts"}
 	for _, t := range tables {
 		s.db.Exec("DROP TABLE IF EXISTS " + t)
 	}
@@ -462,17 +491,19 @@ CREATE INDEX IF NOT EXISTS idx_node_aliases_normalized ON node_aliases(normalize
 CREATE INDEX IF NOT EXISTS idx_node_aliases_node_id ON node_aliases(node_id);
 
 CREATE TABLE IF NOT EXISTS scan_obligations (
-    obligation_id   INTEGER PRIMARY KEY AUTOINCREMENT,
-    revision_id     INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
-    domain_key      TEXT NOT NULL,
-    obligation_type TEXT NOT NULL,
-    target_key      TEXT NOT NULL,
-    reason          TEXT,
-    status          TEXT NOT NULL DEFAULT 'open'
-                      CHECK (status IN ('open','satisfied','skipped','deferred')),
-    defer_reason    TEXT,
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    resolved_at     TEXT
+    obligation_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    revision_id      INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
+    domain_key       TEXT NOT NULL,
+    obligation_type  TEXT NOT NULL,
+    target_key       TEXT NOT NULL,
+    reason           TEXT,
+    status           TEXT NOT NULL DEFAULT 'open'
+                       CHECK (status IN ('open','satisfied','skipped','deferred')),
+    defer_reason     TEXT,
+    claimed_at       TEXT,
+    claim_expires_at TEXT,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    resolved_at      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_scan_obligations_revision ON scan_obligations(revision_id, status);
@@ -505,7 +536,7 @@ CREATE TABLE IF NOT EXISTS scan_extractions (
     domain_key      TEXT NOT NULL,
     file_path       TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'extracted'
-                      CHECK (status IN ('extracted','no_architecture','skipped','error','resolved')),
+                      CHECK (status IN ('extracted','no_runtime_architecture','config_only','type_only','generated','skipped','failed','resolved')),
     facts_json      TEXT NOT NULL DEFAULT '[]',
     error_message   TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))

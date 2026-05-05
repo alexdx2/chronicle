@@ -111,22 +111,11 @@ func TestScanWorkflowFullCycle(t *testing.T) {
 	t.Logf("Step 4 OK: phase1_extract → extract_files (batch of %d)", len(action.Files))
 
 	// ─── Step 5: Simulate extraction loop — extract all files ───
+	// Process the batch from Step 4 first, then keep claiming new batches
 	extractedCount := 0
 	for {
-		// Get next batch of files to extract
-		action, err = g.ScanNextAction(domainKey)
-		if err != nil {
-			t.Fatalf("ScanNextAction (extract loop): %v", err)
-		}
-
-		if action.Action != "extract_files" {
-			// Should transition to call_resolve_extractions when all done
-			break
-		}
-
-		// Simulate extraction for each file in the batch
+		// Process current batch
 		for _, filePath := range action.Files {
-			// Create minimal facts for each file
 			facts, _ := json.Marshal([]Fact{
 				{Kind: "import", To: "./something"},
 			})
@@ -134,17 +123,22 @@ func TestScanWorkflowFullCycle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SaveFileExtraction(%s): %v", filePath, err)
 			}
-
-			// Satisfy the obligation
 			if err := s.SatisfyObligation(revID, "scan_file", filePath); err != nil {
 				t.Fatalf("SatisfyObligation(%s): %v", filePath, err)
 			}
-
-			// Increment extracted counter on the run
 			if err := s.IncrementScanRunExtracted(runID); err != nil {
 				t.Fatalf("IncrementScanRunExtracted: %v", err)
 			}
 			extractedCount++
+		}
+
+		// Claim next batch
+		action, err = g.ScanNextAction(domainKey)
+		if err != nil {
+			t.Fatalf("ScanNextAction (extract loop): %v", err)
+		}
+		if action.Action != "extract_files" {
+			break
 		}
 	}
 

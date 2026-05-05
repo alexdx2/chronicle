@@ -60,7 +60,7 @@ func TestExtractionFlow(t *testing.T) {
 	}
 
 	// Agent 4: reads constants.ts — no architecture
-	_, err = g.SaveFileExtraction(revID, "myapp", "src/constants.ts", "no_architecture", "", "")
+	_, err = g.SaveFileExtraction(revID, "myapp", "src/constants.ts", "no_runtime_architecture", "", "")
 	if err != nil {
 		t.Fatalf("SaveExtraction 4: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestExtractionFlow(t *testing.T) {
 		t.Errorf("expected 3 extracted, got %d", extracted)
 	}
 	if noArch != 1 {
-		t.Errorf("expected 1 no_architecture, got %d", noArch)
+		t.Errorf("expected 1 no_runtime_architecture, got %d", noArch)
 	}
 
 	// === Verify no unresolved extractions remain ===
@@ -189,5 +189,48 @@ func TestExtractionWithHTTPCall(t *testing.T) {
 	}
 	if !foundExternal {
 		t.Error("expected external_system node 'stripe-api' to be created")
+	}
+}
+
+func TestExtractionWithDelegation(t *testing.T) {
+	tmpDir := t.TempDir()
+	s, err := store.Open(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	reg, _ := registry.LoadDefaults()
+	g := New(s, reg)
+
+	revID, _ := s.CreateRevision("myapp", "scan_1", "", "manual", "full", "{}")
+
+	facts, _ := json.Marshal([]Fact{
+		{Kind: "delegates", To: "./handler.factory.ts", Method: "registerHandlers"},
+	})
+	_, err = g.SaveFileExtraction(revID, "myapp", "src/gateway.ts", "extracted", string(facts), "")
+	if err != nil {
+		t.Fatalf("SaveExtraction: %v", err)
+	}
+
+	result, err := g.ResolveExtractions("myapp", revID)
+	if err != nil {
+		t.Fatalf("ResolveExtractions: %v", err)
+	}
+
+	if len(result.Unresolved) == 0 {
+		t.Error("expected delegation to be reported as unresolved")
+	}
+
+	// Check obligation was created for delegated file
+	open, _ := s.ListOpenObligations(revID)
+	found := false
+	for _, ob := range open {
+		if ob.TargetKey == "src/handler.factory.ts" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected obligation created for delegated file src/handler.factory.ts")
 	}
 }
