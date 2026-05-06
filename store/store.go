@@ -58,6 +58,12 @@ func (s *Store) Close() error {
 	return nil
 }
 
+// Exec runs a raw SQL statement. Used for post-resolve fixes and migrations.
+func (s *Store) Exec(query string, args ...any) error {
+	_, err := s.db.Exec(query, args...)
+	return err
+}
+
 // WithTx runs fn inside a database transaction. If fn returns an error, the tx is rolled back.
 func (s *Store) WithTx(fn func(tx *Store) error) error {
 	if s.conn == nil {
@@ -122,6 +128,10 @@ func (s *Store) migrate() error {
 		// Parallel agent support: claim columns for obligations
 		`ALTER TABLE scan_obligations ADD COLUMN claimed_at TEXT`,
 		`ALTER TABLE scan_obligations ADD COLUMN claim_expires_at TEXT`,
+		// File-level metadata
+		`ALTER TABLE scan_extractions ADD COLUMN from_type TEXT NOT NULL DEFAULT ''`,
+		// Claim attempt tracking
+		`ALTER TABLE scan_obligations ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
@@ -502,6 +512,7 @@ CREATE TABLE IF NOT EXISTS scan_obligations (
     defer_reason     TEXT,
     claimed_at       TEXT,
     claim_expires_at TEXT,
+    attempt_count    INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     resolved_at      TEXT
 );
@@ -537,6 +548,7 @@ CREATE TABLE IF NOT EXISTS scan_extractions (
     file_path       TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'extracted'
                       CHECK (status IN ('extracted','no_runtime_architecture','config_only','type_only','generated','skipped','failed','resolved')),
+    from_type       TEXT NOT NULL DEFAULT '',
     facts_json      TEXT NOT NULL DEFAULT '[]',
     error_message   TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))

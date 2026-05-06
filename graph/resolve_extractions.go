@@ -66,8 +66,9 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 	var allFiles []fileFacts
 
 	for _, ext := range extractions {
+		normalized := normalizeFacts(ext.FactsJSON)
 		var facts []Fact
-		if err := json.Unmarshal([]byte(ext.FactsJSON), &facts); err != nil {
+		if err := json.Unmarshal([]byte(normalized), &facts); err != nil {
 			result.Unresolved = append(result.Unresolved, UnresolvedRef{
 				FromFile: ext.FilePath,
 				Kind:     "parse_error",
@@ -76,7 +77,7 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 			})
 			continue
 		}
-		allFiles = append(allFiles, fileFacts{filePath: ext.FilePath, facts: facts})
+		allFiles = append(allFiles, fileFacts{filePath: ext.FilePath, fromType: ext.FromType, facts: facts})
 	}
 
 	// Phase 1: Discover all entities mentioned across all files
@@ -90,8 +91,11 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 
 	// Phase 2: Create nodes and edges from facts
 	for _, ff := range allFiles {
-		// Determine file's node type from its facts (first from_type found wins)
-		fileNodeType := fileNodeTypeFromFacts(ff.facts)
+		// File-level from_type: API param > first fact > default "provider"
+		fileNodeType := ff.fromType
+		if fileNodeType == "" {
+			fileNodeType = fileNodeTypeFromFacts(ff.facts)
+		}
 		for _, fact := range ff.facts {
 			if fact.FromType == "" {
 				fact.FromType = fileNodeType
@@ -105,6 +109,11 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 			}
 		}
 	}
+
+	// Post-resolve: detect module nodes from graph structure and fix edge types.
+	// A module = node with ≥2 outbound import edges, 0 endpoints, 0 service actions.
+	// This is generic (not framework-specific) — modules wire things, they don't DO things.
+	g.fixModuleEdges(domainKey)
 
 	// Mark all extractions as resolved
 	if err := g.store.MarkExtractionsResolved(revisionID, domainKey); err != nil {
@@ -122,6 +131,7 @@ type createdCounts struct {
 
 type fileFacts struct {
 	filePath string
+	fromType string // file-level from_type from API (not from individual facts)
 	facts    []Fact
 }
 
@@ -336,6 +346,38 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			})
 			counts.evidence++
 		}
+
+	case "injects":
+		// Constructor DI — creates INJECTS edge (stronger than import)
+		if fact.To == "" {
+			return counts, nil
+		}
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		toNodeKey := "code:provider:" + domainKey + ":" + strings.ToLower(fact.To)
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
+
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
+			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "INJECTS", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
+		assertion, _ := json.Marshal(map[string]any{
+			"injected": fact.To,
+		})
+		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "constructor_injection", Assertion: string(assertion),
+		})
+		counts.evidence++
 
 	case "decorator":
 		// Decorator — evidence for decorator on class/method
@@ -664,6 +706,182 @@ func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, fi
 	}
 }
 
+// fixModuleEdges reclassifies edges for nodes that the agent explicitly typed as "module".
+// Only touches nodes that are already code:module (agent set from_type="module").
+// For those nodes, INJECTS/DEPENDS_ON → CONTAINS.
+// Does NOT promote provider → module — that's the agent's job.
+func (g *Graph) fixModuleEdges(domainKey string) {
+	active := true
+	allEdges, err := g.store.ListEdges(store.EdgeFilter{Active: &active})
+	if err != nil {
+		return
+	}
+
+	// Collect known module node keys
+	moduleNodes := make(map[string]bool)
+	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	for _, n := range nodes {
+		if n.NodeType == "module" {
+			moduleNodes[n.NodeKey] = true
+		}
+	}
+
+	// Reclassify edges FROM module nodes: INJECTS/DEPENDS_ON → CONTAINS
+	for _, e := range allEdges {
+		if !moduleNodes[e.FromNodeKey] {
+			continue
+		}
+		if e.EdgeType == "INJECTS" || e.EdgeType == "DEPENDS_ON" {
+			newKey := e.FromNodeKey + "->" + e.ToNodeKey + ":CONTAINS"
+			g.store.Exec("UPDATE graph_edges SET edge_type='CONTAINS', edge_key=? WHERE edge_id=?", newKey, e.EdgeID)
+		}
+	}
+}
+
+// normalizeFacts rewrites common LLM field name variations to canonical names.
+// LLMs (especially cheap models) invent field names like "from", "module", "source",
+// "specifier", "url", "path", "items", "queue", "event_type" instead of the canonical
+// "to", "target", "symbols". This normalizes them before JSON unmarshal.
+func normalizeFacts(raw string) string {
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(raw), &arr); err != nil {
+		return raw // not an array of objects, return as-is
+	}
+
+	for i, fact := range arr {
+		kind, _ := fact["kind"].(string)
+
+		// Skip facts with unknown kinds that the resolver won't handle
+		// but keep them in the array (they'll be ignored by resolveOneFact)
+
+		// Normalize "to" field — the primary target/path
+		if _, ok := fact["to"]; !ok {
+			for _, alias := range []string{"from", "module", "source", "specifier"} {
+				if v, ok := fact[alias]; ok {
+					// "from" for import means the module path (import X from './path')
+					if s, ok := v.(string); ok && (kind == "import" || kind == "dependency") {
+						fact["to"] = s
+						delete(fact, alias)
+						break
+					}
+				}
+			}
+		}
+
+		// Normalize "target" field — URL or endpoint path
+		if _, ok := fact["target"]; !ok {
+			for _, alias := range []string{"url", "path", "endpoint"} {
+				if v, ok := fact[alias]; ok {
+					fact["target"] = v
+					delete(fact, alias)
+					break
+				}
+			}
+		}
+
+		// Normalize "to" for produces/consumes — topic/event/queue name
+		if kind == "produces" || kind == "consumes" {
+			if _, ok := fact["to"]; !ok {
+				for _, alias := range []string{"queue", "event_type", "topic", "event", "channel"} {
+					if v, ok := fact[alias]; ok {
+						fact["to"] = v
+						delete(fact, alias)
+						break
+					}
+				}
+			}
+		}
+
+		// Normalize "symbols" field — imported names
+		if _, ok := fact["symbols"]; !ok {
+			for _, alias := range []string{"items", "imported", "names"} {
+				if v, ok := fact[alias]; ok {
+					fact["symbols"] = v
+					delete(fact, alias)
+					break
+				}
+			}
+			// Single imported name in "target" field (haiku puts symbol name there)
+			if kind == "import" {
+				if _, ok := fact["symbols"]; !ok {
+					if t, ok := fact["target"].(string); ok && !strings.HasPrefix(t, "/") && !strings.HasPrefix(t, "http") {
+						fact["symbols"] = []string{t}
+						delete(fact, "target")
+					}
+				}
+			}
+		}
+
+		// Normalize "method" for produces/consumes (haiku puts it in various fields)
+		if kind == "produces" || kind == "consumes" {
+			if _, ok := fact["method"]; !ok {
+				for _, alias := range []string{"handler_method", "handler", "method_name"} {
+					if v, ok := fact[alias]; ok {
+						fact["method"] = v
+						delete(fact, alias)
+						break
+					}
+				}
+			}
+		}
+
+		// Normalize kind aliases
+		switch kind {
+		case "dependency_injection", "constructor_injection", "di":
+			// Normalize to "injects" — constructor DI
+			fact["kind"] = "injects"
+			if _, ok := fact["to"]; !ok {
+				for _, alias := range []string{"injects", "injected_type", "target", "dependency"} {
+					if v, ok := fact[alias]; ok {
+						fact["to"] = v
+						delete(fact, alias)
+						break
+					}
+				}
+			}
+		case "service_call", "method_call":
+			// Normalize to "call"
+			fact["kind"] = "call"
+			if _, ok := fact["to"]; !ok {
+				if v, ok := fact["target"]; ok {
+					fact["to"] = v
+					delete(fact, "target")
+				}
+			}
+		case "model_access":
+			// Normalize to "model"
+			fact["kind"] = "model"
+			if _, ok := fact["to"]; !ok {
+				if v, ok := fact["model"]; ok {
+					fact["to"] = v
+					delete(fact, "model")
+				}
+			}
+		case "module_controller", "module_provider", "class_definition", "class",
+			"uses_interceptor":
+			// Drop non-standard kinds that don't map to edges
+			arr[i] = nil
+			continue
+		}
+
+		arr[i] = fact
+	}
+
+	// Remove nil entries
+	var clean []map[string]any
+	for _, f := range arr {
+		if f != nil {
+			clean = append(clean, f)
+		}
+	}
+
+	out, err := json.Marshal(clean)
+	if err != nil {
+		return raw
+	}
+	return string(out)
+}
+
 func buildImportAssertion(fact Fact) map[string]any {
 	a := map[string]any{"module": fact.To}
 	if len(fact.Symbols) > 0 {
@@ -683,10 +901,10 @@ func inferNodeKeyFromImport(domain, module string) string {
 }
 
 // typedNodeKey creates a node key using the type provided by Claude in the fact.
-// Falls back to "module" if empty.
+// Falls back to "provider" if empty (most files are services/helpers).
 func typedNodeKey(domain, name, nodeType string) string {
 	if nodeType == "" {
-		nodeType = "module"
+		nodeType = "provider"
 	}
 	return "code:" + nodeType + ":" + domain + ":" + strings.ToLower(name)
 }
@@ -754,8 +972,8 @@ func inferNameFromImport(module string) string {
 }
 
 // SaveFileExtraction stores extraction results from a scan agent.
-func (g *Graph) SaveFileExtraction(revisionID int64, domain, filePath, status, factsJSON, errorMsg string) (int64, error) {
-	return g.store.SaveExtraction(revisionID, domain, filePath, status, factsJSON, errorMsg)
+func (g *Graph) SaveFileExtraction(revisionID int64, domain, filePath, status, fromType, factsJSON, errorMsg string) (int64, error) {
+	return g.store.SaveExtraction(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg)
 }
 
 func fileNodeTypeFromFacts(facts []Fact) string {
@@ -764,7 +982,9 @@ func fileNodeTypeFromFacts(facts []Fact) string {
 			return f.FromType
 		}
 	}
-	return "module"
+	// Default to "provider" — most files are services/helpers, not modules.
+	// Modules (DI containers) are rare and agents should explicitly set from_type="module".
+	return "provider"
 }
 
 func fileTypeOrderFromFacts(facts []Fact) int {

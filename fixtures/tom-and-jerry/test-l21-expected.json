@@ -1,0 +1,76 @@
+{
+  "fixtures/tom-and-jerry/arena-api/src/arena/arena.module.ts": {
+    "status": "extracted",
+    "from_type": "module",
+    "expected_facts": [
+      {"kind": "import", "to_type": "controller", "to_contains": "arena.controller"},
+      {"kind": "import", "to_type": "provider", "to_contains": "arena.service"},
+      {"kind": "import", "to_type": "provider", "to_contains": "tom.client"},
+      {"kind": "import", "to_type": "provider", "to_contains": "jerry.client"},
+      {"kind": "import", "to_type": "provider", "to_contains": "battle-result.producer"},
+      {"kind": "import", "to_type": "provider", "to_contains": "battle.gateway"},
+      {"kind": "import", "to_type": "provider", "to_contains": "battle.guard"},
+      {"kind": "import", "to_type": "provider", "to_contains": "prisma.service"}
+    ]
+  },
+  "fixtures/tom-and-jerry/arena-api/src/arena/arena.service.ts": {
+    "status": "extracted",
+    "from_type": "provider",
+    "expected_facts": [
+      {"kind": "import", "to_contains": "prisma.service"},
+      {"kind": "import", "to_contains": "tom.client"},
+      {"kind": "import", "to_contains": "jerry.client"},
+      {"kind": "import", "to_contains": "battle-result.producer"},
+      {"kind": "http_call", "target_contains": "tom-api"},
+      {"kind": "http_call", "target_contains": "jerry-api"},
+      {"kind": "model", "to": "BattleEvent"}
+    ]
+  },
+  "fixtures/tom-and-jerry/arena-api/src/arena/battle.queue.ts": {
+    "status": "extracted",
+    "from_type": "provider",
+    "expected_facts": [
+      {"kind": "import", "to_contains": "arena.service"},
+      {"kind": "produces", "to": "battle-queue"},
+      {"kind": "consumes", "to": "battle-queue"}
+    ]
+  },
+  "fixtures/tom-and-jerry/tom-api/src/tom/tom.events.ts": {
+    "status": "extracted",
+    "from_type": "provider",
+    "expected_facts": [
+      {"kind": "produces", "to": "tom.weapon.equipped"},
+      {"kind": "consumes", "to": "tom.weapon.equipped"},
+      {"kind": "consumes", "to": "battle.result"}
+    ]
+  },
+  "fixtures/tom-and-jerry/spectators-api/src/spectators/spectator.service.ts": {
+    "status": "extracted",
+    "from_type": "provider",
+    "expected_facts": [
+      {"kind": "http_call", "target_contains": "tom-api"},
+      {"kind": "http_call", "target_contains": "jerry-api"}
+    ]
+  },
+  "fixtures/tom-and-jerry/jerry-api/src/jerry/jerry.controller.ts": {
+    "status": "extracted",
+    "from_type": "controller",
+    "expected_facts": [
+      {"kind": "import", "to_contains": "jerry.service"},
+      {"kind": "import", "to_contains": "trap.interceptor"},
+      {"kind": "endpoint", "method": "GET", "target_contains": "/jerry/status"},
+      {"kind": "endpoint", "method": "GET", "target_contains": "/jerry/traps"},
+      {"kind": "endpoint", "method": "POST", "target_contains": "/jerry/set-trap"}
+    ]
+  },
+  "fixtures/tom-and-jerry/tom-api/prisma/schema.prisma": {
+    "status": "extracted",
+    "expected_facts": [
+      {"kind": "model", "to": "Cat"},
+      {"kind": "model", "to": "CatWeapon"},
+      {"kind": "enum", "to": "CatMood"},
+      {"kind": "enum", "to": "WeaponType"},
+      {"kind": "model_relation", "from": "CatWeapon", "to": "Cat"}
+    ]
+  }
+}

@@ -120,6 +120,35 @@ cd fixtures/tom-and-jerry && rm -rf .depbot/chronicle.db
 # then scan via Claude or import via CLI
 ```
 
+## Testing levels
+
+### L1: Unit tests (Go)
+Standard `go test ./...`. Tests store CRUD, graph engine, resolve logic, workflow state machine.
+No LLM involved.
+
+### L2.1: Agent extraction — targeted files
+Give Claude specific files (especially tricky ones) and verify it extracts the correct facts
+with correct types. Tests the extraction instructions + fact_schema quality.
+Fixture: selected files from tom-and-jerry or otopoint that are hard to classify.
+This is the key test for improving extraction accuracy.
+
+### L2.2: Agent extraction — full project scan
+3 parallel haiku agents scan the full tom-and-jerry fixture.
+Measures: duplicates, coverage vs expected-graph, edge type accuracy.
+
+### L3: Graph queries on a built graph
+Given a pre-built graph, test impact analysis, dependency queries, path finding.
+Tests the graph engine, not extraction.
+
+### L4: Incremental graph updates
+New facts arrive that contradict or extend the current graph.
+Tests: stale marking, evidence invalidation, re-resolution, contradiction detection.
+
+### L5+: (future)
+- Cross-repo federation (chronicle-pro)
+- Flow tracing accuracy (phase 2)
+- Evidence verification against source code
+
 ## Key conventions
 
 - Module path: `github.com/alexdx2/chronicle-core`

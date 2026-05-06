@@ -4,40 +4,98 @@ import "github.com/alexdx2/chronicle-core/store"
 
 // ScanAction is what chronicle_scan_next_file returns to Claude.
 type ScanAction struct {
-	ScanRunID    int64         `json:"scan_run_id,omitempty"`
-	Phase        string        `json:"phase"`
-	Action       string        `json:"action"` // start_scan, extract_files, call_resolve_extractions, discover_files, wait, trace_flow, none
-	Files        []string      `json:"files,omitempty"`
-	Blocked      bool          `json:"blocked,omitempty"`
-	Reason       string        `json:"reason,omitempty"`
-	Done         bool          `json:"done,omitempty"`
-	Progress     *ScanProgress `json:"progress,omitempty"`
-	FactSchema   string        `json:"fact_schema,omitempty"` // included with extract_files/trace_flow to guide agents
+	ScanRunID    int64          `json:"scan_run_id,omitempty"`
+	Phase        string         `json:"phase"`
+	Action       string         `json:"action"` // start_scan, extract_files, call_resolve_extractions, discover_files, wait, trace_flow, none
+	Files        []string       `json:"files,omitempty"`
+	Blocked      bool           `json:"blocked,omitempty"`
+	Reason       string         `json:"reason,omitempty"`
+	Done         bool           `json:"done,omitempty"`
+	Progress     *ScanProgress  `json:"progress,omitempty"`
+	FactSchema   string         `json:"fact_schema,omitempty"`  // included with extract_files/trace_flow to guide agents
+	GraphContext *GraphContext  `json:"graph_context,omitempty"` // phase 2 only — known nodes/edges from phase 1
 }
 
-const factSchemaGuide = `EXTRACTION RULES — follow every step, skip nothing.
+// GraphContext provides phase 1 graph data to help flow tracing agents.
+type GraphContext struct {
+	Endpoints []string `json:"endpoints,omitempty"` // known endpoint names
+	Services  []string `json:"services,omitempty"`  // known service/provider nodes
+	Topics    []string `json:"topics,omitempty"`    // known event/message topics
+}
 
-Read the file. Determine what role this file plays by reading its code (not filename):
-- Does it define HTTP/WS/GraphQL endpoints? → from_type="controller"
-- Does it wire together other components (DI container, module registry)? → from_type="module"
-- Everything else (services, clients, producers, consumers, helpers) → from_type="provider"
-- Schema/manifest files (prisma, protobuf, openapi, package.json) → extract models/deps directly
+const factSchemaGuide = `OUTPUT FORMAT: JSON array of objects. Use EXACTLY these field names — no aliases.
 
-Extract ALL of the following that appear in the code:
-1. EVERY import/require → {"kind":"import","to":"./path","symbols":["Name"],"from_type":"...","to_type":"controller|provider|module"}
-2. EVERY HTTP/WS/RPC endpoint definition → {"kind":"endpoint","method":"GET|POST|PUT|DELETE|WS","target":"/path","from_type":"..."}
-3. EVERY outbound HTTP/RPC call → {"kind":"http_call","method":"GET|POST","target":"http://host:port/path","from_type":"provider"}
-4. EVERY database model/table access → {"kind":"model","to":"ModelName","from_type":"provider"}
-5. EVERY event/message publish → {"kind":"produces","to":"topic-name","method":"methodName","from_type":"provider"}
-6. EVERY event/message subscribe/consume → {"kind":"consumes","to":"topic-name","method":"handlerName","from_type":"provider"}
-7. EVERY package dependency (from manifest) → {"kind":"dependency","to":"package-name"}
-8. EVERY schema model/entity definition → {"kind":"model","to":"Name"}
-9. EVERY schema enum definition → {"kind":"enum","to":"Name"}
-10. EVERY schema relation/FK → {"kind":"model_relation","from":"ModelA","to":"ModelB"}
+EXAMPLES (copy the field names exactly):
 
-Status: "extracted" if any facts, "no_runtime_architecture" if file has no endpoints/imports/calls, "type_only" for pure types/interfaces/constants, "config_only" for config files, "generated" for auto-generated.
+import { OrderService } from './order.service';
+→ {"kind":"import","to":"./order.service","symbols":["OrderService"]}
 
-CRITICAL: facts MUST be a JSON array of objects. Every object MUST have a "kind" field. NEVER use plain strings.`
+@Controller('orders')
+@Get('/:id')
+→ {"kind":"endpoint","method":"GET","target":"/orders/:id"}
+
+await fetch('http://user-api:3000/users/me')
+→ {"kind":"http_call","method":"GET","target":"http://user-api:3000/users/me"}
+
+constructor(private orderService: OrderService)
+→ {"kind":"injects","to":"OrderService"}
+
+this.orderService.create(dto)
+→ {"kind":"call","to":"OrderService","method":"create"}
+
+this.prisma.order.create(...)
+→ {"kind":"model","to":"Order"}
+
+this.eventBus.emit('order.created', data)
+→ {"kind":"produces","to":"order.created","method":"emit"}
+
+@OnEvent('order.created')
+handleOrderCreated(data) { ... }
+→ {"kind":"consumes","to":"order.created","method":"handleOrderCreated"}
+
+"dependencies": { "express": "^4.0" }
+→ {"kind":"dependency","to":"express"}
+
+model User { id Int @id }
+→ {"kind":"model","to":"User"}
+
+enum Role { ADMIN USER }
+→ {"kind":"enum","to":"Role"}
+
+model Post { author User @relation(...) }
+→ {"kind":"model_relation","from":"Post","to":"User"}
+
+FIELD NAMES: kind, to, symbols, method, target, from (for relations only). NO other field names.
+
+from_type: set as a SEPARATE PARAMETER on chronicle_file_extracted (not inside facts).
+- File wires components together (DI, module registry) → from_type="module"
+- File defines endpoints/routes → from_type="controller"
+- Everything else → omit (defaults to provider)
+
+Do NOT emit:
+- local helper/utility function calls within the same file
+- type-only imports (import type { X }) unless the file is pure types
+- test mocks, stubs, or test-only dependencies
+- UI component imports (Button, Modal) unless they cross package boundaries
+- comments, TODOs, or documentation
+- framework boilerplate decorators (@Injectable, @Module) as standalone facts
+
+Status: "extracted" if any facts found, "no_runtime_architecture" if no architecture, "type_only" for pure types, "config_only" for config, "generated" for generated code.`
+
+const flowFactGuide = `Phase 2: FLOW TRACING ONLY. Do NOT re-extract imports, endpoints, or dependencies (already done in phase 1).
+
+For each trigger file, identify the business use case it starts, then trace the call chain:
+1. What triggers this flow? (HTTP endpoint, message consumer, event handler, cron)
+2. What services does it call?
+3. What's the sequence of steps?
+
+Emit ONLY flow facts:
+{"kind":"flow","flow_name":"Human-readable use case name","trigger":"POST /path OR topic-name","method":"entryMethodName","requires":["ServiceA","ServiceB"],"steps":["step 1 description","step 2 description"]}
+
+One flow fact per business use case. A controller with 3 endpoints = 3 flow facts.
+Status: "extracted" with flow facts array.
+
+CRITICAL: facts MUST be a JSON array of objects with "kind":"flow". Do NOT re-emit import/endpoint/dependency facts.`
 
 // ScanProgress tracks extraction progress within a scan run.
 type ScanProgress struct {
@@ -195,15 +253,19 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 		g.store.CreateObligation(run.RevisionID, run.DomainKey, "trace_flow", fp, "trigger file — trace business flow")
 	}
 
+	// Build graph context from phase 1 results
+	ctx := g.buildGraphContext(run.DomainKey)
+
 	g.store.TransitionScanRun(run.RunID, "phase2_extract", len(triggerFiles))
 	return &ScanAction{
-		ScanRunID:  run.RunID,
-		Phase:      "phase2_extract",
-		Action:     "trace_flow",
-		Files:      mapKeys(triggerFiles),
-		FactSchema: factSchemaGuide,
-		Reason:     "Read each trigger file, follow the call chain, and extract flow facts. For each file call chronicle_file_extracted with flow facts.",
-		Progress:   &ScanProgress{Total: len(triggerFiles), Extracted: 0, Remaining: len(triggerFiles)},
+		ScanRunID:    run.RunID,
+		Phase:        "phase2_extract",
+		Action:       "trace_flow",
+		Files:        mapKeys(triggerFiles),
+		FactSchema:   flowFactGuide,
+		GraphContext: ctx,
+		Reason:       "Phase 2: trace business flows. Use graph_context to understand the full call chain. Emit ONLY flow facts.",
+		Progress:     &ScanProgress{Total: len(triggerFiles), Extracted: 0, Remaining: len(triggerFiles)},
 	}, nil
 }
 
@@ -221,8 +283,8 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 			Phase:      "phase2_extract",
 			Action:     "trace_flow",
 			Files:      batch,
-			FactSchema: factSchemaGuide,
-			Reason:     "Read each file, trace the business flow through service calls, and extract flow facts.",
+			FactSchema: flowFactGuide,
+			Reason:     "Phase 2: trace business flows ONLY. Do NOT re-extract imports/endpoints. Emit ONLY flow facts.",
 			Progress:   &ScanProgress{Total: run.TotalFiles, Extracted: run.TotalFiles - pending, Remaining: pending},
 		}, nil
 	}
@@ -247,6 +309,28 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 		Blocked:   true,
 		Reason:    "All flows traced. Call chronicle_resolve_extractions to add flows to graph.",
 	}, nil
+}
+
+// buildGraphContext extracts known entities from the phase 1 graph for flow tracing agents.
+func (g *Graph) buildGraphContext(domainKey string) *GraphContext {
+	ctx := &GraphContext{}
+
+	nodes, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	if err != nil {
+		return ctx
+	}
+
+	for _, n := range nodes {
+		switch {
+		case n.Layer == "contract" && n.NodeType == "endpoint":
+			ctx.Endpoints = append(ctx.Endpoints, n.Name)
+		case n.Layer == "code" && (n.NodeType == "provider" || n.NodeType == "controller"):
+			ctx.Services = append(ctx.Services, n.Name)
+		case n.Layer == "contract" && n.NodeType == "topic":
+			ctx.Topics = append(ctx.Topics, n.Name)
+		}
+	}
+	return ctx
 }
 
 func mapKeys(m map[string]bool) []string {

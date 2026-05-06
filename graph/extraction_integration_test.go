@@ -33,7 +33,7 @@ func TestExtractionFlow(t *testing.T) {
 		{Kind: "dependency", To: "@prisma/client"},
 		{Kind: "dependency", To: "kafkajs"},
 	})
-	_, err = g.SaveFileExtraction(revID, "myapp", "package.json", "extracted", string(facts1), "")
+	_, err = g.SaveFileExtraction(revID, "myapp", "package.json", "extracted", "", string(facts1), "")
 	if err != nil {
 		t.Fatalf("SaveExtraction 1: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestExtractionFlow(t *testing.T) {
 		{Kind: "import", From: "OrderService", To: "./pricing.engine", Symbols: []string{"PricingEngine"}},
 		{Kind: "call", From: "OrderService.create", Object: "pricingEngine", Method: "calculate"},
 	})
-	_, err = g.SaveFileExtraction(revID, "myapp", "src/order.service.ts", "extracted", string(facts2), "")
+	_, err = g.SaveFileExtraction(revID, "myapp", "src/order.service.ts", "extracted", "", string(facts2), "")
 	if err != nil {
 		t.Fatalf("SaveExtraction 2: %v", err)
 	}
@@ -54,13 +54,13 @@ func TestExtractionFlow(t *testing.T) {
 		{Kind: "import", From: "PricingEngine", To: "@nestjs/common", Symbols: []string{"Injectable"}},
 		{Kind: "import", From: "PricingEngine", To: "@prisma/client", Symbols: []string{"PrismaClient"}},
 	})
-	_, err = g.SaveFileExtraction(revID, "myapp", "src/pricing.engine.ts", "extracted", string(facts3), "")
+	_, err = g.SaveFileExtraction(revID, "myapp", "src/pricing.engine.ts", "extracted", "", string(facts3), "")
 	if err != nil {
 		t.Fatalf("SaveExtraction 3: %v", err)
 	}
 
 	// Agent 4: reads constants.ts — no architecture
-	_, err = g.SaveFileExtraction(revID, "myapp", "src/constants.ts", "no_runtime_architecture", "", "")
+	_, err = g.SaveFileExtraction(revID, "myapp", "src/constants.ts", "no_runtime_architecture", "", "", "")
 	if err != nil {
 		t.Fatalf("SaveExtraction 4: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestExtractionWithHTTPCall(t *testing.T) {
 		{Kind: "import", From: "PaymentService", To: "@nestjs/common", Symbols: []string{"Injectable", "HttpService"}},
 		{Kind: "http_call", From: "PaymentService.charge", Target: "http://stripe-api:3000/charge", Method: "POST"},
 	})
-	g.SaveFileExtraction(revID, "myapp", "src/payment.service.ts", "extracted", string(facts), "")
+	g.SaveFileExtraction(revID, "myapp", "src/payment.service.ts", "extracted", "", string(facts), "")
 
 	result, err := g.ResolveExtractions("myapp", revID)
 	if err != nil {
@@ -208,7 +208,7 @@ func TestExtractionWithDelegation(t *testing.T) {
 	facts, _ := json.Marshal([]Fact{
 		{Kind: "delegates", To: "./handler.factory.ts", Method: "registerHandlers"},
 	})
-	_, err = g.SaveFileExtraction(revID, "myapp", "src/gateway.ts", "extracted", string(facts), "")
+	_, err = g.SaveFileExtraction(revID, "myapp", "src/gateway.ts", "extracted", "", string(facts), "")
 	if err != nil {
 		t.Fatalf("SaveExtraction: %v", err)
 	}

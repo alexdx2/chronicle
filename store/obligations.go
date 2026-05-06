@@ -45,10 +45,17 @@ func (s *Store) SatisfyObligation(revisionID int64, obligationType, targetKey st
 // because the UPDATE changes claimed_at, excluding those rows from subsequent subselects.
 // Self-healing: expired claims are reclaimed in the same query.
 func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit int) ([]string, error) {
+	// First: mark obligations with too many attempts (5+) as failed
+	s.db.Exec(`
+		UPDATE scan_obligations SET status = 'skipped', defer_reason = 'too many attempts'
+		WHERE revision_id = ? AND obligation_type = ? AND status = 'open' AND attempt_count >= 5
+	`, revisionID, obligationType)
+
 	rows, err := s.db.Query(`
 		UPDATE scan_obligations
 		SET claimed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-		    claim_expires_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+15 minutes')
+		    claim_expires_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+15 minutes'),
+		    attempt_count = attempt_count + 1
 		WHERE obligation_id IN (
 			SELECT obligation_id FROM scan_obligations
 			WHERE revision_id = ? AND obligation_type = ? AND status = 'open'

@@ -9,20 +9,38 @@ type ExtractionRow struct {
 	DomainKey    string `json:"domain_key"`
 	FilePath     string `json:"file_path"`
 	Status       string `json:"status"` // extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed, resolved
+	FromType     string `json:"from_type,omitempty"` // controller, module, provider — set by agent at file level
 	FactsJSON    string `json:"facts_json"`
 	ErrorMessage string `json:"error_message,omitempty"`
 	CreatedAt    string `json:"created_at"`
 }
 
 // SaveExtraction stores facts extracted from a file by an agent.
-func (s *Store) SaveExtraction(revisionID int64, domainKey, filePath, status, factsJSON, errorMessage string) (int64, error) {
+func (s *Store) SaveExtraction(revisionID int64, domainKey, filePath, status, fromType, factsJSON, errorMessage string) (int64, error) {
 	if factsJSON == "" {
 		factsJSON = "[]"
 	}
+
+	// Dedup: skip if this file was already extracted in ANY revision for this domain
+	var existingID int64
+	var existingFacts string
+	err := s.db.QueryRow(`
+		SELECT extraction_id, facts_json FROM scan_extractions
+		WHERE domain_key = ? AND file_path = ?
+		ORDER BY extraction_id DESC LIMIT 1
+	`, domainKey, filePath).Scan(&existingID, &existingFacts)
+	if err == nil {
+		// Already extracted — update facts/from_type if original was empty
+		if (existingFacts == "[]" || existingFacts == "") && factsJSON != "[]" && factsJSON != "" {
+			s.db.Exec(`UPDATE scan_extractions SET facts_json = ?, from_type = ? WHERE extraction_id = ?`, factsJSON, fromType, existingID)
+		}
+		return existingID, nil
+	}
+
 	res, err := s.db.Exec(`
-		INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, facts_json, error_message)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, revisionID, domainKey, filePath, status, factsJSON, nullableStr(errorMessage))
+		INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, from_type, facts_json, error_message)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, revisionID, domainKey, filePath, status, fromType, factsJSON, nullableStr(errorMessage))
 	if err != nil {
 		return 0, fmt.Errorf("SaveExtraction: %w", err)
 	}
@@ -57,7 +75,7 @@ func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]Extractio
 // ListUnresolvedExtractions returns extractions with status='extracted' (not yet resolved into graph).
 func (s *Store) ListUnresolvedExtractions(revisionID int64, domainKey string) ([]ExtractionRow, error) {
 	q := `SELECT extraction_id, revision_id, domain_key, file_path, status,
-	             facts_json, COALESCE(error_message,''), created_at
+	             COALESCE(from_type,''), facts_json, COALESCE(error_message,''), created_at
 	      FROM scan_extractions
 	      WHERE revision_id = ? AND domain_key = ? AND status = 'extracted'
 	      ORDER BY extraction_id`
@@ -71,7 +89,7 @@ func (s *Store) ListUnresolvedExtractions(revisionID int64, domainKey string) ([
 	for rows.Next() {
 		var r ExtractionRow
 		if err := rows.Scan(&r.ExtractionID, &r.RevisionID, &r.DomainKey,
-			&r.FilePath, &r.Status, &r.FactsJSON, &r.ErrorMessage, &r.CreatedAt); err != nil {
+			&r.FilePath, &r.Status, &r.FromType, &r.FactsJSON, &r.ErrorMessage, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

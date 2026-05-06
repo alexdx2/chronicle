@@ -677,9 +677,10 @@ func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func fileExtractedTool() mcp.Tool {
 	return mcp.NewTool("chronicle_file_extracted",
-		mcp.WithDescription("Report extraction results for a single file. Called by scan agents after reading a file. Status: 'extracted' (found architecture facts), 'no_runtime_architecture' (file read, no runtime architecture), 'config_only' (only config/env), 'type_only' (only type definitions), 'generated' (auto-generated file), 'skipped' (intentionally skipped), 'failed' (couldn't process). Facts is a JSON array of observations."),
+		mcp.WithDescription("Report extraction results for a single file. Called by scan agents after reading a file."),
 		mcp.WithString("file_path", mcp.Required(), mcp.Description("File path that was processed")),
 		mcp.WithString("status", mcp.Required(), mcp.Description("Result status: extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed")),
+		mcp.WithString("from_type", mcp.Description("File's role: 'module' (wires components), 'controller' (defines endpoints), omit for provider (default)")),
 		mcp.WithString("facts", mcp.Description("JSON array of extracted facts (for status=extracted)")),
 		mcp.WithString("error_message", mcp.Description("Error description (for status=failed)")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
@@ -692,6 +693,7 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 		args := req.GetArguments()
 		filePath := strParam(args, "file_path")
 		status := strParam(args, "status")
+		fromType := strParam(args, "from_type")
 		factsJSON := strParam(args, "facts")
 		errorMsg := strParam(args, "error_message")
 		revisionID := int64Param(args, "revision_id")
@@ -701,7 +703,7 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("file_path, status, revision_id, and domain are required")), nil
 		}
 
-		id, err := g.SaveFileExtraction(revisionID, domain, filePath, status, factsJSON, errorMsg)
+		id, err := g.SaveFileExtraction(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg)
 		if err != nil {
 			return errorResult(err), nil
 		}

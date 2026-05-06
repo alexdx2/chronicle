@@ -119,7 +119,7 @@ func TestScanWorkflowFullCycle(t *testing.T) {
 			facts, _ := json.Marshal([]Fact{
 				{Kind: "import", To: "./something"},
 			})
-			_, err := g.SaveFileExtraction(revID, domainKey, filePath, "extracted", string(facts), "")
+			_, err := g.SaveFileExtraction(revID, domainKey, filePath, "extracted", "", string(facts), "")
 			if err != nil {
 				t.Fatalf("SaveFileExtraction(%s): %v", filePath, err)
 			}
