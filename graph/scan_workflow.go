@@ -13,7 +13,8 @@ type ScanAction struct {
 	Done         bool           `json:"done,omitempty"`
 	Progress     *ScanProgress  `json:"progress,omitempty"`
 	FactSchema   string         `json:"fact_schema,omitempty"`  // included with extract_files/trace_flow to guide agents
-	GraphContext *GraphContext  `json:"graph_context,omitempty"` // phase 2 only — known nodes/edges from phase 1
+	GraphContext *GraphContext  `json:"graph_context,omitempty"` // phase 2 select — flat list of known entities
+	FlowContext  *FlowContext   `json:"flow_context,omitempty"` // phase 2 extract — per-trigger enriched context
 }
 
 // GraphContext provides phase 1 graph data to help flow tracing agents.
@@ -21,6 +22,25 @@ type GraphContext struct {
 	Endpoints []string `json:"endpoints,omitempty"` // known endpoint names
 	Services  []string `json:"services,omitempty"`  // known service/provider nodes
 	Topics    []string `json:"topics,omitempty"`    // known event/message topics
+}
+
+// FlowContext provides per-trigger-file enriched context for flow tracing.
+type FlowContext struct {
+	TriggerFile string           `json:"trigger_file"`
+	TriggerNode string           `json:"trigger_node"`            // node key
+	TriggerType string           `json:"trigger_type"`            // controller, provider
+	FilesToRead []string         `json:"files_to_read"`           // trigger + reachable files
+	Reachable   []ReachableNode  `json:"reachable"`               // graph neighborhood
+	ModelHint   string           `json:"model_hint,omitempty"`    // "use sonnet or better for flow tracing"
+}
+
+// ReachableNode is a node reachable from the trigger via INJECTS/CALLS edges.
+type ReachableNode struct {
+	Name     string   `json:"name"`
+	NodeType string   `json:"type"`
+	File     string   `json:"file,omitempty"`
+	Depth    int      `json:"depth"`
+	Edges    []string `json:"edges"` // compact edge descriptions: "INJECTS→ServiceName", "EXPOSES→POST /path"
 }
 
 const factSchemaGuide = `OUTPUT FORMAT: JSON array of objects. Use EXACTLY these field names — no aliases.
@@ -82,20 +102,31 @@ Do NOT emit:
 
 Status: "extracted" if any facts found, "no_runtime_architecture" if no architecture, "type_only" for pure types, "config_only" for config, "generated" for generated code.`
 
-const flowFactGuide = `Phase 2: FLOW TRACING ONLY. Do NOT re-extract imports, endpoints, or dependencies (already done in phase 1).
+const flowFactGuide = `PHASE 2: FLOW TRACING. You receive ONE trigger file with enriched context.
 
-For each trigger file, identify the business use case it starts, then trace the call chain:
-1. What triggers this flow? (HTTP endpoint, message consumer, event handler, cron)
-2. What services does it call?
-3. What's the sequence of steps?
+flow_context contains:
+- trigger_file: the root file to start from
+- files_to_read: read these files to trace the call chain
+- reachable: graph neighborhood — shows which services connect to what
 
-Emit ONLY flow facts:
-{"kind":"flow","flow_name":"Human-readable use case name","trigger":"POST /path OR topic-name","method":"entryMethodName","requires":["ServiceA","ServiceB"],"steps":["step 1 description","step 2 description"]}
+Your task:
+1. Read trigger_file first
+2. Read files from files_to_read
+3. For each endpoint/consumer/event in the trigger file, trace the business flow
+4. Use reachable graph as navigation — verify by reading the actual code
 
-One flow fact per business use case. A controller with 3 endpoints = 3 flow facts.
-Status: "extracted" with flow facts array.
+Emit one flow fact per business use case:
+{"kind":"flow","flow_name":"Human-readable name","trigger":"POST /path OR topic-name","method":"entryMethod","requires":["ServiceA","ServiceB"],"steps":["Controller receives request","Service validates","Service calls client","Service persists","Service publishes event"]}
 
-CRITICAL: facts MUST be a JSON array of objects with "kind":"flow". Do NOT re-emit import/endpoint/dependency facts.`
+Rules:
+- One flow per endpoint/consumer (controller with 4 endpoints = 4 flow facts)
+- requires: list services that participate in the flow
+- steps: ordered sequence through the call chain
+- DO NOT re-emit imports, endpoints, or dependencies
+- DO NOT invent services not in the code
+- If no meaningful flow found, return []
+
+Facts MUST be a JSON array of objects with "kind":"flow".`
 
 // ScanProgress tracks extraction progress within a scan run.
 type ScanProgress struct {
@@ -269,23 +300,28 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 	}, nil
 }
 
-// phase2ExtractAction returns pending trace_flow files using atomic claim.
+// phase2ExtractAction claims ONE trigger file, builds enriched per-file context.
 func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) {
-	batch, err := g.store.ClaimObligations(run.RevisionID, "trace_flow", 5)
+	// Claim 1 trigger file (not a batch — flow tracing needs focus)
+	batch, err := g.store.ClaimObligations(run.RevisionID, "trace_flow", 1)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(batch) > 0 {
+		triggerFile := batch[0]
+		flowCtx := g.buildFlowContext(run.DomainKey, triggerFile)
 		pending, _ := g.store.CountPendingObligations(run.RevisionID, "trace_flow")
+
 		return &ScanAction{
-			ScanRunID:  run.RunID,
-			Phase:      "phase2_extract",
-			Action:     "trace_flow",
-			Files:      batch,
-			FactSchema: flowFactGuide,
-			Reason:     "Phase 2: trace business flows ONLY. Do NOT re-extract imports/endpoints. Emit ONLY flow facts.",
-			Progress:   &ScanProgress{Total: run.TotalFiles, Extracted: run.TotalFiles - pending, Remaining: pending},
+			ScanRunID:   run.RunID,
+			Phase:       "phase2_extract",
+			Action:      "trace_flow",
+			Files:       []string{triggerFile},
+			FactSchema:  flowFactGuide,
+			FlowContext: flowCtx,
+			Reason:      "Read trigger_file and files_to_read from flow_context. Use reachable graph as navigation. Emit one flow fact per endpoint/consumer.",
+			Progress:    &ScanProgress{Total: run.TotalFiles, Extracted: run.TotalFiles - pending, Remaining: pending},
 		}, nil
 	}
 
@@ -300,7 +336,6 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 		}, nil
 	}
 
-	// All flows traced — transition to resolve
 	g.store.TransitionScanRun(run.RunID, "phase2_resolve", 0)
 	return &ScanAction{
 		ScanRunID: run.RunID,
@@ -309,6 +344,105 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 		Blocked:   true,
 		Reason:    "All flows traced. Call chronicle_resolve_extractions to add flows to graph.",
 	}, nil
+}
+
+// buildFlowContext builds enriched per-trigger context by walking the phase 1 graph.
+// BFS from trigger node, depth 2, following INJECTS/CALLS_SERVICE/USES_MODEL/PUBLISHES/CONSUMES edges.
+func (g *Graph) buildFlowContext(domainKey, triggerFilePath string) *FlowContext {
+	ctx := &FlowContext{
+		TriggerFile: triggerFilePath,
+		ModelHint:   "use sonnet or better model for flow tracing",
+	}
+
+	// Find trigger node by file_path
+	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	var rootKey string
+	for _, n := range nodes {
+		if n.FilePath == triggerFilePath {
+			rootKey = n.NodeKey
+			ctx.TriggerNode = n.NodeKey
+			ctx.TriggerType = n.NodeType
+			break
+		}
+	}
+	if rootKey == "" {
+		ctx.FilesToRead = []string{triggerFilePath}
+		return ctx
+	}
+
+	// BFS from root, depth 2
+	active := true
+	allEdges, _ := g.store.ListEdges(store.EdgeFilter{Active: &active})
+
+	// Build adjacency: from_key → [(edge_type, to_key)]
+	adj := make(map[string][]struct{ edgeType, toKey string })
+	for _, e := range allEdges {
+		adj[e.FromNodeKey] = append(adj[e.FromNodeKey], struct{ edgeType, toKey string }{e.EdgeType, e.ToNodeKey})
+	}
+
+	// Node lookup
+	nodeMap := make(map[string]store.NodeRow)
+	for _, n := range nodes {
+		nodeMap[n.NodeKey] = n
+	}
+
+	// BFS
+	type bfsItem struct {
+		key   string
+		depth int
+	}
+	visited := make(map[string]int) // key → depth
+	queue := []bfsItem{{rootKey, 0}}
+	visited[rootKey] = 0
+
+	followEdges := map[string]bool{
+		"INJECTS": true, "CONTAINS": true, "CALLS_SERVICE": true,
+		"USES_MODEL": true, "PUBLISHES_TOPIC": true, "CONSUMES_TOPIC": true,
+		"EXPOSES_ENDPOINT": true, "CALLS_ENDPOINT": true,
+	}
+
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+
+		// Collect edges for this node
+		var edgeDescs []string
+		for _, e := range adj[item.key] {
+			toName := e.toKey
+			if n, ok := nodeMap[e.toKey]; ok {
+				toName = n.Name
+			}
+			edgeDescs = append(edgeDescs, e.edgeType+"→"+toName)
+
+			// Continue BFS for structural edges
+			if item.depth < 2 && followEdges[e.edgeType] {
+				if _, seen := visited[e.toKey]; !seen {
+					visited[e.toKey] = item.depth + 1
+					queue = append(queue, bfsItem{e.toKey, item.depth + 1})
+				}
+			}
+		}
+
+		n := nodeMap[item.key]
+		ctx.Reachable = append(ctx.Reachable, ReachableNode{
+			Name:     n.Name,
+			NodeType: n.NodeType,
+			File:     n.FilePath,
+			Depth:    item.depth,
+			Edges:    edgeDescs,
+		})
+	}
+
+	// Collect files_to_read (unique, max 8)
+	seen := make(map[string]bool)
+	for _, r := range ctx.Reachable {
+		if r.File != "" && !seen[r.File] && len(ctx.FilesToRead) < 8 {
+			ctx.FilesToRead = append(ctx.FilesToRead, r.File)
+			seen[r.File] = true
+		}
+	}
+
+	return ctx
 }
 
 // buildGraphContext extracts known entities from the phase 1 graph for flow tracing agents.

@@ -1,0 +1,28 @@
+{
+  "description": "L2.1.2 — Phase 2 flow tracing expected results",
+  "trigger_files": [
+    {
+      "file": "fixtures/tom-and-jerry/arena-api/src/arena/arena.controller.ts",
+      "expected_flows": [
+        {"flow_name_contains": "attack", "trigger_contains": "POST", "requires_contains": ["ArenaService"]},
+        {"flow_name_contains": "trap", "trigger_contains": "POST", "requires_contains": ["ArenaService"]},
+        {"flow_name_contains": "history", "trigger_contains": "GET", "requires_contains": ["ArenaService"]},
+        {"flow_name_contains": "score", "trigger_contains": "GET", "requires_contains": ["ArenaService"]}
+      ]
+    },
+    {
+      "file": "fixtures/tom-and-jerry/tom-api/src/tom/tom.controller.ts",
+      "expected_flows": [
+        {"flow_name_contains": "status", "trigger_contains": "GET", "requires_contains": ["TomService"]},
+        {"flow_name_contains": "weapon", "trigger_contains": "GET", "requires_contains": ["TomService"]},
+        {"flow_name_contains": "arm", "trigger_contains": "POST", "requires_contains": ["TomService"]}
+      ]
+    },
+    {
+      "file": "fixtures/tom-and-jerry/spectators-api/src/spectators/battle-result.consumer.ts",
+      "expected_flows": [
+        {"flow_name_contains": "battle result", "trigger_contains": "battle-results", "requires_contains": ["SpectatorService"]}
+      ]
+    }
+  ]
+}

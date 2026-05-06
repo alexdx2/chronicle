@@ -21,7 +21,7 @@ func (s *Store) SaveExtraction(revisionID int64, domainKey, filePath, status, fr
 		factsJSON = "[]"
 	}
 
-	// Dedup: skip if this file was already extracted in ANY revision for this domain
+	// Dedup: check if this file was already extracted for this domain
 	var existingID int64
 	var existingFacts string
 	err := s.db.QueryRow(`
@@ -30,11 +30,16 @@ func (s *Store) SaveExtraction(revisionID int64, domainKey, filePath, status, fr
 		ORDER BY extraction_id DESC LIMIT 1
 	`, domainKey, filePath).Scan(&existingID, &existingFacts)
 	if err == nil {
-		// Already extracted — update facts/from_type if original was empty
-		if (existingFacts == "[]" || existingFacts == "") && factsJSON != "[]" && factsJSON != "" {
-			s.db.Exec(`UPDATE scan_extractions SET facts_json = ?, from_type = ? WHERE extraction_id = ?`, factsJSON, fromType, existingID)
+		if factsJSON == "[]" || factsJSON == "" {
+			return existingID, nil // no new facts, skip
 		}
-		return existingID, nil
+		if existingFacts == "[]" || existingFacts == "" {
+			// Original had no facts, update with new ones
+			s.db.Exec(`UPDATE scan_extractions SET facts_json = ?, from_type = ?, status = 'extracted' WHERE extraction_id = ?`, factsJSON, fromType, existingID)
+			return existingID, nil
+		}
+		// New facts with different content — allow insert (phase 2 flow facts for phase 1 file)
+		// Fall through to INSERT
 	}
 
 	res, err := s.db.Exec(`
