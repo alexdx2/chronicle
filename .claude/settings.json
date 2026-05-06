@@ -1,11 +1,1 @@
-{
-    "mcpServers": {
-        "chronicle": {
-            "command": "chronicle",
-            "args": [
-                "mcp",
-                "serve"
-            ]
-        }
-    }
-}
+{}

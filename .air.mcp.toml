@@ -1,0 +1,17 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/chronicle ./cmd/chronicle"
+  bin = "./tmp/chronicle mcp serve --open --debug 2>> ./tmp/chronicle-mcp.stderr.log"
+  include_ext = ["go", "yaml", "json", "toml"]
+  exclude_dir = ["tmp", "node_modules", ".git", ".depbot"]
+  delay = 500
+
+[log]
+  time = true
+  silent = true
+  main_only = true
+
+[misc]
+  clean_on_exit = true
