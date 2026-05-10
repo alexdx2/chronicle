@@ -21,27 +21,44 @@ jobs:
   build:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: crazy-max/ghaction-xgo@v3
         with:
-          go-version: '1.22'
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.13.0
-      - name: Build binaries
-        env:
-          ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-cache
+          xgo_version: latest
+          go_version: '1.22'
+          dest: dist
+          prefix: chronicle
+          targets: ${{ matrix.goos }}/${{ matrix.goarch }}
+          pkg: ./cmd/chronicle
+          ldflags: -s -w
+      - name: Rename binary
         run: |
-          mkdir -p dist "$ZIG_GLOBAL_CACHE_DIR"
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-gnu" CXX="zig c++ -target x86_64-linux-gnu" go build -ldflags "-s -w" -o dist/chronicle-linux-amd64 ./cmd/chronicle
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" CXX="zig c++ -target aarch64-linux-gnu" go build -ldflags "-s -w" -o dist/chronicle-linux-arm64 ./cmd/chronicle
-          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="zig cc -target x86_64-macos" CXX="zig c++ -target x86_64-macos" go build -ldflags "-s -w" -o dist/chronicle-darwin-amd64 ./cmd/chronicle
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC="zig cc -target aarch64-macos" CXX="zig c++ -target aarch64-macos" go build -ldflags "-s -w" -o dist/chronicle-darwin-arm64 ./cmd/chronicle
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC="zig cc -target x86_64-windows-gnu" CXX="zig c++ -target x86_64-windows-gnu" go build -ldflags "-s -w" -o dist/chronicle-windows-amd64.exe ./cmd/chronicle
+          cd dist
+          for f in chronicle-*; do
+            suffix="${{ matrix.goos }}-${{ matrix.goarch }}"
+            if [[ "$f" == *.exe ]]; then
+              mv "$f" "chronicle-${suffix}.exe"
+            else
+              mv "$f" "chronicle-${suffix}"
+            fi
+          done
       - uses: actions/upload-artifact@v4
         with:
-          name: binaries
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/
 
   release:
@@ -53,8 +70,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: binaries
+          pattern: binaries-*
           path: dist/
+          merge-multiple: true
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
