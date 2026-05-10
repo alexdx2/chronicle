@@ -3293,9 +3293,11 @@ function dashboard() {
           let cls = 'edge-line';
           if (d._isPath) cls += ' path-edge';
           else if (d._transitive) cls += ' transitive';
+          else if (d.virtual) cls += ' dashed';
           else if (d.derivation !== 'hard' && d.derivation !== 'linked') cls += ' dashed';
           return cls;
         })
+        .attr('opacity', d => d.virtual ? 0.7 : 1)
         .attr('stroke', d => {
           if (d._isPath || d._transitive) return null;
           const info = self.edgeCategoryLookup[d.edge_type];
@@ -3364,12 +3366,13 @@ function dashboard() {
       node.append('rect')
         .attr('class', 'node-rect')
         .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
-        .attr('fill', d => self.layerColor(d.layer) + '40')
+        .attr('fill', d => d.virtual ? '#f0f0f0' : self.layerColor(d.layer) + '40')
         .attr('stroke', d => {
           const ann = annotations[d.node_key];
-          return (ann?.highlight) || self.layerColor(d.layer);
+          return (ann?.highlight) || (d.virtual ? '#999' : self.layerColor(d.layer));
         })
         .attr('stroke-width', d => annotations[d.node_key]?.highlight ? 3 : 1.5)
+        .attr('stroke-dasharray', d => d.virtual ? '6,3' : 'none')
         .style('filter', d => {
           const ann = annotations[d.node_key];
           return ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none';
