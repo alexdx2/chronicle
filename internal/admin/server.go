@@ -875,6 +875,8 @@ func (s *Server) handleDiagram(w http.ResponseWriter, r *http.Request) {
 	sessionID := parts[0]
 
 	switch {
+	case r.Method == "POST" && sessionID == "build":
+		s.handleDiagramBuild(w, r)
 	case r.Method == "POST" && sessionID == "":
 		s.handleDiagramCreate(w, r)
 	case r.Method == "GET" && sessionID == "latest":
@@ -916,6 +918,180 @@ func (s *Server) handleDiagramCreate(w http.ResponseWriter, r *http.Request) {
 	s.persistDiagramSession(session)
 	url := fmt.Sprintf("http://localhost:%d/diagram/%s", s.port, body.SessionID)
 	httpJSON(w, map[string]any{"session_id": body.SessionID, "url": url})
+}
+
+func (s *Server) handleDiagramBuild(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title        string `json:"title"`
+		NodeKeys     []string `json:"node_keys"`
+		HideEdges    []struct {
+			From     string `json:"from"`
+			To       string `json:"to"`
+			EdgeType string `json:"edge_type"`
+		} `json:"hide_edges"`
+		VirtualNodes []struct {
+			Key   string `json:"key"`
+			Name  string `json:"name"`
+			Type  string `json:"type"`
+			Layer string `json:"layer"`
+		} `json:"virtual_nodes"`
+		VirtualEdges []struct {
+			From     string `json:"from"`
+			To       string `json:"to"`
+			EdgeType string `json:"edge_type"`
+			Label    string `json:"label"`
+		} `json:"virtual_edges"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request: invalid JSON", 400)
+		return
+	}
+	if len(body.NodeKeys) == 0 {
+		http.Error(w, "bad request: node_keys is required and must be non-empty", 400)
+		return
+	}
+
+	// Resolve real nodes
+	foundNodes, missingKeys, err := s.getStore().GetNodesByKeys(body.NodeKeys)
+	if err != nil {
+		httpError(w, fmt.Errorf("resolving nodes: %w", err), 500)
+		return
+	}
+	if len(foundNodes) == 0 {
+		http.Error(w, "bad request: all node_keys are invalid", 400)
+		return
+	}
+
+	// Check virtual node key collisions with real keys
+	realKeySet := make(map[string]bool, len(foundNodes))
+	for _, n := range foundNodes {
+		realKeySet[n.NodeKey] = true
+	}
+	for _, vn := range body.VirtualNodes {
+		if realKeySet[vn.Key] {
+			http.Error(w, fmt.Sprintf("bad request: virtual node key %q collides with real node", vn.Key), 400)
+			return
+		}
+	}
+
+	// Auto-discover edges between real nodes
+	nodeIDs := make([]int64, len(foundNodes))
+	for i, n := range foundNodes {
+		nodeIDs[i] = n.NodeID
+	}
+	realEdges, err := s.getStore().GetEdgesBetweenNodes(nodeIDs)
+	if err != nil {
+		httpError(w, fmt.Errorf("discovering edges: %w", err), 500)
+		return
+	}
+
+	// Filter out hidden edges
+	filteredEdges := make([]store.EdgeRow, 0, len(realEdges))
+	for _, e := range realEdges {
+		hidden := false
+		for _, h := range body.HideEdges {
+			if e.FromNodeKey == h.From && e.ToNodeKey == h.To {
+				if h.EdgeType == "" || h.EdgeType == e.EdgeType {
+					hidden = true
+					break
+				}
+			}
+		}
+		if !hidden {
+			filteredEdges = append(filteredEdges, e)
+		}
+	}
+
+	// Build diagram nodes
+	diagramNodes := make([]map[string]any, 0, len(foundNodes)+len(body.VirtualNodes))
+	for _, n := range foundNodes {
+		diagramNodes = append(diagramNodes, map[string]any{
+			"id":      n.NodeID,
+			"key":     n.NodeKey,
+			"name":    n.Name,
+			"type":    n.NodeType,
+			"layer":   n.Layer,
+			"virtual": false,
+		})
+	}
+	// Virtual nodes get negative IDs
+	for i, vn := range body.VirtualNodes {
+		diagramNodes = append(diagramNodes, map[string]any{
+			"id":      -(i + 1),
+			"key":     vn.Key,
+			"name":    vn.Name,
+			"type":    vn.Type,
+			"layer":   vn.Layer,
+			"virtual": true,
+		})
+	}
+
+	// Build diagram edges
+	diagramEdges := make([]map[string]any, 0, len(filteredEdges)+len(body.VirtualEdges))
+	for _, e := range filteredEdges {
+		diagramEdges = append(diagramEdges, map[string]any{
+			"from":      e.FromNodeKey,
+			"to":        e.ToNodeKey,
+			"edge_type": e.EdgeType,
+			"virtual":   false,
+		})
+	}
+	for _, ve := range body.VirtualEdges {
+		edge := map[string]any{
+			"from":      ve.From,
+			"to":        ve.To,
+			"edge_type": ve.EdgeType,
+			"virtual":   true,
+		}
+		if ve.Label != "" {
+			edge["label"] = ve.Label
+		}
+		diagramEdges = append(diagramEdges, edge)
+	}
+
+	// Generate session ID
+	sessionID := fmt.Sprintf("%x", time.Now().UnixNano())
+	sessionID = sessionID[len(sessionID)-8:]
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	title := body.Title
+	if title == "" {
+		title = "Built diagram"
+	}
+	session := &DiagramSession{
+		ID:               sessionID,
+		Title:            title,
+		Nodes:            diagramNodes,
+		Edges:            diagramEdges,
+		Annotations:      make(map[string]DiagramNote),
+		Steps:            make(map[int]map[string]DiagramNote),
+		StepTitles:       make(map[int]string),
+		StepDescriptions: make(map[int]string),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+
+	s.mu.Lock()
+	s.diagrams[sessionID] = session
+	s.mu.Unlock()
+	s.persistDiagramSession(session)
+	s.hub.Send("diagram_update", map[string]any{
+		"session_id": sessionID, "title": session.Title, "nodes": session.Nodes, "edges": session.Edges,
+		"annotations": session.Annotations, "steps": session.Steps,
+		"step_titles": session.StepTitles, "step_descriptions": session.StepDescriptions, "total_steps": session.TotalSteps,
+	})
+
+	url := fmt.Sprintf("http://localhost:%d/diagram/%s", s.port, sessionID)
+	resp := map[string]any{
+		"session_id": sessionID,
+		"url":        url,
+		"node_count": len(diagramNodes),
+		"edge_count": len(diagramEdges),
+	}
+	if len(missingKeys) > 0 {
+		resp["errors"] = missingKeys
+	}
+	httpJSON(w, resp)
 }
 
 func (s *Server) handleDiagramLatest(w http.ResponseWriter, r *http.Request) {
