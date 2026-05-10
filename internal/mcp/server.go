@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -77,6 +78,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(diagramCreateTool(), diagramCreateHandler())
 	s.AddTool(diagramUpdateTool(), diagramUpdateHandler())
 	s.AddTool(diagramAnnotateTool(), diagramAnnotateHandler())
+	s.AddTool(diagramBuildTool(), diagramBuildHandler())
 	s.AddTool(resolveContextTool(), resolveContextHandler(g))
 	s.AddTool(contextListTool(), contextListHandler(g))
 	s.AddTool(contextCreateTool(), contextCreateHandler(g))
@@ -2218,6 +2220,87 @@ func diagramAnnotateHandler() server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("failed to annotate diagram: %w", err)), nil
 		}
 		defer resp.Body.Close()
+
+		var result map[string]any
+		json.NewDecoder(resp.Body).Decode(&result)
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_diagram_build
+// ---------------------------------------------------------------------------
+
+func diagramBuildTool() mcp.Tool {
+	return mcp.NewTool("chronicle_diagram_build",
+		mcp.WithDescription("Build a diagram from real graph entities. Nodes are resolved and validated from the database. Edges between selected nodes are auto-discovered. Virtual nodes/edges for external actors. Returns session URL."),
+		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
+		mcp.WithString("node_keys", mcp.Required(), mcp.Description("JSON array of node_key strings to include, e.g. [\"code:service:demo:OrdersAPI\"]")),
+		mcp.WithString("hide_edges", mcp.Description("JSON array of edges to exclude: [{\"from\":\"key1\",\"to\":\"key2\",\"edge_type\":\"OPTIONAL\"}]")),
+		mcp.WithString("virtual_nodes", mcp.Description("JSON array of non-graph nodes: [{\"key\":\"user\",\"name\":\"User\",\"type\":\"actor\",\"layer\":\"external\"}]")),
+		mcp.WithString("virtual_edges", mcp.Description("JSON array of edges to/from virtual nodes: [{\"from\":\"user\",\"to\":\"key\",\"edge_type\":\"http\",\"label\":\"POST /orders\"}]")),
+	)
+}
+
+func diagramBuildHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		title := strParam(args, "title")
+		nodeKeysStr := strParam(args, "node_keys")
+		if title == "" || nodeKeysStr == "" {
+			return errorResult(fmt.Errorf("title and node_keys are required")), nil
+		}
+
+		var nodeKeys []string
+		if err := json.Unmarshal([]byte(nodeKeysStr), &nodeKeys); err != nil {
+			return errorResult(fmt.Errorf("invalid node_keys JSON: %w", err)), nil
+		}
+
+		port := adminPortValue
+		if port == 0 {
+			port = 4200
+		}
+
+		payload := map[string]any{
+			"title":     title,
+			"node_keys": nodeKeys,
+		}
+
+		if hideStr := strParam(args, "hide_edges"); hideStr != "" {
+			var hideEdges []any
+			if err := json.Unmarshal([]byte(hideStr), &hideEdges); err != nil {
+				return errorResult(fmt.Errorf("invalid hide_edges JSON: %w", err)), nil
+			}
+			payload["hide_edges"] = hideEdges
+		}
+
+		if vnStr := strParam(args, "virtual_nodes"); vnStr != "" {
+			var virtualNodes []any
+			if err := json.Unmarshal([]byte(vnStr), &virtualNodes); err != nil {
+				return errorResult(fmt.Errorf("invalid virtual_nodes JSON: %w", err)), nil
+			}
+			payload["virtual_nodes"] = virtualNodes
+		}
+
+		if veStr := strParam(args, "virtual_edges"); veStr != "" {
+			var virtualEdges []any
+			if err := json.Unmarshal([]byte(veStr), &virtualEdges); err != nil {
+				return errorResult(fmt.Errorf("invalid virtual_edges JSON: %w", err)), nil
+			}
+			payload["virtual_edges"] = virtualEdges
+		}
+
+		body, _ := json.Marshal(payload)
+		resp, err := http.Post(fmt.Sprintf("http://localhost:%d/api/diagram/build", port), "application/json", bytes.NewReader(body))
+		if err != nil {
+			return errorResult(fmt.Errorf("failed to build diagram: %w", err)), nil
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			return errorResult(fmt.Errorf("diagram build failed (%d): %s", resp.StatusCode, string(respBody))), nil
+		}
 
 		var result map[string]any
 		json.NewDecoder(resp.Body).Decode(&result)
