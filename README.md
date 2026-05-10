@@ -6,192 +6,145 @@
 
 Persistent architecture memory for Claude Code.
 
-Chronicle builds a local knowledge graph of your codebase so Claude can understand your project across sessions. Instead of re-reading the same files again and again, Claude can ask Chronicle:
+Every new Claude Code session starts from scratch. Chronicle fixes that — it builds a local knowledge graph of your codebase that persists across conversations.
 
-- what depends on this service?
-- what breaks if this model changes?
-- how does this endpoint reach that system?
-- is the project graph still fresh?
+```
+You: "What breaks if I change the Order model?"
 
-Chronicle stores the graph locally in `.depbot/chronicle.db` and keeps it up to date with `chronicle scan`, `chronicle update`, and `chronicle status`.
+Claude (with Chronicle):
+  → OrderService (direct dependency)
+  → PaymentService (2 hops)
+  → POST /orders (exposed endpoint)
+  3 services affected, 1 Kafka topic downstream.
+  Evidence: src/orders/order.service.ts:14, src/payments/payment.service.ts:8
+```
+
+Without Chronicle, Claude would need to re-read dozens of files to answer this. With Chronicle, the answer comes from a graph grounded in source-code evidence.
 
 ## Quick start
 
-Install Chronicle:
-
 ```bash
 npm install -g @alexdx/chronicle-mcp
-```
-
-Add it to Claude Code:
-
-```bash
 claude mcp add chronicle -- chronicle mcp serve --open
 ```
 
-Open your project in Claude Code and run:
+Then in Claude Code:
 
 ```
 chronicle scan
 ```
 
-## What happens during the first scan
+Chronicle will ask you to confirm the scope before scanning anything.
 
-When you run `chronicle scan`, Claude will:
+## How the brain works
 
-1. Inspect your repository structure.
-2. Suggest what should be scanned.
-3. Ask you to confirm or adjust the scope.
-4. Extract architecture facts from code.
-5. Store them in `.depbot/chronicle.db`.
-6. Show a summary of the graph.
-
-Chronicle does not blindly scan everything. You see what source areas are included, what is excluded, and what questions the graph will be able to answer.
-
-## The project brain
-
-Chronicle is not a chat memory and not a vector search index. It is a local architecture graph.
-
-Each fact is stored as a relationship:
+Chronicle stores architecture as a graph of relationships with evidence:
 
 ```
-OrderController → uses → OrderService
-OrderService → uses_model → Order
-OrderController → exposes → POST /orders
+OrderController → exposes → POST /orders     (src/orders/order.controller.ts:12, confidence: high)
+OrderController → injects → OrderService     (src/orders/order.controller.ts:8, confidence: high)
+OrderService → uses_model → Order            (src/orders/order.service.ts:14, confidence: high)
+arena-api → calls_service → tom-api          (src/arena/tom.client.ts:6, derivation: linked)
 ```
 
-Each relationship includes evidence:
+This is not a vector index or chat memory. It is a structured graph where every fact traces back to a file and line number. Claude queries it to answer architecture questions without re-reading your entire codebase.
 
-```
-src/orders/order.service.ts:14
-confidence: high
-status: fresh
-```
+## Keeping it fresh
 
-This lets Claude answer architecture questions with traceable evidence instead of guessing.
+| When | Run | What happens |
+|------|-----|--------------|
+| First time | `chronicle scan` | Builds the full graph (interactive — you confirm scope) |
+| After code changes | `chronicle update` | Rescans only changed files, refreshes affected edges |
+| Unsure if graph is current | `chronicle status` | Reports freshness, staleness, missing evidence |
 
-## Keeping the brain up to date
+Run `chronicle update` after changing service boundaries, models, endpoints, event topics, or pulling a large branch.
 
-Your code changes. Chronicle tracks that.
+## What you can ask
 
-**Full scan** — use when setting up Chronicle for the first time:
+Natural language — Claude uses the graph automatically:
 
-```
-chronicle scan
-```
+- What breaks if I change OrderService?
+- How does POST /orders reach the payment service?
+- What depends on User model?
+- Show me the checkout flow as a diagram
+- Is the graph up to date?
 
-**Incremental update** — use after changing code:
-
-```
-chronicle update
-```
-
-Chronicle checks what changed and refreshes the affected parts of the graph.
-
-**Status check** — use when unsure whether the graph is still reliable:
-
-```
-chronicle status
-```
-
-Chronicle reports whether the graph is fresh, stale, incomplete, or missing evidence.
-
-**Best practice** — run `chronicle update` when:
-
-- you change service boundaries
-- you add or remove endpoints
-- you change models or schemas
-- you change event topics
-- you pull a large branch
-- Claude gives an answer that feels outdated
-
-## What you can ask Claude
-
-```
-chronicle scan
-What breaks if I change OrderService?
-How does POST /orders reach the payment service?
-What depends on User model?
-Show me the checkout flow
-Is the graph up to date?
-Update Chronicle after my latest changes
-```
-
-## Common commands
+Or use commands directly:
 
 | Command | What it does |
 |---------|-------------|
-| `chronicle scan` | Build the first project graph |
-| `chronicle update` | Refresh the graph after code changes |
-| `chronicle status` | Check freshness and graph health |
-| `chronicle impact X` | Show what may break if X changes |
-| `chronicle deps X` | Show what X depends on |
-| `chronicle path A B` | Explain how A connects to B |
-| `chronicle diagram` | Open an architecture diagram |
+| `chronicle scan` | Build the project graph |
+| `chronicle update` | Refresh after code changes |
+| `chronicle status` | Check graph health |
+| `chronicle impact X` | What may break if X changes |
+| `chronicle deps X` | What X depends on |
+| `chronicle path A B` | How A connects to B |
+| `chronicle diagram` | Live architecture diagram in browser |
 
-## How Chronicle works with Claude Code
+## The first scan
 
-Chronicle runs as an MCP server. That means Claude Code can call Chronicle tools during a conversation:
+When you run `chronicle scan`, Claude will:
 
-- scan the project
-- update the graph
-- ask what depends on something
-- find paths between services
-- show impact of a change
-- open the dashboard
+1. Inspect your repository structure
+2. Suggest scan scope (backend services, data models, APIs)
+3. Ask you to confirm or adjust
+4. Extract architecture facts from code
+5. Store them in `.depbot/chronicle.db`
+6. Open the dashboard with a visual graph
 
-You do not need to call low-level graph tools manually. Claude uses them when needed.
+You control what gets scanned. Chronicle shows what's included, what's excluded, and what questions the graph will answer.
+
+## Dashboard
+
+Chronicle includes a live dashboard that starts automatically:
+
+- Graph explorer — navigate services, models, endpoints
+- Impact analysis — visual blast radius
+- Diagrams — entity-first architecture diagrams (built from real graph data, not invented)
+- Growth chart — track how knowledge accumulates over scans
+- Request log — see what tools Claude called
+
+Get the URL with `chronicle status`.
+
+## How it works with Claude Code
+
+Chronicle runs as an MCP server. Claude Code calls its tools automatically during conversations — you don't need to invoke low-level graph operations manually.
+
+Under the hood, scanning uses a hybrid AST + LLM pipeline: tree-sitter handles deterministic patterns (imports, decorators, DI), and LLM agents classify ambiguous patterns (cross-service calls, event emits). See [docs/scanning.md](docs/scanning.md) for the full breakdown.
 
 ## What Chronicle is good at
 
-Chronicle works best when architecture is visible in code:
+Architecture that is visible in code:
 
 - imports and dependency injection
-- controllers and services
-- models and schemas
-- config files and environment variables
+- controllers, services, modules
+- models and schemas (Prisma, TypeORM)
 - event topics (Kafka, RabbitMQ)
-- API definitions (REST, GraphQL)
+- API definitions (REST endpoints, GraphQL)
+- cross-service HTTP calls
+- environment-based service discovery
 
 ## Limitations
 
-Chronicle is not a compiler and does not guarantee perfect program analysis. It may need help when:
+Chronicle is not a compiler. It may need help when:
 
-- behavior is fully dynamic
-- important relationships are hidden in generated code
-- naming is inconsistent
-- the repository is very large
-- the scan scope was too narrow
+- behavior is fully dynamic (reflection, eval)
+- relationships are hidden in generated code
+- the repository is very large (>5000 files — narrow the scope)
+- naming is inconsistent across services
 
-When in doubt, run:
-
-```
-chronicle status
-```
-
-or ask Claude to show the evidence behind an answer.
-
-## Why Chronicle
-
-Without Chronicle, Claude often has to rediscover your architecture from scratch. With Chronicle, Claude can use a persistent graph grounded in source-code evidence.
-
-That means:
-
-- less repeated explanation
-- faster architecture questions
-- better impact analysis
-- clearer dependency paths
-- answers backed by evidence
+When in doubt: `chronicle status`, or ask Claude to show the evidence behind an answer.
 
 ## Docs
 
 - [How it works](docs/how-it-works.md)
 - [Scan pipeline](docs/scanning.md)
-- [Commands](docs/commands.md)
+- [Commands reference](docs/commands.md)
 
 ## Links
 
 - **npm**: [@alexdx/chronicle-mcp](https://www.npmjs.com/package/@alexdx/chronicle-mcp)
+- **GitHub**: [alexdx2/chronicle](https://github.com/alexdx2/chronicle)
 
 ## License
 
