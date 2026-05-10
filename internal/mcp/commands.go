@@ -122,18 +122,23 @@ __STAGES__`,
 ## How to Create a Diagram
 
 1. Identify the diagram type from the user's question (see catalog below)
-2. Call chronicle_diagram_create(title="{Type}: {subject}") — get session_id and URL
-3. Share URL with user: "Open {url} to see the diagram"
-4. Query the graph using the right tool for the diagram type:
-   - System Overview: chronicle_node_list(layer='service') + chronicle_edge_list()
+2. Query the graph to get node_keys for the diagram type:
+   - System Overview: chronicle_node_list(layer='service') + chronicle_node_list(layer='contract', node_type='topic')
    - Request Flow: chronicle_query_path(from, to)
    - Impact Analysis: chronicle_impact(node_key)
    - Dependency Map: chronicle_query_deps(node_key, depth=1)
-   - Domain Model: chronicle_node_list(layer='data') + chronicle_edge_list(edge_type='REFERENCES_MODEL')
-5. Filter results — only include nodes/edges specified by the diagram type rules
-6. Build payload and call chronicle_diagram_update(session_id, payload)
-7. Add annotations with chronicle_diagram_annotate (see step rules per type)
-8. As conversation evolves, call chronicle_diagram_update again to refine
+   - Domain Model: chronicle_node_list(layer='data')
+3. Call chronicle_diagram_build with:
+   - title: "{Type}: {subject}"
+   - node_keys: array of node_key strings from step 2
+   - virtual_nodes: external actors not in graph (e.g. User, External API)
+   - virtual_edges: connections to/from virtual nodes
+   - hide_edges: edges to exclude for clarity
+4. Share the returned URL with user: "Open {url} to see the diagram"
+5. Add annotations with chronicle_diagram_annotate (see step rules per type)
+6. As conversation evolves, call chronicle_diagram_build again with adjusted node_keys
+
+NOTE: chronicle_diagram_build validates node_keys against the DB and auto-discovers all edges between selected nodes. You do NOT need to manually specify edges — only use hide_edges to remove noisy ones.
 
 ## Diagram Type Catalog
 
@@ -200,14 +205,14 @@ Node cap: All data models (typically <20).
 
 ## Cross-cutting Rules (apply to ALL types)
 
-- NEVER exceed 15 nodes. Filter aggressively — prioritize nodes that answer the question.
+- NEVER exceed 15 node_keys. Filter aggressively — prioritize nodes that answer the question.
 - Every diagram MUST annotate the focal node(s) explaining WHY they matter.
-- Only include edge types specified by the diagram type. No CONTAINS in flow diagrams, no INJECTS in overviews.
+- Use hide_edges to remove edge types not relevant to the diagram type.
 - For multi-step: all nodes present from start but dimmed. Steps reveal progressively.
 - Step descriptions: write as if narrating to someone unfamiliar with the codebase.
-- Node payload must include: node_id, node_key, name, layer, node_type.
 - Highlight colors must match the diagram type visual language.
-- When in doubt, use single step. Multi-step only when there's a clear sequential narrative.`,
+- When in doubt, use single step. Multi-step only when there's a clear sequential narrative.
+- Use virtual_nodes for actors/systems not in the graph (e.g. "User", "External Gateway").`,
 
 	"setup": `Project setup — configure scan scope:
 1. Call chronicle_file_groups — shows all git-tracked files grouped by directory with counts
