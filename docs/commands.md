@@ -33,6 +33,8 @@ All commands are triggered by saying them in a Claude Code session with Chronicl
 |---------|-------------|
 | `chronicle diagram` | Live architecture diagram in the browser |
 
+Diagrams are built from real graph entities — nodes are validated against the database, edges auto-discovered. Virtual nodes (e.g. "User", "External API") can be added for actors not in the graph. Virtual elements render with dashed borders.
+
 ## Business flows
 
 | Command | Description |
@@ -55,4 +57,6 @@ Each command maps to a set of MCP tool calls. When you say `chronicle impact Ord
 | **Write** | `revision_create`, `import_all`, `node_upsert`, `edge_upsert`, `evidence_add` |
 | **Lifecycle** | `invalidate_changed`, `finalize_incremental_scan`, `snapshot_create`, `stale_mark` |
 | **Meta** | `extraction_guide`, `scan_status`, `command`, `define_term`, `check_language` |
-| **Visual** | `diagram_create`, `diagram_update`, `diagram_annotate` |
+| **Visual** | `diagram_build`, `diagram_annotate`, `diagram_create`*, `diagram_update`* |
+
+\* Legacy tools — `diagram_build` is preferred (validates nodes from graph, auto-discovers edges, supports virtual nodes).

@@ -85,7 +85,7 @@ Starts automatically with the MCP server. Embedded SPA — zero infrastructure.
 - **Overview** — graph stats, request log, growth chart
 - **Graph** — tree, explore, and workspace modes
 - **Language** — domain glossary + violation checker
-- **Diagrams** — live sessions pushed by the agent
+- **Diagrams** — entity-first live diagrams (validated from graph, virtual nodes for actors)
 - **Settings** — manifest, prompts, edge config
 
 ## Multi-repo
