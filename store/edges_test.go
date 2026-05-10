@@ -86,6 +86,72 @@ func TestListEdgesByTo(t *testing.T) {
 	}
 }
 
+func TestGetEdgesBetweenNodes(t *testing.T) {
+	s := openTestStore(t)
+	revID, err := s.CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+
+	// Create 3 nodes: A, B, C
+	nA, err := s.UpsertNode(NodeRow{
+		NodeKey: "code:controller:orders:a", Layer: "code", NodeType: "controller",
+		DomainKey: "orders", Name: "A", Status: "active",
+		FirstSeenRevisionID: revID, LastSeenRevisionID: revID, Confidence: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("UpsertNode A: %v", err)
+	}
+	nB, err := s.UpsertNode(NodeRow{
+		NodeKey: "code:controller:orders:b", Layer: "code", NodeType: "controller",
+		DomainKey: "orders", Name: "B", Status: "active",
+		FirstSeenRevisionID: revID, LastSeenRevisionID: revID, Confidence: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("UpsertNode B: %v", err)
+	}
+	nC, err := s.UpsertNode(NodeRow{
+		NodeKey: "code:controller:orders:c", Layer: "code", NodeType: "controller",
+		DomainKey: "orders", Name: "C", Status: "active",
+		FirstSeenRevisionID: revID, LastSeenRevisionID: revID, Confidence: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("UpsertNode C: %v", err)
+	}
+
+	// Insert edges: A→B, B→C, A→C
+	s.UpsertEdge(makeEdgeRow("edge:calls:a:b", nA, nB, revID))
+	s.UpsertEdge(makeEdgeRow("edge:calls:b:c", nB, nC, revID))
+	s.UpsertEdge(makeEdgeRow("edge:calls:a:c", nA, nC, revID))
+
+	// Query with only [A, B] → expect 1 edge (A→B)
+	edges, err := s.GetEdgesBetweenNodes([]int64{nA, nB})
+	if err != nil {
+		t.Fatalf("GetEdgesBetweenNodes [A,B]: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Errorf("expected 1 edge between [A,B], got %d", len(edges))
+	}
+
+	// Query with [A, B, C] → expect 3 edges
+	edges, err = s.GetEdgesBetweenNodes([]int64{nA, nB, nC})
+	if err != nil {
+		t.Fatalf("GetEdgesBetweenNodes [A,B,C]: %v", err)
+	}
+	if len(edges) != 3 {
+		t.Errorf("expected 3 edges between [A,B,C], got %d", len(edges))
+	}
+
+	// Query with empty slice → expect 0 edges
+	edges, err = s.GetEdgesBetweenNodes([]int64{})
+	if err != nil {
+		t.Fatalf("GetEdgesBetweenNodes []: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for empty input, got %d", len(edges))
+	}
+}
+
 func TestDeleteEdge(t *testing.T) {
 	s := openTestStore(t)
 	revID, n1, n2 := seedNodes(t, s)

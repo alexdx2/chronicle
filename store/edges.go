@@ -299,6 +299,65 @@ func (s *Store) GetEdgesWithNoValidEvidence(domainKey string) ([]EdgeRow, error)
 	return out, rows.Err()
 }
 
+// GetEdgesBetweenNodes returns current (non-closed) edges where both from_node_id and to_node_id
+// are within the provided set of node IDs.
+func (s *Store) GetEdgesBetweenNodes(nodeIDs []int64) ([]EdgeRow, error) {
+	if len(nodeIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(nodeIDs))
+	for i := range nodeIDs {
+		placeholders[i] = "?"
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	q := fmt.Sprintf(`
+		SELECT edge_id, edge_key, from_node_id, to_node_id, edge_type, derivation_kind,
+		       COALESCE(context_key,''), active,
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
+		       COALESCE(from_node_key,''), COALESCE(to_node_key,''),
+		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0), COALESCE(context_id,0)
+		FROM graph_edges
+		WHERE (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		  AND from_node_id IN (%s)
+		  AND to_node_id IN (%s)
+		ORDER BY edge_key
+	`, inClause, inClause)
+
+	args := make([]any, 0, len(nodeIDs)*2)
+	for _, id := range nodeIDs {
+		args = append(args, id)
+	}
+	for _, id := range nodeIDs {
+		args = append(args, id)
+	}
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("GetEdgesBetweenNodes: %w", err)
+	}
+	defer rows.Close()
+
+	var out []EdgeRow
+	for rows.Next() {
+		var r EdgeRow
+		var activeInt int
+		if err := rows.Scan(
+			&r.EdgeID, &r.EdgeKey, &r.FromNodeID, &r.ToNodeID, &r.EdgeType, &r.DerivationKind,
+			&r.ContextKey, &activeInt,
+			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
+			&r.FromNodeKey, &r.ToNodeKey,
+			&r.ValidFromRevisionID, &r.ValidToRevisionID, &r.ContextID,
+		); err != nil {
+			return nil, fmt.Errorf("GetEdgesBetweenNodes scan: %w", err)
+		}
+		r.Active = activeInt != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // MarkStaleEdges marks active edges (from nodes in domainKey) with last_seen < revisionID as inactive.
 func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error) {
 	res, err := s.db.Exec(`
