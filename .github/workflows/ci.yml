@@ -48,13 +48,14 @@ jobs:
       - name: Rename binary
         run: |
           cd dist
+          suffix="${{ matrix.goos }}-${{ matrix.goarch }}"
           for f in chronicle-*; do
-            suffix="${{ matrix.goos }}-${{ matrix.goarch }}"
             if [[ "$f" == *.exe ]]; then
-              mv "$f" "chronicle-${suffix}.exe"
+              target="chronicle-${suffix}.exe"
             else
-              mv "$f" "chronicle-${suffix}"
+              target="chronicle-${suffix}"
             fi
+            [ "$f" != "$target" ] && mv "$f" "$target" || true
           done
       - uses: actions/upload-artifact@v4
         with:
