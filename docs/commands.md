@@ -1,6 +1,6 @@
 # Command Reference
 
-All commands are triggered by saying them in a Claude Code session with Chronicle MCP enabled.
+All commands work by saying them in a session with Chronicle MCP enabled.
 
 ## Scanning
 
@@ -43,20 +43,4 @@ Diagrams are built from real graph entities — nodes are validated against the 
 
 ## How commands work
 
-Each command maps to a set of MCP tool calls. When you say `chronicle impact OrderService`, Claude:
-
-1. Calls `chronicle_command(command='impact')` to get step-by-step instructions
-2. Calls `chronicle_impact(node_key="OrderService")` — name resolves automatically
-3. Returns impacted nodes, affected endpoints, and trust scores
-
-## MCP tools (for advanced use)
-
-| Category | Tools |
-|----------|-------|
-| **Read** | `impact`, `query_deps`, `query_reverse_deps`, `query_path`, `query_stats`, `node_get`, `edge_list` |
-| **Write** | `revision_create`, `import_all`, `node_upsert`, `edge_upsert`, `evidence_add` |
-| **Lifecycle** | `invalidate_changed`, `finalize_incremental_scan`, `snapshot_create`, `stale_mark` |
-| **Meta** | `extraction_guide`, `scan_status`, `command`, `define_term`, `check_language` |
-| **Visual** | `diagram_build`, `diagram_annotate`, `diagram_create`*, `diagram_update`* |
-
-\* Legacy tools — `diagram_build` is preferred (validates nodes from graph, auto-discovers edges, supports virtual nodes).
+Each command maps to MCP tool calls under the hood. You say `chronicle impact OrderService` — the agent resolves the name, queries the graph, and returns impacted nodes with evidence. You don't need to call tools directly.

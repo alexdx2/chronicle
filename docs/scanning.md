@@ -10,11 +10,15 @@ Tree-sitter parses source files and emits `RawFact` structs — pure syntax, no 
 
 ```go
 type RawFact struct {
-    Kind     string // import, decorator, constructor_param, call, member_call, produces_candidate
-    Name     string
-    Value    string
-    Line     int
-    Receiver string
+    Kind       string   // import, decorator, constructor_param, call, member_call, produces_candidate
+    Name       string   // decorator name, class name
+    To         string   // import path, type name
+    From       string   // object in member_call chain
+    Symbols    []string // imported symbols
+    Method     string   // called method, decorated method
+    Args       string   // raw decorator arguments
+    Target     string   // first string arg from decorator
+    TargetKind string   // what the decorator is on: class, method
 }
 ```
 
@@ -41,12 +45,16 @@ Some patterns are ambiguous at the AST level:
 
 ```go
 type Candidate struct {
-    Kind       string // http_call, env_access, emit_call, fetch_call
-    Code       string // source snippet
-    Line       int
-    Receiver   string
-    Context    string // surrounding code
-    ResolvedTo string // what the LLM decided
+    ID             string // stable: filepath:kind:code_hash
+    Kind           string // call, member_call, fetch_call, emit_call, env_access
+    Code           string // source text of the expression
+    CodeHash       string // sha1 of normalized code
+    Line           int
+    Receiver       string // object being called
+    Method         string // method name
+    Context        string // surrounding class/function name
+    ResolvedType   string // PascalCase type from constructor params
+    ReceiverOrigin string // "constructor_param", "import", "local"
 }
 ```
 

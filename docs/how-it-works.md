@@ -20,11 +20,11 @@ Questions that cross layers — "how does the User model connect to the payments
 
 Chronicle uses a hybrid AST + LLM pipeline. Tree-sitter parses deterministic patterns (imports, decorators, DI), a rules engine maps framework syntax to semantic meaning, and LLM agents classify ambiguous patterns (HTTP calls, event emits) that require context.
 
-Extraction runs in two phases: haiku agents scan all files in parallel for breadth, then sonnet agents trace complex flows on trigger files for depth. Instruction packs tell agents what framework patterns to look for.
+Extraction runs in two phases: fast parallel agents scan all files for breadth, then stronger agents trace complex flows on trigger files for depth. Instruction packs tell agents what framework patterns to look for.
 
 Every extracted fact carries evidence — file, line, confidence, derivation kind — enabling incremental re-scans and trust scoring.
 
-See [docs/scanning.md](scanning.md) for the full pipeline breakdown.
+See [Scan pipeline](scanning.md) for the full breakdown.
 
 ## Evidence and trust
 
@@ -90,4 +90,4 @@ Starts automatically with the MCP server. Embedded SPA — zero infrastructure.
 
 ## Multi-repo
 
-Chronicle Pro adds federation — cross-repo impact analysis, external node resolution, combined dashboard. Contact for access.
+Chronicle Pro adds federation — cross-repo impact analysis, external node resolution, combined dashboard.
