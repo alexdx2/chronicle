@@ -30,8 +30,10 @@ jobs:
         with:
           version: 0.13.0
       - name: Build binaries
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-cache
         run: |
-          mkdir -p dist
+          mkdir -p dist "$ZIG_GLOBAL_CACHE_DIR"
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-gnu" CXX="zig c++ -target x86_64-linux-gnu" go build -ldflags "-s -w" -o dist/chronicle-linux-amd64 ./cmd/chronicle
           CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-gnu" CXX="zig c++ -target aarch64-linux-gnu" go build -ldflags "-s -w" -o dist/chronicle-linux-arm64 ./cmd/chronicle
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC="zig cc -target x86_64-macos" CXX="zig c++ -target x86_64-macos" go build -ldflags "-s -w" -o dist/chronicle-darwin-amd64 ./cmd/chronicle
