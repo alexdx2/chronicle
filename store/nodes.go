@@ -153,6 +153,70 @@ func (s *Store) GetNodeByKey(key string) (*NodeRow, error) {
 	return r, nil
 }
 
+// GetNodesByKeys returns nodes matching the given keys (batch lookup).
+// Returns found nodes and a list of keys that were not found.
+func (s *Store) GetNodesByKeys(keys []string) ([]NodeRow, []string, error) {
+	if len(keys) == 0 {
+		return nil, nil, nil
+	}
+
+	// Build placeholder string for IN clause.
+	placeholders := ""
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args[i] = k
+	}
+
+	q := `
+		SELECT node_id, node_key, layer, node_type, domain_key, name,
+		       COALESCE(qualified_name,''), COALESCE(repo_name,''), COALESCE(file_path,''),
+		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
+		       COALESCE(visibility,''), status,
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
+		FROM graph_nodes
+		WHERE node_key IN (` + placeholders + `) AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		ORDER BY node_key
+	`
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("GetNodesByKeys: %w", err)
+	}
+	defer rows.Close()
+
+	foundMap := make(map[string]bool, len(keys))
+	var out []NodeRow
+	for rows.Next() {
+		var r NodeRow
+		if err := rows.Scan(
+			&r.NodeID, &r.NodeKey, &r.Layer, &r.NodeType, &r.DomainKey, &r.Name,
+			&r.QualifiedName, &r.RepoName, &r.FilePath, &r.Lang, &r.OwnerKey,
+			&r.Environment, &r.Visibility, &r.Status,
+			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
+		); err != nil {
+			return nil, nil, fmt.Errorf("GetNodesByKeys scan: %w", err)
+		}
+		foundMap[r.NodeKey] = true
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("GetNodesByKeys rows: %w", err)
+	}
+
+	var missing []string
+	for _, k := range keys {
+		if !foundMap[k] {
+			missing = append(missing, k)
+		}
+	}
+
+	return out, missing, nil
+}
+
 // GetNodeByID returns the node with the given node_id.
 func (s *Store) GetNodeByID(id int64) (*NodeRow, error) {
 	const q = `

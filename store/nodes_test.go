@@ -209,3 +209,48 @@ func TestSearchNodesByNameEmpty(t *testing.T) {
 		t.Errorf("expected 0 results for 'zzz', got %d", len(results))
 	}
 }
+
+func TestGetNodesByKeys(t *testing.T) {
+	s := openTestStore(t)
+	revID, _ := s.CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+	s.UpsertNode(makeNodeRow("code:controller:orders:oc", "code", "controller", "orders", "OC", revID))
+	s.UpsertNode(makeNodeRow("service:svc:orders:os", "service", "svc", "orders", "OS", revID))
+	s.UpsertNode(makeNodeRow("code:provider:billing:bp", "code", "provider", "billing", "BP", revID))
+
+	// Query 2 existing + 1 non-existing key.
+	found, missing, err := s.GetNodesByKeys([]string{
+		"code:controller:orders:oc",
+		"service:svc:orders:os",
+		"nonexistent:key:here:x",
+	})
+	if err != nil {
+		t.Fatalf("GetNodesByKeys: %v", err)
+	}
+	if len(found) != 2 {
+		t.Errorf("expected 2 found nodes, got %d", len(found))
+	}
+	if len(missing) != 1 {
+		t.Errorf("expected 1 missing key, got %d", len(missing))
+	}
+	if len(missing) == 1 && missing[0] != "nonexistent:key:here:x" {
+		t.Errorf("expected missing key 'nonexistent:key:here:x', got %q", missing[0])
+	}
+
+	// Verify found nodes have correct keys.
+	foundKeys := map[string]bool{}
+	for _, n := range found {
+		foundKeys[n.NodeKey] = true
+	}
+	if !foundKeys["code:controller:orders:oc"] || !foundKeys["service:svc:orders:os"] {
+		t.Errorf("unexpected found keys: %v", foundKeys)
+	}
+
+	// Edge case: empty input.
+	found, missing, err = s.GetNodesByKeys(nil)
+	if err != nil {
+		t.Fatalf("GetNodesByKeys empty: %v", err)
+	}
+	if len(found) != 0 || len(missing) != 0 {
+		t.Errorf("expected empty results for nil input, got found=%d missing=%d", len(found), len(missing))
+	}
+}
