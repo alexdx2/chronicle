@@ -4,7 +4,7 @@
 
 # Chronicle MCP
 
-Persistent architecture memory for Claude Code.
+Persistent architecture memory for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
 Every new Claude Code session starts from scratch. Chronicle fixes that — it builds a local knowledge graph of your codebase that persists across conversations.
 
@@ -16,10 +16,9 @@ Claude (with Chronicle):
   → PaymentService (2 hops)
   → POST /orders (exposed endpoint)
   3 services affected, 1 Kafka topic downstream.
-  Evidence: src/orders/order.service.ts:14, src/payments/payment.service.ts:8
 ```
 
-Without Chronicle, Claude would need to re-read dozens of files to answer this. With Chronicle, the answer comes from a graph grounded in source-code evidence.
+Without Chronicle, Claude would need to re-read dozens of files to answer this. With Chronicle, the answer comes from a graph where every fact traces back to a file and line number.
 
 ## Quick start
 
@@ -38,30 +37,32 @@ Chronicle will ask you to confirm the scope before scanning anything.
 
 ## How the brain works
 
-Chronicle stores architecture as a graph of relationships with evidence:
+Chronicle stores architecture as a graph of relationships:
 
 ```
-OrderController → exposes → POST /orders     (src/orders/order.controller.ts:12, confidence: high)
-OrderController → injects → OrderService     (src/orders/order.controller.ts:8, confidence: high)
-OrderService → uses_model → Order            (src/orders/order.service.ts:14, confidence: high)
-arena-api → calls_service → tom-api          (src/arena/tom.client.ts:6, derivation: linked)
+OrderController → exposes → POST /orders
+OrderController → injects → OrderService
+OrderService → uses_model → Order
+arena-api → calls_service → tom-api
 ```
 
-This is not a vector index or chat memory. It is a structured graph where every fact traces back to a file and line number. Claude queries it to answer architecture questions without re-reading your entire codebase.
+Each fact links back to source code: file, line number, confidence score. Claude queries this graph to answer architecture questions without re-reading your entire codebase.
+
+This is not a vector index or chat memory. It is a structured graph with traceable evidence.
 
 ## Keeping it fresh
 
 | When | Run | What happens |
 |------|-----|--------------|
-| First time | `chronicle scan` | Builds the full graph (interactive — you confirm scope) |
-| After code changes | `chronicle update` | Rescans only changed files, refreshes affected edges |
-| Unsure if graph is current | `chronicle status` | Reports freshness, staleness, missing evidence |
+| First time | `chronicle scan` | Builds the full graph (you confirm scope first) |
+| After code changes | `chronicle update` | Updates the parts that changed |
+| Unsure if current | `chronicle status` | Reports what's fresh, stale, or missing |
 
 Run `chronicle update` after changing service boundaries, models, endpoints, event topics, or pulling a large branch.
 
 ## What you can ask
 
-Natural language — Claude uses the graph automatically:
+Claude uses the graph automatically when you ask architecture questions:
 
 - What breaks if I change OrderService?
 - How does POST /orders reach the payment service?
@@ -69,7 +70,7 @@ Natural language — Claude uses the graph automatically:
 - Show me the checkout flow as a diagram
 - Is the graph up to date?
 
-Or use commands directly:
+## Commands
 
 | Command | What it does |
 |---------|-------------|
@@ -90,27 +91,37 @@ When you run `chronicle scan`, Claude will:
 3. Ask you to confirm or adjust
 4. Extract architecture facts from code
 5. Store them in `.depbot/chronicle.db`
-6. Open the dashboard with a visual graph
+6. Open the dashboard
 
 You control what gets scanned. Chronicle shows what's included, what's excluded, and what questions the graph will answer.
 
 ## Dashboard
 
-Chronicle includes a live dashboard that starts automatically:
+Chronicle includes a live dashboard that starts automatically with the MCP server.
 
-- Graph explorer — navigate services, models, endpoints
+![Dashboard](assets/dashboard.png)
+
+- Graph explorer — navigate services, models, endpoints visually
 - Impact analysis — visual blast radius
-- Diagrams — entity-first architecture diagrams (built from real graph data, not invented)
-- Growth chart — track how knowledge accumulates over scans
-- Request log — see what tools Claude called
+- Diagrams — architecture diagrams built from real graph data
+- Growth chart — knowledge accumulation over scans
+- Request log — tool calls Claude made
 
-Get the URL with `chronicle status`.
+Get the URL anytime with `chronicle status`.
+
+## Data and privacy
+
+All data stays on your machine. Nothing is sent to external servers.
+
+- Graph stored in `.depbot/chronicle.db` (SQLite)
+- Dashboard runs on localhost only
+- To remove: delete the `.depbot/` directory
 
 ## How it works with Claude Code
 
 Chronicle runs as an MCP server. Claude Code calls its tools automatically during conversations — you don't need to invoke low-level graph operations manually.
 
-Under the hood, scanning uses a hybrid AST + LLM pipeline: tree-sitter handles deterministic patterns (imports, decorators, DI), and LLM agents classify ambiguous patterns (cross-service calls, event emits). See [docs/scanning.md](docs/scanning.md) for the full breakdown.
+Under the hood, scanning uses a hybrid AST + LLM pipeline: tree-sitter handles deterministic patterns (imports, decorators, DI), and LLM agents classify ambiguous patterns (cross-service calls, event emits). See [docs/scanning.md](docs/scanning.md) for details.
 
 ## What Chronicle is good at
 
@@ -122,7 +133,6 @@ Architecture that is visible in code:
 - event topics (Kafka, RabbitMQ)
 - API definitions (REST endpoints, GraphQL)
 - cross-service HTTP calls
-- environment-based service discovery
 
 ## Limitations
 
