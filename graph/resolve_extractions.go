@@ -53,10 +53,13 @@ type UnresolvedRef struct {
 // ResolveExtractions takes all pending extractions and builds the graph.
 // Creates nodes, edges, and evidence from the collected facts.
 func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*ResolveExtractionsResult, error) {
-	extractions, err := g.store.ListUnresolvedExtractions(revisionID, domainKey)
+	rawExtractions, err := g.store.ListUnresolvedExtractions(revisionID, domainKey)
 	if err != nil {
 		return nil, fmt.Errorf("ResolveExtractions: %w", err)
 	}
+
+	// Merge voted extractions before resolving
+	extractions := mergeVotedExtractions(rawExtractions)
 
 	result := &ResolveExtractionsResult{
 		FilesProcessed: len(extractions),
@@ -347,6 +350,116 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.evidence++
 		}
 
+	case "member_call":
+		// 3-level member chain: this.X.Y.method() — promote Y to USES_MODEL if it matches a known model
+		if fact.To == "" {
+			return counts, nil
+		}
+		// Capitalize first letter to match model node naming
+		candidateName := strings.ToUpper(fact.To[:1]) + fact.To[1:]
+		modelKey := "data:model:" + domainKey + ":" + strings.ToLower(candidateName)
+		if modelID, err := g.store.GetNodeIDByKey(modelKey); err == nil {
+			fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+			fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+			edgeKey := fromNodeKey + "->" + modelKey + ":USES_MODEL"
+			_, err := g.store.UpsertEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: modelID,
+				FromNodeKey: fromNodeKey, ToNodeKey: modelKey,
+				EdgeType: "USES_MODEL", DerivationKind: "hard", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: 0.90, Freshness: 1.0, TrustScore: 0.90,
+				Metadata: "{}", ValidFromRevisionID: revisionID,
+			})
+			if err == nil {
+				counts.edges++
+			}
+		}
+		// If not a known model, fact is kept as raw evidence but doesn't create an edge
+
+	case "calls_service":
+		// Explicit service call — creates CALLS_SERVICE edge
+		if fact.To == "" {
+			return counts, nil
+		}
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		toName := fact.To
+		toNodeKey := "code:provider:" + domainKey + ":" + strings.ToLower(toName)
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
+
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
+		confidence := fact.Confidence
+		if confidence == 0 {
+			confidence = 0.85
+		}
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
+			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "CALLS_SERVICE", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
+
+	case "uses_model":
+		// Explicit model usage — creates USES_MODEL edge
+		if fact.To == "" {
+			return counts, nil
+		}
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		// Capitalize model name
+		modelName := strings.ToUpper(fact.To[:1]) + fact.To[1:]
+		modelKey := "data:model:" + domainKey + ":" + strings.ToLower(modelName)
+		modelID := g.ensureNodeID(domainKey, revisionID, modelKey, modelName, "")
+
+		edgeKey := fromNodeKey + "->" + modelKey + ":USES_MODEL"
+		confidence := fact.Confidence
+		if confidence == 0 {
+			confidence = 0.85
+		}
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: modelID,
+			FromNodeKey: fromNodeKey, ToNodeKey: modelKey,
+			EdgeType: "USES_MODEL", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
+
+	case "calls_endpoint":
+		// Internal API call — creates CALLS_ENDPOINT edge
+		if fact.Target == "" {
+			return counts, nil
+		}
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+
+		method := strings.ToUpper(fact.Method)
+		if method == "" {
+			method = "GET"
+		}
+		epName := method + " " + fact.Target
+		epKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(epName, " ", "_"))
+		epID := g.ensureNodeID(domainKey, revisionID, epKey, epName, "")
+
+		edgeKey := fromNodeKey + "->" + epKey + ":CALLS_ENDPOINT"
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: epID,
+			FromNodeKey: fromNodeKey, ToNodeKey: epKey,
+			EdgeType: "CALLS_ENDPOINT", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
+			Metadata: "{}", ValidFromRevisionID: revisionID,
+		})
+		if err == nil {
+			counts.edges++
+		}
+
 	case "injects":
 		// Constructor DI — creates INJECTS edge (stronger than import)
 		if fact.To == "" {
@@ -463,13 +576,19 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "endpoint":
-		// HTTP/WS/GraphQL endpoint — contract node + evidence
+		// Endpoint — contract node + evidence
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		path := fact.Target
 		if path == "" {
 			path = fact.To
+		}
+		// If AST provided a prefix (e.g. from @Controller('prefix')), combine it
+		if fact.From != "" && path != "" {
+			path = "/" + fact.From + "/" + path
+		} else if fact.From != "" {
+			path = "/" + fact.From
 		}
 		endpointName := path
 		if fact.Method != "" {
@@ -576,7 +695,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fact.FlowName == "" {
 			return counts, nil
 		}
-		flowKey := "flow:use_case:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.FlowName, " ", "_"))
+		// Key from trigger (deterministic) — not from flow_name (agent-dependent)
+		// "POST /arena/attack" → "post__arena_attack", "battle-results" → "battle-results"
+		triggerForKey := fact.Trigger
+		if triggerForKey == "" {
+			triggerForKey = fact.FlowName
+		}
+		flowKeyBase := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(triggerForKey, " ", "_"), "/", "_"))
+		flowKey := "flow:use_case:" + domainKey + ":" + flowKeyBase
 		g.ensureNode(domainKey, revisionID, flowKey, fact.FlowName, filePath)
 		counts.nodes++
 
@@ -743,16 +869,57 @@ func (g *Graph) fixModuleEdges(domainKey string) {
 // "specifier", "url", "path", "items", "queue", "event_type" instead of the canonical
 // "to", "target", "symbols". This normalizes them before JSON unmarshal.
 func normalizeFacts(raw string) string {
+	raw = strings.TrimSpace(raw)
+
+	// Handle structured enrichment output: {"candidate_decisions":[], "additional_facts":[]}
+	if strings.HasPrefix(raw, "{") {
+		var structured map[string]any
+		if err := json.Unmarshal([]byte(raw), &structured); err == nil {
+			var combined []map[string]any
+			if decisions, ok := structured["candidate_decisions"].([]any); ok {
+				for _, d := range decisions {
+					if dm, ok := d.(map[string]any); ok {
+						combined = append(combined, dm)
+					}
+				}
+			}
+			if additional, ok := structured["additional_facts"].([]any); ok {
+				for _, a := range additional {
+					if am, ok := a.(map[string]any); ok {
+						combined = append(combined, am)
+					}
+				}
+			}
+			if len(combined) > 0 || (structured["candidate_decisions"] != nil && structured["additional_facts"] != nil) {
+				out, _ := json.Marshal(combined)
+				raw = string(out)
+			}
+		}
+	}
+
 	var arr []map[string]any
 	if err := json.Unmarshal([]byte(raw), &arr); err != nil {
 		return raw // not an array of objects, return as-is
 	}
 
 	for i, fact := range arr {
-		kind, _ := fact["kind"].(string)
+		// Unwrap candidate wrapper format: {"candidate_id":"...","decision":"accept","fact":{...}}
+		// Agents sometimes submit the wrapper as a top-level fact instead of the inner fact.
+		if _, hasCandidateID := fact["candidate_id"]; hasCandidateID {
+			if inner, ok := fact["fact"].(map[string]any); ok {
+				decision, _ := fact["decision"].(string)
+				if decision == "reject" {
+					arr[i] = nil
+					continue
+				}
+				// Preserve candidate_id on the inner fact for voting
+				inner["candidate_id"] = fact["candidate_id"]
+				arr[i] = inner
+				fact = inner
+			}
+		}
 
-		// Skip facts with unknown kinds that the resolver won't handle
-		// but keep them in the array (they'll be ignored by resolveOneFact)
+		kind, _ := fact["kind"].(string)
 
 		// Normalize "to" field — the primary target/path
 		if _, ok := fact["to"]; !ok {
@@ -839,18 +1006,31 @@ func normalizeFacts(raw string) string {
 					}
 				}
 			}
-		case "service_call", "method_call":
-			// Normalize to "call"
-			fact["kind"] = "call"
+		case "dependency":
+			// Normalize "dependency" to "import" — agents confuse npm deps with imports
+			fact["kind"] = "import"
+		case "depends_on":
+			// Normalize "depends_on" to "injects" — agents mean constructor injection
+			fact["kind"] = "injects"
+			if _, ok := fact["to"]; !ok {
+				if v, ok := fact["from"]; ok {
+					// depends_on often has "from" as the source, but we need "to" for the target
+					fact["to"] = v
+					delete(fact, "from")
+				}
+			}
+		case "service_call", "method_call", "member_call_service":
+			// Normalize to "calls_service"
+			fact["kind"] = "calls_service"
 			if _, ok := fact["to"]; !ok {
 				if v, ok := fact["target"]; ok {
 					fact["to"] = v
 					delete(fact, "target")
 				}
 			}
-		case "model_access":
-			// Normalize to "model"
-			fact["kind"] = "model"
+		case "model_access", "uses_modal", "model_usage":
+			// Normalize to "uses_model"
+			fact["kind"] = "uses_model"
 			if _, ok := fact["to"]; !ok {
 				if v, ok := fact["model"]; ok {
 					fact["to"] = v
@@ -858,7 +1038,9 @@ func normalizeFacts(raw string) string {
 				}
 			}
 		case "module_controller", "module_provider", "class_definition", "class",
-			"uses_interceptor":
+			"uses_interceptor", "component", "uses_component", "hook_export",
+			"hoc_export", "config_export", "hybrid_auth", "guard_strategy",
+			"note", "config":
 			// Drop non-standard kinds that don't map to edges
 			arr[i] = nil
 			continue
@@ -880,6 +1062,197 @@ func normalizeFacts(raw string) string {
 		return raw
 	}
 	return string(out)
+}
+
+// mergeVotedExtractions combines multiple LLM vote extractions into one per file.
+// AST and single extractions pass through unchanged.
+// LLM votes are grouped by file+vote_group, facts are voted on.
+func mergeVotedExtractions(extractions []store.ExtractionRow) []store.ExtractionRow {
+	// Separate vote rows from non-vote rows
+	var result []store.ExtractionRow
+	voteGroups := map[string][]store.ExtractionRow{} // key: file_path+vote_group
+
+	for _, ext := range extractions {
+		if ext.ExtractionRole == "llm_vote" && ext.VoteGroup != "" {
+			key := ext.FilePath + "|" + ext.VoteGroup
+			voteGroups[key] = append(voteGroups[key], ext)
+		} else {
+			result = append(result, ext)
+		}
+	}
+
+	// Merge each vote group
+	for _, votes := range voteGroups {
+		if len(votes) == 0 {
+			continue
+		}
+		merged := mergeVoteGroup(votes)
+		result = append(result, merged)
+	}
+
+	return result
+}
+
+func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
+	totalVotes := len(votes)
+
+	// Primary: vote by candidate_id (stable AST anchor)
+	// Secondary: vote by canonical fact key (fallback for free-form facts)
+	candidateVotes := map[string][]map[string]any{} // candidate_id → list of fact objects
+	freeformVotes := map[string][]map[string]any{}   // canonical_key → list of fact objects
+
+	for _, v := range votes {
+		normalized := normalizeFacts(v.FactsJSON)
+		var facts []map[string]any
+		if err := json.Unmarshal([]byte(normalized), &facts); err != nil {
+			continue
+		}
+		seenCandidate := map[string]bool{}
+		seenFreeform := map[string]bool{}
+		for _, f := range facts {
+			cid, _ := f["candidate_id"].(string)
+			if cid != "" {
+				// Candidate-based: group by candidate_id
+				if !seenCandidate[cid] {
+					seenCandidate[cid] = true
+					candidateVotes[cid] = append(candidateVotes[cid], f)
+				}
+			} else {
+				// Free-form: group by canonical key
+				key := canonicalFactKey(f)
+				if !seenFreeform[key] {
+					seenFreeform[key] = true
+					freeformVotes[key] = append(freeformVotes[key], f)
+				}
+			}
+		}
+	}
+
+	// Build merged facts
+	var mergedFacts []json.RawMessage
+
+	// Merge candidate votes
+	for _, factList := range candidateVotes {
+		count := len(factList)
+		var confidence float64
+		switch {
+		case count >= totalVotes:
+			confidence = 0.85
+		case count*3 >= totalVotes*2:
+			confidence = 0.70
+		default:
+			continue
+		}
+		// Use first vote's fact, inject confidence
+		fact := factList[0]
+		// Extract the inner fact if it has a "fact" wrapper from candidate response
+		if inner, ok := fact["fact"].(map[string]any); ok {
+			inner["confidence"] = confidence
+			b, _ := json.Marshal(inner)
+			mergedFacts = append(mergedFacts, b)
+		} else {
+			fact["confidence"] = confidence
+			delete(fact, "candidate_id")
+			delete(fact, "decision")
+			b, _ := json.Marshal(fact)
+			mergedFacts = append(mergedFacts, b)
+		}
+	}
+
+	// Merge free-form votes (fallback)
+	for _, factList := range freeformVotes {
+		count := len(factList)
+		var confidence float64
+		switch {
+		case count >= totalVotes:
+			confidence = 0.85
+		case count*3 >= totalVotes*2:
+			confidence = 0.70
+		default:
+			continue
+		}
+		fact := factList[0]
+		fact["confidence"] = confidence
+		b, _ := json.Marshal(fact)
+		mergedFacts = append(mergedFacts, b)
+	}
+
+	mergedJSON := "[]"
+	if len(mergedFacts) > 0 {
+		b, _ := json.Marshal(mergedFacts)
+		mergedJSON = string(b)
+	}
+
+	merged := votes[0]
+	merged.ExtractionRole = "llm_merged"
+	merged.FactsJSON = mergedJSON
+	merged.Status = "extracted"
+	return merged
+}
+
+// canonicalFactKey produces a stable key for voting comparison.
+// Normalizes kind prefixes and field positions to handle LLM format variance.
+func canonicalFactKey(f map[string]any) string {
+	kind, _ := f["kind"].(string)
+	to, _ := f["to"].(string)
+	from, _ := f["from"].(string)
+	target, _ := f["target"].(string)
+	method, _ := f["method"].(string)
+
+	// Strip code:/contract:/data: prefixes from kind
+	kind = strings.ToLower(kind)
+	for _, prefix := range []string{"code:", "contract:", "data:", "service:"} {
+		kind = strings.TrimPrefix(kind, prefix)
+	}
+
+	// Normalize field positions: some agents put module path in "target" instead of "to"
+	to = strings.ToLower(to)
+	target = strings.ToLower(target)
+	method = strings.ToLower(method)
+	from = strings.ToLower(from)
+
+	// For imports: the module path might be in to, target, or from
+	if kind == "import" {
+		// Merge to+target — whichever has a path-like value
+		if to == "" && target != "" {
+			to = target
+			target = ""
+		}
+		// Method might hold the symbol name, not a real method
+		if method != "" && !strings.Contains(method, ".") && to == "" {
+			// method is probably the module path
+			to = method
+			method = ""
+		}
+	}
+
+	// For injects: to is the type name, might be in target
+	if kind == "injects" || kind == "inject" {
+		kind = "injects"
+		if to == "" && target != "" {
+			to = target
+			target = ""
+		}
+	}
+
+	// Strip node key prefixes from values (code:service:domain:Name → name)
+	to = stripNodeKeyPrefix(to)
+	from = stripNodeKeyPrefix(from)
+	target = stripNodeKeyPrefix(target)
+
+	to = strings.TrimRight(to, "/")
+	target = strings.TrimRight(target, "/")
+
+	return kind + "|" + to + "|" + target + "|" + method
+}
+
+func stripNodeKeyPrefix(s string) string {
+	// "code:service:tom-and-jerry:ArenaService" → "arenaservice"
+	parts := strings.Split(s, ":")
+	if len(parts) > 1 {
+		return strings.ToLower(parts[len(parts)-1])
+	}
+	return s
 }
 
 func buildImportAssertion(fact Fact) map[string]any {
@@ -974,6 +1347,10 @@ func inferNameFromImport(module string) string {
 // SaveFileExtraction stores extraction results from a scan agent.
 func (g *Graph) SaveFileExtraction(revisionID int64, domain, filePath, status, fromType, factsJSON, errorMsg string) (int64, error) {
 	return g.store.SaveExtraction(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg)
+}
+
+func (g *Graph) SaveFileExtractionWithVote(revisionID int64, domain, filePath, status, fromType, factsJSON, errorMsg, role, voteGroup string, voteIndex int) (int64, error) {
+	return g.store.SaveExtractionWithVote(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg, role, voteGroup, voteIndex)
 }
 
 func fileNodeTypeFromFacts(facts []Fact) string {

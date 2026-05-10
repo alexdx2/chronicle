@@ -1,0 +1,1923 @@
+// ------------------------------
+// PRISMA SCHEMA  —  "Luck" v2
+// Option A · Fortune‑Wheel uses a linked SurpriseBox
+// ------------------------------
+//  ✓ No per‑user state tables
+//  ✓ FortuneWheelSlice model removed
+//  ✓ FortuneWheel directly references one SurpriseBox that provides the reward pool on a win
+//  ✓ Wheel win‑chance handled in code: base 12.5 % (1⁄8), +12.5 % per failure
+// ------------------------------
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["windows", "native", "debian-openssl-1.1.x"]
+}
+
+generator nestgraphql {
+  provider              = "node node_modules/prisma-nestjs-graphql"
+  output                = "../src/@generated"
+  useInputTypeRelations = true
+  classTransformer      = true
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------
+// ENUMS
+// ------------------------------
+
+enum TransactionType {
+  POINTS
+  VISIT
+  PROMO_SEEN
+  SURPRISE_BOX // player opened a loot box
+  WHEEL_SPIN // player spun the fortune wheel
+  VOUCHER
+}
+
+enum TransactionAction {
+  ADD // user gained something (points, etc.)
+  REDUCE
+  VISIT
+  SEEN // neutral action — e.g. wheel spin with no reward
+}
+
+enum PromoStoryStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum PromoContentType {
+  IMAGE_STORY
+  VIDEO
+}
+
+enum ChallengeType {
+  POINTS
+  VISITS
+  VISIT_A_DAY
+}
+
+enum ResetPeriod {
+  NEVER // One-time challenge (default, current behavior)
+  DAILY // Resets at 00:00 each day
+  WEEKLY // Resets Monday 00:00
+  MONTHLY // Resets 1st of month 00:00
+}
+
+// Recurrence type for promos, vouchers, and challenges
+enum RecurrenceType {
+  NONE // One-time: uses startDate/endDate only
+  WEEKLY // Recurring: uses validDays for day-of-week
+  MONTHLY // Recurring: same day-of-month each month
+  YEARLY // Recurring: same date each year
+}
+
+enum ScheduleMode {
+  INTERSECT // Campaign = upper bound, child schedule respected within
+  OVERRIDE  // Campaign fully controls, child schedule ignored
+}
+
+enum PromotionRuleType {
+  ITEM_DISCOUNT
+  CATEGORY_DISCOUNT
+  BUY_X_GET_Y
+  QUANTITY_DISCOUNT
+  BUNDLE
+}
+
+enum RewardType {
+  POINTS
+  VOUCHER
+  SURPRISE_BOX
+  OTHER
+}
+
+// CRM user roles for merchant access control
+enum CRMRole {
+  OWNER // Full access, can create admins and all other roles
+  ADMIN // Full access, can create managers/kitchen/waiter
+  MANAGER // Order management, reports, settings (view)
+  KITCHEN // Kitchen view only
+  WAITER // Orders view, limited actions
+  SUPPORT // Chat access only
+}
+
+// ------------------------------
+// CHAT SYSTEM ENUMS
+// ------------------------------
+
+enum ChatSenderType {
+  USER
+  MERCHANT
+}
+
+enum ChatMessageType {
+  TEXT
+  ORDER_PLACEHOLDER
+  SYSTEM
+}
+
+enum ChatMessageStatus {
+  SENT
+  DELIVERED
+  SEEN
+}
+
+enum MessageDeliveryStatus {
+  BROADCASTED      // Message sent + Centrifugo broadcast succeeded
+  PERSISTED_ONLY   // Message saved but Centrifugo failed (tap to retry)
+}
+
+// Notification log result for idempotency tracking
+enum NotificationLogResult {
+  SENT
+  SKIPPED_BY_PREFS
+  FAILED
+}
+
+// Notification kind for analytics and filtering
+enum NotificationLogKind {
+  CHAT_MESSAGE
+  ORDER_STATUS
+  REWARD_POINTS
+  REWARD_VOUCHER
+  SYSTEM
+  MARKETING
+}
+
+// ------------------------------
+// USER NOTIFICATIONS
+// ------------------------------
+
+enum NotificationType {
+  REWARD_POINTS // Получены поинты (из заказа, print_points)
+  REWARD_VOUCHER // Получен ваучер
+  CHALLENGE_COMPLETE // Челлендж выполнен
+  BATTLEPASS_TIER // Достигнут уровень батлпасса
+  SURPRISE_BOX_WON // Выигран сюрприз бокс
+  ORDER_STATUS // Статус заказа изменился
+  SYSTEM // Системное уведомление
+}
+
+model UserNotification {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  title   String
+  message String?
+
+  // Flexible data storage for any reward type
+  // { points: 100, source: 'challenge', merchantId: '...', merchantName: '...', voucherId: '...' }
+  data Json?
+
+  // Link to transaction that created this notification (optional)
+  transactionId Int?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  // Link to merchant (for filtering)
+  merchantId String?
+
+  // Read status
+  read   Boolean   @default(false)
+  readAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@index([userId, merchantId])
+}
+
+// Notification log for idempotency and analytics
+model NotificationLog {
+  id             String                @id @default(uuid())
+  idempotencyKey String                @unique
+  kind           NotificationLogKind
+  targetUserId   String
+  targetMerchantId String?
+  channels       String[]              // ['PUSH', 'IN_APP']
+  result         NotificationLogResult
+  createdAt      DateTime              @default(now())
+
+  @@index([idempotencyKey])
+  @@index([targetUserId, createdAt])
+}
+
+// Food categories for merchant filtering on map
+enum MerchantCategory {
+  PIZZA
+  SUSHI
+  BURGER
+  KEBAB
+  ASIAN
+  ITALIAN
+  UKRAINIAN
+  CHICKEN
+  HOT_DOG
+  SANDWICH
+  COFFEE
+  DESSERT
+  ICE_CREAM
+  SALAD
+  VEGAN
+  GRILL
+  SEAFOOD
+  BREAKFAST
+  OTHER
+}
+
+// ------------------------------
+// USER & AUTH MODELS
+// ------------------------------
+
+model User {
+  id        String    @id @default(uuid())
+  username  String    @unique
+  image     String?
+  birthDate DateTime?
+  gender    String?
+  phone     String?
+  deviceId  String    @unique
+  createdAt DateTime  @default(now())
+  pushToken String?
+
+  muteNotifications   Boolean @default(false)
+  notificationPromo   Boolean @default(true)
+  notificationService Boolean @default(true)
+
+  // Anonymous user fields for web ordering
+  isAnonymous        Boolean   @default(false)
+  anonymousToken     String?   @db.Text
+  anonymousExpiresAt DateTime?
+  claimedAt          DateTime?
+  claimedByUserId    String?
+
+  merchantSettings  MerchantSettings[]
+  transactions      Transaction[]
+  userVouchers      UserVoucher[]
+  userSurpriseBoxes UserSurpriseBox[]
+  globalWheelSpins  GlobalWheelSpin[]
+  managedMerchants  Merchant[]         @relation("MerchantToManager")
+  crmUser           CRMUser[]
+
+  // Chat relations
+  chats              Chat[]
+  chatMessages       ChatMessage[]         @relation("ChatMessageSender")
+  chatReactions      ChatMessageReaction[] @relation("ChatReactionUser")
+  chatParticipations ChatParticipant[]     @relation("ChatParticipantUser")
+
+  // User notifications
+  notifications UserNotification[]
+
+  // Per-printer notification preferences (opt-out model)
+  staffPrinterNotifications StaffPrinterNotification[]
+
+  @@index([isAnonymous, anonymousExpiresAt])
+}
+
+model CRMUser {
+  id      String  @id @default(uuid())
+  email   String  @unique
+  name    String
+  image   String?
+  phone   String?
+  auth0Id String?
+
+  ownedMerchants      Merchant[]       @relation("AdminToMerchant")
+  merchantMemberships MerchantMember[]
+  userId              String?
+  user                User?            @relation(fields: [userId], references: [id])
+  createdAt           DateTime         @default(now())
+
+  // Device linking tokens
+  deviceLinkTokens CrmDeviceLinkToken[]
+
+  // Platform admin flag
+  isPlatformAdmin Boolean @default(false)
+
+  // Chat relations
+  chatMessages       ChatMessage[]         @relation("ChatMessageCrmSender")
+  chatReactions      ChatMessageReaction[] @relation("ChatReactionCrmUser")
+  chatParticipations ChatParticipant[]     @relation("ChatParticipantCrmUser")
+}
+
+model MerchantSettings {
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  merchantId   String
+  allowPush    Boolean @default(true)
+  allowPromo   Boolean @default(true)
+  allowService Boolean @default(true)
+
+  hideMerchant Boolean @default(false)
+  pinned       Boolean @default(false)
+  pinnedOrder  Int?    // Custom sort order for pinned merchants (0, 1, 2...)
+
+  @@id([userId, merchantId])
+}
+
+enum MerchantPlan {
+  FREE_BETA
+  SOLO
+  PRO
+  CHAIN
+}
+
+enum MerchantPlanStatus {
+  ACTIVE
+  GRACE_PERIOD
+  SUSPENDED
+}
+
+enum MerchantValidationStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+// ------------------------------
+// MERCHANT + LUCK MECHANICS
+// ------------------------------
+
+model Merchant {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  imageUrl    String
+  description String
+  badge       String
+  createdAt   DateTime @default(now())
+
+  // Contact & online presence
+  website     String?
+  socialMedia Json? // { "instagram": "...", "facebook": "...", "tiktok": "...", ... }
+
+  adminId String?
+  admins  CRMUser? @relation(fields: [adminId], references: [id], name: "AdminToMerchant")
+
+  managers          User[]            @relation("MerchantToManager")
+  isPlayground      Boolean           @default(false)
+  voucherTemplates  VoucherTemplate[]
+  userVouchers      UserVoucher[]
+  userSurpriseBoxes UserSurpriseBox[]
+  printers          Printer[]
+  transactions      Transaction[]
+  promoGroups       PromoGroup[]
+  challenges        Challenge[]
+  battlePasses      BattlePass[]
+
+  // Luck features
+  surpriseBoxes       SurpriseBox[]
+  fortuneWheels       FortuneWheel[]
+  globalWheelVouchers GlobalWheelVoucher[]
+  menuItems           MenuItem[]
+
+  options      Option[]
+  optionGroups OptionGroup[]
+
+  // Asset library
+  assets Asset[]
+
+  // Promotions
+  promotions Promotion[]
+
+  // Points settings for automatic rewards
+  pointsPerOrderEnabled  Boolean @default(false) // Enable/disable automatic points
+  pointsPerOrderRate     Float   @default(0.0) // Percentage (0.0-100.0) of order total as points
+  pointsPerOrderMinimum  Float   @default(0.0) // Minimum order amount to qualify for points
+  pointsPerOrderMaximum  Float? // Maximum points per order (optional)
+  pointsPerOrderCurrency String  @default("USD") // Currency for calculations
+
+  // Award points quick buttons configuration (up to 5 values, used in waiter dashboard)
+  awardPointsButtons Int[] @default([50, 100, 200])
+
+  // Ordering settings - which delivery modes and payment methods are enabled
+  enabledDeliveryModes  DeliveryMode[]  @default([PICKUP, TABLE])
+  enabledPaymentMethods PaymentMethod[] @default([CASH, CARD])
+
+  // Payment locale — drives Stripe currency & Google/Apple Pay country
+  currency    String @default("PLN") // ISO 4217 (PLN, EUR, USD …)
+  countryCode String @default("PL")  // ISO 3166-1 alpha-2 (PL, UA, US …)
+
+  // Stripe Connect integration for online payments
+  stripeAccountId        String?
+  stripeAccountType      StripeAccountType?
+  stripeOnboardingStatus StripeOnboardingStatus @default(NOT_STARTED)
+  platformFeePercent     Float                  @default(0)
+  onlinePaymentEnabled   Boolean                @default(false)
+  payments               Payment[]
+
+  // Manager invite tokens (for mobile app users - legacy)
+  managerInvites MerchantManagerInvite[]
+
+  // CRM team member management
+  members       MerchantMember[]
+  memberInvites MerchantMemberInvite[]
+
+  // Chat relations
+  chats Chat[]
+
+  // Food category for map filtering
+  businessCategories MerchantCategory[] @default([OTHER])
+
+  // Location (1-to-1 for MVP via @unique on MerchantLocation.merchantId)
+  locations MerchantLocation[]
+
+  // CRM Dashboard configurations
+  dashboards CRMDashboard[]
+
+  // Menu versioning - clients check this to know if menu needs refresh
+  menuVersion   Int      @default(1)
+  menuUpdatedAt DateTime @default(now())
+
+  // QR code template for service points (printers)
+  qrTemplate Json? // { version: 1, canvas: {...}, objects: [...] }
+
+  // Onboarding
+  onboardingDismissed Boolean @default(false)
+  workflowPreset      String? // Stores which preset was chosen at creation
+
+  // Discovery settings (managed by platform admin)
+  isPopular          Boolean @default(false)
+  popularOrder       Int     @default(0)
+  isHiddenFromPublic Boolean @default(false)
+
+  // Subscription plan
+  plan                MerchantPlan             @default(FREE_BETA)
+  planStatus          MerchantPlanStatus       @default(ACTIVE)
+  planExpiresAt       DateTime?
+  gracePeriodEndsAt   DateTime?
+
+  // Validation workflow
+  validationStatus    MerchantValidationStatus @default(DRAFT)
+  validationNote      String?
+  validationAppliedAt DateTime?
+  validationReviewedAt DateTime?
+  validationReviewedBy String?
+
+  campaigns Campaign[]
+
+  // Per-printer notification preferences (opt-out model)
+  staffPrinterNotifications StaffPrinterNotification[]
+}
+
+// ------------------------------
+// MERCHANT MANAGER INVITES
+// ------------------------------
+
+model MerchantManagerInvite {
+  id         String   @id @default(uuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  token     String    @unique @default(uuid())
+  isActive  Boolean   @default(true)
+  createdBy String // CRM user who created the invite
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+  usedBy    String? // User ID who used the invite
+
+  // @deprecated - Legacy - use Team/MerchantMember instead
+}
+
+// ------------------------------
+// CRM DEVICE LINKING
+// ------------------------------
+
+model CrmDeviceLinkToken {
+  id    String @id @default(uuid())
+  token String @unique @default(uuid())
+
+  crmUserId String
+  crmUser   CRMUser @relation(fields: [crmUserId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+  isActive  Boolean   @default(true)
+
+  @@index([token])
+  @@index([crmUserId])
+}
+
+// ------------------------------
+// CRM TEAM MEMBER MANAGEMENT
+// ------------------------------
+
+model MerchantMember {
+  id String @id @default(uuid())
+
+  crmUserId String
+  crmUser   CRMUser @relation(fields: [crmUserId], references: [id], onDelete: Cascade)
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  role     CRMRole @default(WAITER)
+  isActive Boolean @default(true)
+
+  invitedById String? // CRMUser who invited this member
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([crmUserId, merchantId])
+  @@index([merchantId])
+  @@index([crmUserId])
+}
+
+model MerchantMemberInvite {
+  id String @id @default(uuid())
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  email String
+  role  CRMRole
+  token String  @unique @default(uuid())
+
+  invitedById String // CRMUser who created the invite
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  usedAt   DateTime?
+  usedById String? // CRMUser who claimed the invite
+  isActive Boolean   @default(true)
+
+  @@index([token])
+  @@index([merchantId])
+  @@index([email])
+}
+
+// ------------------------------
+// FINANCIAL BALANCES (unchanged)
+// ------------------------------
+
+model TransactionBalance {
+  userId            String
+  lastTransactionId Int
+
+  transactionMarchantBalance TransactionMarchantBalance[]
+
+  @@id([userId])
+}
+
+model TransactionMarchantBalance {
+  userId             String
+  transactionBalance TransactionBalance @relation(fields: [userId], references: [userId])
+  merchantId         String
+  points             Int
+  challenges         Json[]
+  battlePasses       Json[]
+  vouchers           Json[]
+  lastTransactionAt  DateTime?  // Track last interaction time for "Recent" sorting
+
+  @@id([userId, merchantId])
+}
+
+// ------------------------------
+// TRANSACTION LOG
+// ------------------------------
+
+model Transaction {
+  id        Int               @id @default(autoincrement())
+  type      TransactionType
+  action    TransactionAction
+  createdAt DateTime          @default(now())
+
+  // cancellation linking
+  cancellationTransactionId Int?         @unique()
+  cancellationTransaction   Transaction? @relation(fields: [cancellationTransactionId], references: [id], name: "CancellationTransaction")
+  cancellationParent        Transaction? @relation(name: "CancellationTransaction")
+  cancelledAt               DateTime?
+  cancelledBy               String?
+  // idempotency: prevents duplicate reward inserts (challenges, battlepass tiers)
+  idempotencyKey            String?  @unique
+
+  // primary relations
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // reward-related optional links
+  points Int?
+
+  // linked Tx for complex operations
+  linkedTransactionId Int?
+  linkedTransaction   Transaction?  @relation(fields: [linkedTransactionId], references: [id], name: "LinkedTransactions")
+  linkedTransactions  Transaction[] @relation("LinkedTransactions")
+
+  // optional foreign keys to feature items
+  printerId Int?
+  printer   Printer? @relation(fields: [printerId], references: [id])
+
+  challengeId Int?
+  challenge   Challenge? @relation(fields: [challengeId], references: [id])
+
+  promoGroupId Int?
+  promoGroup   PromoGroup? @relation(fields: [promoGroupId], references: [id])
+
+  battlePassId Int?
+  battlePass   BattlePass? @relation(fields: [battlePassId], references: [id])
+
+  battlePassTierId Int?
+  battlePassTier   BattlePassTier? @relation(fields: [battlePassTierId], references: [id])
+
+  // Luck mechanics links
+  surpriseBoxId Int?
+  surpriseBox   SurpriseBox? @relation(fields: [surpriseBoxId], references: [id])
+
+  fortuneWheelId Int?
+  fortuneWheel   FortuneWheel? @relation(fields: [fortuneWheelId], references: [id])
+
+  // User surprise box acquisition tracking
+  userSurpriseBoxAcquisitions UserSurpriseBox[] @relation("SurpriseBoxAcquisition")
+
+  // Global wheel spins
+  globalWheelSpins GlobalWheelSpin[]
+
+  // Notifications created from this transaction
+  notifications UserNotification[]
+}
+
+// ------------------------------
+// VOUCHERS & PRINTERS
+// ------------------------------
+
+// ------------------------------
+// NEW VOUCHER SYSTEM
+// ------------------------------
+
+enum VoucherType {
+  FREE_ITEM
+  DISCOUNT
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum VoucherScope {
+  ITEM
+  ORDER
+}
+
+enum UserVoucherStatus {
+  AVAILABLE // Доступен для использования
+  SELECTED // Выбран для заказа, но заказ не создан  
+  PENDING // Применен к заказу, заказ в процессе
+  USED // Использован в завершенном заказе
+  EXPIRED // Истек срок
+  RETURNED // Возвращен после отмены заказа
+}
+
+model VoucherTemplate {
+  id          String @id @default(uuid())
+  name        String
+  description String
+  imageUrl    String
+  price       Int // цена в поинтах
+
+  // Типы voucher
+  type          VoucherType // FREE_ITEM | DISCOUNT
+  discountType  DiscountType? // PERCENTAGE | FIXED
+  discountValue Float?
+  scope         VoucherScope? // ITEM | ORDER
+
+  // Таргетинг
+  targetMenuItemId String?
+  targetCategoryId String?
+  maxValue         Float? // для FREE_ITEM any item
+  maxDiscount      Float? // максимальная скидка
+
+  // Ограничения времени
+  validFromHour  Int? // с какого часа можно использовать
+  validToHour    Int? // до какого часа
+  expirationDays Int? // через сколько дней истекает после покупки
+
+  // Scheduling - when voucher is available for purchase
+  startDate      DateTime? // when voucher becomes available
+  endDate        DateTime? // when voucher stops being available
+  recurrenceType RecurrenceType @default(NONE) // NONE=one-time, WEEKLY=uses validDays, MONTHLY/YEARLY=same date
+  validDays      Json? // ["monday", "saturday", "sunday"] - days when available (for WEEKLY recurrence)
+  validHours     Json? // { from: "09:00", to: "18:00" } - time window when available
+
+  // Store visibility — false hides from customer store (e.g. reward-only vouchers)
+  shownInStore Boolean @default(true)
+
+  translations Json?
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id])
+
+  // Связи
+  userVouchers        UserVoucher[]
+  challenges          Challenge[] // для наград
+  battlePassTiers     BattlePassTier[] // для наград
+  surpriseBoxItems    SurpriseBoxItem[]
+  globalWheelVouchers GlobalWheelVoucher[]
+
+  createdAt DateTime @default(now())
+
+  campaigns Campaign[]
+}
+
+model UserVoucher {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  templateId String
+  template   VoucherTemplate @relation(fields: [templateId], references: [id])
+
+  // Статус
+  status UserVoucherStatus @default(AVAILABLE)
+
+  // Связь с заказом
+  orderId String?
+  order   Order?  @relation(name: "OrderToAppliedVoucher")
+
+  // Lifecycle
+  purchasedAt DateTime  @default(now())
+  expiresAt   DateTime?
+  usedAt      DateTime?
+
+  // Для отмененных заказов
+  returnedAt  DateTime?
+  returnCount Int       @default(0)
+
+  // Связи с OrderItem для free items
+  orderItems OrderItem[] @relation("OrderItemToAppliedVoucher")
+
+  // Removed unique constraint - users can have multiple vouchers of same type in same status
+}
+
+model Printer {
+  id        Int      @id @default(autoincrement())
+  name      String?
+  state     String?
+  createdAt DateTime @default(now())
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  // Location this printer belongs to (optional for backward compatibility)
+  locationId String?
+  location   MerchantLocation? @relation(fields: [locationId], references: [id])
+
+  // Default delivery mode for this printer/lobby (null = use app default PICKUP)
+  defaultDeliveryMode DeliveryMode?
+
+  transactions Transaction[]
+  orders       Order[]
+
+  // Per-printer notification preferences (opt-out model)
+  staffPrinterNotifications StaffPrinterNotification[]
+
+  @@unique([merchantId, name])
+  @@index([locationId])
+}
+
+// ------------------------------
+// PROMOS & GROUPS
+// ------------------------------
+
+model PromoGroup {
+  id        Int       @id @default(autoincrement())
+  name      String?
+  startDate DateTime?
+  endDate   DateTime?
+  createdAt DateTime  @default(now())
+
+  // Scheduling - recurrence type determines how the promo repeats
+  recurrenceType RecurrenceType @default(NONE) // NONE=one-time, WEEKLY=uses validDays, MONTHLY/YEARLY=same date
+  validDays      Json? // ["monday", "saturday", "sunday"] - days when promo is shown (for WEEKLY recurrence)
+  validHours     Json? // { from: "09:00", to: "18:00" } - time window when promo is shown
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  promos       Promo[]       @relation("PromoToPromoGroup")
+  transactions Transaction[]
+
+  campaigns Campaign[]
+}
+
+model Promo {
+  id          Int      @id @default(autoincrement())
+  name        String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  promoGroupId Int
+  promoGroup   PromoGroup @relation(fields: [promoGroupId], references: [id], name: "PromoToPromoGroup")
+
+  // =========================
+  // STORY EDITOR
+  // =========================
+  storySceneJson   Json? // Scene JSON for editor
+  storyAssetId     String? // Rendered image asset
+  storyAsset       Asset?           @relation(fields: [storyAssetId], references: [id], name: "PromoStoryAsset")
+  storyStatus      PromoStoryStatus @default(DRAFT)
+  storyPublishedAt DateTime?
+  storyUpdatedAt   DateTime? // Updated manually on draft save
+  storyHotspots    Json? // Hotspots JSON for mobile interactive zones
+
+  // =========================
+  // VIDEO PROMO
+  // =========================
+  contentType       PromoContentType @default(IMAGE_STORY)
+  videoAssetId      String?
+  videoAsset        Asset?           @relation(fields: [videoAssetId], references: [id], name: "PromoVideoAsset")
+  videoDuration     Float?           // seconds (max 15)
+  videoThumbnailUrl String?          // auto-generated preview frame from Cloudinary
+}
+
+// ------------------------------
+// CHALLENGES
+// ------------------------------
+
+model Challenge {
+  id          Int       @id @default(autoincrement())
+  name        String?
+  description String?
+  createdAt   DateTime  @default(now())
+  startDate   DateTime?
+  endDate     DateTime?
+  active      Boolean   @default(true)
+  isDeleted   Boolean   @default(false)
+
+  type       ChallengeType
+  target     Int
+  rewardType RewardType
+
+  // Repeatable challenge settings
+  isRepeatable   Boolean     @default(false)
+  resetPeriod    ResetPeriod @default(NEVER)
+  maxCompletions Int? // null = unlimited
+
+  // Scheduling - recurrence type determines when challenge is available
+  recurrenceType RecurrenceType @default(NONE) // NONE=one-time, WEEKLY=uses validDays, MONTHLY/YEARLY=same date
+  validDays      Json? // ["monday", "tuesday", "saturday", "sunday"] - days when challenge is available (for WEEKLY)
+  validHours     Json? // { from: "09:00", to: "18:00" } - time window when challenge is active
+
+  rewardPoints            Int?
+  rewardVoucherTemplateId String?
+  rewardVoucherTemplate   VoucherTemplate? @relation(fields: [rewardVoucherTemplateId], references: [id])
+
+  rewardSurpriseBoxId Int?
+  rewardSurpriseBox   SurpriseBox? @relation(fields: [rewardSurpriseBoxId], references: [id])
+
+  rewardText String?
+
+  translations Json?
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  transactions Transaction[]
+
+  campaigns Campaign[]
+}
+
+// ------------------------------
+// BATTLE PASS
+// ------------------------------
+
+model BattlePass {
+  id          Int       @id @default(autoincrement())
+  name        String?
+  description String?
+  createdAt   DateTime  @default(now())
+  startDate DateTime?
+  expiresAt DateTime?
+
+  // Scheduling - when the battle pass is available
+  recurrenceType RecurrenceType @default(NONE)
+  validDays      Json? // e.g. ["monday", "saturday", "sunday"] - for WEEKLY
+  validHours     Json? // e.g. { from: "09:00", to: "18:00" }
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  tiers        BattlePassTier[]
+  transactions Transaction[]
+
+  campaigns Campaign[]
+}
+
+// ------------------------------
+// CAMPAIGN
+// ------------------------------
+
+model Campaign {
+  id          Int       @id @default(autoincrement())
+  name        String
+  description String?
+  merchantId  String
+  merchant    Merchant  @relation(fields: [merchantId], references: [id])
+
+  startDate      DateTime?
+  endDate        DateTime?
+  recurrenceType RecurrenceType @default(NONE)
+  validDays      Json?
+  validHours     Json?
+  scheduleMode   ScheduleMode   @default(INTERSECT)
+  active         Boolean        @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  challenges       Challenge[]
+  promoGroups      PromoGroup[]
+  battlePasses     BattlePass[]
+  promotions       Promotion[]
+  voucherTemplates VoucherTemplate[]
+  menuItems        MenuItem[]
+
+  @@index([merchantId])
+}
+
+model BattlePassTier {
+  id        Int      @id @default(autoincrement())
+  name      String?
+  createdAt DateTime @default(now())
+
+  battlePassId Int
+  battlePass   BattlePass @relation(fields: [battlePassId], references: [id])
+  xp           Int
+
+  rewardType              RewardType
+  rewardPoints            Int?
+  rewardVoucherTemplateId String?
+  rewardVoucherTemplate   VoucherTemplate? @relation(fields: [rewardVoucherTemplateId], references: [id])
+
+  rewardSurpriseBoxId Int?
+  rewardSurpriseBox   SurpriseBox? @relation(fields: [rewardSurpriseBoxId], references: [id])
+
+  active Boolean @default(true)
+
+  transactions Transaction[]
+}
+
+// ------------------------------
+// LUCK MECHANICS — LOOT BOX
+// ------------------------------
+
+model SurpriseBox {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  imageUrl    String?
+  price       Int? // optional cost in points / currency
+  createdAt   DateTime @default(now())
+
+  // Voucher-like validity fields
+  validFrom  DateTime?
+  validTo    DateTime?
+  validDays  Json? // ["monday", "tuesday", etc]
+  validHours Json? // { from: "09:00", to: "18:00" }
+  maxUsage   Int       @default(1) // max times a user can open the box
+  isActive   Boolean   @default(true)
+
+  // Store visibility — false hides from customer store (e.g. reward-only boxes)
+  shownInStore Boolean @default(true)
+
+  translations Json?
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id])
+
+  items        SurpriseBoxItem[]
+  transactions Transaction[]
+  userBoxes    UserSurpriseBox[] // track user's acquired boxes
+
+  // wheels that use this box as their reward pool
+  fortuneWheels FortuneWheel[]
+
+  // battle pass tiers that use this box as their reward
+  battlePassTiers  BattlePassTier[]
+  challengeRewards Challenge[]
+}
+
+model SurpriseBoxItem {
+  id            Int         @id @default(autoincrement())
+  surpriseBoxId Int
+  surpriseBox   SurpriseBox @relation(fields: [surpriseBoxId], references: [id])
+
+  probability             Float // 0 < p ≤ 1 — items per box must sum to 1
+  rewardType              RewardType
+  rewardPoints            Int?
+  rewardVoucherTemplateId String?
+  rewardVoucherTemplate   VoucherTemplate? @relation(fields: [rewardVoucherTemplateId], references: [id])
+
+  shownInStore Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+model UserSurpriseBox {
+  id            String      @id @default(uuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  surpriseBoxId Int
+  surpriseBox   SurpriseBox @relation(fields: [surpriseBoxId], references: [id])
+  merchantId    String
+  merchant      Merchant    @relation(fields: [merchantId], references: [id])
+
+  // Status tracking
+  isOpened   Boolean   @default(false)
+  openedAt   DateTime?
+  usageCount Int       @default(0) // track multiple uses if maxUsage > 1
+
+  // Lifecycle
+  acquiredAt DateTime  @default(now())
+  expiresAt  DateTime? // calculated from surprise box validity rules
+
+  // Transaction reference
+  acquisitionTransactionId Int?
+  acquisitionTransaction   Transaction? @relation(fields: [acquisitionTransactionId], references: [id], name: "SurpriseBoxAcquisition")
+
+  @@index([userId, isOpened])
+  @@index([userId, merchantId])
+}
+
+// ------------------------------
+// LUCK MECHANICS — FORTUNE WHEEL
+// ------------------------------
+
+model FortuneWheel {
+  id          Int      @id @default(autoincrement())
+  name        String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  daily    Boolean   @default(true) // once per day per user if true
+  opensAt  DateTime?
+  closesAt DateTime?
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  // reward pool
+  surpriseBoxId Int
+  surpriseBox   SurpriseBox @relation(fields: [surpriseBoxId], references: [id])
+
+  transactions Transaction[]
+}
+
+// Global wheel - daily spin for all users
+model GlobalWheel {
+  id        String   @id @default(uuid())
+  name      String   @default("Daily Global Wheel")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  // Voucher pool from merchants
+  vouchers GlobalWheelVoucher[]
+
+  // User spin tracking
+  userSpins GlobalWheelSpin[]
+}
+
+model GlobalWheelVoucher {
+  id            String      @id @default(uuid())
+  globalWheelId String
+  globalWheel   GlobalWheel @relation(fields: [globalWheelId], references: [id])
+
+  voucherTemplateId String
+  voucherTemplate   VoucherTemplate @relation(fields: [voucherTemplateId], references: [id])
+
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  // For paid promotion
+  priority  Int       @default(0) // Higher priority = higher chance of selection
+  isPaid    Boolean   @default(false)
+  paidUntil DateTime?
+
+  // Location constraints
+  maxDistanceKm Float? // Max distance from user to merchant
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  // Spins that won this voucher
+  wonBySpins GlobalWheelSpin[]
+
+  @@index([globalWheelId, isActive])
+  @@index([merchantId])
+}
+
+model GlobalWheelSpin {
+  id            String      @id @default(uuid())
+  globalWheelId String
+  globalWheel   GlobalWheel @relation(fields: [globalWheelId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  spinDate DateTime @default(now())
+
+  // Location at time of spin
+  userLat Float?
+  userLng Float?
+
+  // Result
+  wonVoucherId String?
+  wonVoucher   GlobalWheelVoucher? @relation(fields: [wonVoucherId], references: [id])
+
+  // Transaction for reward
+  transactionId Int?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@unique([userId, globalWheelId, spinDate])
+  @@index([userId, spinDate])
+}
+
+// model Menu {
+//   id          String   @id @default(uuid())
+//   merchantId  String
+//   version     Int
+//   isPublished Boolean  @default(false)
+//   createdAt   DateTime @default(now())
+
+//   items MenuItem[]
+
+//   @@unique([merchantId, version])
+//   @@index([merchantId, isPublished])
+// }
+
+model MenuItem {
+  id         String   @id @default(uuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+  // menuId    String
+  // menu      Menu     @relation(fields: [menuId], references: [id])
+  createdAt  DateTime @default(now())
+  orderIndex Int      @default(0)
+
+  name     String
+  price    Float
+  imageUrl String?
+  isActive  Boolean @default(true)
+  isSoldOut Boolean @default(false)
+  isHidden  Boolean @default(false)
+  data      Json
+
+  // Schedule: when this item is available (null = always)
+  // validDays: ["monday", "tuesday", ...], validHours: { from: "09:00", to: "18:00" }
+  schedule  Json?
+
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id])
+
+  orders OrderItem[]
+
+  targetedByPromotions Promotion[] @relation("PromotionTargetMenuItem")
+
+  alwaysVisible Boolean @default(true)
+  campaigns     Campaign[]
+}
+
+// ---------- ENUMS -------------------------------------------------------
+enum OrderState {
+  PREPARING // заказ ушёл на кухню
+  READY_FOR_PICKUP // можно забирать
+  CLOSED // выдан / отменён
+  CANCELLED
+}
+
+enum OrderItemState {
+  PENDING // Not started
+  READY   // Done / ready
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+enum DeliveryMode {
+  PICKUP // самовывоз / на вынос (takeaway)
+  TABLE // к столику в зале
+}
+
+enum PaymentMethod {
+  CASH // наличные
+  CARD // картой
+  ONLINE_CARD // online card payment via Stripe
+  BLIK // BLIK instant payment (Poland)
+  P24 // Przelewy24 bank transfer (Poland)
+}
+
+enum StripeAccountType {
+  EXPRESS
+  STANDARD
+}
+
+enum StripeOnboardingStatus {
+  NOT_STARTED
+  PENDING
+  COMPLETED
+  RESTRICTED
+}
+
+// ---------- ORDER -------------------------------------------------------
+model Order {
+  id            String   @id @default(uuid())
+  merchantId    String // FK → Merchant
+  menuVersionId Int? // FK → MenuVersion (снимок)
+  printerId     Int? // ID принтера (Redis) для аудита
+  printer       Printer? @relation(fields: [printerId], references: [id])
+
+  // кто инициировал финализацию (≠ все участники)
+  userId       String?
+  // учаcтники на момент фиксации (id + имя для истории)
+  participants Json? // [ {id:"...", name:"..."} ]
+
+  state         OrderState    @default(PREPARING)
+  deliveryMode  DeliveryMode  @default(PICKUP)
+  paymentMethod PaymentMethod @default(CASH)
+  paymentStatus PaymentStatus @default(PENDING)
+
+  // VOUCHER INTEGRATION
+  appliedVoucherId String?      @unique
+  appliedVoucher   UserVoucher? @relation(fields: [appliedVoucherId], references: [id], name: "OrderToAppliedVoucher")
+
+  // PRICE TRACKING  
+  subtotal        Float // сумма товаров без скидки
+  voucherDiscount Float @default(0) // размер скидки от voucher
+  total           Float // итоговая сумма = subtotal - voucherDiscount
+
+  createdAt     DateTime  @default(now())
+  estimatedTime Int?
+  readyTime     DateTime?
+  hasWarning    Boolean   @default(false) // Kitchen can flag order with warning
+
+  items OrderItem[]
+
+  // Online payment relation (1-to-1)
+  payment Payment?
+
+  // Chat message placeholders referencing this order
+  chatMessages ChatMessage[]
+
+  @@index([merchantId, createdAt])
+}
+
+// ---------- PAYMENT (Stripe) ---------------------------------------------
+model Payment {
+  id                    String          @id @default(cuid())
+
+  orderId               String?         @unique
+  order                 Order?          @relation(fields: [orderId], references: [id])
+
+  merchantId            String
+  merchant              Merchant        @relation(fields: [merchantId], references: [id])
+
+  userId                String
+
+  stripePaymentIntentId String          @unique
+  stripeStatus          String
+
+  amount                Int
+  currency              String          @default("pln")
+  paymentMethod         PaymentMethod
+
+  cartSnapshot          Json
+  voucherIds            String[]
+
+  printerId             String?
+  deliveryMode          DeliveryMode?
+  tableNumber           String?
+
+  status                PaymentStatus   @default(PENDING)
+
+  createdAt             DateTime        @default(now())
+  completedAt           DateTime?
+
+  @@index([merchantId, createdAt])
+  @@index([userId])
+}
+
+// ---------- ORDER-ITEM ---------------------------------------------------
+model OrderItem {
+  id         String  @id @default(uuid())
+  cartItemId String?
+  orderId    String
+  order      Order   @relation(fields: [orderId], references: [id])
+
+  menuItemId String? // null, если позиция удалена из меню
+  menuItem   MenuItem? @relation(fields: [menuItemId], references: [id])
+  name       String // денормализуем
+  price      Float
+  options    Json? // [{group:"Size", label:"L", delta:200}]
+
+  // FREE ITEM от VOUCHER
+  isVoucherItem    Boolean      @default(false)
+  appliedVoucherId String?
+  appliedVoucher   UserVoucher? @relation(fields: [appliedVoucherId], references: [id], name: "OrderItemToAppliedVoucher")
+  originalPrice    Float? // оригинальная цена до voucher
+
+  ownerId String?
+  paid    Boolean   @default(false)
+  paidAt  DateTime?
+  paidBy  String?
+
+  // Station-based kitchen workflow (item-level readiness)
+  itemState     OrderItemState @default(PENDING) // Using 'itemState' to avoid conflict with 'state' field if any
+  itemStateAt   DateTime?                        // When state changed
+  itemStateBy   String?                          // Who changed it (userId or "system")
+  category      String?                          // Denormalized from MenuItem.data.category[0]
+  quantity      Int            @default(1)       // Item quantity
+
+  // Promotion discounts
+  promoDiscount     Float?   @default(0)    // amount saved by promotions
+  prePromoPrice     Float?                  // price before promo (null = no promo)
+  bundleMetadata    Json?
+  appliedPromotions PromotionAppliedItem[]
+
+  @@index([orderId])
+}
+
+model OptionGroup {
+  id        Int      @id @default(autoincrement())
+  name      String
+  key       String   @default("")
+  isDeleted Boolean  @default(false)
+  imageUrl  String?
+  sortOrder Int      @default(0)
+  options   Option[]
+
+  // New fields (UI Spec)
+  type        String? // 'ingredients' | 'options' | 'modifiers'
+  isSingleton Boolean @default(false) // true = single option without group UI
+
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id])
+
+  translations Json?
+
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id])
+
+  @@unique([merchantId, key, name])
+}
+
+model Option {
+  id            Int         @id @default(autoincrement())
+  key           String      @default("")
+  name          String
+  data          Json
+  sortOrder     Int         @default(0)
+  isDeleted     Boolean     @default(false)
+  merchantId    String?
+  merchant      Merchant?   @relation(fields: [merchantId], references: [id])
+  optionGroupId Int
+  optionGroup   OptionGroup @relation(fields: [optionGroupId], references: [id])
+
+  @@unique([merchantId, key, name])
+  @@index([merchantId, key])
+}
+
+// ------------------------------
+// MERCHANT LOCATIONS
+// ------------------------------
+
+model MerchantLocation {
+  id         String   @id @default(uuid())
+  merchantId String   @unique // @unique enforces 1-to-1 for MVP (one location per merchant)
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  // Branch name (for future multi-location support)
+  name String @default("Main")
+
+  // Address information
+  address    String  @default("")
+  city       String  @default("")
+  country    String  @default("Ukraine")
+  postalCode String?
+
+  // Coordinates for map (0,0 = not configured, excluded from map)
+  latitude  Float @default(0)
+  longitude Float @default(0)
+
+  // Working hours (JSON format)
+  // Example: { "mon": { "open": "09:00", "close": "21:00" }, "tue": null, ... }
+  workingHours Json?
+
+  // Contact
+  phone String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Printers at this location
+  printers Printer[]
+
+  @@index([latitude, longitude])
+}
+
+// ------------------------------
+// CHAT SYSTEM
+// ------------------------------
+
+model Chat {
+  id String @id @default(uuid())
+
+  // Participants
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+
+  // Metadata
+  lastMessageAt DateTime?
+  lastMessageId String?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  messages     ChatMessage[]
+  participants ChatParticipant[]
+
+  @@unique([userId, merchantId])
+  @@index([userId])
+  @@index([merchantId])
+  @@index([lastMessageAt])
+}
+
+model ChatMessage {
+  id     String @id @default(uuid())
+  chatId String
+  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  // Sender (either user or merchant staff)
+  senderType      ChatSenderType
+  senderUserId    String?
+  senderUser      User?          @relation("ChatMessageSender", fields: [senderUserId], references: [id])
+  senderCrmUserId String?
+  senderCrmUser   CRMUser?       @relation("ChatMessageCrmSender", fields: [senderCrmUserId], references: [id])
+
+  // Content
+  content     String          @db.Text
+  messageType ChatMessageType @default(TEXT)
+  metadata    Json? // Structured data for system messages (points, etc.)
+
+  // Reply reference
+  replyToId String?
+  replyTo   ChatMessage?  @relation("ChatMessageReplies", fields: [replyToId], references: [id])
+  replies   ChatMessage[] @relation("ChatMessageReplies")
+
+  // Order reference (for ORDER_PLACEHOLDER type)
+  orderId String?
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  // Status
+  status      ChatMessageStatus @default(SENT)
+  deliveredAt DateTime?
+  seenAt      DateTime?
+
+  // Real-time delivery status (Centrifugo broadcast)
+  deliveryStatus MessageDeliveryStatus @default(BROADCASTED)
+
+  // Edit/Delete
+  isEdited  Boolean   @default(false)
+  editedAt  DateTime?
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  reactions ChatMessageReaction[]
+
+  @@index([chatId])
+  @@index([createdAt])
+  @@index([orderId])
+}
+
+model ChatMessageReaction {
+  id        String      @id @default(uuid())
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  // Who reacted
+  userId    String?
+  user      User?    @relation("ChatReactionUser", fields: [userId], references: [id])
+  crmUserId String?
+  crmUser   CRMUser? @relation("ChatReactionCrmUser", fields: [crmUserId], references: [id])
+
+  // Reaction emoji
+  emoji String
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@unique([messageId, crmUserId])
+  @@index([messageId])
+}
+
+model ChatParticipant {
+  id     String @id @default(uuid())
+  chatId String
+  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  // Participant (user or crm user)
+  userId    String?
+  user      User?    @relation("ChatParticipantUser", fields: [userId], references: [id])
+  crmUserId String?
+  crmUser   CRMUser? @relation("ChatParticipantCrmUser", fields: [crmUserId], references: [id])
+
+  // Read tracking
+  lastReadAt        DateTime?
+  lastReadMessageId String?
+
+  // Notification settings
+  isMuted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([chatId, userId])
+  @@unique([chatId, crmUserId])
+  @@index([chatId])
+}
+
+// ------------------------------
+// ASSET MANAGEMENT
+// ------------------------------
+
+model Asset {
+  id         String    @id @default(uuid())
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+
+  // File metadata
+  filename String // Original filename
+  url      String // Cloudinary URL
+  publicId String // Cloudinary public_id for management
+  mimeType String
+  size     Int // File size in bytes
+  width    Int?
+  height   Int?
+  duration Float?   // video duration in seconds
+
+  // Organization
+  tags String[] // Array of tags for filtering
+  alt  String? // Alt text for accessibility
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  // Relations to entities
+  menuItems        MenuItem[]
+  voucherTemplates VoucherTemplate[]
+  promoStories     Promo[]           @relation("PromoStoryAsset")
+  promoVideos      Promo[]           @relation("PromoVideoAsset")
+  surpriseBoxes    SurpriseBox[]
+  optionGroups     OptionGroup[]
+  promotions       Promotion[]
+
+  @@index([merchantId])
+  @@index([merchantId, deletedAt])
+}
+
+// ------------------------------
+// PROMOTIONS
+// ------------------------------
+
+model Promotion {
+  id          String   @id @default(uuid())
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+
+  name        String
+  description String?
+  imageUrl    String?
+  assetId     String?
+  asset       Asset?  @relation(fields: [assetId], references: [id])
+
+  ruleType    PromotionRuleType
+
+  targetMenuItemId String?
+  targetMenuItem   MenuItem? @relation("PromotionTargetMenuItem", fields: [targetMenuItemId], references: [id])
+  targetCategoryId String?
+
+  discountType  DiscountType
+  discountValue Float
+
+  ruleConfig    Json?
+
+  maxApplicationsPerOrder Int  @default(0) // 0 = unlimited
+
+  startDate      DateTime?
+  endDate        DateTime?
+  recurrenceType RecurrenceType @default(NONE)
+  validDays      Json?
+  validHours     Json?
+
+  active    Boolean  @default(true)
+  // Mirrors MenuItem.isSoldOut. Different concept from `active`: `active=false`
+  // means the promo isn't running at all (scheduled for later, retired);
+  // `isSoldOut=true` is a transient "we ran out of an ingredient today" state
+  // the merchant can flip without disturbing the schedule.
+  isSoldOut Boolean  @default(false)
+  // Mirrors MenuItem.orderIndex. Used by the CRM menu items view's bundle
+  // section so merchants can reorder bundles via drag-and-drop.
+  orderIndex Int     @default(0)
+  createdAt DateTime @default(now())
+
+  translations Json?
+
+  appliedItems PromotionAppliedItem[]
+
+  campaigns Campaign[]
+
+  @@index([merchantId, active])
+}
+
+model PromotionAppliedItem {
+  id             String    @id @default(uuid())
+  promotionId    String
+  promotion      Promotion @relation(fields: [promotionId], references: [id])
+  orderItemId    String
+  orderItem      OrderItem @relation(fields: [orderItemId], references: [id])
+  discountAmount Float
+
+  @@unique([promotionId, orderItemId])
+}
+
+// ------------------------------
+// CRM DASHBOARD CONFIGURATION
+// ------------------------------
+
+enum DashboardPreset {
+  KITCHEN_SIMPLE // Only "Done" (PREPARING → CLOSED)
+  KITCHEN_FULL // "Ready" + "Done" + Warning toggle
+  WAITER // "Ready" + "Deliver" + Warning + Payment
+  COUNTER // "Ready" + "Picked Up"
+  CUSTOM // Fully custom configuration
+}
+
+// CRM Dashboard V2 Enums
+enum CRMActionKind {
+  SET_STATUS // Set order to targetStatus (configurable)
+  SET_PAYMENT // Set order to targetPaymentStatus (configurable)
+  FLAG_PROBLEM // Set warning = true
+  RESOLVE_PROBLEM // Set warning = false
+  CUSTOM_NOTE // Add comment only
+  // Deprecated - use SET_STATUS with targetStatus instead:
+  ADVANCE_STATUS // PREPARING → READY_FOR_PICKUP (legacy)
+  CLOSE_ORDER // → CLOSED (legacy)
+  CANCEL_ORDER // → CANCELLED (legacy)
+  MARK_DELIVERED // → CLOSED (legacy)
+  MARK_PICKED_UP // → CLOSED (legacy)
+}
+
+enum CRMPrinterScope {
+  ALL
+  INCLUDE_LIST
+}
+
+enum CRMGroupBy {
+  NONE
+  PRINTER
+  DELIVERY
+  PAYMENT
+}
+
+enum CRMSortBy {
+  OLDEST
+  NEWEST
+  SLA
+}
+
+enum CRMConfirmMode {
+  NONE
+  CONFIRM
+  REASON_REQUIRED
+}
+
+enum CRMActionColor {
+  PRIMARY
+  SUCCESS
+  WARNING
+  DANGER
+  MUTED
+}
+
+enum CRMActionGuard {
+  REQUIRE_PAID
+  REQUIRE_READY
+  REQUIRE_WARNING_OFF
+  REQUIRE_WARNING_ON
+  REQUIRE_ALL_ITEMS_READY // Block until all order items are READY
+}
+
+enum CRMCardSlot {
+  ORDER_SHORT_ID
+  AGE_TIMER
+  PRINTER_NAME
+  DELIVERY_MODE
+  PAYMENT_STATUS
+  WARNING_FLAG
+  TOTAL_PRICE
+  CREATED_AT
+  ITEM_COUNT
+}
+
+enum CRMCardArea {
+  HEADER_LEFT
+  HEADER_RIGHT
+  BADGES
+  BODY
+  FOOTER_LEFT
+  FOOTER_RIGHT
+}
+
+model CRMDashboard {
+  id          String   @id @default(uuid())
+  name        String
+  description String?  // Human-readable description (e.g., "Show this on the kitchen screen")
+  merchantId  String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  // V2: Views relation (new flexible system)
+  views CRMDashboardView[]
+
+  // Legacy fields (nullable for backward compatibility)
+  // When views.length > 0, these are ignored
+  preset        DashboardPreset? @default(KITCHEN_FULL)
+  printerIds    Int[]            @default([]) // Empty = all printers
+  actionButtons Json?            @default("[]") // Legacy action buttons
+
+  // Legacy display settings
+  showOrderId       Boolean? @default(true)
+  showOrderTime     Boolean? @default(true)
+  showPrices        Boolean? @default(false)
+  showItemOptions   Boolean? @default(true)
+  showDeliveryMode  Boolean? @default(true)
+  showWarningToggle Boolean? @default(true)
+  showPaymentStatus Boolean? @default(false)
+  showPrinterName   Boolean? @default(true)
+
+  // Legacy layout
+  layout         String? @default("grid") // grid | list
+  cardSize       String? @default("normal") // compact | normal | large
+  columnsDesktop Int?    @default(3)
+
+  // Legacy behavior
+  soundEnabled    Boolean? @default(true)
+  autoRefresh     Boolean? @default(true)
+  refreshInterval Int?     @default(30) // seconds
+
+  // V2: Dashboard-level settings
+  showPrinterFilter Boolean @default(true) // Show printer filter bar with users
+  showOrderCreation Boolean @default(false) // Show order creation panel
+
+  // V3: Flexible widget dashboard configuration (JSON)
+  // Stores tabs, widgets, layouts from react-grid-layout
+  widgetConfig          Json?
+  widgetConfigUpdatedAt DateTime?
+  widgetConfigUpdatedBy String? // CRMUser id who last updated
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // NOTE: Removed @@unique([merchantId, name]) - duplicate names allowed
+  @@index([merchantId])
+}
+
+model CRMDashboardView {
+  id          String       @id @default(uuid())
+  dashboardId String
+  dashboard   CRMDashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+
+  name       String // "Preparing", "Ready", "Late"
+  orderIndex Int    @default(0)
+
+  // Scope: which printers
+  printerScope CRMPrinterScope @default(ALL)
+  printerIds   Int[]           @default([])
+
+  // Include filters (empty = all)
+  states        OrderState[]    @default([])
+  deliveryModes DeliveryMode[]  @default([])
+  paymentStates PaymentStatus[] @default([])
+
+  // Exclude filters (for flexibility)
+  excludeStates        OrderState[]    @default([])
+  excludeDeliveryModes DeliveryMode[]  @default([])
+  excludePaymentStates PaymentStatus[] @default([])
+
+  // Station-based kitchen workflow: category filtering for items
+  categories        String[] @default([]) // Only show items in these categories (empty = all)
+  excludeCategories String[] @default([]) // Exclude items in these categories
+  itemCloseMode     String   @default("bulk") // 'bulk' | 'per-item'
+
+  // Grouping & sorting
+  groupBy    CRMGroupBy @default(NONE)
+  sortBy     CRMSortBy  @default(OLDEST)
+  slaMinutes Int? // Highlight orders older than this
+
+  // Card UI (JSON with version)
+  // Schema: { version: 1, size, columnsDesktop, areas: { HEADER_LEFT: [...], ... }, items, highlight }
+  cardConfig Json @default("{\"version\":1,\"areas\":{}}")
+
+  // Behavior
+  soundEnabled    Boolean @default(true)
+  autoRefresh     Boolean @default(true)
+  refreshInterval Int     @default(30)
+
+  // Soft delete
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+
+  // Actions for this view
+  actions CRMDashboardAction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dashboardId, isDeleted])
+}
+
+model CRMDashboardAction {
+  id     String           @id @default(uuid())
+  viewId String
+  view   CRMDashboardView @relation(fields: [viewId], references: [id], onDelete: Cascade)
+
+  kind         CRMActionKind
+  label        String
+  orderIndex   Int           @default(0)
+  targetStatus OrderState? // Target status for SET_STATUS kind
+  targetPaymentStatus PaymentStatus? // Target payment status for SET_PAYMENT kind
+
+  // Visibility rules (UI-side filtering, when to show button)
+  fromStates   OrderState[]    @default([]) // empty = any
+  onlyDelivery DeliveryMode[]  @default([]) // empty = any
+  onlyPayment  PaymentStatus[] @default([]) // empty = any
+
+  // Guards (server-side validation, prevents execution)
+  guards CRMActionGuard[] @default([])
+
+  // Behavior
+  confirmMode CRMConfirmMode @default(NONE)
+  color       CRMActionColor @default(PRIMARY)
+
+  // Soft delete
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([viewId, isDeleted])
+}
+
+// ------------------------------
+// STAFF PRINTER NOTIFICATION PREFERENCES
+// ------------------------------
+
+model StaffPrinterNotification {
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+  printerId  Int
+  printer    Printer  @relation(fields: [printerId], references: [id])
+  pushEnabled Boolean @default(true)
+
+  @@id([userId, merchantId, printerId])
+}

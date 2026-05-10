@@ -10,7 +10,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEPBOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$DEPBOT_DIR"
-go build -o ./tmp/chronicle ./cmd/chronicle >/dev/null 2>&1
+BUILD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+go build -ldflags "-X github.com/alexdx2/chronicle-core/version.BuildHash=$BUILD_HASH" -o ./tmp/chronicle ./cmd/chronicle >/dev/null 2>&1
 
 # Resolve project directory
 PROJECT_DIR="${CHRONICLE_PROJECT_DIR:-$(pwd)}"

@@ -1,20 +1,54 @@
 package graph
 
-import "github.com/alexdx2/chronicle-core/store"
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/alexdx2/chronicle-core/extract/ast"
+	"github.com/alexdx2/chronicle-core/extract/rules"
+	"github.com/alexdx2/chronicle-core/graph/prompts"
+	"github.com/alexdx2/chronicle-core/store"
+)
+
+// FileWithAST is a file path paired with pre-extracted AST facts and enrichment candidates.
+type FileWithAST struct {
+	Path       string `json:"path"`
+	ASTFacts   string `json:"ast_facts"`   // JSON array of semantic facts, or "[]"
+	FromType   string `json:"from_type"`   // detected by AST: controller, module, or ""
+	Candidates string `json:"candidates"`  // JSON array of enrichment candidates for LLM classification
+}
 
 // ScanAction is what chronicle_scan_next_file returns to Claude.
 type ScanAction struct {
+	Domain       string         `json:"domain,omitempty"`        // ALWAYS included — agents MUST use this exact domain
 	ScanRunID    int64          `json:"scan_run_id,omitempty"`
 	Phase        string         `json:"phase"`
 	Action       string         `json:"action"` // start_scan, extract_files, call_resolve_extractions, discover_files, wait, trace_flow, none
-	Files        []string       `json:"files,omitempty"`
+	Files        []string       `json:"files,omitempty"`         // simple file list (backward compat)
+	FilesWithAST []FileWithAST  `json:"files_with_ast,omitempty"` // files + pre-extracted AST facts
 	Blocked      bool           `json:"blocked,omitempty"`
 	Reason       string         `json:"reason,omitempty"`
 	Done         bool           `json:"done,omitempty"`
 	Progress     *ScanProgress  `json:"progress,omitempty"`
 	FactSchema   string         `json:"fact_schema,omitempty"`  // included with extract_files/trace_flow to guide agents
-	GraphContext *GraphContext  `json:"graph_context,omitempty"` // phase 2 select — flat list of known entities
-	FlowContext  *FlowContext   `json:"flow_context,omitempty"` // phase 2 extract — per-trigger enriched context
+	VotesNeeded  int            `json:"votes_needed,omitempty"` // how many LLM enrichment runs per file (0 or 1 = no voting)
+	GraphContext     *GraphContext          `json:"graph_context,omitempty"`      // phase 2 select — flat list of known entities
+	FlowContext      *FlowContext           `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
+	InstructionPacks *prompts.PackSelection `json:"instruction_packs,omitempty"` // loaded + available instruction packs
+	// Checkpoint — when set, Claude MUST show this to user and call chronicle_scan_confirm
+	Checkpoint       *ScanCheckpoint        `json:"checkpoint,omitempty"`
+}
+
+// ScanCheckpoint is a user-facing question that blocks scan progress.
+// The orchestrator MUST show this to the user and pass the answer
+// back via chronicle_scan_confirm before scan_next_file will return files.
+type ScanCheckpoint struct {
+	ID       string         `json:"id"`       // checkpoint identifier
+	Question string         `json:"question"` // what to ask the user
+	Context  map[string]any `json:"context"`  // data to show (file counts, packs, etc.)
+	Options  []string       `json:"options"`  // suggested answers
 }
 
 // GraphContext provides phase 1 graph data to help flow tracing agents.
@@ -43,90 +77,23 @@ type ReachableNode struct {
 	Edges    []string `json:"edges"` // compact edge descriptions: "INJECTS→ServiceName", "EXPOSES→POST /path"
 }
 
-const factSchemaGuide = `OUTPUT FORMAT: JSON array of objects. Use EXACTLY these field names — no aliases.
+// Guides are loaded from graph/prompts/*.md via go:embed.
+// Per-project overrides can be set via the admin dashboard (stored in settings table).
 
-EXAMPLES (copy the field names exactly):
-
-import { OrderService } from './order.service';
-→ {"kind":"import","to":"./order.service","symbols":["OrderService"]}
-
-@Controller('orders')
-@Get('/:id')
-→ {"kind":"endpoint","method":"GET","target":"/orders/:id"}
-
-await fetch('http://user-api:3000/users/me')
-→ {"kind":"http_call","method":"GET","target":"http://user-api:3000/users/me"}
-
-constructor(private orderService: OrderService)
-→ {"kind":"injects","to":"OrderService"}
-
-this.orderService.create(dto)
-→ {"kind":"call","to":"OrderService","method":"create"}
-
-this.prisma.order.create(...)
-→ {"kind":"model","to":"Order"}
-
-this.eventBus.emit('order.created', data)
-→ {"kind":"produces","to":"order.created","method":"emit"}
-
-@OnEvent('order.created')
-handleOrderCreated(data) { ... }
-→ {"kind":"consumes","to":"order.created","method":"handleOrderCreated"}
-
-"dependencies": { "express": "^4.0" }
-→ {"kind":"dependency","to":"express"}
-
-model User { id Int @id }
-→ {"kind":"model","to":"User"}
-
-enum Role { ADMIN USER }
-→ {"kind":"enum","to":"Role"}
-
-model Post { author User @relation(...) }
-→ {"kind":"model_relation","from":"Post","to":"User"}
-
-FIELD NAMES: kind, to, symbols, method, target, from (for relations only). NO other field names.
-
-from_type: set as a SEPARATE PARAMETER on chronicle_file_extracted (not inside facts).
-- File wires components together (DI, module registry) → from_type="module"
-- File defines endpoints/routes → from_type="controller"
-- Everything else → omit (defaults to provider)
-
-Do NOT emit:
-- local helper/utility function calls within the same file
-- type-only imports (import type { X }) unless the file is pure types
-- test mocks, stubs, or test-only dependencies
-- UI component imports (Button, Modal) unless they cross package boundaries
-- comments, TODOs, or documentation
-- framework boilerplate decorators (@Injectable, @Module) as standalone facts
-
-Status: "extracted" if any facts found, "no_runtime_architecture" if no architecture, "type_only" for pure types, "config_only" for config, "generated" for generated code.`
-
-const flowFactGuide = `PHASE 2: FLOW TRACING. You receive ONE trigger file with enriched context.
-
-flow_context contains:
-- trigger_file: the root file to start from
-- files_to_read: read these files to trace the call chain
-- reachable: graph neighborhood — shows which services connect to what
-
-Your task:
-1. Read trigger_file first
-2. Read files from files_to_read
-3. For each endpoint/consumer/event in the trigger file, trace the business flow
-4. Use reachable graph as navigation — verify by reading the actual code
-
-Emit one flow fact per business use case:
-{"kind":"flow","flow_name":"Human-readable name","trigger":"POST /path OR topic-name","method":"entryMethod","requires":["ServiceA","ServiceB"],"steps":["Controller receives request","Service validates","Service calls client","Service persists","Service publishes event"]}
-
-Rules:
-- One flow per endpoint/consumer (controller with 4 endpoints = 4 flow facts)
-- requires: list services that participate in the flow
-- steps: ordered sequence through the call chain
-- DO NOT re-emit imports, endpoints, or dependencies
-- DO NOT invent services not in the code
-- If no meaningful flow found, return []
-
-Facts MUST be a JSON array of objects with "kind":"flow".`
+// getGuide returns a guide with per-project override support.
+// If tech is provided, technology adapters are appended to the core guide.
+func (g *Graph) getGuide(key string, tech ...string) string {
+	custom, err := g.store.GetSetting(key)
+	if err == nil && custom != "" {
+		return custom // custom overrides include their own tech hints
+	}
+	defaults := prompts.Defaults()
+	def, ok := defaults[key]
+	if !ok {
+		return ""
+	}
+	return prompts.Compose(def, tech)
+}
 
 // ScanProgress tracks extraction progress within a scan run.
 type ScanProgress struct {
@@ -136,7 +103,17 @@ type ScanProgress struct {
 }
 
 // ScanNextAction returns what Claude should do next based on scan run state.
-func (g *Graph) ScanNextAction(domainKey string) (*ScanAction, error) {
+// tech is the list of frameworks from the manifest (e.g. ["nestjs", "graphql"]).
+func (g *Graph) ScanNextAction(domainKey string, tech ...string) (*ScanAction, error) {
+	// Wrap to always set Domain on the returned action
+	action, err := g.scanNextAction(domainKey, tech...)
+	if err == nil && action != nil {
+		action.Domain = domainKey
+	}
+	return action, err
+}
+
+func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, error) {
 	run, err := g.store.GetActiveScanRun(domainKey)
 	if err != nil {
 		return nil, err
@@ -158,6 +135,29 @@ func (g *Graph) ScanNextAction(domainKey string) (*ScanAction, error) {
 			Action:    "discover_files",
 		}, nil
 
+	case "confirm_scope":
+		// Checkpoint: show user what was discovered, ask for confirmation
+		// Blocked until chronicle_scan_confirm is called
+		pending, _ := g.store.CountPendingObligations(run.RevisionID, "scan_file")
+		return &ScanAction{
+			ScanRunID: run.RunID,
+			Phase:     "confirm_scope",
+			Action:    "confirm",
+			Blocked:   true,
+			Checkpoint: &ScanCheckpoint{
+				ID:       "scope",
+				Question: "Ready to scan? Review the file count and confirm.",
+				Context: map[string]any{
+					"total_files":  run.TotalFiles,
+					"pending":     pending,
+					"votes_needed": run.VotesNeeded,
+					"estimated_reads": run.TotalFiles * run.VotesNeeded,
+				},
+				Options: []string{"yes", "adjust scope", "change votes"},
+			},
+			Reason: "STOP: Show the checkpoint to the user. Call chronicle_scan_confirm(scan_run_id, confirmed=true) to proceed.",
+		}, nil
+
 	case "phase1_extract":
 		// Atomically claim up to 10 unclaimed files (reclaims expired leases too)
 		batch, err := g.store.ClaimObligations(run.RevisionID, "scan_file", 10)
@@ -167,12 +167,64 @@ func (g *Graph) ScanNextAction(domainKey string) (*ScanAction, error) {
 
 		if len(batch) > 0 {
 			pending, _ := g.store.CountPendingObligations(run.RevisionID, "scan_file")
+
+			// Run tree-sitter AST + rules on each file
+			// AST extracts raw syntax → rules apply framework meaning → semantic facts saved
+			ruleRegistry := rules.NewRegistry(rules.RulesetsForTech(tech)...)
+			filesWithAST := make([]FileWithAST, 0, len(batch))
+			for _, filePath := range batch {
+				fwa := FileWithAST{Path: filePath, ASTFacts: "[]", Candidates: "[]"}
+				if isTypeScriptFile(filePath) {
+					if content := readFileContent(filePath); content != nil {
+						rawResult := ast.ExtractTypeScript(content)
+						semantic := ruleRegistry.Apply(rawResult)
+						fwa.ASTFacts = semantic.FactsJSON()
+						fwa.FromType = semantic.FromType
+						fmt.Fprintf(os.Stderr, "AST: %s → %d facts, %d candidates\n", filePath, len(rawResult.Facts), len(rawResult.Candidates))
+						// Serialize candidates for LLM classification
+						if len(rawResult.Candidates) > 0 {
+							if cb, err := json.Marshal(rawResult.Candidates); err == nil {
+								fwa.Candidates = string(cb)
+							}
+						}
+					}
+				}
+				filesWithAST = append(filesWithAST, fwa)
+			}
+
+			// Save semantic facts directly — high-confidence deterministic facts
+			for _, fwa := range filesWithAST {
+				if fwa.ASTFacts != "[]" {
+					g.SaveFileExtraction(run.RevisionID, run.DomainKey, fwa.Path, "extracted", fwa.FromType, fwa.ASTFacts, "")
+				}
+			}
+
+			// Pick guide: enrichment if AST found facts, full extraction if not
+			guide := g.getGuide("guide_enrichment", tech...)
+			hasASTFacts := false
+			for _, fwa := range filesWithAST {
+				if fwa.ASTFacts != "[]" {
+					hasASTFacts = true
+					break
+				}
+			}
+			if !hasASTFacts {
+				guide = g.getGuide("guide_fact_schema", tech...)
+				filesWithAST = nil // don't confuse agent with empty AST
+			}
+
+			// Build per-batch pack selection from AST-detected imports/decorators
+			packSel := g.buildPackSelection(batch, filesWithAST, tech)
+
 			return &ScanAction{
-				ScanRunID:  run.RunID,
-				Phase:      "phase1_extract",
-				Action:     "extract_files",
-				Files:      batch,
-				FactSchema: factSchemaGuide,
+				ScanRunID:        run.RunID,
+				Phase:            "phase1_extract",
+				Action:           "extract_files",
+				Files:            batch,
+				FilesWithAST:     filesWithAST,
+				VotesNeeded:      run.VotesNeeded,
+				FactSchema:       guide,
+				InstructionPacks: packSel,
 				Progress: &ScanProgress{
 					Total:     run.TotalFiles,
 					Extracted: run.TotalFiles - pending,
@@ -293,7 +345,7 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 		Phase:        "phase2_extract",
 		Action:       "trace_flow",
 		Files:        mapKeys(triggerFiles),
-		FactSchema:   flowFactGuide,
+		FactSchema:   g.getGuide("guide_flow"),
 		GraphContext: ctx,
 		Reason:       "Phase 2: trace business flows. Use graph_context to understand the full call chain. Emit ONLY flow facts.",
 		Progress:     &ScanProgress{Total: len(triggerFiles), Extracted: 0, Remaining: len(triggerFiles)},
@@ -318,7 +370,7 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 			Phase:       "phase2_extract",
 			Action:      "trace_flow",
 			Files:       []string{triggerFile},
-			FactSchema:  flowFactGuide,
+			FactSchema:  g.getGuide("guide_flow"),
 			FlowContext: flowCtx,
 			Reason:      "Read trigger_file and files_to_read from flow_context. Use reachable graph as navigation. Emit one flow fact per endpoint/consumer.",
 			Progress:    &ScanProgress{Total: run.TotalFiles, Extracted: run.TotalFiles - pending, Remaining: pending},
@@ -344,6 +396,54 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 		Blocked:   true,
 		Reason:    "All flows traced. Call chronicle_resolve_extractions to add flows to graph.",
 	}, nil
+}
+
+// buildPackSelection creates a PackSelection from the batch's AST-detected signals.
+func (g *Graph) buildPackSelection(files []string, filesWithAST []FileWithAST, tech []string) *prompts.PackSelection {
+	// Collect imports and decorators from AST facts across the batch
+	var allImports, allDecorators []string
+	importSet := map[string]bool{}
+	decSet := map[string]bool{}
+
+	for _, fwa := range filesWithAST {
+		if fwa.ASTFacts == "[]" {
+			continue
+		}
+		var facts []map[string]any
+		if err := json.Unmarshal([]byte(fwa.ASTFacts), &facts); err != nil {
+			continue
+		}
+		for _, f := range facts {
+			kind, _ := f["kind"].(string)
+			switch kind {
+			case "import":
+				if to, ok := f["to"].(string); ok && !importSet[to] {
+					allImports = append(allImports, to)
+					importSet[to] = true
+				}
+			case "decorator":
+				if name, ok := f["name"].(string); ok && !decSet[name] {
+					allDecorators = append(allDecorators, name)
+					decSet[name] = true
+				}
+			}
+		}
+	}
+
+	// Use first file for extension-based matching
+	filePath := ""
+	if len(files) > 0 {
+		filePath = files[0]
+	}
+
+	ctx := prompts.FileContext{
+		FilePath:   filePath,
+		Imports:    allImports,
+		Decorators: allDecorators,
+	}
+
+	sel := prompts.MatchPacks(ctx, tech)
+	return &sel
 }
 
 // buildFlowContext builds enriched per-trigger context by walking the phase 1 graph.
@@ -465,6 +565,37 @@ func (g *Graph) buildGraphContext(domainKey string) *GraphContext {
 		}
 	}
 	return ctx
+}
+
+// readFileContent tries to read a file, checking the path as-is first,
+// then trying subdirectories that contain a .depbot/ folder (the project root).
+func readFileContent(filePath string) []byte {
+	// Try as-is (works when cwd = project root)
+	if content, err := os.ReadFile(filePath); err == nil {
+		return content
+	}
+	// Find the subdirectory that has .depbot/ — that's the project root
+	cwd, _ := os.Getwd()
+	entries, _ := os.ReadDir(cwd)
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "." || e.Name() == ".." {
+			continue
+		}
+		// Only try subdirectories that have .depbot/ (project root indicator)
+		depbotPath := cwd + "/" + e.Name() + "/.depbot"
+		if _, err := os.Stat(depbotPath); err != nil {
+			continue
+		}
+		candidate := cwd + "/" + e.Name() + "/" + filePath
+		if content, err := os.ReadFile(candidate); err == nil {
+			return content
+		}
+	}
+	return nil
+}
+
+func isTypeScriptFile(path string) bool {
+	return strings.HasSuffix(path, ".ts") || strings.HasSuffix(path, ".tsx")
 }
 
 func mapKeys(m map[string]bool) []string {

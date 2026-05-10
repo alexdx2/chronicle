@@ -65,6 +65,14 @@ internal/manifest/      Domain manifest parsing (internal)
 
 Public packages (`graph/`, `store/`, `registry/`, `validate/`) are importable by chronicle-pro. Internal packages are only used by this binary. This is enforced by Go's `internal/` convention.
 
+**CRITICAL: MCP tool registration has TWO places.**
+When adding a new MCP tool, you MUST register it in BOTH:
+1. `internal/mcp/server.go` → `NewServer()` — used by tests
+2. `internal/mcp/middleware.go` → `NewServerWithLogging()` — used by CLI (`chronicle mcp serve`)
+
+If you only add to `server.go`, tests pass but the tool won't appear in production.
+If you only add to `middleware.go`, tests won't cover it.
+
 ## Build and test
 
 ```bash
@@ -126,15 +134,30 @@ cd fixtures/tom-and-jerry && rm -rf .depbot/chronicle.db
 Standard `go test ./...`. Tests store CRUD, graph engine, resolve logic, workflow state machine.
 No LLM involved.
 
-### L2.1: Agent extraction — targeted files
-Give Claude specific files (especially tricky ones) and verify it extracts the correct facts
-with correct types. Tests the extraction instructions + fact_schema quality.
-Fixture: selected files from tom-and-jerry or otopoint that are hard to classify.
-This is the key test for improving extraction accuracy.
+### L2.1: Agent extraction — targeted files (haiku)
+Give Claude specific hard files and verify correct facts + types.
+Fixture: `test-l21-expected.json` — 7 files (modules, services, controllers, schemas, consumers, event handlers).
+Tests: from_type detection, import/injects/endpoint/http_call/model/enum/produces/consumes extraction.
+Pass criteria: 35/35 checks. Model: haiku.
 
-### L2.2: Agent extraction — full project scan
-3 parallel haiku agents scan the full tom-and-jerry fixture.
-Measures: duplicates, coverage vs expected-graph, edge type accuracy.
+### L2.1.2: Flow tracing — targeted triggers (sonnet)
+Give Claude trigger files with enriched graph context (flow_context with reachable nodes + files_to_read).
+Fixture: `test-l212-expected.json` — 3 trigger files (arena controller, tom controller, consumer).
+Tests: flow node creation, TRIGGERS_FLOW edges, REQUIRES edges.
+Pass criteria: 8/8 flows. Model: sonnet (haiku produces shallow/missing flows).
+
+### L2.2.1: Full project scan — phase 1 (haiku x3)
+3 parallel haiku agents scan all 41 tom-and-jerry files (phase 1 only — stop at extract_files).
+Tests: 0 duplicates, 0 DEPENDS_ON, 4 modules, 4 controllers, 12+ endpoints, correct CONTAINS/INJECTS.
+
+### L2.2.2: Full project scan — phase 2 (sonnet)
+Sonnet agents trace flows on trigger files identified by phase 1.
+Tests: flow nodes created with trigger-based keys (no duplicates), TRIGGERS_FLOW + REQUIRES edges.
+Uses enriched flow_context (files_to_read, reachable graph neighborhood).
+
+### L2.2: Full project scan — combined
+L2.2.1 + L2.2.2 end-to-end. Haiku for breadth, sonnet for flows.
+Target: 80+ nodes, 100+ edges, 12+ flows, 0 duplicates.
 
 ### L3: Graph queries on a built graph
 Given a pre-built graph, test impact analysis, dependency queries, path finding.

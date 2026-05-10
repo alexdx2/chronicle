@@ -3,6 +3,11 @@ package mcp
 // Command definitions for user-facing slash commands.
 // These are returned by chronicle_extraction_guide and documented in CLAUDE.md.
 
+func init() {
+	// Inject dynamically-built checkpoint flow into scan command
+	CommandInstructions["scan"] = buildScanCommand()
+}
+
 var UserCommands = map[string]string{
 	"scan":     "Full project scan — discover structure, extract all layers, import graph, define domain language",
 	"data":     "Analyze data models only — Prisma/TypeORM schemas, relations, enums",
@@ -21,18 +26,19 @@ var UserCommands = map[string]string{
 }
 
 var CommandInstructions = map[string]string{
-	"scan": `Scan this project:
-1. Call chronicle_scan_next_file(domain) in a loop
-2. Follow the action it returns:
-   - "start_scan": call chronicle_discover_files to start
-   - "extract_files": spawn parallel subagents, one per file in the files array
-   - "call_resolve_extractions": call chronicle_resolve_extractions
-   - "trace_flow": read the trigger file and trace the business flow
-   - "none" with done=true: scan complete
-3. For file extraction, each subagent reads ONE file and calls chronicle_file_extracted
-4. Keep calling chronicle_scan_next_file until done=true
+	"scan": `Scan this project using the chronicle_scan_next_file workflow.
 
-MCP controls the workflow. You just execute what it tells you.`,
+CRITICAL RULES:
+  ❌ NEVER call chronicle_import_all during a scan — use chronicle_file_extracted
+  ❌ NEVER read files and extract facts yourself — subagents do extraction
+  ❌ NEVER skip checkpoints — STOP and wait at each one
+  ❌ NEVER save the manifest without user approval
+  ❌ NEVER guess the domain — use the EXACT domain from chronicle.domain.yaml
+  ✅ The ONLY extraction workflow is: scan_next_file → read file → file_extracted → repeat
+  ✅ YOU are the orchestrator. Subagents do the extraction work.
+  ✅ Pass the EXACT domain to ALL subagents: "domain is '<domain>'"
+
+__STAGES__`,
 
 	"data": `Analyze data models:
 1. Call chronicle_schema({ from_layer: 'code', to_layer: 'data', include: 'edges' }) to see valid data edge types

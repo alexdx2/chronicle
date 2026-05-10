@@ -28,7 +28,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=10000")
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=60000")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
@@ -56,6 +56,24 @@ func (s *Store) Close() error {
 		return s.conn.Close()
 	}
 	return nil
+}
+
+// reconnectIfNeeded checks if the DB connection is dead and reopens it.
+func (s *Store) reconnectIfNeeded(err error) {
+	if err == nil || s.dbPath == "" {
+		return
+	}
+	errStr := err.Error()
+	if errStr == "sql: database is closed" || errStr == "database is locked (5) (SQLITE_BUSY)" {
+		if s.conn != nil {
+			s.conn.Close()
+		}
+		db, openErr := sql.Open("sqlite", s.dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=60000")
+		if openErr == nil {
+			s.conn = db
+			s.db = db
+		}
+	}
 }
 
 // Exec runs a raw SQL statement. Used for post-resolve fixes and migrations.
@@ -130,6 +148,11 @@ func (s *Store) migrate() error {
 		`ALTER TABLE scan_obligations ADD COLUMN claim_expires_at TEXT`,
 		// File-level metadata
 		`ALTER TABLE scan_extractions ADD COLUMN from_type TEXT NOT NULL DEFAULT ''`,
+		// Voting support
+		`ALTER TABLE scan_extractions ADD COLUMN extraction_role TEXT NOT NULL DEFAULT 'single'`,
+		`ALTER TABLE scan_extractions ADD COLUMN vote_group TEXT`,
+		`ALTER TABLE scan_extractions ADD COLUMN vote_index INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scan_runs ADD COLUMN votes_needed INTEGER NOT NULL DEFAULT 1`,
 		// Claim attempt tracking
 		`ALTER TABLE scan_obligations ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
 	}
@@ -232,17 +255,11 @@ func (s *Store) backfillContexts() {
 // If the DB file was deleted externally, this reopens the connection.
 // Refuses to reset if a scan is actively running.
 func (s *Store) ResetDB() error {
-	// Guard: refuse if a scan is running
-	var runningCount int
-	if err := s.db.QueryRow("SELECT count(*) FROM scan_runs WHERE status='running'").Scan(&runningCount); err == nil && runningCount > 0 {
-		return fmt.Errorf("cannot reset: %d scan(s) currently running — wait for completion or mark them failed first", runningCount)
-	}
-
-	// Try a ping first — if the connection is dead (file deleted), reopen
+	// Reconnect first — if DB file was deleted or connection is dead, reopen
 	if s.conn != nil {
 		if err := s.conn.Ping(); err != nil && s.dbPath != "" {
 			s.conn.Close()
-			db, err := sql.Open("sqlite", s.dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=5000")
+			db, err := sql.Open("sqlite", s.dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=60000")
 			if err != nil {
 				return fmt.Errorf("reopening database: %w", err)
 			}
@@ -250,6 +267,9 @@ func (s *Store) ResetDB() error {
 			s.db = db
 		}
 	}
+
+	// Auto-close any running scans — user explicitly asked for reset
+	s.db.Exec("UPDATE scan_runs SET status='failed' WHERE status='running'")
 
 	tables := []string{"scan_runs", "scan_extractions", "scan_obligations", "evidence_verification_runs", "node_aliases", "graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts"}
 	for _, t := range tables {
@@ -549,6 +569,9 @@ CREATE TABLE IF NOT EXISTS scan_extractions (
     status          TEXT NOT NULL DEFAULT 'extracted'
                       CHECK (status IN ('extracted','no_runtime_architecture','config_only','type_only','generated','skipped','failed','resolved')),
     from_type       TEXT NOT NULL DEFAULT '',
+    extraction_role TEXT NOT NULL DEFAULT 'single',
+    vote_group      TEXT,
+    vote_index      INTEGER NOT NULL DEFAULT 0,
     facts_json      TEXT NOT NULL DEFAULT '[]',
     error_message   TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
@@ -568,6 +591,7 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     total_files     INTEGER NOT NULL DEFAULT 0,
     extracted_files INTEGER NOT NULL DEFAULT 0,
     resolved        INTEGER NOT NULL DEFAULT 0,
+    votes_needed    INTEGER NOT NULL DEFAULT 1,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at      TEXT
 );

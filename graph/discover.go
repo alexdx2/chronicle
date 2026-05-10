@@ -10,9 +10,13 @@ import (
 
 // DiscoverResult holds files found during project discovery.
 type DiscoverResult struct {
-	Files      []string       `json:"files"`
-	TotalFiles int            `json:"total_files"`
-	ScanConfig map[string]any `json:"scan_config"`
+	Files        []string          `json:"files"`
+	TotalFiles   int               `json:"total_files"`
+	TotalGit     int               `json:"total_git_files"`     // all git-tracked files before filtering
+	Excluded     int               `json:"excluded"`            // files excluded by patterns
+	ByDirectory  map[string]int    `json:"by_directory"`        // file count per top-level directory
+	ByExtension  map[string]int    `json:"by_extension"`        // file count per extension
+	ScanConfig   map[string]any    `json:"scan_config"`
 }
 
 // DiscoverFiles finds all scannable files using git ls-files + manifest include/exclude rules.
@@ -33,9 +37,31 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, scanC
 		}
 	}
 
+	// Build summary stats
+	byDir := map[string]int{}
+	byExt := map[string]int{}
+	for _, f := range filtered {
+		// Top-level directory (first path component)
+		dir := f
+		if i := strings.Index(f, "/"); i >= 0 {
+			dir = f[:i]
+		}
+		byDir[dir]++
+
+		ext := filepath.Ext(f)
+		if ext == "" {
+			ext = "(no ext)"
+		}
+		byExt[ext]++
+	}
+
 	result := &DiscoverResult{
-		Files:      filtered,
-		TotalFiles: len(filtered),
+		Files:       filtered,
+		TotalFiles:  len(filtered),
+		TotalGit:    len(gitFiles),
+		Excluded:    len(gitFiles) - len(filtered),
+		ByDirectory: byDir,
+		ByExtension: byExt,
 	}
 
 	if scanCfg != nil {
@@ -73,11 +99,38 @@ func gitTrackedFiles(rootDir string) ([]string, error) {
 	return files, nil
 }
 
+// alwaysExclude are patterns that are ALWAYS excluded regardless of manifest.
+// These are directories that never contain scannable architecture.
+var alwaysExclude = []string{
+	"**/node_modules/**",
+	"**/.history/**",
+	"**/.git/**",
+	"**/dist/**",
+	"**/build/**",
+	"**/@generated/**",
+	"**/generated/**",
+	"**/__pycache__/**",
+	"**/.venv/**",
+	"**/vendor/**",
+	"**/*.min.js",
+	"**/*.map",
+	"**/*.lock",
+	"**/migrations/**",
+}
+
 // shouldInclude checks if a file matches the manifest scan config.
 // If no config → include everything (Claude decides per-file).
 // If include patterns exist → file must match at least one.
 // If exclude patterns exist → file must NOT match any.
+// alwaysExclude patterns are applied regardless of config.
 func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
+	// Always-exclude patterns (safety net)
+	for _, pattern := range alwaysExclude {
+		if matchGlob(filePath, pattern) {
+			return false
+		}
+	}
+
 	if cfg == nil || (len(cfg.Include) == 0 && len(cfg.Exclude) == 0) {
 		return true // no config = include all
 	}

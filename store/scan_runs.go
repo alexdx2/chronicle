@@ -15,16 +15,21 @@ type ScanRunRow struct {
 	TotalFiles     int    `json:"total_files"`
 	ExtractedFiles int    `json:"extracted_files"`
 	Resolved       int    `json:"resolved"`
+	VotesNeeded    int    `json:"votes_needed"`
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at,omitempty"`
 }
 
 // CreateScanRun inserts a new scan run with phase=setup, status=running.
-func (s *Store) CreateScanRun(revisionID int64, domainKey string) (int64, error) {
+func (s *Store) CreateScanRun(revisionID int64, domainKey string, votesNeeded ...int) (int64, error) {
+	votes := 1
+	if len(votesNeeded) > 0 && votesNeeded[0] > 0 {
+		votes = votesNeeded[0]
+	}
 	res, err := s.db.Exec(`
-		INSERT INTO scan_runs (revision_id, domain_key)
-		VALUES (?, ?)
-	`, revisionID, domainKey)
+		INSERT INTO scan_runs (revision_id, domain_key, votes_needed)
+		VALUES (?, ?, ?)
+	`, revisionID, domainKey, votes)
 	if err != nil {
 		return 0, fmt.Errorf("CreateScanRun: %w", err)
 	}
@@ -37,10 +42,10 @@ func (s *Store) GetScanRun(runID int64) (*ScanRunRow, error) {
 	var updatedAt sql.NullString
 	err := s.db.QueryRow(`
 		SELECT run_id, revision_id, domain_key, phase, status,
-		       total_files, extracted_files, resolved, created_at, updated_at
+		       total_files, extracted_files, resolved, COALESCE(votes_needed,1), created_at, updated_at
 		FROM scan_runs WHERE run_id = ?
 	`, runID).Scan(&r.RunID, &r.RevisionID, &r.DomainKey, &r.Phase, &r.Status,
-		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.CreatedAt, &updatedAt)
+		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded, &r.CreatedAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("GetScanRun: %w", err)
 	}
@@ -57,12 +62,12 @@ func (s *Store) GetActiveScanRun(domainKey string) (*ScanRunRow, error) {
 	var updatedAt sql.NullString
 	err := s.db.QueryRow(`
 		SELECT run_id, revision_id, domain_key, phase, status,
-		       total_files, extracted_files, resolved, created_at, updated_at
+		       total_files, extracted_files, resolved, COALESCE(votes_needed,1), created_at, updated_at
 		FROM scan_runs
 		WHERE domain_key = ? AND phase != 'finalized' AND status NOT IN ('completed','failed')
 		ORDER BY run_id DESC LIMIT 1
 	`, domainKey).Scan(&r.RunID, &r.RevisionID, &r.DomainKey, &r.Phase, &r.Status,
-		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.CreatedAt, &updatedAt)
+		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded, &r.CreatedAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

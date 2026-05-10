@@ -18,6 +18,7 @@ import (
 
 	dashboard "github.com/alexdx2/chronicle-core/admin"
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/internal/mcp"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
@@ -362,6 +363,11 @@ func (s *Server) Start() error {
 		fmt.Fprintf(os.Stderr, "Dev mode: serving static files from %s\n", staticDir)
 		fileServer := http.FileServer(http.Dir(staticDir))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Unknown /api/ paths return 404, not HTML
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
 			path := filepath.Join(staticDir, r.URL.Path)
 			if _, err := os.Stat(path); err == nil {
 				fileServer.ServeHTTP(w, r)
@@ -376,6 +382,11 @@ func (s *Server) Start() error {
 		}
 		fileServer := http.FileServer(http.FS(staticContent))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Unknown /api/ paths return 404, not HTML
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
 			// Serve static assets (favicon, logos) from embed
 			f, err := staticContent.Open(strings.TrimPrefix(r.URL.Path, "/"))
 			if err == nil {
@@ -760,6 +771,8 @@ func (s *Server) handleSaveTerm(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePromptSetting(w http.ResponseWriter, r *http.Request) {
 	st := s.getStore()
+	guideDefaults := prompts.Defaults()
+
 	if r.Method == "GET" {
 		// Return all command prompts — defaults merged with custom overrides
 		result := map[string]string{}
@@ -771,7 +784,16 @@ func (s *Server) handlePromptSetting(w http.ResponseWriter, r *http.Request) {
 				result[cmd] = custom
 			}
 		}
-		// Also include the extraction guide custom prompt
+		// Include extraction guide prompts (fact_schema, enrichment, flow_tracing)
+		for key, defaultGuide := range guideDefaults {
+			custom, err := st.GetSetting(key)
+			if err != nil || custom == "" {
+				result[key] = defaultGuide
+			} else {
+				result[key] = custom
+			}
+		}
+		// Legacy extraction guide custom prompt
 		guideCustom, _ := st.GetSetting("extraction_prompt")
 		result["_extraction_guide"] = guideCustom
 		httpJSON(w, result)
@@ -786,10 +808,17 @@ func (s *Server) handlePromptSetting(w http.ResponseWriter, r *http.Request) {
 		for key, val := range req {
 			if key == "_extraction_guide" {
 				st.SetSetting("extraction_prompt", val)
+			} else if _, isGuide := guideDefaults[key]; isGuide {
+				// Guide prompt override — clear if same as default
+				if val == guideDefaults[key] {
+					st.SetSetting(key, "")
+				} else {
+					st.SetSetting(key, val)
+				}
 			} else {
-				// Only save if different from default
+				// Command prompt override
 				if defaultVal, ok := mcp.CommandInstructions[key]; ok && val == defaultVal {
-					st.SetSetting("prompt_"+key, "") // clear override, use default
+					st.SetSetting("prompt_"+key, "")
 				} else {
 					st.SetSetting("prompt_"+key, val)
 				}

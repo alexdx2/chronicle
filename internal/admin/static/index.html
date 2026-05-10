@@ -1037,6 +1037,40 @@ a{color:var(--primary);text-decoration:none}
     </div>
   </div>
 
+  <!-- Extraction Guides -->
+  <div class="card" style="width:100%;margin-top:16px">
+    <div class="card-header">
+      <h3>Extraction Guides</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span x-show="guideSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
+        <button @click="saveAllGuides()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+        These guides are sent to extraction agents during scanning. Customize them per project to improve extraction quality.
+      </p>
+
+      <template x-for="[key, label] in [['guide_fact_schema','Fact Schema (non-TS files)'],['guide_enrichment','Enrichment (candidate classification)'],['guide_flow','Flow Tracing (phase 2)']]" :key="key">
+        <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <div @click="expandedGuide = expandedGuide === key ? null : key"
+               style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
+            <div>
+              <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="key"></code>
+              <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="label"></span>
+            </div>
+            <span style="color:var(--text-muted);font-size:12px" x-text="expandedGuide === key ? '&#9660;' : '&#9654;'"></span>
+          </div>
+          <div x-show="expandedGuide === key" x-cloak>
+            <textarea x-model="guidePrompts[key]" @input="guideSaved=false"
+              style="width:100%;min-height:200px;font-family:var(--font-mono);font-size:11px;line-height:1.6;padding:10px;border:none;border-top:1px solid var(--border);background:#fff;resize:vertical;color:var(--text);box-sizing:border-box"
+              spellcheck="false"></textarea>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <!-- Edge Categories -->
   <div class="card" style="width:100%;margin-top:16px">
     <div class="card-header">
@@ -1303,6 +1337,9 @@ function dashboard() {
     commandPrompts: {},
     promptSaved: false,
     expandedPrompt: null,
+    guidePrompts: {},
+    guideSaved: false,
+    expandedGuide: null,
     promptOrder: ['scan', 'data', 'flows', 'language', 'services', 'impact', 'deps', 'path', 'status'],
     promptDescriptions: {
       scan: 'Full project scan',
@@ -1520,7 +1557,8 @@ function dashboard() {
       try {
         // Try federation stats first (pro only — endpoint doesn't exist in core)
         let r = await fetch('/api/federation/stats');
-        if (r.ok) {
+        const ct = r.headers.get('content-type') || '';
+        if (r.ok && ct.includes('application/json')) {
           const data = await r.json();
           this.stats = { graph: data.aggregated || data, requests: {} };
           return;
@@ -1589,7 +1627,17 @@ function dashboard() {
     async fetchPrompt() {
       try {
         const r = await fetch('/api/settings/prompt');
-        this.commandPrompts = await r.json();
+        const data = await r.json();
+        // Separate guide prompts from command prompts
+        this.guidePrompts = {};
+        this.commandPrompts = {};
+        for (const [k, v] of Object.entries(data)) {
+          if (k.startsWith('guide_')) {
+            this.guidePrompts[k] = v;
+          } else {
+            this.commandPrompts[k] = v;
+          }
+        }
       } catch(e) { console.error('prompt:', e); }
     },
 
@@ -1603,6 +1651,18 @@ function dashboard() {
         this.promptSaved = true;
         setTimeout(() => this.promptSaved = false, 2000);
       } catch(e) { console.error('save prompts:', e); }
+    },
+
+    async saveAllGuides() {
+      try {
+        await fetch('/api/settings/prompt', {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(this.guidePrompts),
+        });
+        this.guideSaved = true;
+        setTimeout(() => this.guideSaved = false, 2000);
+      } catch(e) { console.error('save guides:', e); }
     },
 
     async resetToDefault() {

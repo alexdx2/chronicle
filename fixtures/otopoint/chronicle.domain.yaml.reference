@@ -1,0 +1,84 @@
+domain: otopoint
+description: "OtoPoint - Restaurant management and loyalty platform monorepo with real-time ordering, group collaboration, voucher/loyalty system, and multi-tenant merchant management"
+repos:
+  - path: .
+    ref: main
+tech:
+  - typescript
+  - nestjs
+  - graphql
+  - prisma
+  - socketio
+  - redis
+  - postgresql
+  - docker
+  - react
+  - react-native
+  - expo
+  - vite
+  - tailwindcss
+  - playwright
+  - centrifugo
+scan:
+  include:
+    - "api/src/**/*.ts"
+    - "api/prisma/**/*.prisma"
+    - "api/package.json"
+    - "packages/pricing-engine/src/**/*.ts"
+    - "packages/shared-core/src/**/*.ts"
+  exclude:
+    - "**/*.test.*"
+    - "**/*.spec.*"
+    - "**/*.mock.*"
+    - "**/*.stub.*"
+    - "**/*.d.ts"
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/generated/**"
+    - "api/src/@generated/**"
+    - "e2e/**"
+    - "benchmark/**"
+    - "fixtures/**"
+services:
+  - name: api
+    path: api
+    description: "NestJS backend API - GraphQL, Socket.io, Prisma ORM, event-sourced balances"
+  - name: crm
+    path: crm
+    description: "React CRM dashboard - merchant admin, kitchen view, waiter tools"
+  - name: mobile
+    path: mobile
+    description: "React Native + Expo mobile app - customer UI, merchant tools, real-time ordering"
+  - name: web
+    path: web
+    description: "Customer web ordering - React 19, anonymous users, QR code entry, deeplink to mobile"
+  - name: pricing-engine
+    path: packages/pricing-engine
+    description: "Shared pricing and promotion calculation engine"
+  - name: shared-core
+    path: packages/shared-core
+    description: "Shared core types and utilities across packages"
+  - name: centrifugo
+    path: centrifugo
+    description: "Centrifugo real-time messaging server config for chat system"
+domains:
+  - name: orders
+    description: "Order lifecycle management - creation, preparation, pickup, closing"
+  - name: lobby
+    description: "Printer/lobby system - QR rooms, group ordering, real-time collaboration"
+  - name: vouchers
+    description: "Voucher lifecycle - FREE_ITEM, DISCOUNT types, stacking rules"
+  - name: balance
+    description: "Event-sourced loyalty points - immutable transactions, balance projections"
+  - name: menu
+    description: "Menu items, categories, option groups, pricing, scheduling"
+  - name: merchant
+    description: "Multi-tenant merchant management, locations, settings, subscriptions"
+  - name: gamification
+    description: "Challenges, battle passes, surprise boxes, promo groups, promo timeline"
+  - name: chat
+    description: "Real-time chat via Centrifugo - order placeholders, unread counts"
+  - name: user
+    description: "User management, anonymous users, authentication (JWT + Auth0)"
+  - name: offline-orders
+    description: "Merchant-created orders for walk-in customers without app"

@@ -26,7 +26,9 @@ type Manifest struct {
 	Repos        []Repository `yaml:"repos,omitempty"`    // alias for repositories (legacy)
 	Services     []Repository `yaml:"services,omitempty"` // service definitions
 	Owner        string       `yaml:"owner"`
-	Scan         ScanConfig   `yaml:"scan,omitempty"`
+	Tech              []string     `yaml:"tech,omitempty"`               // frameworks/languages: nestjs, graphql, prisma, express, etc.
+	InstructionPacks  []string     `yaml:"instruction_packs,omitempty"`  // explicit pack IDs to load (e.g. "framework/nestjs", "orm/prisma")
+	Scan              ScanConfig   `yaml:"scan,omitempty"`
 }
 
 func LoadFile(path string) (*Manifest, error) {
