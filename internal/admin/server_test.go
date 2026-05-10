@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/graph"
@@ -95,6 +96,86 @@ func TestHandleScans(t *testing.T) {
 	srv.handleScans(w, req)
 	if w.Code != 200 {
 		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
+func TestHandleDiagramBuild(t *testing.T) {
+	srv := setupTestServer(t)
+
+	// Insert test nodes
+	idA, err := srv.store.UpsertNode(store.NodeRow{
+		NodeKey: "code:service:test:OrdersAPI", Layer: "code", NodeType: "service", DomainKey: "test", Name: "OrdersAPI", Status: "active",
+	})
+	if err != nil {
+		t.Fatalf("insert node A: %v", err)
+	}
+	idB, err := srv.store.UpsertNode(store.NodeRow{
+		NodeKey: "code:service:test:PaymentsAPI", Layer: "code", NodeType: "service", DomainKey: "test", Name: "PaymentsAPI", Status: "active",
+	})
+	if err != nil {
+		t.Fatalf("insert node B: %v", err)
+	}
+	// Insert edge between them
+	_, err = srv.store.UpsertEdge(store.EdgeRow{
+		EdgeKey: "code:service:test:OrdersAPI->code:service:test:PaymentsAPI:CALLS_SERVICE",
+		FromNodeID: idA, ToNodeID: idB, EdgeType: "CALLS_SERVICE", DerivationKind: "hard",
+		FromNodeKey: "code:service:test:OrdersAPI", ToNodeKey: "code:service:test:PaymentsAPI",
+	})
+	if err != nil {
+		t.Fatalf("insert edge: %v", err)
+	}
+
+	body := `{
+		"title": "Test Build",
+		"node_keys": ["code:service:test:OrdersAPI", "code:service:test:PaymentsAPI", "INVALID_KEY"],
+		"virtual_nodes": [{"key": "user", "name": "User", "type": "actor"}],
+		"virtual_edges": [{"from": "user", "to": "code:service:test:OrdersAPI", "edge_type": "http_request", "label": "POST /orders"}]
+	}`
+	req := httptest.NewRequest("POST", "/api/diagram/build", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleDiagram(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var result map[string]any
+	json.NewDecoder(w.Body).Decode(&result)
+
+	// Should have session_id and url
+	if result["session_id"] == nil || result["session_id"] == "" {
+		t.Fatal("expected session_id in response")
+	}
+	if result["url"] == nil || result["url"] == "" {
+		t.Fatal("expected url in response")
+	}
+	// 2 real + 1 virtual = 3 nodes
+	nodeCount := int(result["node_count"].(float64))
+	if nodeCount != 3 {
+		t.Fatalf("expected 3 nodes, got %d", nodeCount)
+	}
+	// 1 real edge (A->B) + 1 virtual edge (user->A) = 2
+	edgeCount := int(result["edge_count"].(float64))
+	if edgeCount != 2 {
+		t.Fatalf("expected 2 edges, got %d", edgeCount)
+	}
+	// INVALID_KEY should be in errors
+	errs, ok := result["errors"].([]any)
+	if !ok || len(errs) != 1 {
+		t.Fatalf("expected 1 error for invalid key, got %v", result["errors"])
+	}
+	if errs[0].(string) != "INVALID_KEY" {
+		t.Fatalf("expected INVALID_KEY error, got %v", errs[0])
+	}
+}
+
+func TestHandleDiagramBuildAllInvalid(t *testing.T) {
+	srv := setupTestServer(t)
+	body := `{"title": "Bad", "node_keys": ["NOPE", "ALSO_NOPE"]}`
+	req := httptest.NewRequest("POST", "/api/diagram/build", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleDiagram(w, req)
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
