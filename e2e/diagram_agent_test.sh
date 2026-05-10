@@ -229,11 +229,147 @@ PYEOF
   fi
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST 2: Request Flow with Virtual Nodes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+section "Test 2: Request Flow (virtual nodes + hide_edges)"
+info "Asking Claude to show how a user request reaches the database..."
+
+# Clear request log for clean assertions
+sqlite3 "$DB_PATH" "DELETE FROM mcp_request_log" 2>/dev/null
+
+CLAUDE_PROMPT2="You have Chronicle MCP tools available. The project graph is already populated.
+
+Show me how a user request flows through arena-api to reach the database. Build a live diagram.
+
+IMPORTANT RULES:
+- Use chronicle_diagram_build (NOT chronicle_diagram_create + chronicle_diagram_update)
+- Add a virtual node for the User/Client (they are not in the graph)
+- Add a virtual edge from the User to the entry point (controller or endpoint)
+- Use hide_edges to remove any CONTAINS or INJECTS edges that add noise to the flow
+- Query the graph first to find the right node_keys
+- Do NOT ask questions. Execute immediately."
+
+claude --print \
+  --model haiku \
+  --dangerously-skip-permissions \
+  --mcp-config "$MCP_CONFIG" \
+  --strict-mcp-config \
+  "$CLAUDE_PROMPT2" > "$RESULTS_DIR/diagram_test2_output.txt" 2>&1 || true
+
+pass "Claude finished (test 2)"
+
+# ─── Verify Tool Usage ───
+section "Test 2: Tool Usage"
+
+BUILD_CALLS2=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM mcp_request_log WHERE tool_name = 'chronicle_diagram_build'" 2>/dev/null || echo "0")
+if [ "$BUILD_CALLS2" -ge 1 ]; then
+  pass "chronicle_diagram_build called ($BUILD_CALLS2 time(s))"
+else
+  fail "chronicle_diagram_build NOT called"
+fi
+
+# ─── Verify Virtual Nodes & Edges ───
+section "Test 2: Virtual Nodes & Edges"
+
+if [ "$BUILD_CALLS2" -eq 0 ]; then
+  fail "Cannot verify — diagram_build was not called"
+else
+  sqlite3 "$DB_PATH" "SELECT params_json FROM mcp_request_log WHERE tool_name = 'chronicle_diagram_build' ORDER BY rowid DESC LIMIT 1" > "$WORK_DIR/build_params2.json" 2>/dev/null
+
+  export WORK_DIR
+  python3 << 'PYEOF'
+import json, sys, os
+
+work_dir = os.environ.get('WORK_DIR', '/tmp')
+with open(os.path.join(work_dir, 'build_params2.json')) as f:
+    params = json.loads(f.read().strip())
+
+errors = 0
+
+# Check virtual_nodes present
+virtual_nodes_raw = params.get('virtual_nodes', '[]')
+if isinstance(virtual_nodes_raw, str):
+    virtual_nodes = json.loads(virtual_nodes_raw) if virtual_nodes_raw else []
+else:
+    virtual_nodes = virtual_nodes_raw
+
+if len(virtual_nodes) >= 1:
+    names = [vn.get('name', vn.get('key', '?')) for vn in virtual_nodes]
+    print(f"  \033[0;32m✓ Virtual nodes ({len(virtual_nodes)}): {names}\033[0m")
+    # Check at least one looks like a user/client
+    user_found = any(
+        'user' in str(vn).lower() or 'client' in str(vn).lower()
+        for vn in virtual_nodes
+    )
+    if user_found:
+        print(f"  \033[0;32m✓ User/Client virtual node found\033[0m")
+    else:
+        print(f"  \033[0;31m✗ No User/Client virtual node (expected one)\033[0m")
+        errors += 1
+else:
+    print(f"  \033[0;31m✗ No virtual_nodes provided (expected User/Client)\033[0m")
+    errors += 1
+
+# Check virtual_edges present
+virtual_edges_raw = params.get('virtual_edges', '[]')
+if isinstance(virtual_edges_raw, str):
+    virtual_edges = json.loads(virtual_edges_raw) if virtual_edges_raw else []
+else:
+    virtual_edges = virtual_edges_raw
+
+if len(virtual_edges) >= 1:
+    print(f"  \033[0;32m✓ Virtual edges ({len(virtual_edges)}): {virtual_edges}\033[0m")
+else:
+    print(f"  \033[0;31m✗ No virtual_edges provided (expected User→entry point)\033[0m")
+    errors += 1
+
+# Check hide_edges present (should hide CONTAINS or INJECTS)
+hide_edges_raw = params.get('hide_edges', '[]')
+if isinstance(hide_edges_raw, str):
+    hide_edges = json.loads(hide_edges_raw) if hide_edges_raw else []
+else:
+    hide_edges = hide_edges_raw
+
+if len(hide_edges) >= 1:
+    print(f"  \033[0;32m✓ hide_edges ({len(hide_edges)}): filtering noise\033[0m")
+else:
+    print(f"  \033[1;33m⚠ No hide_edges — Claude didn't filter noisy edges\033[0m")
+    # Not a hard failure — Claude might decide it's not needed
+
+# Check node_keys include arena-related nodes
+node_keys_raw = params.get('node_keys', '[]')
+if isinstance(node_keys_raw, str):
+    node_keys = json.loads(node_keys_raw)
+else:
+    node_keys = node_keys_raw
+
+arena_found = any('arena' in k.lower() for k in node_keys)
+if arena_found:
+    print(f"  \033[0;32m✓ Arena nodes included in flow\033[0m")
+else:
+    print(f"  \033[0;31m✗ No arena nodes — flow should go through arena-api\033[0m")
+    errors += 1
+
+print(f"  node_keys ({len(node_keys)}): {node_keys}")
+
+sys.exit(errors)
+PYEOF
+
+  PYEXIT2=$?
+  if [ "$PYEXIT2" -eq 0 ]; then
+    pass "All virtual node/edge assertions passed"
+  else
+    ERRORS=$((ERRORS + PYEXIT2))
+  fi
+fi
+
 # ═══ Summary ═══
 echo ""
 echo "══════════════════════════════════════════════════════"
 if [ "$ERRORS" -eq 0 ]; then
-  echo -e "${GREEN}  DIAGRAM TEST PASSED ✓${NC}"
+  echo -e "${GREEN}  ALL DIAGRAM TESTS PASSED ✓${NC}"
 else
   echo -e "${RED}  $ERRORS CHECK(S) FAILED${NC}"
 fi
