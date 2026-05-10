@@ -18,13 +18,13 @@ Questions that cross layers — "how does the User model connect to the payments
 
 ## Scanning
 
-When you say `chronicle scan`, your AI agent reads code file by file and extracts structured facts:
+Chronicle uses a hybrid AST + LLM pipeline. Tree-sitter parses deterministic patterns (imports, decorators, DI), a rules engine maps framework syntax to semantic meaning, and LLM agents classify ambiguous patterns (HTTP calls, event emits) that require context.
 
-- "UserService injects PrismaService"
-- "OrderController exposes POST /orders"
-- "api-service calls payments-service via HTTP"
+Extraction runs in two phases: haiku agents scan all files in parallel for breadth, then sonnet agents trace complex flows on trigger files for depth. Instruction packs tell agents what framework patterns to look for.
 
-Chronicle validates, normalizes, and stores each fact in SQLite.
+Every extracted fact carries evidence — file, line, confidence, derivation kind — enabling incremental re-scans and trust scoring.
+
+See [docs/scanning.md](scanning.md) for the full pipeline breakdown.
 
 ## Evidence and trust
 
