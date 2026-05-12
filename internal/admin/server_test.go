@@ -128,8 +128,8 @@ func TestHandleDiagramBuild(t *testing.T) {
 	body := `{
 		"title": "Test Build",
 		"node_keys": ["code:service:test:OrdersAPI", "code:service:test:PaymentsAPI", "INVALID_KEY"],
-		"virtual_nodes": [{"key": "user", "name": "User", "type": "actor"}],
-		"virtual_edges": [{"from": "user", "to": "code:service:test:OrdersAPI", "edge_type": "http_request", "label": "POST /orders"}]
+		"nodes": [{"key": "user", "label": "User", "kind": "actor"}],
+		"edges": [{"from": "user", "to": "code:service:test:OrdersAPI", "kind": "http", "label": "POST /orders"}]
 	}`
 	req := httptest.NewRequest("POST", "/api/diagram/build", strings.NewReader(body))
 	w := httptest.NewRecorder()
@@ -171,6 +171,28 @@ func TestHandleDiagramBuild(t *testing.T) {
 func TestHandleDiagramBuildAllInvalid(t *testing.T) {
 	srv := setupTestServer(t)
 	body := `{"title": "Bad", "node_keys": ["NOPE", "ALSO_NOPE"]}`
+	req := httptest.NewRequest("POST", "/api/diagram/build", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleDiagram(w, req)
+	// All keys invalid still returns 200 with 0 nodes and errors list
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var result map[string]any
+	json.NewDecoder(w.Body).Decode(&result)
+	nodeCount := int(result["node_count"].(float64))
+	if nodeCount != 0 {
+		t.Fatalf("expected 0 nodes, got %d", nodeCount)
+	}
+	errs, ok := result["errors"].([]any)
+	if !ok || len(errs) != 2 {
+		t.Fatalf("expected 2 errors, got %v", result["errors"])
+	}
+}
+
+func TestHandleDiagramBuildNoInput(t *testing.T) {
+	srv := setupTestServer(t)
+	body := `{"title": "Bad"}`
 	req := httptest.NewRequest("POST", "/api/diagram/build", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.handleDiagram(w, req)

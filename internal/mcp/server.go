@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
@@ -75,9 +74,6 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(getGlossaryTool(), getGlossaryHandler(g))
 	s.AddTool(checkLanguageTool(), checkLanguageHandler(g))
 	s.AddTool(commandTool(), commandHandler(g))
-	s.AddTool(diagramCreateTool(), diagramCreateHandler())
-	s.AddTool(diagramUpdateTool(), diagramUpdateHandler())
-	s.AddTool(diagramAnnotateTool(), diagramAnnotateHandler())
 	s.AddTool(diagramBuildTool(), diagramBuildHandler())
 	s.AddTool(resolveContextTool(), resolveContextHandler(g))
 	s.AddTool(contextListTool(), contextListHandler(g))
@@ -2075,147 +2071,6 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 // ---------------------------------------------------------------------------
 // chronicle_diagram_create
 // ---------------------------------------------------------------------------
-
-func diagramCreateTool() mcp.Tool {
-	return mcp.NewTool("chronicle_diagram_create",
-		mcp.WithDescription("Create a live diagram session. Returns a URL the user can open to see the diagram. Use chronicle_diagram_update to push content."),
-		mcp.WithString("title", mcp.Description("Human-readable title for the diagram, e.g. 'Auth Flow' or 'Order Dependencies'")),
-	)
-}
-
-func diagramCreateHandler() server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		title := strParam(req.GetArguments(), "title")
-		if title == "" {
-			title = "Diagram"
-		}
-		sessionID := fmt.Sprintf("%x", time.Now().UnixNano())[len(fmt.Sprintf("%x", time.Now().UnixNano()))-8:]
-
-		port := adminPortValue
-		if port == 0 {
-			port = 4200
-		}
-
-		body, _ := json.Marshal(map[string]string{"session_id": sessionID, "title": title})
-		resp, err := http.Post(fmt.Sprintf("http://localhost:%d/api/diagram", port), "application/json", bytes.NewReader(body))
-		if err != nil {
-			return errorResult(fmt.Errorf("failed to create diagram session: %w", err)), nil
-		}
-		defer resp.Body.Close()
-
-		var result map[string]any
-		json.NewDecoder(resp.Body).Decode(&result)
-		return jsonResult(result), nil
-	}
-}
-
-// ---------------------------------------------------------------------------
-// chronicle_diagram_update
-// ---------------------------------------------------------------------------
-
-func diagramUpdateTool() mcp.Tool {
-	return mcp.NewTool("chronicle_diagram_update",
-		mcp.WithDescription("Push graph data to a live diagram. The dashboard updates in real-time. Can be called repeatedly to evolve the diagram. Payload uses standard Chronicle graph format: {nodes: [...], edges: [...]}"),
-		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from chronicle_diagram_create")),
-		mcp.WithString("payload", mcp.Required(), mcp.Description("JSON string: {\"nodes\": [{\"node_id\": 1, \"node_key\": \"...\", \"name\": \"...\", \"layer\": \"...\", \"node_type\": \"...\"}], \"edges\": [{\"from_node_id\": 1, \"to_node_id\": 2, \"edge_type\": \"...\"}]}")),
-	)
-}
-
-func diagramUpdateHandler() server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		sessionID := strParam(req.GetArguments(), "session_id")
-		payloadStr := strParam(req.GetArguments(), "payload")
-		if sessionID == "" || payloadStr == "" {
-			return errorResult(fmt.Errorf("session_id and payload are required")), nil
-		}
-
-		port := adminPortValue
-		if port == 0 {
-			port = 4200
-		}
-
-		url := fmt.Sprintf("http://localhost:%d/api/diagram/%s", port, sessionID)
-		httpReq, _ := http.NewRequest("PUT", url, strings.NewReader(payloadStr))
-		httpReq.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(httpReq)
-		if err != nil {
-			return errorResult(fmt.Errorf("failed to update diagram: %w", err)), nil
-		}
-		defer resp.Body.Close()
-
-		var result map[string]any
-		json.NewDecoder(resp.Body).Decode(&result)
-		return jsonResult(result), nil
-	}
-}
-
-// ---------------------------------------------------------------------------
-// chronicle_diagram_annotate
-// ---------------------------------------------------------------------------
-
-func diagramAnnotateTool() mcp.Tool {
-	return mcp.NewTool("chronicle_diagram_annotate",
-		mcp.WithDescription("Add a highlight or text note to a node in a live diagram. The node gets a colored glow and/or a text label. Use 'step' to create presentation steps — user navigates with Next/Back buttons."),
-		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID from chronicle_diagram_create")),
-		mcp.WithString("node_key", mcp.Required(), mcp.Description("node_key of the node to annotate")),
-		mcp.WithString("note", mcp.Description("Text note shown near the node, e.g. 'This is the bottleneck'")),
-		mcp.WithString("highlight", mcp.Description("Highlight color — name or hex, e.g. 'red', '#ff6600', 'green'")),
-		mcp.WithNumber("step", mcp.Description("Presentation step number (0-based). Omit for always-visible annotations. User sees Next/Back buttons to navigate steps.")),
-		mcp.WithString("step_title", mcp.Description("Title for this step shown in the navigation bar, e.g. 'Tom attacks'")),
-		mcp.WithString("step_description", mcp.Description("Longer description text shown below the diagram for this step")),
-	)
-}
-
-func diagramAnnotateHandler() server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args := req.GetArguments()
-		sessionID := strParam(args, "session_id")
-		nodeKey := strParam(args, "node_key")
-		note := strParam(args, "note")
-		highlight := strParam(args, "highlight")
-		if sessionID == "" || nodeKey == "" {
-			return errorResult(fmt.Errorf("session_id and node_key are required")), nil
-		}
-		if note == "" && highlight == "" {
-			return errorResult(fmt.Errorf("at least one of note or highlight is required")), nil
-		}
-
-		port := adminPortValue
-		if port == 0 {
-			port = 4200
-		}
-
-		payload := map[string]any{"node_key": nodeKey, "note": note, "highlight": highlight}
-		if stepVal, ok := args["step"]; ok {
-			if stepNum, ok2 := stepVal.(float64); ok2 {
-				step := int(stepNum)
-				payload["step"] = step
-			}
-		}
-		stepTitle := strParam(args, "step_title")
-		if stepTitle != "" {
-			payload["step_title"] = stepTitle
-		}
-		stepDesc := strParam(args, "step_description")
-		if stepDesc != "" {
-			payload["step_description"] = stepDesc
-		}
-
-		body, _ := json.Marshal(payload)
-		url := fmt.Sprintf("http://localhost:%d/api/diagram/%s/annotate", port, sessionID)
-		httpReq, _ := http.NewRequest("PUT", url, bytes.NewReader(body))
-		httpReq.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(httpReq)
-		if err != nil {
-			return errorResult(fmt.Errorf("failed to annotate diagram: %w", err)), nil
-		}
-		defer resp.Body.Close()
-
-		var result map[string]any
-		json.NewDecoder(resp.Body).Decode(&result)
-		return jsonResult(result), nil
-	}
-}
 
 // ---------------------------------------------------------------------------
 // chronicle_diagram_build

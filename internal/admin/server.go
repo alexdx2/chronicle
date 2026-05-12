@@ -51,18 +51,61 @@ func portFromPath(dir string) int {
 //go:embed static/*
 var staticFS embed.FS
 
+type DiagramNode struct {
+	Key       string            `json:"key"`
+	Label     string            `json:"label"`
+	Kind      string            `json:"kind"`
+	SourceKey string            `json:"source_key,omitempty"`
+	Domain    string            `json:"domain,omitempty"`
+	Layer     string            `json:"layer,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+}
+
+type DiagramEdge struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Label string `json:"label,omitempty"`
+	Kind  string `json:"kind,omitempty"`
+}
+
+type DiagramStep struct {
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	Highlights  map[string]string `json:"highlights"`
+	Notes       map[string]string `json:"notes,omitempty"`
+}
+
+type DiagramGroups struct {
+	Field string `json:"field"`
+}
+
+type HideEdgeRule struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	EdgeType string `json:"edge_type,omitempty"`
+}
+
+type DiagramBuildRequest struct {
+	Title       string                 `json:"title"`
+	Nodes       []DiagramNode          `json:"nodes,omitempty"`
+	Edges       []DiagramEdge          `json:"edges,omitempty"`
+	NodeKeys    []string               `json:"node_keys,omitempty"`
+	Groups      *DiagramGroups         `json:"groups,omitempty"`
+	Steps       []DiagramStep          `json:"steps,omitempty"`
+	Annotations map[string]DiagramNote `json:"annotations,omitempty"`
+	HideEdges   []HideEdgeRule         `json:"hide_edges,omitempty"`
+}
+
 type DiagramSession struct {
-	ID          string                            `json:"id"`
-	Title       string                            `json:"title"`
-	Nodes       []map[string]any                  `json:"nodes"`
-	Edges       []map[string]any                  `json:"edges"`
-	Annotations map[string]DiagramNote            `json:"annotations"`
-	Steps            map[int]map[string]DiagramNote `json:"steps"`             // step_number → {node_key → annotation}
-	StepTitles       map[int]string                `json:"step_titles"`       // step_number → title
-	StepDescriptions map[int]string                `json:"step_descriptions"` // step_number → description text
-	TotalSteps       int                           `json:"total_steps"`
-	CreatedAt   string                            `json:"created_at"`
-	UpdatedAt   string                            `json:"updated_at"`
+	ID          string                 `json:"id"`
+	Title       string                 `json:"title"`
+	Nodes       []DiagramNode          `json:"nodes"`
+	Edges       []DiagramEdge          `json:"edges"`
+	Groups      *DiagramGroups         `json:"groups,omitempty"`
+	Annotations map[string]DiagramNote `json:"annotations,omitempty"`
+	Steps       []DiagramStep          `json:"steps,omitempty"`
+	CreatedAt   string                 `json:"created_at"`
+	UpdatedAt   string                 `json:"updated_at"`
 }
 
 type DiagramNote struct {
@@ -219,15 +262,6 @@ func (s *Server) loadDiagramSessions() {
 		session.ID = row["session_id"]
 		if session.Annotations == nil {
 			session.Annotations = make(map[string]DiagramNote)
-		}
-		if session.Steps == nil {
-			session.Steps = make(map[int]map[string]DiagramNote)
-		}
-		if session.StepTitles == nil {
-			session.StepTitles = make(map[int]string)
-		}
-		if session.StepDescriptions == nil {
-			session.StepDescriptions = make(map[int]string)
 		}
 		s.diagrams[session.ID] = &session
 	}
@@ -877,221 +911,156 @@ func (s *Server) handleDiagram(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == "POST" && sessionID == "build":
 		s.handleDiagramBuild(w, r)
-	case r.Method == "POST" && sessionID == "":
-		s.handleDiagramCreate(w, r)
 	case r.Method == "GET" && sessionID == "latest":
 		s.handleDiagramLatest(w, r)
 	case r.Method == "GET" && sessionID != "":
 		s.handleDiagramGet(w, r, sessionID)
-	case r.Method == "PUT" && len(parts) == 2 && parts[1] == "annotate":
-		s.handleDiagramAnnotate(w, r, sessionID)
-	case r.Method == "PUT" && sessionID != "":
-		s.handleDiagramUpdate(w, r, sessionID)
 	default:
 		http.Error(w, "not found", 404)
 	}
 }
 
-func (s *Server) handleDiagramCreate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		SessionID string `json:"session_id"`
-		Title     string `json:"title"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", 400)
-		return
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	session := &DiagramSession{
-		ID:          body.SessionID,
-		Title:       body.Title,
-		Annotations: make(map[string]DiagramNote),
-		Steps:            make(map[int]map[string]DiagramNote),
-		StepTitles:       make(map[int]string),
-		StepDescriptions: make(map[int]string),
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	s.mu.Lock()
-	s.diagrams[body.SessionID] = session
-	s.mu.Unlock()
-	s.persistDiagramSession(session)
-	url := fmt.Sprintf("http://localhost:%d/diagram/%s", s.port, body.SessionID)
-	httpJSON(w, map[string]any{"session_id": body.SessionID, "url": url})
-}
-
 func (s *Server) handleDiagramBuild(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Title        string `json:"title"`
-		NodeKeys     []string `json:"node_keys"`
-		HideEdges    []struct {
-			From     string `json:"from"`
-			To       string `json:"to"`
-			EdgeType string `json:"edge_type"`
-		} `json:"hide_edges"`
-		VirtualNodes []struct {
-			Key   string `json:"key"`
-			Name  string `json:"name"`
-			Type  string `json:"type"`
-			Layer string `json:"layer"`
-		} `json:"virtual_nodes"`
-		VirtualEdges []struct {
-			From     string `json:"from"`
-			To       string `json:"to"`
-			EdgeType string `json:"edge_type"`
-			Label    string `json:"label"`
-		} `json:"virtual_edges"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request: invalid JSON", 400)
+	var req DiagramBuildRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if len(body.NodeKeys) == 0 {
-		http.Error(w, "bad request: node_keys is required and must be non-empty", 400)
+	if req.Title == "" {
+		req.Title = "Diagram"
+	}
+	if len(req.Nodes) == 0 && len(req.NodeKeys) == 0 {
+		http.Error(w, "at least one of 'nodes' or 'node_keys' is required", http.StatusBadRequest)
 		return
 	}
 
-	// Resolve real nodes
-	foundNodes, missingKeys, err := s.getStore().GetNodesByKeys(body.NodeKeys)
-	if err != nil {
-		httpError(w, fmt.Errorf("resolving nodes: %w", err), 500)
-		return
-	}
-	if len(foundNodes) == 0 {
-		http.Error(w, "bad request: all node_keys are invalid", 400)
-		return
-	}
+	// Start with explicit nodes/edges
+	diagramNodes := append([]DiagramNode{}, req.Nodes...)
+	diagramEdges := append([]DiagramEdge{}, req.Edges...)
+	var errors []string
 
-	// Check virtual node key collisions with real keys
-	realKeySet := make(map[string]bool, len(foundNodes))
-	for _, n := range foundNodes {
-		realKeySet[n.NodeKey] = true
-	}
-	for _, vn := range body.VirtualNodes {
-		if realKeySet[vn.Key] {
-			http.Error(w, fmt.Sprintf("bad request: virtual node key %q collides with real node", vn.Key), 400)
+	// Resolve node_keys from graph DB
+	if len(req.NodeKeys) > 0 && s.getStore() != nil {
+		foundNodes, missingKeys, err := s.getStore().GetNodesByKeys(req.NodeKeys)
+		if err != nil {
+			http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
+		errors = missingKeys
 
-	// Auto-discover edges between real nodes
-	nodeIDs := make([]int64, len(foundNodes))
-	for i, n := range foundNodes {
-		nodeIDs[i] = n.NodeID
-	}
-	realEdges, err := s.getStore().GetEdgesBetweenNodes(nodeIDs)
-	if err != nil {
-		httpError(w, fmt.Errorf("discovering edges: %w", err), 500)
-		return
-	}
+		existingKeys := make(map[string]bool, len(diagramNodes))
+		for _, n := range diagramNodes {
+			existingKeys[n.Key] = true
+		}
 
-	// Filter out hidden edges
-	filteredEdges := make([]store.EdgeRow, 0, len(realEdges))
-	for _, e := range realEdges {
-		hidden := false
-		for _, h := range body.HideEdges {
-			if e.FromNodeKey == h.From && e.ToNodeKey == h.To {
-				if h.EdgeType == "" || h.EdgeType == e.EdgeType {
-					hidden = true
-					break
+		resolvedIDs := make([]int64, 0, len(foundNodes))
+		for _, gn := range foundNodes {
+			if existingKeys[gn.NodeKey] {
+				continue
+			}
+			diagramNodes = append(diagramNodes, DiagramNode{
+				Key:       gn.NodeKey,
+				Label:     gn.Name,
+				Kind:      gn.NodeType,
+				SourceKey: gn.NodeKey,
+				Domain:    gn.DomainKey,
+				Layer:     gn.Layer,
+			})
+			resolvedIDs = append(resolvedIDs, gn.NodeID)
+		}
+
+		// Auto-discover edges
+		if len(resolvedIDs) > 0 {
+			discoveredEdges, err := s.getStore().GetEdgesBetweenNodes(resolvedIDs)
+			if err == nil {
+				idToKey := make(map[int64]string, len(foundNodes))
+				for _, gn := range foundNodes {
+					idToKey[gn.NodeID] = gn.NodeKey
+				}
+				for _, ge := range discoveredEdges {
+					fromKey := idToKey[ge.FromNodeID]
+					toKey := idToKey[ge.ToNodeID]
+					if fromKey == "" || toKey == "" {
+						continue
+					}
+					hidden := false
+					for _, h := range req.HideEdges {
+						if h.From == fromKey && h.To == toKey {
+							if h.EdgeType == "" || h.EdgeType == ge.EdgeType {
+								hidden = true
+								break
+							}
+						}
+					}
+					if hidden {
+						continue
+					}
+					diagramEdges = append(diagramEdges, DiagramEdge{
+						From:  fromKey,
+						To:    toKey,
+						Label: ge.EdgeType,
+						Kind:  edgeTypeToKind(ge.EdgeType),
+					})
 				}
 			}
 		}
-		if !hidden {
-			filteredEdges = append(filteredEdges, e)
-		}
 	}
 
-	// Build diagram nodes
-	diagramNodes := make([]map[string]any, 0, len(foundNodes)+len(body.VirtualNodes))
-	for _, n := range foundNodes {
-		diagramNodes = append(diagramNodes, map[string]any{
-			"id":      n.NodeID,
-			"key":     n.NodeKey,
-			"name":    n.Name,
-			"type":    n.NodeType,
-			"layer":   n.Layer,
-			"virtual": false,
-		})
-	}
-	// Virtual nodes get negative IDs
-	for i, vn := range body.VirtualNodes {
-		diagramNodes = append(diagramNodes, map[string]any{
-			"id":      -(i + 1),
-			"key":     vn.Key,
-			"name":    vn.Name,
-			"type":    vn.Type,
-			"layer":   vn.Layer,
-			"virtual": true,
-		})
-	}
-
-	// Build diagram edges
-	diagramEdges := make([]map[string]any, 0, len(filteredEdges)+len(body.VirtualEdges))
-	for _, e := range filteredEdges {
-		diagramEdges = append(diagramEdges, map[string]any{
-			"from":      e.FromNodeKey,
-			"to":        e.ToNodeKey,
-			"edge_type": e.EdgeType,
-			"virtual":   false,
-		})
-	}
-	for _, ve := range body.VirtualEdges {
-		edge := map[string]any{
-			"from":      ve.From,
-			"to":        ve.To,
-			"edge_type": ve.EdgeType,
-			"virtual":   true,
-		}
-		if ve.Label != "" {
-			edge["label"] = ve.Label
-		}
-		diagramEdges = append(diagramEdges, edge)
-	}
-
-	// Generate session ID
+	// Create session
 	sessionID := fmt.Sprintf("%x", time.Now().UnixNano())
-	sessionID = sessionID[len(sessionID)-8:]
+	if len(sessionID) > 8 {
+		sessionID = sessionID[len(sessionID)-8:]
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	title := body.Title
-	if title == "" {
-		title = "Built diagram"
-	}
 	session := &DiagramSession{
-		ID:               sessionID,
-		Title:            title,
-		Nodes:            diagramNodes,
-		Edges:            diagramEdges,
-		Annotations:      make(map[string]DiagramNote),
-		Steps:            make(map[int]map[string]DiagramNote),
-		StepTitles:       make(map[int]string),
-		StepDescriptions: make(map[int]string),
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:          sessionID,
+		Title:       req.Title,
+		Nodes:       diagramNodes,
+		Edges:       diagramEdges,
+		Groups:      req.Groups,
+		Annotations: req.Annotations,
+		Steps:       req.Steps,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	s.mu.Lock()
 	s.diagrams[sessionID] = session
 	s.mu.Unlock()
 	s.persistDiagramSession(session)
-	s.hub.Send("diagram_update", map[string]any{
-		"session_id": sessionID, "title": session.Title, "nodes": session.Nodes, "edges": session.Edges,
-		"annotations": session.Annotations, "steps": session.Steps,
-		"step_titles": session.StepTitles, "step_descriptions": session.StepDescriptions, "total_steps": session.TotalSteps,
-	})
 
-	url := fmt.Sprintf("http://localhost:%d/diagram/%s", s.port, sessionID)
+	sessionJSON, _ := json.Marshal(session)
+	s.hub.Send("diagram", map[string]any{"session": json.RawMessage(sessionJSON)})
+
+	port := s.port
+	if port == 0 {
+		port = 4200
+	}
+
 	resp := map[string]any{
 		"session_id": sessionID,
-		"url":        url,
+		"url":        fmt.Sprintf("http://localhost:%d/?diagram=%s", port, sessionID),
 		"node_count": len(diagramNodes),
 		"edge_count": len(diagramEdges),
 	}
-	if len(missingKeys) > 0 {
-		resp["errors"] = missingKeys
+	if len(errors) > 0 {
+		resp["errors"] = errors
 	}
 	httpJSON(w, resp)
+}
+
+func edgeTypeToKind(edgeType string) string {
+	switch edgeType {
+	case "CALLS_ENDPOINT", "CALLS_SERVICE", "EXPOSES_ENDPOINT", "HANDLES_OPERATION":
+		return "http"
+	case "PUBLISHES_TOPIC", "CONSUMES_TOPIC", "CONSUMED_BY", "USES_QUEUE":
+		return "async"
+	case "USES_MODEL", "DEFINES_MODEL", "REFERENCES_MODEL", "READS_DB", "WRITES_DB", "STORED_IN", "HAS_FIELD":
+		return "data"
+	default:
+		return "structural"
+	}
 }
 
 func (s *Server) handleDiagramLatest(w http.ResponseWriter, r *http.Request) {
@@ -1121,85 +1090,6 @@ func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id str
 	httpJSON(w, session)
 }
 
-func (s *Server) handleDiagramUpdate(w http.ResponseWriter, r *http.Request, id string) {
-	s.mu.RLock()
-	session, ok := s.diagrams[id]
-	s.mu.RUnlock()
-	if !ok {
-		http.Error(w, "session not found", 404)
-		return
-	}
-	var body struct {
-		Nodes []map[string]any `json:"nodes"`
-		Edges []map[string]any `json:"edges"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", 400)
-		return
-	}
-	s.mu.Lock()
-	session.Nodes = body.Nodes
-	session.Edges = body.Edges
-	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	s.mu.Unlock()
-	s.persistDiagramSession(session)
-	s.hub.Send("diagram_update", map[string]any{
-		"session_id": id, "title": session.Title, "nodes": session.Nodes, "edges": session.Edges,
-		"annotations": session.Annotations, "steps": session.Steps,
-		"step_titles": session.StepTitles, "step_descriptions": session.StepDescriptions, "total_steps": session.TotalSteps,
-	})
-	httpJSON(w, map[string]any{"status": "ok", "node_count": len(body.Nodes), "edge_count": len(body.Edges)})
-}
-
-func (s *Server) handleDiagramAnnotate(w http.ResponseWriter, r *http.Request, id string) {
-	s.mu.RLock()
-	session, ok := s.diagrams[id]
-	s.mu.RUnlock()
-	if !ok {
-		http.Error(w, "session not found", 404)
-		return
-	}
-	var body struct {
-		NodeKey   string `json:"node_key"`
-		Note      string `json:"note"`
-		Highlight string `json:"highlight"`
-		Step            *int   `json:"step"`              // nil = global annotation, number = step-specific
-		StepTitle       string `json:"step_title"`        // optional title for this step
-		StepDescription string `json:"step_description"`  // optional description text for this step
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", 400)
-		return
-	}
-	s.mu.Lock()
-	if body.Step != nil {
-		step := *body.Step
-		if session.Steps[step] == nil {
-			session.Steps[step] = make(map[string]DiagramNote)
-		}
-		session.Steps[step][body.NodeKey] = DiagramNote{Note: body.Note, Highlight: body.Highlight}
-		if body.StepTitle != "" {
-			session.StepTitles[step] = body.StepTitle
-		}
-		if body.StepDescription != "" {
-			session.StepDescriptions[step] = body.StepDescription
-		}
-		if step+1 > session.TotalSteps {
-			session.TotalSteps = step + 1
-		}
-	} else {
-		session.Annotations[body.NodeKey] = DiagramNote{Note: body.Note, Highlight: body.Highlight}
-	}
-	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	s.mu.Unlock()
-	s.persistDiagramSession(session)
-	s.hub.Send("diagram_update", map[string]any{
-		"session_id": id, "nodes": session.Nodes, "edges": session.Edges,
-		"annotations": session.Annotations, "steps": session.Steps,
-		"step_titles": session.StepTitles, "step_descriptions": session.StepDescriptions, "total_steps": session.TotalSteps,
-	})
-	httpJSON(w, map[string]any{"status": "ok"})
-}
 
 func httpJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
