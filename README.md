@@ -97,17 +97,6 @@ Scanning uses a hybrid AST + LLM pipeline: tree-sitter handles deterministic pat
 
 See [docs/scanning.md](docs/scanning.md) for the full breakdown.
 
-## Limitations
-
-Chronicle is not a compiler. It may need help when:
-
-- behavior is fully dynamic (reflection, eval)
-- relationships are hidden in generated code
-- the repository is very large (narrow the scope)
-- naming is inconsistent across services
-
-When in doubt: `chronicle status`.
-
 ## Docs
 
 - [How it works](docs/how-it-works.md)
