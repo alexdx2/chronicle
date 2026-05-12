@@ -72,16 +72,9 @@ This is not a vector index or chat memory. It is a structured graph with traceab
 
 ## Dashboard
 
-Chronicle includes a live dashboard that starts automatically.
+The MCP server runs a web dashboard on localhost. It opens automatically on first scan, or get the URL with `chronicle status`.
 
 ![Dashboard](assets/dashboard.png)
-
-- Graph explorer — navigate services, models, endpoints
-- Impact analysis — visual blast radius
-- Diagrams — architecture diagrams built from real graph data
-- Growth chart — knowledge accumulation over scans
-
-Get the URL with `chronicle status`.
 
 ## Data and privacy
 
