@@ -117,102 +117,103 @@ __STAGES__`,
 5. Call chronicle_admin_url
 6. Summarize: nodes, edges, layers, last scan, discoveries, domain terms, dashboard URL`,
 
-	"diagram": `Live diagram for the user. Use the Diagram Type Catalog below to construct proper diagrams.
+	"diagram": `Live diagram for the user. Use the Diagram Type Catalog below to construct diagrams.
 
 ## How to Create a Diagram
 
 1. Identify the diagram type from the user's question (see catalog below)
-2. Query the graph to get node_keys for the diagram type:
-   - System Overview: chronicle_node_list(layer='service') + chronicle_node_list(layer='contract', node_type='topic')
-   - Request Flow: chronicle_query_path(from, to)
-   - Impact Analysis: chronicle_impact(node_key)
-   - Dependency Map: chronicle_query_deps(node_key, depth=1)
-   - Domain Model: chronicle_node_list(layer='data')
-3. Call chronicle_diagram_build with:
-   - title: "{Type}: {subject}"
-   - node_keys: array of node_key strings from step 2
-   - virtual_nodes: external actors not in graph (e.g. User, External API)
-   - virtual_edges: connections to/from virtual nodes
-   - hide_edges: edges to exclude for clarity
+2. Query the graph to gather data for the diagram type
+3. Call chronicle_diagram_build with the appropriate payload
 4. Share the returned URL with user: "Open {url} to see the diagram"
-5. Add annotations with chronicle_diagram_annotate (see step rules per type)
-6. As conversation evolves, call chronicle_diagram_build again with adjusted node_keys
-
-NOTE: chronicle_diagram_build validates node_keys against the DB and auto-discovers all edges between selected nodes. You do NOT need to manually specify edges — only use hide_edges to remove noisy ones.
 
 ## Diagram Type Catalog
 
-### Type 1: System Overview
-Trigger: "show architecture", "show services", "how does the system work"
-Nodes: All service-layer nodes + contract:topic nodes (async channels only, NO endpoints)
-Edges: CALLS_SERVICE, PUBLISHES_TOPIC, CONSUMES_TOPIC
-Styling: Layer-level — services (#ef4444), topics (#10b981)
-Steps: Single step (total_steps=1). Annotate the central orchestrating service.
-Title: "Overview: {project name} Architecture"
-Description: Summarize how many services and communication patterns (sync/async).
-Node cap: 5-10. If >10 services, show only primary ones.
+### Type 1: Overview (Context Diagram)
+Trigger: "show architecture", "overview", "how is the system organized", "high-level diagram"
+Purpose: Domains as blocks, infrastructure as bridges, external systems as actors. No individual services.
 
-### Type 2: Request Flow
+Construction:
+1. Call chronicle_domain_list to get all domains
+2. Build view model: each domain → node with kind "domain", infra → kind "infrastructure", external → kind "external"
+3. Determine edges by querying cross-domain relationships (which domains call which)
+4. Call chronicle_diagram_build with nodes + edges (no node_keys — all synthetic)
+
+Example:
+  chronicle_diagram_build(
+    title: "Overview: {project} Architecture",
+    nodes: '[{"key":"domain:core-api","label":"Core API","kind":"domain"},{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"},{"key":"ext:stripe","label":"Stripe","kind":"external"}]',
+    edges: '[{"from":"domain:core-api","to":"infra:kafka","label":"publish order.created","kind":"async"}]'
+  )
+
+### Type 2: Domain Detail
+Trigger: "show X in detail", "what's inside X", "expand X"
+Purpose: One domain expanded with services inside. Other domains as collapsed blocks.
+
+Construction:
+1. Call chronicle_node_list(domain="{target}") to get services in the target domain
+2. Use node_keys for real services in the target domain
+3. Add synthetic nodes (kind "domain") for neighboring domains
+4. Add infrastructure nodes if domain uses async
+5. Set groups: {"field":"domain"} for visual grouping
+
+Example:
+  chronicle_diagram_build(
+    title: "Domain: Core API",
+    node_keys: '["service:code:core:OrdersService","service:code:core:PaymentsService"]',
+    nodes: '[{"key":"domain:crm","label":"CRM","kind":"domain"},{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"}]',
+    edges: '[{"from":"service:code:core:OrdersService","to":"infra:kafka","label":"publish order.created","kind":"async"},{"from":"infra:kafka","to":"domain:crm","label":"consume","kind":"async"}]',
+    groups: '{"field":"domain"}'
+  )
+
+### Type 3: Request Flow
 Trigger: "how does X flow to Y", "trace a request", "explain how X calls Y"
-Nodes: Only nodes on the request path — controllers, providers, endpoints, services crossed.
-  Optional: include data models if a provider on the path uses one (USES_MODEL).
-Edges: INJECTS, CALLS_SERVICE, CALLS_ENDPOINT, EXPOSES_ENDPOINT, USES_MODEL (optional)
-Styling: Node-type-level — controllers/providers (#3b82f6), endpoints (#10b981), services (#ef4444), models (#8b5cf6)
-Steps: Multi-step walkthrough. Each step advances one hop:
-  - Step 0: Entry point (endpoint + controller). Highlight: #f59e0b. Dim all others.
-  - Step 1..N-1: Each injection or cross-service call. Highlight active nodes, dim inactive.
-  - Step N: Arrival at destination.
-  step_title: short imperative ("Entry Point", "Cross-Service Call", "Arrival")
-  step_description: explain what happens at this hop and why
-Title: "Flow: {entry} -> {destination}"
-Node cap: 8-12. Only the direct path, no tangential deps.
+Purpose: Trace a request path across domains. Domains as swimlanes.
 
-### Type 3: Impact Analysis
-Trigger: "what breaks if I change X", "blast radius of X"
-Nodes: Start from changed node, traverse INCOMING edges transitively. Stop at 3 hops or 15 nodes.
-Edges: USES_MODEL, INJECTS, EXPOSES_ENDPOINT, REFERENCES_MODEL — anything pointing TO the changed node.
-Styling: Heat map by distance from change:
-  - Distance 0 (changed): highlight="#ef4444"
-  - Distance 1 (direct): highlight="#f59e0b"
-  - Distance 2+ (ripple): highlight="#eab308"
-Steps: Multi-step, one per distance level:
-  - Step 0 "The Change": highlight changed node + co-affected (e.g. referenced models). Dim all others.
-  - Step 1 "Direct Impact": reveal distance-1 nodes, explain WHY each is affected.
-  - Step 2 "Ripple Effect": reveal distance-2 nodes, show full blast radius.
-  step_description: explain WHY each layer is affected, not just that it is.
-Title: "Impact: Changing {node name}"
-Node cap: 12-15.
+Construction:
+1. Identify start and end from user's question
+2. Call chronicle_query_path(from, to) to get the path
+3. Use node_keys for all nodes on the path
+4. Set groups: {"field":"domain"} for domain swimlanes
+5. Build steps array: each step = one hop, active nodes highlighted (#f59e0b), others dimmed
 
-### Type 4: Dependency Map
-Trigger: "what does X depend on", "dependencies of X"
-Nodes: Subject node + all nodes reachable via outgoing edges (1 hop). Include called endpoints.
-Edges: CALLS_SERVICE, CALLS_ENDPOINT, USES_MODEL, PUBLISHES_TOPIC, CONSUMES_TOPIC, INJECTS (if code-level subject)
-Styling: Node-type-level — services (#ef4444), models (#8b5cf6), topics (#10b981), endpoints (#10b981)
-Steps: Single step. Annotate the subject node with its role.
-Title: "Dependencies: {node name}"
-Description: Summarize dependency profile — how many services, models, async channels.
-Node cap: 10-15. If many endpoints, show only the ones actually called.
+Example:
+  chronicle_diagram_build(
+    title: "Flow: Create Order",
+    node_keys: '["service:code:mobile:Gateway","service:code:core:OrdersService"]',
+    nodes: '[{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"}]',
+    groups: '{"field":"domain"}',
+    steps: '[{"title":"Entry","description":"Mobile sends POST /orders","highlights":{"service:code:mobile:Gateway":"#f59e0b"}},{"title":"Processing","description":"OrdersService validates","highlights":{"service:code:core:OrdersService":"#f59e0b"}}]'
+  )
 
-### Type 5: Domain Model
-Trigger: "show data models", "show entities", "show schema"
-Nodes: All data:model nodes. Enums are LOW PRIORITY — only include if user asks or total <10 nodes.
-Edges: REFERENCES_MODEL only.
-Styling: Node-type-level — models (#8b5cf6), enums (#8b5cf6 with note "enum")
-Steps: Single step. Annotate models that span service boundaries.
-Title: "Domain: {project name} Data Models"
-Description: Summarize count of models and which services own what.
-Node cap: All data models (typically <20).
+### Type 4: Dependency Map (Impact)
+Trigger: "what depends on X", "what breaks if I change X", "blast radius"
+Purpose: Show what a change affects. Grouped by domain with heatmap.
 
-## Cross-cutting Rules (apply to ALL types)
+Construction:
+1. Call chronicle_impact(node_key) or chronicle_query_deps + chronicle_query_reverse_deps
+2. Collect affected nodes up to 2 hops / 15 nodes
+3. Use node_keys for all affected nodes
+4. Set groups: {"field":"domain"}
+5. Use annotations for heatmap: changed (#ef4444), direct (#f59e0b), indirect (#eab308)
 
-- NEVER exceed 15 node_keys. Filter aggressively — prioritize nodes that answer the question.
-- Every diagram MUST annotate the focal node(s) explaining WHY they matter.
-- Use hide_edges to remove edge types not relevant to the diagram type.
-- For multi-step: all nodes present from start but dimmed. Steps reveal progressively.
-- Step descriptions: write as if narrating to someone unfamiliar with the codebase.
-- Highlight colors must match the diagram type visual language.
-- When in doubt, use single step. Multi-step only when there's a clear sequential narrative.
-- Use virtual_nodes for actors/systems not in the graph (e.g. "User", "External Gateway").`,
+Example:
+  chronicle_diagram_build(
+    title: "Impact: Changing OrdersService",
+    node_keys: '["service:code:core:OrdersService","service:code:core:PaymentsService","service:code:crm:CrmConsumer"]',
+    groups: '{"field":"domain"}',
+    annotations: '{"service:code:core:OrdersService":{"highlight":"#ef4444","note":"CHANGED"},"service:code:crm:CrmConsumer":{"highlight":"#f59e0b","note":"Consumes order.created events"}}'
+  )
+
+## Cross-cutting Rules
+
+- Node kinds: domain, infrastructure, external, service, endpoint, model, topic, queue, database
+- Edge kinds: http, async, data, structural
+- NEVER exceed 15 real nodes (node_keys). Synthetic nodes (domain/infra/external) don't count.
+- Infrastructure is ALWAYS explicit — show Kafka/Redis/RabbitMQ as nodes between publisher and consumer. Never a direct edge from publisher to consumer.
+- Edge labels: always show protocol type (HTTP, publish, consume, uses).
+- Kafka topics: include topic names as edge labels.
+- Annotate focal nodes explaining WHY they matter.
+- Use groups: {"field":"domain"} for types 2-4 to show domain boundaries.`,
 
 	"setup": `Project setup — configure scan scope:
 1. Call chronicle_file_groups — shows all git-tracked files grouped by directory with counts
