@@ -62,6 +62,11 @@ node_types:
     - k8s_object
     - k8s_service
     - k8s_deployment
+    - infrastructure
+    - topic
+    - queue
+    - cache
+    - database
   ci:
     - workflow
     - pipeline
@@ -107,6 +112,12 @@ edge_types:
   CONSUMES_TOPIC:
     from_layers: [code, service]
     to_layers: [contract]
+  BELONGS_TO:
+    from_layers: [contract, infra]
+    to_layers: [infra]
+  CONSUMED_BY:
+    from_layers: [contract]
+    to_layers: [code, service]
   USES_SCHEMA:
     from_layers: [contract]
     to_layers: [contract]
