@@ -44,7 +44,7 @@ git diff → changed files → invalidate stale evidence → re-scan affected fi
   → new evidence → trust recalculated → graph updated
 ```
 
-Only changed files get re-scanned. A 6000-file project with 3 changed files takes seconds, not minutes.
+Only changed files get re-scanned. The rest of the graph stays intact.
 
 ## Pub/sub traversal
 

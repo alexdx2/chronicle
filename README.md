@@ -85,28 +85,17 @@ Get the URL with `chronicle status`.
 
 ## Data and privacy
 
-All data stays on your machine. Nothing is sent externally.
+Graph data stays on your machine in `.depbot/chronicle.db` (SQLite). The dashboard runs on localhost.
 
-- Graph stored in `.depbot/chronicle.db` (SQLite)
-- Dashboard runs on localhost only
-- To remove: delete `.depbot/`
+Note: the dashboard loads fonts and D3.js from CDN (fonts.googleapis.com, d3js.org).
+
+To remove all Chronicle data: delete `.depbot/`.
 
 ## How it works
 
 Scanning uses a hybrid AST + LLM pipeline: tree-sitter handles deterministic patterns (imports, decorators, DI), LLM agents classify ambiguous patterns (cross-service calls, event emits).
 
 See [docs/scanning.md](docs/scanning.md) for the full breakdown.
-
-## Limitations
-
-Chronicle is not a compiler. It may need help when:
-
-- behavior is fully dynamic (reflection, eval)
-- relationships are hidden in generated code
-- the repository is very large (narrow the scope)
-- naming is inconsistent across services
-
-When in doubt: `chronicle status`.
 
 ## Docs
 

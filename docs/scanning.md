@@ -30,10 +30,13 @@ Framework-specific rulesets transform raw facts into `SemanticFact` structs:
 
 ```go
 type SemanticFact struct {
-    FromType string // controller, module, provider
-    ToType   string
-    EdgeType string // INJECTS, EXPOSES, CONTAINS, IMPORTS
-    Endpoint string // GET /users/:id
+    Kind       string   // e.g. "endpoint", "import", "consumes"
+    To         string   // target name or path
+    From       string   // source name
+    Symbols    []string // imported symbols
+    Method     string   // HTTP method or called method
+    Target     string   // endpoint path, topic name
+    Confidence float64  // 0.0 to 1.0
 }
 ```
 
@@ -103,7 +106,7 @@ Every fact stored in the graph carries evidence:
 - **file** — source file path
 - **line** — line number
 - **confidence** — 0.0 to 1.0
-- **derivation_kind** — `ast_extraction`, `rule_mapping`, `llm_classification`, `flow_tracing`
+- **derivation_kind** — `hard`, `linked`, `inferred`, `unknown`
 
 This enables trust scoring and incremental invalidation.
 
@@ -116,7 +119,7 @@ When files change:
 3. Re-scanning only the changed files produces fresh evidence
 4. Trust recalculates — confirmed facts restore confidence, removed patterns drop nodes
 
-A 6000-file project with 3 changed files re-scans in seconds. The graph stays current without full re-extraction.
+Only changed files are re-scanned. The rest of the graph stays intact.
 
 ## Cost model
 
@@ -126,4 +129,4 @@ A 6000-file project with 3 changed files re-scans in seconds. The graph stays cu
 | Phase 2 | sonnet x1-3 | trigger files only | flow tracing |
 | Custom packs | sonnet x1 | sample files | framework learning |
 
-Typical full scan of a 40-file project: ~3-5 haiku calls + 1-3 sonnet calls. Incremental: 1 haiku call for changed files.
+Phase 1 uses 3-5 parallel haiku agents. Phase 2 uses 1-3 sonnet agents on trigger files only. Incremental updates re-scan only changed files.
