@@ -15,9 +15,10 @@ import (
 // FileWithAST is a file path paired with pre-extracted AST facts and enrichment candidates.
 type FileWithAST struct {
 	Path       string `json:"path"`
-	ASTFacts   string `json:"ast_facts"`   // JSON array of semantic facts, or "[]"
-	FromType   string `json:"from_type"`   // detected by AST: controller, module, or ""
-	Candidates string `json:"candidates"`  // JSON array of enrichment candidates for LLM classification
+	DomainKey  string `json:"domain_key,omitempty"` // which domain this file belongs to (from manifest)
+	ASTFacts   string `json:"ast_facts"`            // JSON array of semantic facts, or "[]"
+	FromType   string `json:"from_type"`            // detected by AST: controller, module, or ""
+	Candidates string `json:"candidates"`           // JSON array of enrichment candidates for LLM classification
 }
 
 // ScanAction is what chronicle_scan_next_file returns to Claude.
@@ -160,20 +161,28 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 
 	case "phase1_extract":
 		// Atomically claim up to 10 unclaimed files (reclaims expired leases too)
-		batch, err := g.store.ClaimObligations(run.RevisionID, "scan_file", 10)
+		claimed, err := g.store.ClaimObligations(run.RevisionID, "scan_file", 10)
 		if err != nil {
 			return nil, err
 		}
 
-		if len(batch) > 0 {
+		if len(claimed) > 0 {
 			pending, _ := g.store.CountPendingObligations(run.RevisionID, "scan_file")
+
+			// Build domain lookup from claimed obligations
+			domainByFile := make(map[string]string, len(claimed))
+			batch := make([]string, 0, len(claimed))
+			for _, c := range claimed {
+				batch = append(batch, c.TargetKey)
+				domainByFile[c.TargetKey] = c.DomainKey
+			}
 
 			// Run tree-sitter AST + rules on each file
 			// AST extracts raw syntax → rules apply framework meaning → semantic facts saved
 			ruleRegistry := rules.NewRegistry(rules.RulesetsForTech(tech)...)
 			filesWithAST := make([]FileWithAST, 0, len(batch))
 			for _, filePath := range batch {
-				fwa := FileWithAST{Path: filePath, ASTFacts: "[]", Candidates: "[]"}
+				fwa := FileWithAST{Path: filePath, DomainKey: domainByFile[filePath], ASTFacts: "[]", Candidates: "[]"}
 				if isTypeScriptFile(filePath) {
 					if content := readFileContent(filePath); content != nil {
 						rawResult := ast.ExtractTypeScript(content)
@@ -195,7 +204,11 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 			// Save semantic facts directly — high-confidence deterministic facts
 			for _, fwa := range filesWithAST {
 				if fwa.ASTFacts != "[]" {
-					g.SaveFileExtraction(run.RevisionID, run.DomainKey, fwa.Path, "extracted", fwa.FromType, fwa.ASTFacts, "")
+					domain := fwa.DomainKey
+					if domain == "" {
+						domain = run.DomainKey
+					}
+					g.SaveFileExtraction(run.RevisionID, domain, fwa.Path, "extracted", fwa.FromType, fwa.ASTFacts, "")
 				}
 			}
 
@@ -355,13 +368,13 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 // phase2ExtractAction claims ONE trigger file, builds enriched per-file context.
 func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) {
 	// Claim 1 trigger file (not a batch — flow tracing needs focus)
-	batch, err := g.store.ClaimObligations(run.RevisionID, "trace_flow", 1)
+	claimed, err := g.store.ClaimObligations(run.RevisionID, "trace_flow", 1)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(batch) > 0 {
-		triggerFile := batch[0]
+	if len(claimed) > 0 {
+		triggerFile := claimed[0].TargetKey
 		flowCtx := g.buildFlowContext(run.DomainKey, triggerFile)
 		pending, _ := g.store.CountPendingObligations(run.RevisionID, "trace_flow")
 

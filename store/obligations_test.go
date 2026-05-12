@@ -27,6 +27,12 @@ func TestClaimObligations_Basic(t *testing.T) {
 	if len(batch) != 3 {
 		t.Fatalf("expected 3 claimed, got %d", len(batch))
 	}
+	// Verify domain_key is returned
+	for _, c := range batch {
+		if c.DomainKey != "myapp" {
+			t.Errorf("expected domain_key=myapp, got %s", c.DomainKey)
+		}
+	}
 }
 
 func TestClaimObligations_NoDuplicates(t *testing.T) {
@@ -56,12 +62,12 @@ func TestClaimObligations_NoDuplicates(t *testing.T) {
 
 	// No overlap
 	seen := make(map[string]bool)
-	for _, f := range batch1 {
-		seen[f] = true
+	for _, c := range batch1 {
+		seen[c.TargetKey] = true
 	}
-	for _, f := range batch2 {
-		if seen[f] {
-			t.Fatalf("duplicate file claimed: %s", f)
+	for _, c := range batch2 {
+		if seen[c.TargetKey] {
+			t.Fatalf("duplicate file claimed: %s", c.TargetKey)
 		}
 	}
 }
@@ -90,8 +96,8 @@ func TestClaimObligations_ReclaimsExpired(t *testing.T) {
 	if len(batch2) != 1 {
 		t.Fatalf("expected expired claim to be reclaimed, got %d", len(batch2))
 	}
-	if batch2[0] != "stale.ts" {
-		t.Fatalf("expected stale.ts, got %s", batch2[0])
+	if batch2[0].TargetKey != "stale.ts" {
+		t.Fatalf("expected stale.ts, got %s", batch2[0].TargetKey)
 	}
 }
 

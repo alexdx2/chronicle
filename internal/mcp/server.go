@@ -606,19 +606,23 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
 		}
 
-		// Load manifest for scan config
+		// Load manifest for scan config + per-file domain assignment
 		rootDir, _ := os.Getwd()
-		var scanCfg *manifest.ScanConfig
-		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
-			merged := m.MergedScanConfig()
-			scanCfg = &merged
+		var m *manifest.Manifest
+		if loaded, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
+			m = loaded
 		}
 
-		result, err := g.DiscoverFiles(rootDir, domain, revisionID, scanCfg)
+		result, err := g.DiscoverFiles(rootDir, domain, revisionID, m)
 		if err != nil {
 			return errorResult(err), nil
 		}
 
+		scanCfg := (*manifest.ScanConfig)(nil)
+		if m != nil {
+			merged := m.MergedScanConfig()
+			scanCfg = &merged
+		}
 		if scanCfg == nil || (len(scanCfg.Include) == 0 && len(scanCfg.Exclude) == 0) {
 			// Block: don't scan without a manifest — too many files, wastes tokens
 			if result.TotalFiles > 200 {

@@ -2,6 +2,12 @@ package store
 
 import "fmt"
 
+// ClaimedObligation is returned by ClaimObligations with both target and domain.
+type ClaimedObligation struct {
+	TargetKey string
+	DomainKey string
+}
+
 // ObligationRow represents a scan obligation.
 type ObligationRow struct {
 	ObligationID   int64  `json:"obligation_id"`
@@ -41,10 +47,10 @@ func (s *Store) SatisfyObligation(revisionID int64, obligationType, targetKey st
 }
 
 // ClaimObligations atomically claims up to `limit` unclaimed (or expired) open obligations.
-// Returns the target keys of claimed obligations. Concurrent callers get different rows
-// because the UPDATE changes claimed_at, excluding those rows from subsequent subselects.
+// Returns the target keys and domain keys of claimed obligations. Concurrent callers get
+// different rows because the UPDATE changes claimed_at, excluding those rows from subsequent subselects.
 // Self-healing: expired claims are reclaimed in the same query.
-func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit int) ([]string, error) {
+func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit int) ([]ClaimedObligation, error) {
 	// First: mark obligations with too many attempts (5+) as failed
 	s.db.Exec(`
 		UPDATE scan_obligations SET status = 'skipped', defer_reason = 'too many attempts'
@@ -63,22 +69,22 @@ func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit 
 			ORDER BY obligation_id
 			LIMIT ?
 		)
-		RETURNING target_key
+		RETURNING target_key, domain_key
 	`, revisionID, obligationType, limit)
 	if err != nil {
 		return nil, fmt.Errorf("ClaimObligations: %w", err)
 	}
 	defer rows.Close()
 
-	var targets []string
+	var claimed []ClaimedObligation
 	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
+		var c ClaimedObligation
+		if err := rows.Scan(&c.TargetKey, &c.DomainKey); err != nil {
 			return nil, err
 		}
-		targets = append(targets, key)
+		claimed = append(claimed, c)
 	}
-	return targets, rows.Err()
+	return claimed, rows.Err()
 }
 
 // CountPendingObligations returns the count of open obligations (claimed or unclaimed).

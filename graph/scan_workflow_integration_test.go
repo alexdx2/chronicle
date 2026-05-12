@@ -72,12 +72,19 @@ func TestScanWorkflowFullCycle(t *testing.T) {
 	t.Log("Step 2 OK: setup phase → discover_files")
 
 	// ─── Step 3: Discover files using the fixture directory ───
-	scanCfg := &manifest.ScanConfig{
-		Include: []string{"**/*.ts", "**/*.prisma", "**/package.json"},
-		Exclude: []string{"**/*.test.*", "**/*.spec.*"},
+	testManifest := &manifest.Manifest{
+		Domains: []manifest.DomainEntry{
+			{
+				Name: domainKey,
+				Scan: manifest.ScanConfig{
+					Include: []string{"**/*.ts", "**/*.prisma", "**/package.json"},
+					Exclude: []string{"**/*.test.*", "**/*.spec.*"},
+				},
+			},
+		},
 	}
 
-	discovery, err := g.DiscoverFiles(absFixture, domainKey, revID, scanCfg)
+	discovery, err := g.DiscoverFiles(absFixture, domainKey, revID, testManifest)
 	if err != nil {
 		t.Fatalf("DiscoverFiles: %v", err)
 	}

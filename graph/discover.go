@@ -21,12 +21,20 @@ type DiscoverResult struct {
 
 // DiscoverFiles finds all scannable files using git ls-files + manifest include/exclude rules.
 // Only git-tracked files are considered — no temp files, no untracked junk.
-// If manifest has no scan config, returns ALL git-tracked files (Claude decides per-file).
-func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, scanCfg *manifest.ScanConfig) (*DiscoverResult, error) {
+// If manifest is provided, uses MergedScanConfig for filtering and DomainForFile for per-file domain.
+// Falls back to domainKey for all files when manifest is nil.
+func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *manifest.Manifest) (*DiscoverResult, error) {
 	// Get git-tracked files
 	gitFiles, err := gitTrackedFiles(rootDir)
 	if err != nil {
 		return nil, err
+	}
+
+	// Build scan config from manifest (or nil for no filtering)
+	var scanCfg *manifest.ScanConfig
+	if m != nil {
+		merged := m.MergedScanConfig()
+		scanCfg = &merged
 	}
 
 	// Apply include/exclude filters from manifest
@@ -71,10 +79,14 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, scanC
 		}
 	}
 
-	// Create scan_file obligation for each discovered file
+	// Create scan_file obligation for each discovered file — per-file domain from manifest
 	for _, f := range filtered {
 		if revisionID > 0 {
-			g.store.CreateObligation(revisionID, domainKey, "scan_file", f, "git-tracked, matches scan config")
+			domain := domainKey
+			if m != nil {
+				domain = m.DomainForFile(f)
+			}
+			g.store.CreateObligation(revisionID, domain, "scan_file", f, "git-tracked, matches scan config")
 		}
 	}
 
