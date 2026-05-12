@@ -609,10 +609,9 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 		// Load manifest for scan config
 		rootDir, _ := os.Getwd()
 		var scanCfg *manifest.ScanConfig
-		var manifestRepos []manifest.Repository
 		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
-			scanCfg = &m.Scan
-			manifestRepos = m.Repositories
+			merged := m.MergedScanConfig()
+			scanCfg = &merged
 		}
 
 		result, err := g.DiscoverFiles(rootDir, domain, revisionID, scanCfg)
@@ -634,21 +633,8 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
-		// Create repository and service nodes from manifest
-		for _, repo := range manifestRepos {
-			repoKey := "code:repository:" + domain + ":" + repo.Name
-			g.Store().UpsertNode(store.NodeRow{
-				NodeKey: repoKey, DomainKey: domain, Name: repo.Name,
-				Layer: "code", NodeType: "repository", Status: "active",
-				LastSeenRevisionID: revisionID,
-			})
-			svcKey := "service:service:" + domain + ":" + repo.Name
-			g.Store().UpsertNode(store.NodeRow{
-				NodeKey: svcKey, DomainKey: domain, Name: repo.Name,
-				Layer: "service", NodeType: "service", Status: "active",
-				LastSeenRevisionID: revisionID,
-			})
-		}
+		// NOTE: Repository/service node creation from manifest removed in v2.
+		// The scan pipeline (Task 4) will create domain-scoped nodes per file.
 
 		// Create or update scan run — transition to confirm_scope (checkpoint)
 		votesNeeded := int(int64Param(args, "votes_needed"))

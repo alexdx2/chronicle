@@ -3,32 +3,28 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-type Repository struct {
-	Name        string   `yaml:"name"`
-	Path        string   `yaml:"path"`
-	Tags        []string `yaml:"tags"`
-	Description string   `yaml:"description,omitempty"`
+type ScanConfig struct {
+	Include []string `yaml:"include,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty"`
 }
 
-type ScanConfig struct {
-	Include []string `yaml:"include,omitempty"` // glob patterns for files to scan
-	Exclude []string `yaml:"exclude,omitempty"` // glob patterns to skip
+type DomainEntry struct {
+	Name        string     `yaml:"name"`
+	Description string     `yaml:"description,omitempty"`
+	Owner       string     `yaml:"owner,omitempty"`
+	Scan        ScanConfig `yaml:"scan,omitempty"`
 }
 
 type Manifest struct {
-	Domain       string       `yaml:"domain"`
-	Description  string       `yaml:"description"`
-	Repositories []Repository `yaml:"repositories"`
-	Repos        []Repository `yaml:"repos,omitempty"`    // alias for repositories (legacy)
-	Services     []Repository `yaml:"services,omitempty"` // service definitions
-	Owner        string       `yaml:"owner"`
-	Tech              []string     `yaml:"tech,omitempty"`               // frameworks/languages: nestjs, graphql, prisma, express, etc.
-	InstructionPacks  []string     `yaml:"instruction_packs,omitempty"`  // explicit pack IDs to load (e.g. "framework/nestjs", "orm/prisma")
-	Scan              ScanConfig   `yaml:"scan,omitempty"`
+	Domains          []DomainEntry `yaml:"domains"`
+	Tech             []string      `yaml:"tech,omitempty"`
+	InstructionPacks []string      `yaml:"instruction_packs,omitempty"`
 }
 
 func LoadFile(path string) (*Manifest, error) {
@@ -44,17 +40,95 @@ func Load(data []byte) (*Manifest, error) {
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing manifest: %w", err)
 	}
-	if m.Domain == "" {
-		return nil, fmt.Errorf("manifest validation: domain is required")
+	if len(m.Domains) == 0 {
+		return nil, fmt.Errorf("manifest validation: domains is required (must have at least one domain)")
 	}
-	// Merge repos → repositories (legacy alias)
-	if len(m.Repositories) == 0 && len(m.Repos) > 0 {
-		m.Repositories = m.Repos
+	for i, d := range m.Domains {
+		if d.Name == "" {
+			return nil, fmt.Errorf("manifest validation: domains[%d].name is required", i)
+		}
 	}
-	// Merge services → repositories if no repos defined
-	if len(m.Repositories) == 0 && len(m.Services) > 0 {
-		m.Repositories = m.Services
-	}
-	// Repositories are optional — scan config alone is enough
 	return &m, nil
+}
+
+// DomainForFile matches a file path against each domain's scan.include/exclude patterns.
+// First matching domain wins. Returns "_unassigned" if nothing matches.
+func (m *Manifest) DomainForFile(filePath string) string {
+	for _, d := range m.Domains {
+		if domainMatchesFile(d, filePath) {
+			return d.Name
+		}
+	}
+	return "_unassigned"
+}
+
+// domainMatchesFile checks if a file matches a domain's scan config.
+// If no include patterns, domain does not match any file.
+// If include patterns exist, file must match at least one.
+// If exclude patterns exist, file must NOT match any.
+func domainMatchesFile(d DomainEntry, filePath string) bool {
+	if len(d.Scan.Include) == 0 {
+		return false
+	}
+	for _, pattern := range d.Scan.Exclude {
+		if matchGlob(filePath, pattern) {
+			return false
+		}
+	}
+	for _, pattern := range d.Scan.Include {
+		if matchGlob(filePath, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// MergedScanConfig builds a single ScanConfig from all domains' scan patterns.
+// Useful for callers that need a flat include/exclude list.
+func (m *Manifest) MergedScanConfig() ScanConfig {
+	var merged ScanConfig
+	for _, d := range m.Domains {
+		merged.Include = append(merged.Include, d.Scan.Include...)
+		merged.Exclude = append(merged.Exclude, d.Scan.Exclude...)
+	}
+	return merged
+}
+
+// matchGlob matches a file path against a glob pattern with ** support.
+// Copied from graph/discover.go to avoid circular imports.
+func matchGlob(filePath, pattern string) bool {
+	if strings.Contains(pattern, "**") {
+		parts := strings.SplitN(pattern, "**", 2)
+		prefix := strings.TrimSuffix(parts[0], "/")
+		suffix := ""
+		if len(parts) > 1 {
+			suffix = strings.TrimPrefix(parts[1], "/")
+		}
+
+		if prefix == "" {
+			if suffix == "" {
+				return true
+			}
+			matched, _ := filepath.Match(suffix, filepath.Base(filePath))
+			return matched
+		}
+
+		if !strings.HasPrefix(filePath, prefix+"/") && filePath != prefix {
+			return false
+		}
+
+		if suffix == "" {
+			return true
+		}
+
+		matched, _ := filepath.Match(suffix, filepath.Base(filePath))
+		return matched
+	}
+
+	matched, _ := filepath.Match(pattern, filePath)
+	if matched {
+		return true
+	}
+	matched, _ = filepath.Match(pattern, filepath.Base(filePath))
+	return matched
 }

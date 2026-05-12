@@ -1,0 +1,19 @@
+domains:
+  - name: mobile-app
+    description: Mobile gateway
+    owner: mobile-team
+    scan:
+      include: ["mobile-gateway/**", "push-service/**"]
+  - name: core-api
+    description: Core business logic
+    owner: backend-team
+    scan:
+      include: ["orders-api/**", "payments-api/**", "users-api/**"]
+  - name: crm
+    description: CRM panel
+    owner: crm-team
+    scan:
+      include: ["crm-api/**", "crm-worker/**"]
+
+tech: [nestjs, kafka]
+instruction_packs: ["framework/nestjs"]

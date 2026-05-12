@@ -1,4 +1,0 @@
-description: Missing domain field
-repositories:
-  - name: orders-api
-    path: ./repos/orders-api
