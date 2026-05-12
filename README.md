@@ -76,6 +76,12 @@ The MCP server runs a web dashboard on localhost. It opens automatically on firs
 
 ![Dashboard](assets/dashboard.png)
 
+- **Overview** — graph stats, low-confidence edges, request log, growth chart
+- **Graph** — interactive graph explorer with tree, explore, and workspace modes
+- **Language** — domain glossary and naming violation checker
+- **Diagrams** — live architecture diagrams built from graph data
+- **Settings** — scan manifest, instruction packs, edge type config
+
 ## Data and privacy
 
 All data stays on your machine. Nothing is sent externally.
