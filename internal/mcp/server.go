@@ -75,6 +75,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(checkLanguageTool(), checkLanguageHandler(g))
 	s.AddTool(commandTool(), commandHandler(g))
 	s.AddTool(diagramBuildTool(), diagramBuildHandler())
+	s.AddTool(domainListTool(), domainListHandler(g))
 	s.AddTool(resolveContextTool(), resolveContextHandler(g))
 	s.AddTool(contextListTool(), contextListHandler(g))
 	s.AddTool(contextCreateTool(), contextCreateHandler(g))
@@ -2078,12 +2079,23 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func diagramBuildTool() mcp.Tool {
 	return mcp.NewTool("chronicle_diagram_build",
-		mcp.WithDescription("Build a diagram from real graph entities. Nodes are resolved and validated from the database. Edges between selected nodes are auto-discovered. Virtual nodes/edges for external actors. Returns session URL."),
+		mcp.WithDescription(`Build a live diagram. Accepts a diagram view model: explicit nodes/edges (for overview, synthetic diagrams) and/or node_keys (resolved from graph DB with auto-edge-discovery). Returns session URL.
+
+Modes:
+- Pure view model: provide nodes + edges — for overview diagrams where all nodes are synthetic (domains, infra, external).
+- Graph-backed: provide node_keys — nodes resolved from DB, edges auto-discovered.
+- Mixed: both — node_keys resolved + explicit synthetic nodes/edges merged.
+
+Node kinds: service, endpoint, model, domain, infrastructure, external, topic, queue, database
+Edge kinds: http, async, data, structural`),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
-		mcp.WithString("node_keys", mcp.Required(), mcp.Description("JSON array of node_key strings to include, e.g. [\"code:service:demo:OrdersAPI\"]")),
-		mcp.WithString("hide_edges", mcp.Description("JSON array of edges to exclude: [{\"from\":\"key1\",\"to\":\"key2\",\"edge_type\":\"OPTIONAL\"}]")),
-		mcp.WithString("virtual_nodes", mcp.Description("JSON array of non-graph nodes: [{\"key\":\"user\",\"name\":\"User\",\"type\":\"actor\",\"layer\":\"external\"}]")),
-		mcp.WithString("virtual_edges", mcp.Description("JSON array of edges to/from virtual nodes: [{\"from\":\"user\",\"to\":\"key\",\"edge_type\":\"http\",\"label\":\"POST /orders\"}]")),
+		mcp.WithString("nodes", mcp.Description("JSON array of DiagramNode: [{\"key\":\"...\",\"label\":\"...\",\"kind\":\"domain|infrastructure|external|service|...\",\"source_key\":\"optional\",\"domain\":\"optional\"}]")),
+		mcp.WithString("edges", mcp.Description("JSON array of DiagramEdge: [{\"from\":\"node_key\",\"to\":\"node_key\",\"label\":\"HTTP\",\"kind\":\"http|async|data|structural\"}]")),
+		mcp.WithString("node_keys", mcp.Description("JSON array of graph node_key strings to resolve from DB. Edges auto-discovered.")),
+		mcp.WithString("groups", mcp.Description("JSON object: {\"field\":\"domain|layer|kind\"}")),
+		mcp.WithString("steps", mcp.Description("JSON array of DiagramStep: [{\"title\":\"...\",\"description\":\"...\",\"highlights\":{\"node_key\":\"#color\"},\"notes\":{\"node_key\":\"text\"}}]")),
+		mcp.WithString("annotations", mcp.Description("JSON object: {\"node_key\":{\"note\":\"text\",\"highlight\":\"#color\"}}")),
+		mcp.WithString("hide_edges", mcp.Description("JSON array: [{\"from\":\"key1\",\"to\":\"key2\",\"edge_type\":\"OPTIONAL\"}]")),
 	)
 }
 
@@ -2091,14 +2103,8 @@ func diagramBuildHandler() server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		title := strParam(args, "title")
-		nodeKeysStr := strParam(args, "node_keys")
-		if title == "" || nodeKeysStr == "" {
-			return errorResult(fmt.Errorf("title and node_keys are required")), nil
-		}
-
-		var nodeKeys []string
-		if err := json.Unmarshal([]byte(nodeKeysStr), &nodeKeys); err != nil {
-			return errorResult(fmt.Errorf("invalid node_keys JSON: %w", err)), nil
+		if title == "" {
+			return errorResult(fmt.Errorf("title is required")), nil
 		}
 
 		port := adminPortValue
@@ -2106,33 +2112,23 @@ func diagramBuildHandler() server.ToolHandlerFunc {
 			port = 4200
 		}
 
-		payload := map[string]any{
-			"title":     title,
-			"node_keys": nodeKeys,
+		payload := map[string]any{"title": title}
+
+		// Parse all JSON string parameters
+		for _, field := range []string{"nodes", "edges", "node_keys", "steps", "hide_edges", "groups", "annotations"} {
+			if raw := strParam(args, field); raw != "" {
+				var parsed any
+				if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+					return errorResult(fmt.Errorf("invalid %s JSON: %w", field, err)), nil
+				}
+				payload[field] = parsed
+			}
 		}
 
-		if hideStr := strParam(args, "hide_edges"); hideStr != "" {
-			var hideEdges []any
-			if err := json.Unmarshal([]byte(hideStr), &hideEdges); err != nil {
-				return errorResult(fmt.Errorf("invalid hide_edges JSON: %w", err)), nil
-			}
-			payload["hide_edges"] = hideEdges
-		}
-
-		if vnStr := strParam(args, "virtual_nodes"); vnStr != "" {
-			var virtualNodes []any
-			if err := json.Unmarshal([]byte(vnStr), &virtualNodes); err != nil {
-				return errorResult(fmt.Errorf("invalid virtual_nodes JSON: %w", err)), nil
-			}
-			payload["virtual_nodes"] = virtualNodes
-		}
-
-		if veStr := strParam(args, "virtual_edges"); veStr != "" {
-			var virtualEdges []any
-			if err := json.Unmarshal([]byte(veStr), &virtualEdges); err != nil {
-				return errorResult(fmt.Errorf("invalid virtual_edges JSON: %w", err)), nil
-			}
-			payload["virtual_edges"] = virtualEdges
+		_, hasNodes := payload["nodes"]
+		_, hasNodeKeys := payload["node_keys"]
+		if !hasNodes && !hasNodeKeys {
+			return errorResult(fmt.Errorf("at least one of 'nodes' or 'node_keys' is required")), nil
 		}
 
 		body, _ := json.Marshal(payload)
@@ -2150,6 +2146,39 @@ func diagramBuildHandler() server.ToolHandlerFunc {
 		var result map[string]any
 		json.NewDecoder(resp.Body).Decode(&result)
 		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_domain_list
+// ---------------------------------------------------------------------------
+
+func domainListTool() mcp.Tool {
+	return mcp.NewTool("chronicle_domain_list",
+		mcp.WithDescription("List all domains in the knowledge graph with metadata. Returns domain name and node count. Use to understand project structure before building overview diagrams."),
+	)
+}
+
+func domainListHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		domains, err := g.Store().GetDomains()
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		result := make([]map[string]any, 0, len(domains))
+		for _, d := range domains {
+			nodes, err := g.Store().ListNodes(store.NodeFilter{Domain: d, Status: "active"})
+			if err != nil {
+				continue
+			}
+			result = append(result, map[string]any{
+				"domain":     d,
+				"node_count": len(nodes),
+			})
+		}
+
+		return jsonResult(map[string]any{"domains": result, "count": len(result)}), nil
 	}
 }
 
