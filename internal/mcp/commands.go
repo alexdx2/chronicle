@@ -33,10 +33,11 @@ CRITICAL RULES:
   ❌ NEVER read files and extract facts yourself — subagents do extraction
   ❌ NEVER skip checkpoints — STOP and wait at each one
   ❌ NEVER save the manifest without user approval
-  ❌ NEVER guess the domain — use the EXACT domain from chronicle.domain.yaml
+  ❌ NEVER guess the domain — the manifest defines multiple domains with scan.include/exclude patterns
   ✅ The ONLY extraction workflow is: scan_next_file → read file → file_extracted → repeat
   ✅ YOU are the orchestrator. Subagents do the extraction work.
-  ✅ Pass the EXACT domain to ALL subagents: "domain is '<domain>'"
+  ✅ Each file in the scan batch includes a domain_key field — use it when extracting facts
+  ✅ Pass the domain_key from each file's batch entry to tool calls — do NOT hardcode a single domain
 
 __STAGES__`,
 
@@ -224,7 +225,7 @@ Example:
    - Frontend presentation (components, hooks, pages, screens) — exclude by default
    - Tests, generated, dist — exclude
 3. Ask user which directories to EXCLUDE
-4. Write scan.include and scan.exclude patterns to the manifest
+4. Write scan.include and scan.exclude patterns to each domain in the manifest's domains: array
 5. Call chronicle_discover_files to validate the final count
 6. Show: "X files will be scanned. Ready to scan?"
 

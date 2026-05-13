@@ -152,13 +152,13 @@ var scanStages = []ScanStage{
 		Name: "Finalize setup",
 		Type: "action",
 		Instruction: `Save manifest and discover files:
-  a. Call chronicle_save_manifest with the approved manifest (include instruction_packs, tech, scan patterns)
-  b. Call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
-  c. Call chronicle_discover_files(domain, revision_id, votes_needed)
+  a. Call chronicle_save_manifest with the approved manifest (include instruction_packs, tech, domains array with scan patterns)
+  b. For each domain in the manifest, call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
+  c. Call chronicle_discover_files(revision_id, votes_needed) — files are auto-assigned domain_key based on scan.include/exclude patterns
   d. Call chronicle_scan_next_file — it will return a CHECKPOINT with action="confirm"
      Show the checkpoint to the user and call chronicle_scan_confirm to proceed.
   e. Show discovery summary:
-     "Discovered X files (Y git-tracked, Z excluded). Starting scan."`,
+     "Discovered X files across N domains (Y git-tracked, Z excluded). Starting scan."`,
 	},
 
 	// ─── Phase 1: Extraction ───
@@ -167,16 +167,16 @@ var scanStages = []ScanStage{
 		Name:       "Phase 1 — extraction",
 		Type:       "agents",
 		AgentModel: "haiku",
-		Instruction: `Spawn haiku subagents. Pass them the EXACT domain name.
+		Instruction: `Spawn haiku subagents.
   Each agent runs this loop:
-    1. Call chronicle_scan_next_file(domain="<EXACT DOMAIN>")
+    1. Call chronicle_scan_next_file — each file in the batch includes a domain_key
     2. Check "action" field:
-       - "extract_files": read the files, call chronicle_file_extracted for each, go to 1
+       - "extract_files": read the files, use each file's domain_key when calling chronicle_file_extracted, go to 1
        - "call_resolve_extractions": call chronicle_resolve_extractions, go to 1
        - "wait": sleep a few seconds, go to 1
        - "done" or "trace_flow": STOP — agent is done
     3. Response includes fact_schema + instruction_packs — follow them exactly
-    4. Response includes "domain" field — use it for ALL tool calls
+    4. Each file includes a domain_key field — use it for tool calls on that file
 
   Parallelism:
   - votes=1: spawn 3-5 parallel haiku agents
@@ -197,8 +197,8 @@ var scanStages = []ScanStage{
 		AgentModel: "sonnet",
 		Instruction: `scan_next_file returned "trace_flow" with flow_context.
   Spawn sonnet subagents (2-3). Each agent loops:
-    1. Call chronicle_scan_next_file(domain="<EXACT DOMAIN>")
-    2. If action is "trace_flow": read trigger file + files_to_read, emit flow facts, go to 1
+    1. Call chronicle_scan_next_file — each file includes a domain_key
+    2. If action is "trace_flow": read trigger file + files_to_read, use the file's domain_key, emit flow facts, go to 1
     3. If action is NOT "trace_flow": STOP`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
   b. Call chronicle_scan_next_file(domain) — should return done=true
@@ -219,7 +219,7 @@ func BuildScanStagesInstruction() string {
   - Do NOT ask yes/no questions unless user chose Custom.
 
 ORCHESTRATOR PATTERN — applies to ALL agent stages:
-  1. Spawn agents with EXACT domain name
+  1. Spawn agents — each file batch entry includes its own domain_key
   2. Wait for ALL agents to finish
   3. Run the "AFTER AGENTS" steps yourself — do NOT skip them
   4. Then proceed to the next stage`)
