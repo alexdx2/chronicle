@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -48,8 +47,6 @@ func portFromPath(dir string) int {
 	return 4200 + int(h.Sum32()%800)
 }
 
-//go:embed static/*
-var staticFS embed.FS
 
 type DiagramNode struct {
 	Key       string            `json:"key"`
@@ -393,11 +390,10 @@ func (s *Server) Start() error {
 	dashboardBytes := []byte(s.dashboardHTML)
 
 	if s.devMode {
-		staticDir := filepath.Join(findModuleRoot(), "internal", "admin", "static")
+		staticDir := filepath.Join(findModuleRoot(), "admin", "static")
 		fmt.Fprintf(os.Stderr, "Dev mode: serving static files from %s\n", staticDir)
 		fileServer := http.FileServer(http.Dir(staticDir))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Unknown /api/ paths return 404, not HTML
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				http.NotFound(w, r)
 				return
@@ -410,18 +406,17 @@ func (s *Server) Start() error {
 			http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 		}))
 	} else {
-		staticContent, err := fs.Sub(staticFS, "static")
+		staticContent, err := fs.Sub(dashboard.StaticFS(), "static")
 		if err != nil {
 			return fmt.Errorf("static fs: %w", err)
 		}
 		fileServer := http.FileServer(http.FS(staticContent))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Unknown /api/ paths return 404, not HTML
 			if strings.HasPrefix(r.URL.Path, "/api/") {
 				http.NotFound(w, r)
 				return
 			}
-			// Serve static assets (favicon, logos) from embed
+			// Serve static assets (favicon, logo) from embed
 			f, err := staticContent.Open(strings.TrimPrefix(r.URL.Path, "/"))
 			if err == nil {
 				f.Close()
@@ -913,8 +908,14 @@ func (s *Server) handleDiagram(w http.ResponseWriter, r *http.Request) {
 		s.handleDiagramBuild(w, r)
 	case r.Method == "GET" && sessionID == "latest":
 		s.handleDiagramLatest(w, r)
+	case r.Method == "GET" && sessionID == "list":
+		s.handleDiagramList(w, r)
+	case r.Method == "GET" && sessionID == "":
+		s.handleDiagramList(w, r)
 	case r.Method == "GET" && sessionID != "":
 		s.handleDiagramGet(w, r, sessionID)
+	case r.Method == "DELETE" && sessionID != "":
+		s.handleDiagramDelete(w, r, sessionID)
 	default:
 		http.Error(w, "not found", 404)
 	}
@@ -1061,6 +1062,30 @@ func edgeTypeToKind(edgeType string) string {
 	default:
 		return "structural"
 	}
+}
+
+func (s *Server) handleDiagramList(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	sessions := make([]map[string]any, 0, len(s.diagrams))
+	for _, session := range s.diagrams {
+		sessions = append(sessions, map[string]any{
+			"id":         session.ID,
+			"title":      session.Title,
+			"node_count": len(session.Nodes),
+			"edge_count": len(session.Edges),
+			"created_at": session.CreatedAt,
+		})
+	}
+	s.mu.RUnlock()
+	httpJSON(w, map[string]any{"sessions": sessions})
+}
+
+func (s *Server) handleDiagramDelete(w http.ResponseWriter, r *http.Request, id string) {
+	s.mu.Lock()
+	delete(s.diagrams, id)
+	s.mu.Unlock()
+	s.getStore().DeleteDiagramSession(id)
+	httpJSON(w, map[string]any{"deleted": id})
 }
 
 func (s *Server) handleDiagramLatest(w http.ResponseWriter, r *http.Request) {

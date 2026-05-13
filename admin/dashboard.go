@@ -12,6 +12,9 @@ import (
 //go:embed static/*
 var staticFS embed.FS
 
+// StaticFS returns the embedded static filesystem (favicon, logo, etc).
+func StaticFS() embed.FS { return staticFS }
+
 // DashboardSlots defines content to inject into the dashboard HTML.
 // All fields are optional — empty strings leave the default content.
 type DashboardSlots struct {

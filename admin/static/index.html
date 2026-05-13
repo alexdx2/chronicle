@@ -114,6 +114,9 @@ a{color:var(--primary);text-decoration:none}
 
 /* Graph tab */
 .graph-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 110px)}
+.graph-container.diagram-main{height:100%;flex:1;border-radius:0;border:none;box-shadow:none;min-width:0}
+.diagram-main #diagram-canvas svg{display:block}
+.diagram-root{display:flex!important;flex-direction:column;height:calc(100vh - 86px);width:100%;padding:0;overflow:hidden}
 #graph-canvas{flex:1;min-height:200px;overflow:auto}
 .resize-handle{height:6px;background:var(--border);cursor:ns-resize;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background .15s}
 .resize-handle:hover,.resize-handle.active{background:var(--primary);opacity:0.6}
@@ -149,6 +152,21 @@ a{color:var(--primary);text-decoration:none}
 .graph-svg .layer-band{fill:#f5f0e8;stroke:var(--border);stroke-dasharray:4,2}
 .graph-svg .layer-label{font-size:12px;font-weight:600;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1px}
 .graph-svg .arrow-head{fill:#b8a898}
+/* Diagram session tabs — browser-style: shrink to fit, scroll when overflow */
+.diagram-tabs{display:flex;align-items:flex-end;gap:1px;background:linear-gradient(to bottom,#ede5d8,#e4dace);padding:3px 6px 0;overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;flex-shrink:0;min-height:34px}
+.diagram-tabs::-webkit-scrollbar{height:3px}
+.diagram-tabs::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.diagram-tab{display:flex;align-items:center;gap:6px;padding:6px 10px 5px;font-size:12px;font-family:var(--font-serif);user-select:none;cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;transition:all .15s;position:relative;top:1px;color:var(--text-muted);background:transparent;min-width:0;flex:0 1 200px;max-width:240px}
+.diagram-tab:hover{background:rgba(255,255,255,.6);color:var(--text-secondary)}
+.diagram-tab.active{background:var(--card);color:var(--primary);font-weight:600;border-color:var(--border);box-shadow:0 -1px 3px rgba(59,47,32,.04)}
+.diagram-tab .tab-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.diagram-tab .tab-meta{font-size:10px;font-family:var(--font-mono);opacity:.5;letter-spacing:-.3px;flex-shrink:0}
+.diagram-tab .tab-close{width:16px;height:16px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:13px;line-height:1;opacity:0;transition:all .12s;color:var(--text-muted);flex-shrink:0}
+.diagram-tab:hover .tab-close{opacity:.5}
+.diagram-tab .tab-close:hover{opacity:1;background:rgba(158,43,43,.1);color:var(--error)}
+.diagram-tab.active .tab-close{opacity:.4}
+.diagram-tab.active .tab-close:hover{opacity:1;background:rgba(158,43,43,.1);color:var(--error)}
+
 /* Filter sidebar */
 .filter-sidebar{width:200px;background:var(--card);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;font-size:11px;padding:10px}
 .filter-sidebar h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:10px 0 4px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none}
@@ -1037,6 +1055,40 @@ a{color:var(--primary);text-decoration:none}
     </div>
   </div>
 
+  <!-- Extraction Guides -->
+  <div class="card" style="width:100%;margin-top:16px">
+    <div class="card-header">
+      <h3>Extraction Guides</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span x-show="guideSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
+        <button @click="saveAllGuides()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+        These guides are sent to extraction agents during scanning. Customize them per project to improve extraction quality.
+      </p>
+
+      <template x-for="[key, label] in [['guide_fact_schema','Fact Schema (non-TS files)'],['guide_enrichment','Enrichment (candidate classification)'],['guide_flow','Flow Tracing (phase 2)']]" :key="key">
+        <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <div @click="expandedGuide = expandedGuide === key ? null : key"
+               style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
+            <div>
+              <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="key"></code>
+              <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="label"></span>
+            </div>
+            <span style="color:var(--text-muted);font-size:12px" x-text="expandedGuide === key ? '&#9660;' : '&#9654;'"></span>
+          </div>
+          <div x-show="expandedGuide === key" x-cloak>
+            <textarea x-model="guidePrompts[key]" @input="guideSaved=false"
+              style="width:100%;min-height:200px;font-family:var(--font-mono);font-size:11px;line-height:1.6;padding:10px;border:none;border-top:1px solid var(--border);background:#fff;resize:vertical;color:var(--text);box-sizing:border-box"
+              spellcheck="false"></textarea>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <!-- Edge Categories -->
   <div class="card" style="width:100%;margin-top:16px">
     <div class="card-header">
@@ -1093,9 +1145,20 @@ a{color:var(--primary);text-decoration:none}
 </div>
 
 <!-- Diagram Tab (completely separate from Graph) -->
-<div class="container fullscreen" x-show="tab==='diagram'" x-cloak>
-  <div style="display:flex;height:calc(100vh - 110px);gap:0">
-    <!-- Left: Entity palette (always visible) -->
+<div class="diagram-root" x-show="tab==='diagram'" x-cloak>
+  <!-- Session tabs — full width above everything -->
+  <div class="diagram-tabs" x-show="diagramSessions.length > 0">
+    <template x-for="sess in diagramSessions" :key="sess.id">
+      <div class="diagram-tab" :class="{active: diagramSessionId === sess.id}" @click="switchDiagramSession(sess.id)">
+        <span class="tab-title" x-text="sess.title"></span>
+        <span class="tab-meta" x-text="sess.node_count + '·' + sess.edge_count"></span>
+        <span class="tab-close" @click.stop="closeDiagramSession(sess.id)" title="Close">×</span>
+      </div>
+    </template>
+  </div>
+
+  <div style="display:flex;flex:1;gap:0;overflow:hidden;min-height:0">
+    <!-- Left: Entity palette -->
     <div class="ws-palette" style="width:220px;height:100%;border-right:1px solid var(--border)">
       <input type="text" placeholder="Search entities..." x-model="diagramSearch">
       <div style="flex:1;overflow-y:auto">
@@ -1130,22 +1193,22 @@ a{color:var(--primary);text-decoration:none}
     </div>
 
     <!-- Main diagram area -->
-    <div class="graph-container" style="flex:1;height:100%">
+    <div class="graph-container diagram-main">
       <!-- Diagram toolbar: step navigation + filter toggle -->
       <div class="graph-toolbar" style="justify-content:space-between;gap:16px;padding:8px 16px">
         <template x-if="diagramData?.title">
           <span style="font-weight:700;font-size:15px;color:var(--primary)" x-text="diagramData.title"></span>
         </template>
-        <template x-if="diagramData?.total_steps > 0">
+        <template x-if="(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0) > 0">
           <div style="display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
             <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:4px 8px;font-size:10px" title="Clear all highlights">Clear</button>
             <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
             <span style="font-size:13px;min-width:120px;text-align:center">
               <template x-if="diagramStep >= 0">
                 <span>
-                  <strong x-text="'Step '+(diagramStep+1)+' / '+diagramData.total_steps" style="font-size:14px"></strong>
-                  <template x-if="diagramData.step_titles?.[diagramStep]">
-                    <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="diagramData.step_titles[diagramStep]"></span>
+                  <strong x-text="'Step '+(diagramStep+1)+' / '+(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)" style="font-size:14px"></strong>
+                  <template x-if="Array.isArray(diagramData?.steps) && diagramData.steps[diagramStep]?.title">
+                    <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.title || '') : ''"></span>
                   </template>
                 </span>
               </template>
@@ -1153,7 +1216,7 @@ a{color:var(--primary);text-decoration:none}
                 <span style="color:var(--text-muted);font-size:12px">No highlights</span>
               </template>
             </span>
-            <button class="mode-btn" @click="diagramStep=Math.min(diagramData.total_steps-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=diagramData.total_steps-1" style="padding:4px 10px;font-size:14px">▶</button>
+            <button class="mode-btn" @click="diagramStep=Math.min((Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)-1" style="padding:4px 10px;font-size:14px">▶</button>
           </div>
         </template>
         <div style="display:flex;gap:4px;align-items:center">
@@ -1194,24 +1257,24 @@ a{color:var(--primary);text-decoration:none}
       </div>
 
       <!-- Resizable description panel -->
-      <template x-if="diagramData?.total_steps > 0">
+      <template x-if="(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0) > 0">
         <div style="flex-shrink:0">
           <div class="resize-handle" :class="{active: _resizing}"
                @mousedown.prevent="_resizing=true;_resizeStart=$event.clientY;_resizeInitH=descPanelHeight"
                @touchstart.prevent="_resizing=true;_resizeStart=$event.touches[0].clientY;_resizeInitH=descPanelHeight"></div>
           <div class="step-description-panel" :style="'height:'+descPanelHeight+'px;padding:20px 28px'">
-            <template x-if="diagramStep >= 0 && diagramData?.step_descriptions?.[diagramStep]">
+            <template x-if="diagramStep >= 0 && (Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.description || '') : '')">
               <div style="font-size:16px;color:var(--text);line-height:1.8;letter-spacing:0.01em">
-                <template x-if="diagramData?.step_titles?.[diagramStep]">
-                  <div style="font-weight:700;font-size:18px;margin-bottom:8px;color:var(--primary)" x-text="diagramData.step_titles[diagramStep]"></div>
+                <template x-if="Array.isArray(diagramData?.steps) && diagramData.steps[diagramStep]?.title">
+                  <div style="font-weight:700;font-size:18px;margin-bottom:8px;color:var(--primary)" x-text="Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.title || '') : ''"></div>
                 </template>
-                <span x-text="diagramData.step_descriptions[diagramStep]"></span>
+                <span x-text="Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.description || '') : ''"></span>
               </div>
             </template>
-            <template x-if="diagramStep < 0 || !diagramData?.step_descriptions?.[diagramStep]">
+            <template x-if="diagramStep < 0 || !(Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.description || '') : '')">
               <div style="font-size:14px;color:var(--text-muted);line-height:1.6">
                 <strong x-text="diagramData?.title || 'Diagram'"></strong>
-                <span x-text="' — ' + diagramData?.total_steps + ' steps'"></span>
+                <span x-text="' — ' + (Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0) + ' steps'"></span>
               </div>
             </template>
           </div>
@@ -1303,6 +1366,9 @@ function dashboard() {
     commandPrompts: {},
     promptSaved: false,
     expandedPrompt: null,
+    guidePrompts: {},
+    guideSaved: false,
+    expandedGuide: null,
     promptOrder: ['scan', 'data', 'flows', 'language', 'services', 'impact', 'deps', 'path', 'status'],
     promptDescriptions: {
       scan: 'Full project scan',
@@ -1361,9 +1427,10 @@ function dashboard() {
     collapsedPaletteGroups: {},
     collapsedFilterSections: {},
     // SLOT:EXTRA_STATE
-    // Diagram (live from Claude — single slot, auto-navigates)
+    // Diagram (live from Claude — tabbed sessions)
+    diagramSessions: [],  // [{id, title, node_count, edge_count, created_at}]
     diagramSessionId: null,
-    diagramData: null,  // {id, title, nodes, edges, annotations, steps, step_titles, total_steps}
+    diagramData: null,  // {id, title, nodes, edges, annotations, steps: DiagramStep[], groups}
     diagramStep: -1,    // -1 = clean (no highlights), 0+ = step index
     diagramFlash: false,
     diagramSidebarOpen: false,
@@ -1435,14 +1502,32 @@ function dashboard() {
         });
       }
 
-      // Always try to load the latest diagram so the tab appears
+      // Restore last diagram session from localStorage, fallback to latest
       try {
-        const dr = await fetch('/api/diagram/latest');
-        if (dr.ok) {
-          const dd = await dr.json();
-          this.diagramSessionId = dd.id;
-          this.diagramData = dd;
-          // Prefetch graph data for entity palette
+        const savedSession = localStorage.getItem('chronicle_diagram_session');
+        let loaded = false;
+        if (savedSession) {
+          try {
+            const sr = await fetch('/api/diagram/' + savedSession);
+            if (sr.ok) {
+              const sd = await sr.json();
+              this.diagramSessionId = sd.id;
+              this.diagramData = this._normalizeDiagramData(sd);
+              loaded = true;
+            }
+          } catch(e) {}
+        }
+        if (!loaded) {
+          const dr = await fetch('/api/diagram/latest');
+          if (dr.ok) {
+            const dd = await dr.json();
+            this.diagramSessionId = dd.id;
+            this.diagramData = this._normalizeDiagramData(dd);
+            localStorage.setItem('chronicle_diagram_session', dd.id);
+          }
+        }
+        if (this.diagramData) {
+          this.fetchDiagramSessions();
           if (!this.diagramGraphLoaded) {
             this.fetchGraphData().then(() => { this.diagramGraphLoaded = true; });
           }
@@ -1520,7 +1605,8 @@ function dashboard() {
       try {
         // Try federation stats first (pro only — endpoint doesn't exist in core)
         let r = await fetch('/api/federation/stats');
-        if (r.ok) {
+        const ct = r.headers.get('content-type') || '';
+        if (r.ok && ct.includes('application/json')) {
           const data = await r.json();
           this.stats = { graph: data.aggregated || data, requests: {} };
           return;
@@ -1589,7 +1675,17 @@ function dashboard() {
     async fetchPrompt() {
       try {
         const r = await fetch('/api/settings/prompt');
-        this.commandPrompts = await r.json();
+        const data = await r.json();
+        // Separate guide prompts from command prompts
+        this.guidePrompts = {};
+        this.commandPrompts = {};
+        for (const [k, v] of Object.entries(data)) {
+          if (k.startsWith('guide_')) {
+            this.guidePrompts[k] = v;
+          } else {
+            this.commandPrompts[k] = v;
+          }
+        }
       } catch(e) { console.error('prompt:', e); }
     },
 
@@ -1603,6 +1699,18 @@ function dashboard() {
         this.promptSaved = true;
         setTimeout(() => this.promptSaved = false, 2000);
       } catch(e) { console.error('save prompts:', e); }
+    },
+
+    async saveAllGuides() {
+      try {
+        await fetch('/api/settings/prompt', {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(this.guidePrompts),
+        });
+        this.guideSaved = true;
+        setTimeout(() => this.guideSaved = false, 2000);
+      } catch(e) { console.error('save guides:', e); }
     },
 
     async resetToDefault() {
@@ -1760,19 +1868,21 @@ function dashboard() {
               this.fetchDiscoveries();
             }, 2000);
           }
-          if (msg.type === 'diagram_update') {
-            this.diagramSessionId = msg.data?.session_id;
-            this.diagramData = {
-              id: msg.data.session_id,
-              title: msg.data.title || this.diagramData?.title || '',
-              nodes: msg.data.nodes || [],
-              edges: msg.data.edges || [],
-              annotations: msg.data.annotations || {},
-              steps: msg.data.steps || {},
-              step_titles: msg.data.step_titles || {},
-              step_descriptions: msg.data.step_descriptions || {},
-              total_steps: msg.data.total_steps || 0
-            };
+          if (msg.type === 'diagram_update' || msg.type === 'diagram') {
+            const session = msg.data?.session || msg.data;
+            this.diagramSessionId = session?.id || session?.session_id || msg.data?.session_id;
+            this.diagramData = this._normalizeDiagramData({
+              id: this.diagramSessionId,
+              title: session?.title || this.diagramData?.title || '',
+              nodes: session?.nodes || [],
+              edges: session?.edges || [],
+              annotations: session?.annotations || {},
+              steps: Array.isArray(session?.steps) ? session.steps : [],
+              groups: session?.groups || null,
+            });
+            // Refresh session list + persist
+            this.fetchDiagramSessions();
+            localStorage.setItem('chronicle_diagram_session', this.diagramSessionId);
             // Auto-navigate to diagram tab
             if (this.tab !== 'diagram') {
               this.diagramFlash = true;
@@ -1798,6 +1908,30 @@ function dashboard() {
     layerColor(layer) {
       const colors = {code:'#8b5a2b',contract:'#1a7a2e',service:'#c23030',data:'#6a3d9a',flow:'#b85c2e',ownership:'#c4880a',infra:'#2e5f8a',ci:'#a83262'};
       return colors[layer] || '#b8a898';
+    },
+
+    diagramNodeStyle(kind) {
+      const styles = {
+        domain:         { width: 140, height: 50, fill: '#6b442318', stroke: '#6b4423', strokeWidth: 2, dash: 'none', fontWeight: 'bold', fontSize: 12 },
+        infrastructure: { width: 120, height: 50, fill: '#d4915e20', stroke: '#d4915e', strokeWidth: 2, dash: 'none', fontWeight: 'bold', fontSize: 12 },
+        external:       { width: 100, height: 40, fill: '#f5f5f5',   stroke: '#999',    strokeWidth: 1.5, dash: '6,3', fontWeight: 'normal', fontSize: 11 },
+        service:        { width: 100, height: 40, fill: null,        stroke: null,      strokeWidth: 1.5, dash: 'none', fontWeight: 'normal', fontSize: 10 },
+        endpoint:       { width: 100, height: 35, fill: '#10b98140', stroke: '#10b981', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
+        model:          { width: 100, height: 35, fill: '#8b5cf640', stroke: '#8b5cf6', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
+        topic:          { width: 110, height: 35, fill: '#d4915e30', stroke: '#d4915e', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
+        queue:          { width: 110, height: 35, fill: '#d4915e30', stroke: '#d4915e', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
+        database:       { width: 100, height: 45, fill: '#2e5f8a20', stroke: '#2e5f8a', strokeWidth: 1.5, dash: 'none', fontWeight: 'normal', fontSize: 10 },
+      };
+      return styles[kind] || styles.service;
+    },
+    diagramEdgeStyle(kind) {
+      const styles = {
+        http:       { color: '#6b9bd2', dash: 'none' },
+        async:      { color: '#d4915e', dash: '8,4' },
+        data:       { color: '#a87dc2', dash: 'none' },
+        structural: { color: '#b8a898', dash: '4,2' },
+      };
+      return styles[kind] || styles.structural;
     },
 
     toggleLayer(l) {
@@ -3038,6 +3172,33 @@ function dashboard() {
       return Object.values(types).sort((a, b) => a.type.localeCompare(b.type));
     },
 
+    // Normalize DiagramNode/DiagramEdge fields to match what the renderer expects.
+    // DiagramNode has key/label/kind; renderer expects node_id/node_key/name/layer/node_type.
+    // DiagramEdge has from/to/label/kind; renderer expects from_node_id/to_node_id/edge_type.
+    _normalizeDiagramData(data) {
+      if (!data) return data;
+      if (data.nodes) {
+        data.nodes = data.nodes.map((n, i) => ({
+          ...n,
+          node_id: n.node_id || n.key || i,
+          node_key: n.node_key || n.key || '',
+          name: n.name || n.label || n.key || '',
+          layer: n.layer || n.kind || '',
+          node_type: n.node_type || n.kind || '',
+          virtual: !n.source_key && n.kind && ['domain','infrastructure','external'].includes(n.kind),
+        }));
+      }
+      if (data.edges) {
+        data.edges = data.edges.map(e => ({
+          ...e,
+          from_node_id: e.from_node_id || e.from || '',
+          to_node_id: e.to_node_id || e.to || '',
+          edge_type: e.edge_type || e.label || e.kind || '',
+        }));
+      }
+      return data;
+    },
+
     // Filter diagram nodes/edges with transitive collapsing (reuses existing engine)
     _filterDiagramData() {
       const nodes = this.diagramData.nodes || [];
@@ -3110,9 +3271,14 @@ function dashboard() {
         }
 
         config.nodes.forEach(n => {
-          gDag.setNode(String(n.node_id), { label: n.name || '', width: 110, height: 44 });
+          const nodeKey = String(n.node_id);
+          gDag.setNode(nodeKey, {
+            width: n.kind ? self.diagramNodeStyle(n.kind).width + 20 : 120,
+            height: n.kind ? self.diagramNodeStyle(n.kind).height + 10 : 50,
+            label: n.name || n.label || nodeKey,
+          });
           if (useCompound && n._group && groups.keys.includes(n._group)) {
-            gDag.setParent(String(n.node_id), 'group_' + n._group);
+            gDag.setParent(nodeKey, 'group_' + n._group);
           }
         });
 
@@ -3204,7 +3370,7 @@ function dashboard() {
           const maxX = d3.max(members, d => d.x) + 50 + padding;
           const minY = d3.min(members, d => d.y) - 20 - padding - labelH;
           const maxY = d3.max(members, d => d.y) + 20 + padding;
-          const color = groups.field === 'layer' ? self.layerColor(gk) : '#6b4423';
+          const color = groups.field === 'layer' ? self.layerColor(gk) : (groups.field === 'domain' ? '#6b4423' : '#6b4423');
           return { gk, x: minX, y: minY, w: maxX - minX, h: maxY - minY, color };
         }).filter(Boolean);
 
@@ -3233,13 +3399,20 @@ function dashboard() {
           let cls = 'edge-line';
           if (d._isPath) cls += ' path-edge';
           else if (d._transitive) cls += ' transitive';
+          else if (d.virtual) cls += ' dashed';
           else if (d.derivation !== 'hard' && d.derivation !== 'linked') cls += ' dashed';
           return cls;
         })
+        .attr('opacity', d => d.virtual ? 0.7 : 1)
         .attr('stroke', d => {
+          if (d.kind) return self.diagramEdgeStyle(d.kind).color;
           if (d._isPath || d._transitive) return null;
           const info = self.edgeCategoryLookup[d.edge_type];
           return info ? info.color : null;
+        })
+        .attr('stroke-dasharray', d => {
+          if (d.kind) return self.diagramEdgeStyle(d.kind).dash;
+          return null;
         })
         .attr('marker-end', d => {
           if (d._isPath || d._transitive) return 'url(#g-arrow-highlight)';
@@ -3297,28 +3470,79 @@ function dashboard() {
 
       // White background for cleaner rounded corners
       node.append('rect')
-        .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
+        .attr('width', d => d.kind ? self.diagramNodeStyle(d.kind).width : 100)
+        .attr('height', d => d.kind ? self.diagramNodeStyle(d.kind).height : 40)
+        .attr('x', d => d.kind ? -self.diagramNodeStyle(d.kind).width/2 : -50)
+        .attr('y', d => d.kind ? -self.diagramNodeStyle(d.kind).height/2 : -20)
         .attr('fill', '#fff').attr('rx', 6).attr('ry', 6);
 
       // Colored node rect
       node.append('rect')
         .attr('class', 'node-rect')
-        .attr('width', 100).attr('height', 40).attr('x', -50).attr('y', -20)
-        .attr('fill', d => self.layerColor(d.layer) + '40')
-        .attr('stroke', d => {
-          const ann = annotations[d.node_key];
-          return (ann?.highlight) || self.layerColor(d.layer);
+        .attr('width', d => d.kind ? self.diagramNodeStyle(d.kind).width : 100)
+        .attr('height', d => d.kind ? self.diagramNodeStyle(d.kind).height : 40)
+        .attr('x', d => d.kind ? -self.diagramNodeStyle(d.kind).width/2 : -50)
+        .attr('y', d => d.kind ? -self.diagramNodeStyle(d.kind).height/2 : -20)
+        .attr('fill', d => {
+          const ann = annotations[d.node_key || d.key];
+          if (ann?.highlight) return ann.highlight + '30';
+          if (d.kind) { const s = self.diagramNodeStyle(d.kind); if (s.fill) return s.fill; }
+          if (d.virtual) return '#f0f0f0';
+          return self.layerColor(d.layer) + '40';
         })
-        .attr('stroke-width', d => annotations[d.node_key]?.highlight ? 3 : 1.5)
+        .attr('stroke', d => {
+          const ann = annotations[d.node_key || d.key];
+          if (ann?.highlight) return ann.highlight;
+          if (d.kind) { const s = self.diagramNodeStyle(d.kind); if (s.stroke) return s.stroke; }
+          if (d.virtual) return '#999';
+          return self.layerColor(d.layer);
+        })
+        .attr('stroke-width', d => {
+          const ann = annotations[d.node_key || d.key];
+          if (ann?.highlight) return 3;
+          if (d.kind) return self.diagramNodeStyle(d.kind).strokeWidth;
+          return 1.5;
+        })
+        .attr('stroke-dasharray', d => {
+          if (d.kind) return self.diagramNodeStyle(d.kind).dash;
+          if (d.virtual) return '6,3';
+          return 'none';
+        })
+        .attr('rx', 6).attr('ry', 6)
         .style('filter', d => {
-          const ann = annotations[d.node_key];
+          const ann = annotations[d.node_key || d.key];
           return ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none';
+        });
+
+      // Infrastructure double-stroke
+      node.filter(d => d.kind === 'infrastructure')
+        .append('rect')
+        .attr('class', 'infra-inner-stroke')
+        .attr('x', d => -self.diagramNodeStyle('infrastructure').width/2 + 3)
+        .attr('y', -self.diagramNodeStyle('infrastructure').height/2 + 3)
+        .attr('width', self.diagramNodeStyle('infrastructure').width - 6)
+        .attr('height', self.diagramNodeStyle('infrastructure').height - 6)
+        .attr('rx', 4).attr('ry', 4)
+        .attr('fill', 'none')
+        .attr('stroke', '#d4915e')
+        .attr('stroke-width', 1)
+        .attr('pointer-events', 'none');
+
+      // Tooltip (native SVG title — shows full name + key on hover)
+      node.append('title')
+        .text(d => {
+          const nm = d.name || d.label || '';
+          const key = d.node_key || d.key || '';
+          const ann = annotations[key]?.note || '';
+          return nm + (d.node_type ? ' (' + d.node_type + ')' : '') + (key && key !== nm ? '\n' + key : '') + (ann ? '\n' + ann : '');
         });
 
       // Node name
       node.append('text')
-        .attr('text-anchor', 'middle').attr('dy', -2).attr('font-size', '10px')
-        .text(d => d.name.length > 14 ? d.name.slice(0, 13) + '\u2026' : d.name);
+        .attr('text-anchor', 'middle').attr('dy', -2)
+        .attr('font-weight', d => d.kind ? self.diagramNodeStyle(d.kind).fontWeight : 'normal')
+        .attr('font-size', d => (d.kind ? self.diagramNodeStyle(d.kind).fontSize : 10) + 'px')
+        .text(d => { const nm = d.name || d.label || ''; return nm.length > 14 ? nm.slice(0, 13) + '\u2026' : nm; });
 
       // Node type subtitle
       node.append('text')
@@ -3326,12 +3550,12 @@ function dashboard() {
         .text(d => d.node_type);
 
       // Annotation notes (when annotations have notes)
-      node.filter(d => annotations[d.node_key]?.note).append('text')
+      node.filter(d => annotations[d.node_key || d.key]?.note).append('text')
         .attr('class', 'ann-note')
         .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
-        .attr('fill', d => annotations[d.node_key]?.highlight || 'var(--primary)')
+        .attr('fill', d => annotations[d.node_key || d.key]?.highlight || 'var(--primary)')
         .attr('font-style', 'italic')
-        .text(d => { const n = annotations[d.node_key].note; return n.length > 30 ? n.slice(0, 29) + '\u2026' : n; });
+        .text(d => { const n = annotations[d.node_key || d.key].note; return n.length > 30 ? n.slice(0, 29) + '\u2026' : n; });
 
       // --- Investigation badges (when investigation mode) ---
       if (isInvestigation) {
@@ -3388,7 +3612,11 @@ function dashboard() {
       node.on('mouseenter', (event, d) => {
         self.highlightNode(d.node_id || d.id, simEdges);
       }).on('mouseleave', () => {
-        if (!self.selectedNode) self.highlightNode(null, simEdges);
+        if (!self.selectedNode) {
+          self.highlightNode(null, simEdges);
+          // Restore step-based annotations if active
+          if (self.diagramStep >= 0) self.updateDiagramAnnotations();
+        }
       });
       gRoot.on('click', () => {
         if (config.callbacks?.onBackgroundClick) config.callbacks.onBackgroundClick(simEdges);
@@ -3405,7 +3633,8 @@ function dashboard() {
       this.wsDataSource = 'diagram';
       this.loading.graph = false;
       this.loaded.graph = true;
-      if (this.diagramStep < 0 && this.diagramData?.total_steps > 0) {
+      await this.fetchDiagramSessions();
+      if (this.diagramStep < 0 && (Array.isArray(this.diagramData?.steps) ? this.diagramData.steps.length : 0) > 0) {
         this.diagramStep = 0;
       }
       // Fetch full graph data for entity palette
@@ -3425,7 +3654,7 @@ function dashboard() {
           if (r.ok) {
             const data = await r.json();
             this.diagramSessionId = data.id;
-            this.diagramData = data;
+            this.diagramData = this._normalizeDiagramData(data);
             this.$nextTick(() => this.renderDiagram());
             return;
           }
@@ -3435,18 +3664,62 @@ function dashboard() {
       try {
         const r = await fetch('/api/diagram/' + this.diagramSessionId);
         if (!r.ok) return;
-        this.diagramData = await r.json();
+        this.diagramData = this._normalizeDiagramData(await r.json());
         this.$nextTick(() => this.renderDiagram());
       } catch(e) { console.error('diagram fetch:', e); }
     },
 
+    async fetchDiagramSessions() {
+      try {
+        const r = await fetch('/api/diagram/list');
+        if (!r.ok) return;
+        const data = await r.json();
+        this.diagramSessions = (data.sessions || []).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+      } catch(e) {}
+    },
+
+    async switchDiagramSession(id) {
+      if (this.diagramSessionId === id) return;
+      this.diagramSessionId = id;
+      this.diagramStep = -1;
+      this._diagramPositions = {};
+      localStorage.setItem('chronicle_diagram_session', id);
+      await this.fetchDiagram();
+    },
+
+    async closeDiagramSession(id) {
+      try { await fetch('/api/diagram/' + id, { method: 'DELETE' }); } catch(e) {}
+      this.diagramSessions = this.diagramSessions.filter(s => s.id !== id);
+      if (this.diagramSessionId === id) {
+        const remaining = this.diagramSessions;
+        if (remaining.length > 0) {
+          await this.switchDiagramSession(remaining[remaining.length - 1].id);
+        } else {
+          this.diagramSessionId = null;
+          this.diagramData = null;
+          localStorage.removeItem('chronicle_diagram_session');
+        }
+      }
+    },
+
     // Get merged annotations for current step
     _getDiagramAnnotations() {
-      if (!this.diagramData) return {};
-      const globalAnn = this.diagramData.annotations || {};
-      const steps = this.diagramData.steps || {};
-      const stepAnn = steps[this.diagramStep] || {};
-      return { ...globalAnn, ...stepAnn };
+      const data = this.diagramData;
+      if (!data) return {};
+      const globalAnn = data.annotations || {};
+      if (this.diagramStep >= 0 && Array.isArray(data.steps)) {
+        const step = data.steps[this.diagramStep];
+        if (step) {
+          const stepAnn = {};
+          if (step.highlights) {
+            Object.entries(step.highlights).forEach(([key, color]) => {
+              stepAnn[key] = { highlight: color, note: step.notes?.[key] || '' };
+            });
+          }
+          return { ...globalAnn, ...stepAnn };
+        }
+      }
+      return globalAnn;
     },
 
     // Update annotation visuals without re-rendering the entire diagram
@@ -3462,14 +3735,21 @@ function dashboard() {
       // Update node groups
       svg.selectAll('.node-g').each(function(d) {
         const g = d3.select(this);
-        const ann = annotations[d.node_key];
+        const ann = annotations[d.node_key || d.key];
         const dimmed = hasAny && !ann;
 
+        const baseFill = d.kind
+          ? (self.diagramNodeStyle(d.kind).fill || (self.layerColor(d.layer) + '40'))
+          : (self.layerColor(d.layer) + '40');
+        const baseStroke = d.kind
+          ? (self.diagramNodeStyle(d.kind).stroke || self.layerColor(d.layer))
+          : self.layerColor(d.layer);
+
         g.select('.node-rect')
-          .attr('stroke', ann?.highlight || self.layerColor(d.layer))
-          .attr('stroke-width', ann?.highlight ? 3 : 1.5)
+          .attr('stroke', ann?.highlight || baseStroke)
+          .attr('stroke-width', ann?.highlight ? 3 : (d.kind ? self.diagramNodeStyle(d.kind).strokeWidth : 1.5))
           .style('filter', ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none')
-          .attr('fill', dimmed ? '#f0e9dd' : (self.layerColor(d.layer) + '40'))
+          .attr('fill', dimmed ? '#f0e9dd' : (ann?.highlight ? ann.highlight + '30' : baseFill))
           .style('opacity', dimmed ? 0.3 : 1);
 
         // Dim text too
@@ -3490,7 +3770,7 @@ function dashboard() {
       // Dim edges not connected to highlighted nodes
       const highlightedIds = new Set();
       svg.selectAll('.node-g').each(function(d) {
-        if (annotations[d.node_key]) highlightedIds.add(d.id);
+        if (annotations[d.node_key || d.key]) highlightedIds.add(d.id);
       });
       svg.selectAll('.edge-line').style('opacity', function(d) {
         if (!hasAny) return 0.6;
@@ -3542,13 +3822,30 @@ function dashboard() {
       const annotations = this._getDiagramAnnotations();
       const self = this;
 
+      // Build groups config from diagram data
+      let diagramGroups = { keys: [], map: {}, field: '' };
+      const dgConfig = this.diagramData?.groups;
+      if (dgConfig?.field) {
+        const field = dgConfig.field;
+        const groupMap = {};
+        filtered.nodes.forEach(n => {
+          const gk = n[field] || n['_' + field] || '';
+          if (gk) {
+            if (!groupMap[gk]) groupMap[gk] = [];
+            groupMap[gk].push(n);
+            n._group = gk;
+          }
+        });
+        diagramGroups = { keys: Object.keys(groupMap), map: groupMap, field };
+      }
+
       const result = this._renderGraphSVG({
         container,
         nodes: filtered.nodes,
         edges: filtered.edges,
         mode: this.diagramMode,
         positionCache: this._diagramPositions,
-        groups: { keys: [], map: {}, field: '' },
+        groups: diagramGroups,
         features: { annotations },
         callbacks: {
           onNodeClick(d, simEdges) {

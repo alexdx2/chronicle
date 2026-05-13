@@ -618,6 +618,12 @@ func (s *Store) GetDiagramSession(sessionID string) (title, dataJSON string, err
 	return
 }
 
+// DeleteDiagramSession removes a diagram session.
+func (s *Store) DeleteDiagramSession(sessionID string) error {
+	_, err := s.db.Exec(`DELETE FROM diagram_sessions WHERE session_id = ?`, sessionID)
+	return err
+}
+
 // ListDiagramSessions returns all session IDs and titles.
 func (s *Store) ListDiagramSessions() ([]map[string]string, error) {
 	rows, err := s.db.Query(`SELECT session_id, title, created_at, updated_at FROM diagram_sessions ORDER BY updated_at DESC`)
