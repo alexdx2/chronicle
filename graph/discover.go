@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/internal/manifest"
+	"github.com/alexdx2/chronicle-core/store"
 )
 
 // DiscoverResult holds files found during project discovery.
@@ -87,6 +88,25 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 				domain = m.DomainForFile(f)
 			}
 			g.store.CreateObligation(revisionID, domain, "scan_file", f, "git-tracked, matches scan config")
+		}
+	}
+
+	// Create infrastructure nodes from manifest
+	if m != nil && revisionID > 0 {
+		for _, infra := range m.Infrastructure {
+			nodeKey := infra.InfraNodeKey()
+			infraDomain := domainKey
+			if len(m.Domains) > 0 {
+				infraDomain = m.Domains[0].Name
+			}
+			g.store.UpsertNode(store.NodeRow{
+				NodeKey:   nodeKey,
+				Layer:     "infra",
+				NodeType:  infra.Type,
+				DomainKey: infraDomain,
+				Name:      infra.Name,
+				Status:    "active",
+			})
 		}
 	}
 

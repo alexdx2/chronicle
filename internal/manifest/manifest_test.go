@@ -121,3 +121,39 @@ func TestDomainForFile(t *testing.T) {
 		}
 	}
 }
+
+func TestInfrastructure(t *testing.T) {
+	m, err := LoadFile("../../testdata/manifest/multi_domain.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(m.Infrastructure) != 2 {
+		t.Fatalf("infrastructure = %d, want 2", len(m.Infrastructure))
+	}
+
+	kafka := m.Infrastructure[0]
+	if kafka.Name != "events-kafka" {
+		t.Errorf("infra[0].name = %q, want %q", kafka.Name, "events-kafka")
+	}
+	if kafka.Type != "broker" {
+		t.Errorf("infra[0].type = %q, want %q", kafka.Type, "broker")
+	}
+	if kafka.Address != "kafka-events.internal:9092" {
+		t.Errorf("infra[0].address = %q, want %q", kafka.Address, "kafka-events.internal:9092")
+	}
+	if kafka.InfraNodeKey() != "infra:broker:kafka-events.internal:9092" {
+		t.Errorf("infra[0].InfraNodeKey() = %q, want %q", kafka.InfraNodeKey(), "infra:broker:kafka-events.internal:9092")
+	}
+
+	redis := m.Infrastructure[1]
+	if redis.InfraNodeKey() != "infra:cache:redis.internal:6379" {
+		t.Errorf("infra[1].InfraNodeKey() = %q, want %q", redis.InfraNodeKey(), "infra:cache:redis.internal:6379")
+	}
+}
+
+func TestInfraNodeKeyNoAddress(t *testing.T) {
+	e := InfraEntry{Name: "my-kafka", Type: "broker"}
+	if e.InfraNodeKey() != "infra:broker:my-kafka" {
+		t.Errorf("InfraNodeKey() = %q, want %q", e.InfraNodeKey(), "infra:broker:my-kafka")
+	}
+}

@@ -737,16 +737,21 @@ func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("domain is required")), nil
 		}
 
-		// Load tech list from manifest for framework-specific rules
+		// Load manifest for tech + infrastructure
 		var tech []string
+		var infra []manifest.InfraEntry
 		rootDir, _ := os.Getwd()
 		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
 			tech = m.Tech
+			infra = m.Infrastructure
 		}
 
 		action, err := g.ScanNextAction(domain, tech...)
 		if err != nil {
 			return errorResult(err), nil
+		}
+		if len(infra) > 0 {
+			action.Infrastructure = infra
 		}
 		return jsonResult(action), nil
 	}

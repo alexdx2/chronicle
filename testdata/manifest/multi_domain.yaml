@@ -17,3 +17,13 @@ domains:
 
 tech: [nestjs, kafka]
 instruction_packs: ["framework/nestjs"]
+
+infrastructure:
+  - name: events-kafka
+    type: broker
+    address: kafka-events.internal:9092
+    description: Event bus for async workflows
+  - name: redis
+    type: cache
+    address: redis.internal:6379
+    description: Session cache

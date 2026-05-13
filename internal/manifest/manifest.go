@@ -21,9 +21,27 @@ type DomainEntry struct {
 	Scan        ScanConfig `yaml:"scan,omitempty"`
 }
 
+type InfraEntry struct {
+	Name        string `yaml:"name"`
+	Type        string `yaml:"type"`                  // broker, cache, database, queue
+	Address     string `yaml:"address,omitempty"`      // host:port or connection string
+	Description string `yaml:"description,omitempty"`
+}
+
+// InfraNodeKey returns the graph node key for this infrastructure entry.
+// Format: infra:{type}:{address} or infra:{type}:{name} if no address.
+func (e InfraEntry) InfraNodeKey() string {
+	id := e.Address
+	if id == "" {
+		id = e.Name
+	}
+	return "infra:" + e.Type + ":" + id
+}
+
 type Manifest struct {
 	Domains          []DomainEntry `yaml:"domains"`
 	Tech             []string      `yaml:"tech,omitempty"`
+	Infrastructure   []InfraEntry  `yaml:"infrastructure,omitempty"`
 	InstructionPacks []string      `yaml:"instruction_packs,omitempty"`
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/alexdx2/chronicle-core/extract/ast"
 	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
+	"github.com/alexdx2/chronicle-core/internal/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -38,6 +39,7 @@ type ScanAction struct {
 	GraphContext     *GraphContext          `json:"graph_context,omitempty"`      // phase 2 select — flat list of known entities
 	FlowContext      *FlowContext           `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
 	InstructionPacks *prompts.PackSelection `json:"instruction_packs,omitempty"` // loaded + available instruction packs
+	Infrastructure   []manifest.InfraEntry  `json:"infrastructure,omitempty"`    // from manifest — agents use to link topics to brokers
 	// Checkpoint — when set, Claude MUST show this to user and call chronicle_scan_confirm
 	Checkpoint       *ScanCheckpoint        `json:"checkpoint,omitempty"`
 }
