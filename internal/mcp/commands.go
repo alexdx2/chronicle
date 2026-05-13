@@ -127,17 +127,26 @@ __STAGES__`,
 3. Call chronicle_diagram_build with the appropriate payload
 4. Share the returned URL with user: "Open {url} to see the diagram"
 
+## When to use node_keys vs nodes
+
+- **node_keys**: resolve REAL entities from the graph DB. Use for Domain Detail, Flow, Impact — when you need actual services/controllers/providers.
+- **nodes**: SYNTHETIC diagram-only entities. Use for domains, infrastructure, external actors — things that represent groups or systems, not individual code entities.
+- **NEVER use node_keys for Overview** — Overview shows domains as collapsed blocks, not individual services.
+- **Domain Detail mixes both**: node_keys for services inside the target domain + nodes for neighboring domains.
+
 ## Diagram Type Catalog
 
 ### Type 1: Overview (Context Diagram)
 Trigger: "show architecture", "overview", "how is the system organized", "high-level diagram"
-Purpose: Domains as blocks, infrastructure as bridges, external systems as actors. No individual services.
+Purpose: Domains as blocks, infrastructure as bridges, external systems as actors. NO individual services — only domain blocks.
+
+CRITICAL: Use ONLY "nodes" (synthetic). NEVER use "node_keys". Each domain from the manifest becomes ONE node with kind "domain".
 
 Construction:
 1. Call chronicle_domain_list to get all domains
-2. Build view model: each domain → node with kind "domain", infra → kind "infrastructure", external → kind "external"
-3. Determine edges by querying cross-domain relationships (which domains call which)
-4. Call chronicle_diagram_build with nodes + edges (no node_keys — all synthetic)
+2. Each domain → one node with kind "domain". Infrastructure from manifest → kind "infrastructure". External systems → kind "external".
+3. Edges: aggregated cross-domain relationships with protocol labels (HTTP, async, data)
+4. Call chronicle_diagram_build with nodes + edges ONLY — no node_keys
 
 Example:
   chronicle_diagram_build(
