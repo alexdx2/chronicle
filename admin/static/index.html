@@ -174,6 +174,13 @@ a{color:var(--primary);text-decoration:none}
 .filter-sidebar h4 .chevron{font-size:8px;transition:transform .15s}
 .filter-sidebar label{display:flex;align-items:center;gap:5px;padding:2px 0;cursor:pointer;color:var(--text)}
 .filter-sidebar label input[type=checkbox]{margin:0}
+/* Three-state node type filter */
+.filter-tri{display:flex;align-items:center;gap:5px;padding:2px 0;cursor:pointer;color:var(--text);user-select:none}
+.filter-tri:hover{color:var(--primary)}
+.filter-tri-icon{width:14px;text-align:center;font-size:12px;line-height:1;flex-shrink:0;transition:color .15s}
+.filter-tri-icon.show{color:var(--success)}
+.filter-tri-icon.collapse{color:var(--warning)}
+.filter-tri-icon.hide{color:var(--text-muted);opacity:.4}
 .filter-sidebar .group{margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:8px}
 /* Floating legend panel */
 .graph-legend{position:absolute;bottom:10px;right:10px;background:rgba(250,246,239,0.92);border:1px solid var(--border);border-radius:8px;padding:8px 12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);z-index:10;min-width:140px;backdrop-filter:blur(4px);font-size:10px}
@@ -783,7 +790,7 @@ a{color:var(--primary);text-decoration:none}
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
             <div style="display:flex;gap:4px;align-items:center">
-              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';renderWorkspace()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
+              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';nodeTypeFilter={};_collapsibleTypes=[];renderWorkspace()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
               <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
             </div>
           </div>
@@ -816,12 +823,12 @@ a{color:var(--primary);text-decoration:none}
                 <div>
                   <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
                   <template x-for="nt in getNodeTypesForLayer(layer)" :key="nt">
-                    <label>
-                      <input type="checkbox"
-                             :checked="!hiddenNodeTypes.includes(nt)"
-                             @change="toggleNodeType(nt)">
+                    <div class="filter-tri" @click="cycleNodeTypeFilter(nt);renderGraph()">
+                      <span class="filter-tri-icon"
+                            :class="{'show': (nodeTypeFilter[nt]||'show')==='show', 'collapse': nodeTypeFilter[nt]==='collapse', 'hide': nodeTypeFilter[nt]==='hide'}"
+                            x-text="(nodeTypeFilter[nt]||'show')==='show'?'●':nodeTypeFilter[nt]==='collapse'?'◐':'○'"></span>
                       <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
-                    </label>
+                    </div>
                   </template>
                 </div>
               </template>
@@ -1288,7 +1295,7 @@ a{color:var(--primary);text-decoration:none}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
           <strong>Filters</strong>
           <div style="display:flex;gap:4px;align-items:center">
-            <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
+            <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];nodeTypeFilter={};_collapsibleTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
             <button @click="diagramSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
           </div>
         </div>
@@ -1303,13 +1310,14 @@ a{color:var(--primary);text-decoration:none}
               <div>
                 <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
                 <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt.type">
-                  <label>
-                    <input type="checkbox"
-                           :checked="!hiddenNodeTypes.includes(nt.type)"
-                           @change="toggleNodeType(nt.type);renderDiagram()">
+                  <div class="filter-tri" @click="cycleNodeTypeFilter(nt.type);renderDiagram()">
+                    <span class="filter-tri-icon"
+                          :class="{'show': (nodeTypeFilter[nt.type]||'show')==='show', 'collapse': nodeTypeFilter[nt.type]==='collapse', 'hide': nodeTypeFilter[nt.type]==='hide'}"
+                          :title="(nodeTypeFilter[nt.type]||'show')==='show'?'Visible — click to collapse':'nodeTypeFilter[nt.type]==='collapse'?'Collapsed — edges bridge through. Click to hide':'Hidden — click to show'"
+                          x-text="(nodeTypeFilter[nt.type]||'show')==='show'?'●':nodeTypeFilter[nt.type]==='collapse'?'◐':'○'"></span>
                     <span :style="'color:'+layerColor(layer)" x-text="nt.type"></span>
                     <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="nt.count"></span>
-                  </label>
+                  </div>
                 </template>
               </div>
             </template>
@@ -1408,7 +1416,7 @@ function dashboard() {
     wsDataSource: 'graph', // 'graph' or 'diagram'
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
     filterSidebarOpen: false,
-    hiddenNodeTypes: [],      // string[] of node_type values
+    hiddenNodeTypes: [],      // string[] of node_type values (legacy — computed from nodeTypeFilter)
     hiddenEdgeTypes: [],      // string[] of edge_type values
     edgeCategories: {},       // category_name → {color, types: {EDGE_TYPE: shortLabel}}
     edgeCategoryLookup: {},   // EDGE_TYPE → {category, color, shortLabel}
@@ -1418,8 +1426,12 @@ function dashboard() {
     wsShowNeighbors: true,    // show grayed linked nodes in workspace
     hiddenDomains: [],        // string[] of domain_key values
     minConfidence: 0,
-    // Only these types produce transitive edges when hidden; others just disappear
-    collapsibleTypes: ['endpoint', 'function', 'topic', 'schema'],
+    // Three-state filter per node_type: 'show' | 'collapse' | 'hide'
+    //   show: visible as normal
+    //   collapse: hidden but edges bridge through (transitive edges)
+    //   hide: gone completely, edges severed
+    nodeTypeFilter: {},       // { node_type: 'show'|'collapse'|'hide' } — default 'show'
+    _collapsibleTypes: [],    // computed from nodeTypeFilter — types in 'collapse' state
     // Workspace state
     workspaceNodes: [],       // [{node_id, x, y, manual: bool}]
     workspacePaths: [],       // [{from, to, path: [node_ids]}]
@@ -2005,7 +2017,7 @@ function dashboard() {
       }
 
       // Check if any hidden types are collapsible (should produce transitive edges)
-      const hasCollapsibleHidden = this.hiddenNodeTypes.some(t => this.collapsibleTypes.includes(t));
+      const hasCollapsibleHidden = this.hiddenNodeTypes.some(t => (this._collapsibleTypes || []).includes(t));
       if (hasCollapsibleHidden) {
         // Pass all layer-filtered nodes (before hiding) so collapsible nodes are available for bridging
         const allVisibleByLayer = allNodes.filter(n => this.layerFilters.includes(n.layer));
@@ -2019,7 +2031,7 @@ function dashboard() {
     },
 
     // Compute transitive edges when collapsible node types are hidden.
-    // Only types in this.collapsibleTypes produce transitive edges.
+    // Only types in (this._collapsibleTypes || []) produce transitive edges.
     // Non-collapsible hidden types (service, database, team, etc.) just disappear — no false bridges.
     computeTransitiveEdges(visibleNodes, allNodes, allEdges) {
       const visibleIds = new Set(visibleNodes.map(n => n.node_id));
@@ -2027,7 +2039,7 @@ function dashboard() {
       allNodes.forEach(n => { nodeById[n.node_id] = n; });
 
       // Split hidden nodes into collapsible (produce transitive edges) vs opaque (just gone)
-      const collapsibleSet = new Set(this.collapsibleTypes);
+      const collapsibleSet = new Set((this._collapsibleTypes || []));
       const collapsibleIds = new Set();
       allNodes.forEach(n => {
         if (!visibleIds.has(n.node_id) && collapsibleSet.has(n.node_type)) {
@@ -2169,6 +2181,32 @@ function dashboard() {
       else this.hiddenNodeTypes.push(nt);
       this.renderGraph();
     },
+
+    // Three-state filter: show → collapse → hide → show
+    cycleNodeTypeFilter(nt) {
+      const current = this.nodeTypeFilter[nt] || 'show';
+      const next = current === 'show' ? 'collapse' : current === 'collapse' ? 'hide' : 'show';
+      this.nodeTypeFilter[nt] = next;
+      this._syncNodeTypeFilter();
+    },
+
+    setNodeTypeFilter(nt, state) {
+      this.nodeTypeFilter[nt] = state;
+      this._syncNodeTypeFilter();
+    },
+
+    // Sync nodeTypeFilter → hiddenNodeTypes + collapsibleTypes for backward compat
+    _syncNodeTypeFilter() {
+      const hidden = [];
+      const collapsible = [];
+      for (const [nt, state] of Object.entries(this.nodeTypeFilter)) {
+        if (state === 'collapse') { hidden.push(nt); collapsible.push(nt); }
+        else if (state === 'hide') { hidden.push(nt); }
+      }
+      this.hiddenNodeTypes = hidden;
+      this._collapsibleTypes = collapsible;
+    },
+
 
     toggleDomain(d) {
       const idx = this.hiddenDomains.indexOf(d);
@@ -3215,7 +3253,7 @@ function dashboard() {
       }
 
       // Transitive collapsing for hidden collapsible types
-      const collapsibleSet = new Set(this.collapsibleTypes);
+      const collapsibleSet = new Set((this._collapsibleTypes || []));
       const hasCollapsible = this.hiddenNodeTypes.some(t => collapsibleSet.has(t));
       if (hasCollapsible) {
         return this.computeTransitiveEdges(visibleNodes, nodes, filteredEdges);
