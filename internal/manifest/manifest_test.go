@@ -85,6 +85,18 @@ func TestLoadFileNotFound(t *testing.T) {
 	}
 }
 
+func TestMergedScanConfig(t *testing.T) {
+	m, err := LoadFile("../../testdata/manifest/multi_domain.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	merged := m.MergedScanConfig()
+	// mobile-app has 2 includes, core-api has 3, crm has 2 = total 7
+	if len(merged.Include) != 7 {
+		t.Errorf("merged include = %d, want 7", len(merged.Include))
+	}
+}
+
 func TestDomainForFile(t *testing.T) {
 	m, err := LoadFile("../../testdata/manifest/multi_domain.yaml")
 	if err != nil {
