@@ -39,10 +39,10 @@ func TestScanCommand_OrchestratorAfterAgents(t *testing.T) {
 
 func TestScanCommand_DomainPassing(t *testing.T) {
 	cmd := CommandInstructions["scan"]
-	assertContains(t, cmd, "EXACT DOMAIN",
-		"must tell agents to use exact domain")
-	assertContains(t, cmd, "EXACT domain",
-		"must reference domain from manifest")
+	assertContains(t, cmd, "domain_key",
+		"must reference per-file domain_key")
+	assertContains(t, cmd, "domains",
+		"must reference multi-domain manifest format")
 }
 
 func TestScanCommand_PackCreationUsesStrongModel(t *testing.T) {
