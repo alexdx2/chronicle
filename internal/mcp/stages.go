@@ -205,6 +205,14 @@ var scanStages = []ScanStage{
     3. Response includes fact_schema + instruction_packs — follow them exactly
     4. Each file includes a domain_key field — use it for tool calls on that file
 
+  CRITICAL — CONTAINS edges (structural backbone of the graph):
+  - For every @Module file: emit "provides" facts for EVERY controller AND provider declared in it
+    → set from_type="module" so the resolver creates CONTAINS edges (module→controller, module→provider)
+  - For every repository root: emit a "provides" fact pointing to its main module
+  - Missing "provides" from module files = missing CONTAINS edges = broken graph structure
+  Example: @Module({ controllers: [OrderController], providers: [OrderService] })
+    → {"kind":"provides","to":"OrderController"} + {"kind":"provides","to":"OrderService"} with from_type="module"
+
   Parallelism:
   - votes=1: spawn 3-5 parallel haiku agents
   - votes>1: spawn votes_needed agents per file with vote_group/vote_index

@@ -19,6 +19,19 @@ If evidence is weak or ambiguous, do not output the fact.
 
 # Fact templates
 
+## Module containment (CRITICAL)
+
+```json
+{"kind":"provides","to":"OrderController"}
+{"kind":"provides","to":"OrderService"}
+```
+
+For `@Module()` / module registration files: emit one `provides` fact for EVERY entry in `controllers:` and `providers:` arrays.
+Set `from_type: "module"` so the resolver creates CONTAINS edges (module→controller, module→provider).
+
+CONTAINS edges link: repository→module, module→controller, module→provider.
+These are the structural backbone of the graph. Missing `provides` facts = missing CONTAINS edges.
+
 ## Dependency injection
 
 ```json

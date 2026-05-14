@@ -20,7 +20,14 @@ Only emit `calls_service` if receiver is known to be an injected provider.
 
 ## Modules
 
-`@Module({ providers: [OrderService] })` => `{"kind":"provides","to":"OrderService"}`
+CRITICAL: Every `@Module()` file MUST emit `provides` facts for ALL controllers AND providers declared in it.
+CONTAINS edges (module→controller, module→provider) are built from these facts — if you omit them the graph will have no structural edges.
+
+`@Module({ controllers: [OrderController] })` => `{"kind":"provides","to":"OrderController"}`
+`@Module({ providers: [OrderService, OrderRepository] })` => `{"kind":"provides","to":"OrderService"}` + `{"kind":"provides","to":"OrderRepository"}`
+
+Emit one `provides` fact per entry in `controllers:` and `providers:` arrays.
+Set `from_type: "module"` on the file so the resolver creates CONTAINS edges (module→controller, module→provider).
 
 Do NOT treat `imports: [OtherModule]` as `calls_service`.
 

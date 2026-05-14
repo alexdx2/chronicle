@@ -39,6 +39,12 @@ CRITICAL RULES:
   ✅ Each file in the scan batch includes a domain_key field — use it when extracting facts
   ✅ Pass the domain_key from each file's batch entry to tool calls — do NOT hardcode a single domain
 
+CRITICAL — CONTAINS edges (structural backbone):
+  ✅ Every module MUST have CONTAINS edges to its controllers and providers
+  ✅ CONTAINS edges link: repository→module, module→controller, module→provider
+  ✅ These come from "provides" facts emitted by @Module files with from_type="module"
+  ❌ A graph with no CONTAINS edges is broken — subagents must emit "provides" for every controller/provider in every @Module
+
 __STAGES__`,
 
 	"data": `Analyze data models:
