@@ -99,6 +99,64 @@ func TestGraphCompleteness_CrossServiceCalls(t *testing.T) {
 	}
 }
 
+// TestGraphCompleteness_CallsEndpoint verifies that HTTP clients call specific endpoints.
+// TomClient → GET /tom/status, JerryClient → GET /jerry/status + GET /jerry/traps
+func TestGraphCompleteness_CallsEndpoint(t *testing.T) {
+	g, _ := setupTomAndJerry(t)
+
+	cases := []struct {
+		client   string
+		endpoint string
+	}{
+		{"code:provider:tomandjerry:tomclient", "contract:endpoint:tomandjerry:get:/tom/status"},
+		{"code:provider:tomandjerry:jerryclient", "contract:endpoint:tomandjerry:get:/jerry/status"},
+		{"code:provider:tomandjerry:jerryclient", "contract:endpoint:tomandjerry:get:/jerry/traps"},
+	}
+
+	for _, tc := range cases {
+		deps, err := g.QueryDeps(tc.client, 1, nil)
+		if err != nil {
+			t.Fatalf("QueryDeps(%s): %v", tc.client, err)
+		}
+		found := false
+		for _, d := range deps {
+			if d.NodeKey == tc.endpoint {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s should CALLS_ENDPOINT %s", tc.client, tc.endpoint)
+		}
+	}
+}
+
+// TestGraphCompleteness_SpectatorServiceCrossServiceCalls verifies SpectatorService
+// calls both tom-api and jerry-api (for stats aggregation).
+func TestGraphCompleteness_SpectatorServiceCrossServiceCalls(t *testing.T) {
+	g, _ := setupTomAndJerry(t)
+
+	deps, err := g.QueryDeps("code:provider:tomandjerry:spectatorservice", 1, nil)
+	if err != nil {
+		t.Fatalf("QueryDeps: %v", err)
+	}
+
+	services := map[string]bool{
+		"service:service:tomandjerry:tom-api":   false,
+		"service:service:tomandjerry:jerry-api": false,
+	}
+	for _, d := range deps {
+		if _, ok := services[d.NodeKey]; ok {
+			services[d.NodeKey] = true
+		}
+	}
+	for svc, found := range services {
+		if !found {
+			t.Errorf("SpectatorService should CALLS_SERVICE %s", svc)
+		}
+	}
+}
+
 // TestGraphCompleteness_KafkaFlow verifies both PUBLISHES_TOPIC and
 // CONSUMES_TOPIC edges exist for the battle-results topic.
 func TestGraphCompleteness_KafkaFlow(t *testing.T) {
