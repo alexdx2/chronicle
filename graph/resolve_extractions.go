@@ -789,6 +789,25 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			Target:   delegatedFile,
 			Reason:   fmt.Sprintf("delegates to %s via %s — ensure this file is also scanned", delegatedFile, fact.Method),
 		}
+
+	case "declares_service":
+		// Create a service-layer node for a deployable service (from package.json, Dockerfile, etc.)
+		if fact.To == "" {
+			return counts, nil
+		}
+		svcName := normalizePackageName(fact.To)
+		nodeKey := "service:service:" + domainKey + ":" + svcName
+		id, err := g.UpsertNode(validate.NodeInput{
+			NodeKey:   nodeKey,
+			Layer:     "service",
+			NodeType:  "service",
+			DomainKey: domainKey,
+			Name:      fact.To,
+			FilePath:  filePath,
+		}, revisionID)
+		if err == nil && id > 0 {
+			counts.nodes++
+		}
 	}
 
 	return counts, nil

@@ -7,7 +7,7 @@
 #   - chronicle binary built (or go installed to build it)
 #   - claude CLI available and authenticated
 
-set -e
+set +e  # Don't exit on errors — count them instead
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -177,8 +177,8 @@ done
 # ── 3d: Services ──
 section "Services"
 SERVICES=$("$CHRONICLE" node list --layer service --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
-SERVICE_COUNT=$(echo "$SERVICES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
-SERVICE_NAMES=$(echo "$SERVICES" | python3 -c "import sys,json; print(', '.join(n['name'] for n in json.load(sys.stdin)))")
+SERVICE_COUNT=$(echo "$SERVICES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+SERVICE_NAMES=$(echo "$SERVICES" | python3 -c "import sys,json; print(', '.join(n['name'] for n in json.load(sys.stdin)))" 2>/dev/null || echo "(none)")
 if [ "$SERVICE_COUNT" -ge 3 ]; then pass "Services ($SERVICE_COUNT): $SERVICE_NAMES"
 else fail "Services: $SERVICE_COUNT (want >= 3). Found: $SERVICE_NAMES"; fi
 

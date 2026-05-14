@@ -347,7 +347,7 @@ var allowedFactKinds = map[string]bool{
 	"produces": true, "consumes": true,
 	"decorator": true, "constructor_param": true,
 	"call": true, "member_call": true,
-	"flow": true, "delegates": true,
+	"flow": true, "delegates": true, "declares_service": true,
 }
 
 // ValidateCustomPack checks that a custom pack's content doesn't introduce unknown fact kinds.

@@ -95,6 +95,16 @@ Do not infer a model from variable names or type annotations.
 Use when this file reads/writes/queries/persists a data model via ORM, repository, or database client.
 Do NOT use for TypeScript type annotations or DTO usage.
 
+## Service declaration
+
+```json
+{"kind":"declares_service","to":"order-api"}
+```
+
+Use when you identify a deployable service — typically from package.json `name` field, Dockerfile, docker-compose service name, or the top-level directory structure.
+Each microservice/API in the project should have exactly one `declares_service` fact.
+The resolver creates `service:service:{domain}:{name}` nodes in the service layer.
+
 ## Events / messaging
 
 ```json
