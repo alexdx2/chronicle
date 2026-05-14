@@ -4,14 +4,14 @@
 # Usage: ./e2e/claude_agent_test.sh
 #
 # Prerequisites:
-#   - oracle binary built (or go installed to build it)
+#   - chronicle binary built (or go installed to build it)
 #   - claude CLI available and authenticated
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ORACLE="$PROJECT_DIR/oracle"
+CHRONICLE="$PROJECT_DIR/chronicle"
 FIXTURE_DIR="$PROJECT_DIR/fixtures/tom-and-jerry"
 WORK_DIR=$(mktemp -d)
 RESULTS_DIR="$PROJECT_DIR/e2e/results"
@@ -44,11 +44,11 @@ echo "════════════════════════�
 
 mkdir -p "$RESULTS_DIR"
 
-# ─── Step 0: Build oracle ───
+# ─── Step 0: Build chronicle ───
 section "Build"
 cd "$PROJECT_DIR"
-go build -o oracle ./cmd/oracle 2>/dev/null
-pass "Oracle binary built"
+go build -o chronicle ./cmd/chronicle 2>/dev/null
+pass "Chronicle binary built"
 
 # ─── Step 1: Setup fixture project ───
 section "Setup"
@@ -56,17 +56,17 @@ cp -r "$FIXTURE_DIR"/* "$WORK_DIR/"
 cd "$WORK_DIR"
 
 # Create .depbot
-"$ORACLE" init > /dev/null 2>&1
-pass "Oracle initialized in $WORK_DIR"
+"$CHRONICLE" init > /dev/null 2>&1
+pass "Chronicle initialized in $WORK_DIR"
 
-# Create MCP config for Claude to find oracle tools
-DB_PATH="$WORK_DIR/.depbot/oracle.db"
+# Create MCP config for Claude to find chronicle tools
+DB_PATH="$WORK_DIR/.depbot/chronicle.db"
 MCP_CONFIG="$WORK_DIR/mcp.json"
 cat > "$MCP_CONFIG" << MCPEOF
 {
   "mcpServers": {
-    "oracle": {
-      "command": "$ORACLE",
+    "chronicle": {
+      "command": "$CHRONICLE",
       "args": ["mcp", "serve", "--db", "$DB_PATH", "--no-admin"]
     }
   }
@@ -79,12 +79,29 @@ section "Claude Scan"
 info "Running Claude to scan the project..."
 info "This may take 1-3 minutes depending on model speed."
 
-CLAUDE_PROMPT="You have Oracle MCP tools available. Scan this Tom & Jerry project.
+CLAUDE_PROMPT="You have Chronicle MCP tools available. Scan this Tom & Jerry project.
 
 Steps:
-1. Call oracle_extraction_guide to learn the extraction methodology
-2. Call oracle_save_manifest — domain: tomandjerry, repos: tom-api (./tom-api), jerry-api (./jerry-api), arena-api (./arena-api), spectators-api (./spectators-api)
-3. Call oracle_revision_create — domain: tomandjerry, after_sha: test123, trigger: manual, mode: full
+1. Call chronicle_extraction_guide to learn the extraction methodology
+2. Call chronicle_save_manifest with this manifest:
+domains:
+  - name: tomandjerry
+    description: Tom and Jerry battle simulation
+    owner: cartoon-team
+    scan:
+      include: [\"tom-api/**\", \"jerry-api/**\", \"arena-api/**\", \"spectators-api/**\", \"shared/**\"]
+      exclude: [\"**/*.test.ts\", \"**/*.spec.ts\"]
+tech: [nestjs, prisma, kafka, redis, websocket]
+infrastructure:
+  - name: kafka
+    type: broker
+    address: kafka:9092
+    description: Event bus for battle results
+  - name: redis
+    type: cache
+    address: redis:6379
+    description: Battle state cache
+3. Call chronicle_revision_create — domain: tomandjerry, after_sha: test123, trigger: manual, mode: full
 4. Read the source code of ALL 4 services and extract:
    - Prisma models from prisma/schema.prisma (Cat, CatWeapon, Mouse, Trap, BattleEvent + all enums as data:enum nodes)
    - NestJS modules, controllers, services (code layer)
@@ -96,16 +113,17 @@ Steps:
    - Repository and service nodes for each API
 5. Also extract: @UseGuards → INJECTS from controller to guard, @UseInterceptors → INJECTS from controller to interceptor, middleware → INJECTS from module. Bull queue processors, custom decorators, validation pipes — all as providers.
 6. Don't forget the shared library at ./shared — extract as code:package node
-7. Import via oracle_import_all (split into batches if needed — data first, then code, then contracts)
+7. Import via chronicle_import_all (split into batches if needed — data first, then code, then contracts)
 8. FLOW extraction — identify the key business use cases and create flow:use_case nodes:
    - TomAttacksJerry: triggered by POST /arena/attack, requires ArenaService+TomClient+JerryClient, produces battle-results topic event
    - JerrySetsTrap: triggered by POST /arena/trap, requires JerryClient
    - WatchBattle: triggered by WebSocket watch-battle, requires ArenaService
    - ViewLeaderboard: triggered by GET /stats/leaderboard, requires SpectatorService
    Create TRIGGERS_FLOW edges from endpoints to use cases, REQUIRES edges to services/models, PRODUCES_OUTCOME edges to topics.
-9. Call oracle_snapshot_create and oracle_stale_mark
-10. Define domain language — oracle_define_term for Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon. Include anti-patterns. Then oracle_check_language.
-11. Call oracle_report_discovery for each observation:
+9. Call chronicle_snapshot_create and chronicle_stale_mark
+10. Define domain language — chronicle_define_term for Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon. Include anti-patterns. Then chronicle_check_language.
+11. Call chronicle_domain_list to verify the domain was registered correctly.
+12. Call chronicle_report_discovery for each observation:
    - Any code patterns you found unusual or couldn't classify → category: unknown_pattern
    - Any relationships you suspect but couldn't confirm → category: missing_edge
    - Overall scan quality assessment → category: pattern
@@ -137,7 +155,7 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 
 # Helper to query stats
-STATS=$("$ORACLE" query stats --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo '{"node_count":0,"edge_count":0,"nodes_by_layer":{},"edges_by_type":{},"edges_by_derivation":{}}')
+STATS=$("$CHRONICLE" query stats --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo '{"node_count":0,"edge_count":0,"nodes_by_layer":{},"edges_by_type":{},"edges_by_derivation":{}}')
 echo "$STATS" > "$RESULTS_DIR/stats.json"
 
 NODE_COUNT=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_count',0))")
@@ -172,7 +190,7 @@ done
 
 # ── 3d: Services ──
 section "Services"
-SERVICES=$("$ORACLE" node list --layer service --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
+SERVICES=$("$CHRONICLE" node list --layer service --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
 SERVICE_COUNT=$(echo "$SERVICES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
 SERVICE_NAMES=$(echo "$SERVICES" | python3 -c "import sys,json; print(', '.join(n['name'] for n in json.load(sys.stdin)))")
 if [ "$SERVICE_COUNT" -ge 3 ]; then pass "Services ($SERVICE_COUNT): $SERVICE_NAMES"
@@ -180,7 +198,7 @@ else fail "Services: $SERVICE_COUNT (want >= 3). Found: $SERVICE_NAMES"; fi
 
 # ── 3e: Data models ──
 section "Data Models"
-DATA_NODES=$("$ORACLE" node list --layer data --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
+DATA_NODES=$("$CHRONICLE" node list --layer data --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
 DATA_COUNT=$(echo "$DATA_NODES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
 DATA_NAMES=$(echo "$DATA_NODES" | python3 -c "import sys,json; print(', '.join(n['name'] for n in json.load(sys.stdin)))")
 if [ "$DATA_COUNT" -ge 3 ]; then pass "Data nodes ($DATA_COUNT): $DATA_NAMES"
@@ -195,7 +213,7 @@ done
 
 # ── 3f: Endpoints ──
 section "Endpoints"
-CONTRACT_NODES=$("$ORACLE" node list --layer contract --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
+CONTRACT_NODES=$("$CHRONICLE" node list --layer contract --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
 ENDPOINT_COUNT=$(echo "$CONTRACT_NODES" | python3 -c "import sys,json; print(len([n for n in json.load(sys.stdin) if n['node_type']=='endpoint']))")
 TOPIC_COUNT=$(echo "$CONTRACT_NODES" | python3 -c "import sys,json; print(len([n for n in json.load(sys.stdin) if n['node_type']=='topic']))")
 if [ "$ENDPOINT_COUNT" -ge 8 ]; then pass "Endpoints: $ENDPOINT_COUNT (>= 8)"
@@ -249,7 +267,7 @@ else echo -e "  ${YELLOW}⚠ No linked edges — cross-service deps may be missi
 section "Path Queries"
 
 # Tom attack chain: ArenaController → tom-api service
-TOM_PATH=$("$ORACLE" query path code:controller:tomandjerry:arenacontroller service:service:tomandjerry:tom-api --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+TOM_PATH=$("$CHRONICLE" query path code:controller:tomandjerry:arenacontroller service:service:tomandjerry:tom-api --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
 TOM_PATH_COUNT=$(echo "$TOM_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))")
 if [ "$TOM_PATH_COUNT" -ge 1 ]; then
   pass "ArenaController → tom-api: $TOM_PATH_COUNT path(s)"
@@ -264,7 +282,7 @@ else
 fi
 
 # Tom ↔ Jerry: should NOT have direct path (only through arena)
-TJ_DIRECT=$("$ORACLE" query path service:service:tomandjerry:tom-api service:service:tomandjerry:jerry-api --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+TJ_DIRECT=$("$CHRONICLE" query path service:service:tomandjerry:tom-api service:service:tomandjerry:jerry-api --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
 TJ_PATH_COUNT=$(echo "$TJ_DIRECT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('paths') or []))")
 if [ "$TJ_PATH_COUNT" -eq 0 ]; then pass "tom-api ↛ jerry-api: no direct path (correct — only via arena)"
 else echo -e "  ${YELLOW}⚠ tom-api → jerry-api: found $TJ_PATH_COUNT path(s) (unexpected direct connection)${NC}"; fi
@@ -273,7 +291,7 @@ else echo -e "  ${YELLOW}⚠ tom-api → jerry-api: found $TJ_PATH_COUNT path(s)
 section "Impact Analysis"
 
 # What breaks if Cat model changes?
-CAT_IMPACT=$("$ORACLE" impact data:model:tomandjerry:cat --depth 4 --db "$DB_PATH" 2>/dev/null || echo '{"total_impacted":0,"impacts":[]}')
+CAT_IMPACT=$("$CHRONICLE" impact data:model:tomandjerry:cat --depth 4 --db "$DB_PATH" 2>/dev/null || echo '{"total_impacted":0,"impacts":[]}')
 CAT_IMPACT_COUNT=$(echo "$CAT_IMPACT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_impacted',0))")
 if [ "$CAT_IMPACT_COUNT" -ge 1 ]; then
   pass "Cat model impact: $CAT_IMPACT_COUNT nodes affected"
@@ -288,7 +306,7 @@ fi
 
 # ── 3k: Kafka connectivity ──
 section "Kafka Flow"
-KAFKA_PATH=$("$ORACLE" query path code:provider:tomandjerry:battleresultproducer code:provider:tomandjerry:battleresultconsumer --mode connected --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+KAFKA_PATH=$("$CHRONICLE" query path code:provider:tomandjerry:battleresultproducer code:provider:tomandjerry:battleresultconsumer --mode connected --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
 KAFKA_PATH_COUNT=$(echo "$KAFKA_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))")
 if [ "$KAFKA_PATH_COUNT" -ge 1 ]; then
   pass "Kafka flow: Producer → battle-results → Consumer"
@@ -309,7 +327,7 @@ SELECT
   COALESCE(SUM(LENGTH(params_json)), 0) as total_params_bytes,
   COALESCE(AVG(LENGTH(params_json)), 0) as avg_params,
   COALESCE(MAX(LENGTH(params_json)), 0) as max_params,
-  COUNT(CASE WHEN tool_name='oracle_import_all' THEN 1 END) as imports,
+  COUNT(CASE WHEN tool_name='chronicle_import_all' THEN 1 END) as imports,
   COUNT(CASE WHEN error_message != '' AND error_message IS NOT NULL THEN 1 END) as errors
 FROM mcp_request_log
 " 2>/dev/null | while IFS='|' read total params avg max imports errors; do
@@ -328,7 +346,7 @@ FROM mcp_request_log
   fi
 
   if [ "$imports" -gt 0 ]; then
-    avg_import=$(sqlite3 "$DB_PATH" "SELECT AVG(LENGTH(params_json)) FROM mcp_request_log WHERE tool_name='oracle_import_all'" 2>/dev/null)
+    avg_import=$(sqlite3 "$DB_PATH" "SELECT AVG(LENGTH(params_json)) FROM mcp_request_log WHERE tool_name='chronicle_import_all'" 2>/dev/null)
     echo "  Avg import size: $(echo "scale=1; $avg_import / 1024" | bc)KB"
   fi
 done
@@ -358,7 +376,7 @@ fi
 if [ "$CLAUDE_DISC" -gt 0 ]; then
   pass "Claude reported $CLAUDE_DISC discovery(ies)"
 else
-  echo -e "  ${YELLOW}⚠ Claude didn't call oracle_report_discovery${NC}"
+  echo -e "  ${YELLOW}⚠ Claude didn't call chronicle_report_discovery${NC}"
 fi
 
 # Show all discoveries
@@ -370,7 +388,7 @@ SHARED_NODE=$(echo "$STATS" | python3 -c "
 import sys,json
 # Check if any node has 'shared' or 'package' in it
 " 2>/dev/null || echo "")
-SHARED_COUNT=$("$ORACLE" node list --db "$DB_PATH" 2>/dev/null | python3 -c "
+SHARED_COUNT=$("$CHRONICLE" node list --db "$DB_PATH" 2>/dev/null | python3 -c "
 import sys,json
 nodes = json.load(sys.stdin)
 shared = [n for n in nodes if 'shared' in n.get('node_key','').lower() or n.get('node_type') == 'package']
@@ -384,10 +402,10 @@ fi
 
 # ── 3p: Business Flows ──
 section "Business Flows"
-FLOW_COUNT=$("$ORACLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+FLOW_COUNT=$("$CHRONICLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
 if [ "$FLOW_COUNT" -ge 2 ]; then
   pass "Flow use cases: $FLOW_COUNT (>= 2)"
-  "$ORACLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "
+  "$CHRONICLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "
 import sys,json
 for n in json.load(sys.stdin):
     print(f'    {n[\"node_type\"]:12s} {n[\"name\"]}')
@@ -412,17 +430,54 @@ else
   echo -e "  ${YELLOW}⚠ No REQUIRES edges — flows not linked to services${NC}"
 fi
 
-# ── 3q: Domain Language ──
+# ── 3q: Infrastructure ──
+section "Infrastructure"
+INFRA_COUNT=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('nodes_by_layer',{}).get('infra',0))" 2>/dev/null || echo "0")
+if [ "$INFRA_COUNT" -ge 1 ]; then
+  pass "Infrastructure nodes: $INFRA_COUNT (>= 1)"
+  "$CHRONICLE" node list --layer infra --db "$DB_PATH" 2>/dev/null | python3 -c "
+import sys,json
+for n in json.load(sys.stdin):
+    print(f'    {n[\"node_type\"]:12s} {n[\"name\"]}')
+" 2>/dev/null
+else
+  fail "Infrastructure nodes: 0 (want >= 1 — kafka broker, redis cache)"
+fi
+
+# Check BELONGS_TO edge from topic to broker
+BELONGS_TO_COUNT=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('edges_by_type',{}).get('BELONGS_TO',0))" 2>/dev/null || echo "0")
+if [ "$BELONGS_TO_COUNT" -ge 1 ]; then
+  pass "BELONGS_TO edges (topic → broker): $BELONGS_TO_COUNT"
+else
+  echo -e "  ${YELLOW}⚠ No BELONGS_TO edges — Kafka topics not linked to broker${NC}"
+fi
+
+# ── 3r: Domain List ──
+section "Domain List"
+DOMAIN_LIST=$("$CHRONICLE" domain list --db "$DB_PATH" 2>/dev/null || echo "[]")
+DOMAIN_COUNT=$(echo "$DOMAIN_LIST" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+if [ "$DOMAIN_COUNT" -ge 1 ]; then
+  pass "chronicle domain list: $DOMAIN_COUNT domain(s) found"
+  echo "$DOMAIN_LIST" | python3 -c "
+import sys,json
+for d in json.load(sys.stdin):
+    print(f'    {d[\"name\"]}')
+" 2>/dev/null
+else
+  fail "chronicle domain list: no domains found"
+fi
+
+# ── 3s: Domain Language ──
 section "Domain Language"
 TERM_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM domain_language" 2>/dev/null || echo "0")
 if [ "$TERM_COUNT" -gt 0 ]; then
   pass "Domain glossary: $TERM_COUNT terms defined"
   sqlite3 "$DB_PATH" "SELECT printf('    %s (%s): %s', term, context, description) FROM domain_language ORDER BY context, term LIMIT 10" 2>/dev/null
 else
-  echo -e "  ${YELLOW}⚠ No domain terms defined — Claude didn't call oracle_define_term${NC}"
+  echo -e "  ${YELLOW}⚠ No domain terms defined — Claude didn't call chronicle_define_term${NC}"
 fi
 
-VIOLATION_COUNT=$("$ORACLE" node list --db "$DB_PATH" 2>/dev/null | python3 -c "
+VIOLATION_COUNT=$("$CHRONICLE" node list --db "$DB_PATH" 2>/dev/null | python3 -c "
 import sys, json, sqlite3
 nodes = json.load(sys.stdin)
 conn = sqlite3.connect('$DB_PATH')
@@ -467,7 +522,9 @@ cat > "$RESULTS_DIR/summary.json" << SUMEOF
   "topics": $TOPIC_COUNT,
   "kafka_connected": $( [ "$KAFKA_PATH_COUNT" -ge 1 ] && echo "true" || echo "false" ),
   "tom_path_found": $( [ "$TOM_PATH_COUNT" -ge 1 ] && echo "true" || echo "false" ),
-  "cat_impact": $CAT_IMPACT_COUNT
+  "cat_impact": $CAT_IMPACT_COUNT,
+  "infra_nodes": $INFRA_COUNT,
+  "domains": $DOMAIN_COUNT
 }
 SUMEOF
 
