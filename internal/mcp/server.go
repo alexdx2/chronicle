@@ -65,7 +65,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(saveCustomPackTool(), saveCustomPackHandler(g))
 	s.AddTool(scanConfirmTool(), scanConfirmHandler(g))
 	s.AddTool(scanStatusTool(), scanStatusHandler(g))
-	s.AddTool(saveManifestTool(), saveManifestHandler())
+	s.AddTool(saveManifestTool(), saveManifestHandler(g))
 	s.AddTool(resetDBTool(), resetDBHandler(g))
 	s.AddTool(reportDiscoveryTool(), reportDiscoveryHandler(g))
 	s.AddTool(getDiscoveriesTool(), getDiscoveriesHandler(g))
@@ -1812,7 +1812,7 @@ func saveManifestTool() mcp.Tool {
 	)
 }
 
-func saveManifestHandler() server.ToolHandlerFunc {
+func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		content := strParam(req.GetArguments(), "content")
 		if content == "" {
@@ -1826,6 +1826,25 @@ func saveManifestHandler() server.ToolHandlerFunc {
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			return errorResult(err), nil
 		}
+
+		// After saving, load the manifest and create infra nodes in the graph.
+		if m, err := manifest.LoadFile(path); err == nil {
+			domainKey := ""
+			if len(m.Domains) > 0 {
+				domainKey = m.Domains[0].Name
+			}
+			for _, infra := range m.Infrastructure {
+				g.Store().UpsertNode(store.NodeRow{
+					NodeKey:   infra.InfraNodeKey(),
+					Layer:     "infra",
+					NodeType:  infra.Type,
+					DomainKey: domainKey,
+					Name:      infra.Name,
+					Status:    "active",
+				})
+			}
+		}
+
 		return jsonResult(map[string]string{"status": "saved", "path": path}), nil
 	}
 }

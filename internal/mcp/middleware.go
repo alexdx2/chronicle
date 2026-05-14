@@ -416,7 +416,7 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(saveCustomPackTool(), saveCustomPackHandler(g))
 	add(scanConfirmTool(), scanConfirmHandler(g))
 	add(scanStatusTool(), scanStatusHandler(g))
-	add(saveManifestTool(), saveManifestHandler())
+	add(saveManifestTool(), saveManifestHandler(g))
 	add(resetDBTool(), resetDBHandler(g))
 	add(reportDiscoveryTool(), reportDiscoveryHandler(g))
 	add(getDiscoveriesTool(), getDiscoveriesHandler(g))
