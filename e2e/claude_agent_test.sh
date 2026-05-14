@@ -77,13 +77,14 @@ pass "MCP config created at $MCP_CONFIG"
 # ─── Step 2: Run Claude ───
 section "Claude Scan"
 info "Running Claude to scan the project..."
-info "This may take 1-3 minutes depending on model speed."
+info "This may take 3-10 minutes — using full scan pipeline with file_extracted loop."
 
-CLAUDE_PROMPT="You have Chronicle MCP tools available. Scan this Tom & Jerry project.
+CLAUDE_PROMPT="You have Chronicle MCP tools available. Scan this Tom & Jerry project using the scan pipeline.
 
-Steps:
-1. Call chronicle_extraction_guide to learn the extraction methodology
-2. Call chronicle_save_manifest with this manifest:
+Use chronicle_command(command='scan') to get the step-by-step scan instructions, then follow them exactly.
+
+When the scan instructions ask you to save a manifest, use this content:
+
 domains:
   - name: tomandjerry
     description: Tom and Jerry battle simulation
@@ -101,34 +102,19 @@ infrastructure:
     type: cache
     address: redis:6379
     description: Battle state cache
-3. Call chronicle_revision_create — domain: tomandjerry, after_sha: test123, trigger: manual, mode: full
-4. Read the source code of ALL 4 services and extract:
-   - Prisma models from prisma/schema.prisma (Cat, CatWeapon, Mouse, Trap, BattleEvent + all enums as data:enum nodes)
-   - NestJS modules, controllers, services (code layer)
-   - HTTP endpoints from @Get/@Post decorators (contract:endpoint nodes + EXPOSES_ENDPOINT edges)
-   - Cross-service HTTP calls via env URLs like TOM_API_URL, JERRY_API_URL (CALLS_SERVICE + CALLS_ENDPOINT edges, derivation: linked)
-   - Kafka topic battle-results (PUBLISHES_TOPIC + CONSUMES_TOPIC edges)
-   - USES_MODEL edges from services that call prisma (e.g. TomService -> Cat model)
-   - REFERENCES_MODEL edges between models with @relation (Cat->CatWeapon, Mouse->Trap)
-   - Repository and service nodes for each API
-5. Also extract: @UseGuards → INJECTS from controller to guard, @UseInterceptors → INJECTS from controller to interceptor, middleware → INJECTS from module. Bull queue processors, custom decorators, validation pipes — all as providers.
-6. Don't forget the shared library at ./shared — extract as code:package node
-7. Import via chronicle_import_all (split into batches if needed — data first, then code, then contracts)
-8. FLOW extraction — identify the key business use cases and create flow:use_case nodes:
-   - TomAttacksJerry: triggered by POST /arena/attack, requires ArenaService+TomClient+JerryClient, produces battle-results topic event
-   - JerrySetsTrap: triggered by POST /arena/trap, requires JerryClient
-   - WatchBattle: triggered by WebSocket watch-battle, requires ArenaService
-   - ViewLeaderboard: triggered by GET /stats/leaderboard, requires SpectatorService
-   Create TRIGGERS_FLOW edges from endpoints to use cases, REQUIRES edges to services/models, PRODUCES_OUTCOME edges to topics.
-9. Call chronicle_snapshot_create and chronicle_stale_mark
-10. Define domain language — chronicle_define_term for Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon. Include anti-patterns. Then chronicle_check_language.
-11. Call chronicle_domain_list to verify the domain was registered correctly.
-12. Call chronicle_report_discovery for each observation:
-   - Any code patterns you found unusual or couldn't classify → category: unknown_pattern
-   - Any relationships you suspect but couldn't confirm → category: missing_edge
-   - Overall scan quality assessment → category: pattern
 
-IMPORTANT: Do NOT skip data models, endpoints, cross-service edges, or discovery reporting. The test checks for all of them.
+CRITICAL RULES:
+- Follow the scan pipeline: chronicle_command → checkpoints → discover_files → scan_next_file → file_extracted → resolve_extractions
+- Do NOT use chronicle_import_all directly — use the scan pipeline (file_extracted for each file batch)
+- At each checkpoint, confirm with chronicle_scan_confirm
+- When scan completes, also do these post-scan tasks:
+  1. Define domain language — chronicle_define_term for Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon. Include anti-patterns. Then chronicle_check_language.
+  2. Call chronicle_domain_list to verify the domain was registered.
+  3. Call chronicle_report_discovery for each observation:
+     - Any code patterns you found unusual → category: unknown_pattern
+     - Any relationships you suspect but couldn't confirm → category: missing_edge
+     - Overall scan quality assessment → category: pattern
+
 Do NOT ask questions. Execute immediately."
 
 claude --print \
