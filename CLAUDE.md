@@ -24,7 +24,7 @@ This repo is the open-source core. Chronicle Pro is a separate private repo that
 | Validation (`validate/`) | Key normalization, input validation |
 | CLI (`internal/cli/`) | `chronicle scan`, `import`, `query`, `alias`, etc. |
 | MCP server (`internal/mcp/`) | 25+ tools for Claude (import, query, evidence, diagrams) |
-| Admin dashboard (`internal/admin/`) | Overview, graph explorer, language, settings, diagrams |
+| Admin dashboard (`admin/`) | Overview, graph explorer, language, settings, diagrams |
 | `external` node status | Boundary marker — node exists but is defined elsewhere |
 | `node_aliases` table | Name/DNS/topic aliases for resolution |
 | `GraphQuerier` interface | Abstraction that pro implements for federation |
@@ -58,7 +58,7 @@ store/                  SQLite storage (public)
 registry/               Type registry + defaults.yaml (public)
 validate/               Key normalization + validation (public)
 internal/cli/           CLI commands (internal — not importable by pro)
-internal/admin/         Dashboard server + embedded static/ (internal)
+admin/                  Dashboard server + static/ (public — importable by pro)
 internal/mcp/           MCP server + tools (internal)
 internal/manifest/      Domain manifest parsing (internal)
 ```
@@ -183,7 +183,7 @@ Tests: stale marking, evidence invalidation, re-resolution, contradiction detect
 
 ## Dashboard dev
 
-The dashboard is a single `internal/admin/static/index.html` (~3700 lines). Uses Alpine.js + D3.js.
+The dashboard is a single `admin/static/index.html` (~3900 lines). This is the ONLY source of truth — `internal/admin/static/` was removed. Uses Alpine.js + D3.js.
 
 ```bash
 # Dev mode serves from disk (no rebuild needed for HTML/JS changes)

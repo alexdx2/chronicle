@@ -152,7 +152,34 @@ var scanStages = []ScanStage{
 		Name: "Finalize setup",
 		Type: "action",
 		Instruction: `Save manifest and discover files:
-  a. Call chronicle_save_manifest with the approved manifest (include instruction_packs, tech, domains array with scan patterns)
+  a. Call chronicle_save_manifest with the approved manifest. Full manifest format:
+
+     domains:
+       - name: domain-name
+         description: ...
+         owner: ...
+         scan:
+           include: ["src/**"]
+           exclude: ["**/*.test.ts"]
+
+     tech: [nestjs, prisma, kafka]
+
+     infrastructure:
+       - name: kafka
+         type: broker
+         address: kafka:9092
+         description: Event bus
+       - name: redis
+         type: cache
+         address: redis:6379
+
+     instruction_packs: [typescript, nestjs]
+
+     Include all discovered domains with scan patterns, tech stack, and any infrastructure
+     (brokers, caches, databases) the project uses. Infrastructure entries are imported as
+     infra-layer nodes in the graph — agents will receive the infrastructure list in scan
+     actions so they can link topics/queues to specific broker nodes.
+
   b. For each domain in the manifest, call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
   c. Call chronicle_discover_files(revision_id, votes_needed) — files are auto-assigned domain_key based on scan.include/exclude patterns
   d. Call chronicle_scan_next_file — it will return a CHECKPOINT with action="confirm"
