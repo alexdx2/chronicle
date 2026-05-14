@@ -101,6 +101,19 @@ Do NOT re-emit facts already in `ast_facts`.
 Do NOT re-emit facts already accepted from candidates.
 Do NOT invent candidates or kind values.
 
+## Candidate boundaries (from scan context)
+
+The scan action may include `candidate_boundaries` — directory names from the manifest's include patterns.
+These are **hints only**. They suggest where service boundaries MIGHT be.
+
+DO NOT create `declares_service` from a candidate boundary name alone.
+A candidate boundary becomes a service ONLY when confirmed by code evidence:
+- package.json with an application name (not a shared library)
+- main.ts / NestFactory.create / app bootstrap
+- Dockerfile or deployment config
+
+Libraries, shared packages, and workspace roots are NOT services even if they appear as candidates.
+
 ## File-type obligations (CRITICAL)
 
 These checks are NOT optional. You MUST verify them for every file.

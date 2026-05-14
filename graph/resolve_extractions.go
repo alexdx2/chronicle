@@ -832,21 +832,14 @@ func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) s
 		return canonicalKey
 	}
 
-	// Try common variations: with/without trailing 's', dots vs dashes
-	variants := []string{
-		normalized,
-	}
+	// Try only plural/singular variation (the most common agent inconsistency).
+	// DO NOT try dot↔dash — order.created and order-created are different topics.
+	// DO NOT try removing version suffixes — order.created.v2 is a different topic.
+	variants := []string{normalized}
 	if strings.HasSuffix(normalized, "s") {
 		variants = append(variants, strings.TrimSuffix(normalized, "s"))
 	} else {
 		variants = append(variants, normalized+"s")
-	}
-	// dot notation ↔ dash notation
-	if strings.Contains(normalized, ".") {
-		variants = append(variants, strings.ReplaceAll(normalized, ".", "-"))
-	}
-	if strings.Contains(normalized, "-") {
-		variants = append(variants, strings.ReplaceAll(normalized, "-", "."))
 	}
 
 	for _, v := range variants {

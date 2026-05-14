@@ -140,6 +140,9 @@ Use when you identify a deployable service/application boundary — from package
 Each independently deployable unit should have exactly one `declares_service` fact.
 The resolver creates `service:service:{domain}:{name}` nodes in the service layer.
 
+DO NOT declare shared libraries, workspace roots, or packages without server entrypoints as services.
+A package name alone is NOT sufficient — require entrypoint/deployment evidence.
+
 ## Events / messaging
 
 ```json
