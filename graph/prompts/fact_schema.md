@@ -17,6 +17,41 @@ Every fact must be directly supported by:
 
 If evidence is weak or ambiguous, do not output the fact.
 
+# File-type obligations
+
+These are NOT optional. If the file matches a role below, you MUST check for the listed facts.
+
+## Package / build / app manifest files
+Files: package.json, go.mod, pyproject.toml, pom.xml, build.gradle, Cargo.toml
+CHECK: Does this file confirm a deployable service/application boundary?
+IF YES: emit `declares_service` with the package/application name.
+
+## Schema / contract files
+Files: *.prisma, *.graphql, *.proto, *.avro, openapi.yaml
+CHECK: model definitions, enum definitions, relations between models.
+EMIT: `model`, `enum`, `model_relation` for every definition found.
+
+## Entry point / bootstrap files
+Files: main.ts, main.go, main.py, app.ts, index.ts, Program.cs
+CHECK: Does this file bootstrap an application? What modules/services does it register?
+IF YES: emit `declares_service` if not already declared from package manifest.
+
+## Module / registration files
+Files: *.module.ts, AppModule, providers arrays, DI containers
+CHECK: Every controller and provider registered in this module.
+EMIT: `provides` for EACH entry in controllers/providers arrays. Set `from_type: "module"`.
+CRITICAL: Missing `provides` = missing CONTAINS edges = broken graph structure.
+
+## Controller / handler files
+Files: controllers, resolvers, gateways, RPC handlers
+CHECK: Every route/endpoint/handler method.
+EMIT: `endpoint` for each. `injects` for each DI dependency.
+
+## Service / provider files
+Files: services, repositories, clients, producers, consumers
+CHECK: DI dependencies, model usage, cross-service calls, event publishing/consuming.
+EMIT: `injects`, `uses_model`, `calls_service`, `calls_endpoint`, `produces`, `consumes` as applicable.
+
 # Fact templates
 
 ## Module containment (CRITICAL)

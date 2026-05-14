@@ -3,11 +3,34 @@ package graph
 import (
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/internal/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 )
+
+// boundaryPriority returns a sort priority for boundary-first scan ordering.
+// Lower = scanned first. Boundary files (package.json, Dockerfile, schema, main.ts)
+// are scanned before regular source files so the agent discovers service boundaries
+// and data models before processing controllers/providers.
+func boundaryPriority(filePath string) int {
+	base := filepath.Base(filePath)
+	switch {
+	case base == "package.json" || base == "go.mod" || base == "pyproject.toml" || base == "pom.xml" || base == "build.gradle":
+		return 0 // App manifest — declares service boundary
+	case base == "Dockerfile" || base == "docker-compose.yml" || base == "docker-compose.yaml":
+		return 1 // Deployment — confirms service boundary
+	case strings.HasSuffix(base, ".prisma") || strings.HasSuffix(base, ".graphql") || strings.HasSuffix(base, ".proto"):
+		return 2 // Schema — defines data models and contracts
+	case base == "main.ts" || base == "main.go" || base == "main.py" || base == "app.ts" || base == "index.ts":
+		return 3 // Entry point — confirms app boundary
+	case strings.Contains(filePath, "module") || strings.HasSuffix(base, ".module.ts"):
+		return 4 // Module — structural containment
+	default:
+		return 5 // Regular source files
+	}
+}
 
 // DiscoverResult holds files found during project discovery.
 type DiscoverResult struct {
@@ -45,6 +68,11 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 			filtered = append(filtered, f)
 		}
 	}
+
+	// Boundary-first ordering: package/build/deployment/schema files before source
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return boundaryPriority(filtered[i]) < boundaryPriority(filtered[j])
+	})
 
 	// Build summary stats
 	byDir := map[string]int{}

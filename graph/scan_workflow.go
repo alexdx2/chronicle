@@ -40,6 +40,7 @@ type ScanAction struct {
 	FlowContext      *FlowContext           `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
 	InstructionPacks *prompts.PackSelection `json:"instruction_packs,omitempty"` // loaded + available instruction packs
 	Infrastructure   []manifest.InfraEntry  `json:"infrastructure,omitempty"`    // from manifest — agents use to link topics to brokers
+	CandidateBoundaries []string            `json:"candidate_boundaries,omitempty"` // from manifest include patterns — hints, not truth
 	// Checkpoint — when set, Claude MUST show this to user and call chronicle_scan_confirm
 	Checkpoint       *ScanCheckpoint        `json:"checkpoint,omitempty"`
 }

@@ -737,13 +737,24 @@ func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("domain is required")), nil
 		}
 
-		// Load manifest for tech + infrastructure
+		// Load manifest for tech + infrastructure + candidate boundaries
 		var tech []string
 		var infra []manifest.InfraEntry
+		var candidates []string
 		rootDir, _ := os.Getwd()
 		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
 			tech = m.Tech
 			infra = m.Infrastructure
+			// Derive candidate service boundaries from include patterns
+			for _, d := range m.Domains {
+				for _, pattern := range d.Scan.Include {
+					// Extract top-level directory from pattern (e.g. "tom-api/**" → "tom-api")
+					parts := strings.SplitN(pattern, "/", 2)
+					if len(parts) > 0 && parts[0] != "**" && parts[0] != "*" {
+						candidates = append(candidates, parts[0])
+					}
+				}
+			}
 		}
 
 		action, err := g.ScanNextAction(domain, tech...)
@@ -752,6 +763,9 @@ func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 		if len(infra) > 0 {
 			action.Infrastructure = infra
+		}
+		if len(candidates) > 0 {
+			action.CandidateBoundaries = candidates
 		}
 		return jsonResult(action), nil
 	}
