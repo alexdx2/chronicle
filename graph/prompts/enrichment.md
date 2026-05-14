@@ -106,8 +106,10 @@ Do NOT invent candidates or kind values.
 These checks are NOT optional. You MUST verify them for every file.
 
 **Package/build manifest files** (package.json, go.mod, pyproject.toml, pom.xml):
-- MUST check: does this file confirm a deployable service boundary?
+- MUST check: does this file confirm a deployable service/application boundary?
 - IF YES: emit `{"kind":"declares_service","to":"<package-name>"}`
+- DO NOT declare shared libraries/packages as services — only independently runnable/deployable apps
+- Evidence: executable entrypoint (main.ts, NestFactory.create), Dockerfile, or deployment config
 
 **Schema/contract files** (*.prisma, *.graphql, *.proto, openapi.yaml):
 - MUST check: all model definitions, enum definitions, model relations

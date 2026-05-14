@@ -377,6 +377,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 	case "calls_service":
 		// Explicit service call — creates CALLS_SERVICE edge
+		// First try to link to existing service:service node, then fall back to code:provider
 		if fact.To == "" {
 			return counts, nil
 		}
@@ -384,7 +385,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		toName := fact.To
-		toNodeKey := "code:provider:" + domainKey + ":" + strings.ToLower(toName)
+		// Try service layer first (service:service:domain:name)
+		svcKey := "service:service:" + domainKey + ":" + normalizePackageName(toName)
+		toNodeKey := svcKey
+		existingNode, _ := g.store.GetNodeByKey(svcKey)
+		if existingNode == nil {
+			// Fall back to code:provider
+			toNodeKey = "code:provider:" + domainKey + ":" + strings.ToLower(toName)
+		}
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
@@ -517,7 +525,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
-		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
+		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":PUBLISHES_TOPIC"
@@ -548,7 +556,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
-		toNodeKey := "contract:topic:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(fact.To, " ", "-"))
+		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONSUMES_TOPIC"
@@ -811,6 +819,44 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	}
 
 	return counts, nil
+}
+
+// resolveTopicKey finds an existing topic node by normalized name, or creates a canonical key.
+// Handles common variations: "battle-results" vs "battle-result", "order.created" vs "order-created".
+func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) string {
+	normalized := strings.ToLower(strings.ReplaceAll(topicName, " ", "-"))
+	canonicalKey := "contract:topic:" + domainKey + ":" + normalized
+
+	// Check if exact key exists
+	if n, _ := g.store.GetNodeByKey(canonicalKey); n != nil {
+		return canonicalKey
+	}
+
+	// Try common variations: with/without trailing 's', dots vs dashes
+	variants := []string{
+		normalized,
+	}
+	if strings.HasSuffix(normalized, "s") {
+		variants = append(variants, strings.TrimSuffix(normalized, "s"))
+	} else {
+		variants = append(variants, normalized+"s")
+	}
+	// dot notation ↔ dash notation
+	if strings.Contains(normalized, ".") {
+		variants = append(variants, strings.ReplaceAll(normalized, ".", "-"))
+	}
+	if strings.Contains(normalized, "-") {
+		variants = append(variants, strings.ReplaceAll(normalized, "-", "."))
+	}
+
+	for _, v := range variants {
+		key := "contract:topic:" + domainKey + ":" + v
+		if n, _ := g.store.GetNodeByKey(key); n != nil {
+			return key // Found existing topic — reuse it
+		}
+	}
+
+	return canonicalKey // No match — create new
 }
 
 // ensureNodeID ensures a node exists and returns its ID.
