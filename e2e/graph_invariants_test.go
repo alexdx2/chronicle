@@ -424,6 +424,82 @@ func TestInvariant_ImpactPropagates(t *testing.T) {
 	}
 }
 
+// --- Async Path Traversal ---
+
+// TestInvariant_KafkaPathConnected verifies that producer → topic → consumer
+// is traversable via connected-mode path query. This catches the edge versioning
+// bug where CONSUMES_TOPIC edges were silently closed.
+func TestInvariant_KafkaPathConnected(t *testing.T) {
+	g, _ := setupTomAndJerry(t)
+	edges := allEdges(t, g)
+
+	// Find a producer and consumer that share a topic
+	topicPublishers := map[string]string{} // topic_key → publisher_key
+	topicConsumers := map[string]string{}  // topic_key → consumer_key
+	for _, e := range edges {
+		if e.EdgeType == "PUBLISHES_TOPIC" {
+			topicPublishers[e.ToNodeKey] = e.FromNodeKey
+		}
+		if e.EdgeType == "CONSUMES_TOPIC" {
+			topicConsumers[e.ToNodeKey] = e.FromNodeKey
+		}
+	}
+
+	for topicKey, producer := range topicPublishers {
+		consumer, ok := topicConsumers[topicKey]
+		if !ok {
+			continue
+		}
+		// Found a topic with both producer and consumer — test connected path
+		result, err := g.QueryPath(producer, consumer, graph.PathOptions{MaxDepth: 5, Mode: "connected"})
+		if err != nil {
+			t.Fatalf("QueryPath(%s → %s): %v", producer, consumer, err)
+		}
+		if len(result.Paths) == 0 {
+			t.Errorf("no connected path from producer %s to consumer %s through topic %s — edge versioning bug?",
+				producer, consumer, topicKey)
+		}
+		return // One successful check is enough
+	}
+	t.Skip("no topic with both publisher and consumer in fixture")
+}
+
+// --- Edge Type Layer Validation ---
+
+// TestInvariant_EdgeTargetLayers verifies edges point to correct layer targets.
+func TestInvariant_EdgeTargetLayers(t *testing.T) {
+	g, _ := setupTomAndJerry(t)
+	s := g.Store()
+	edges := allEdges(t, g)
+
+	nodeByID := map[int64]*store.NodeRow{}
+	nodes, _ := s.ListNodes(store.NodeFilter{})
+	for i := range nodes {
+		nodeByID[nodes[i].NodeID] = &nodes[i]
+	}
+
+	for _, e := range edges {
+		toNode := nodeByID[e.ToNodeID]
+		if toNode == nil {
+			continue
+		}
+		switch e.EdgeType {
+		case "CALLS_ENDPOINT":
+			if toNode.NodeType != "endpoint" {
+				t.Errorf("CALLS_ENDPOINT → %s (type=%s) — should target endpoint", e.ToNodeKey, toNode.NodeType)
+			}
+		case "PUBLISHES_TOPIC", "CONSUMES_TOPIC":
+			if toNode.NodeType != "topic" {
+				t.Errorf("%s → %s (type=%s) — should target topic", e.EdgeType, e.ToNodeKey, toNode.NodeType)
+			}
+		case "USES_MODEL":
+			if toNode.Layer != "data" {
+				t.Errorf("USES_MODEL → %s (layer=%s) — should target data layer", e.ToNodeKey, toNode.Layer)
+			}
+		}
+	}
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================
