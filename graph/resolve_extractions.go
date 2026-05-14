@@ -1468,16 +1468,21 @@ func fileNodeTypeFromFacts(facts []Fact) string {
 
 func fileTypeOrderFromFacts(facts []Fact) int {
 	for _, f := range facts {
+		if f.Kind == "declares_service" || f.Kind == "model" || f.Kind == "enum" {
+			return 0 // boundary + schema files first — creates service/model nodes before references
+		}
+	}
+	for _, f := range facts {
 		if f.Kind == "endpoint" {
-			return 0 // files that expose endpoints first
+			return 1 // files that expose endpoints second
 		}
 	}
 	for _, f := range facts {
 		if f.Kind == "produces" || f.Kind == "consumes" {
-			return 1 // async handlers second
+			return 2 // async handlers third
 		}
 	}
-	return 2 // everything else last
+	return 3 // everything else last
 }
 
 func extractPathFromURL(url string) string {

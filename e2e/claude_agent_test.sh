@@ -253,19 +253,26 @@ else echo -e "  ${YELLOW}⚠ No linked edges — cross-service deps may be missi
 # ── 3i: Path queries ──
 section "Path Queries"
 
-# Tom attack chain: ArenaController → tom-api service
-TOM_PATH=$("$CHRONICLE" query path code:controller:tomandjerry:arenacontroller service:service:tomandjerry:tom-api --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
-TOM_PATH_COUNT=$(echo "$TOM_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))")
-if [ "$TOM_PATH_COUNT" -ge 1 ]; then
-  pass "ArenaController → tom-api: $TOM_PATH_COUNT path(s)"
-  echo "$TOM_PATH" | python3 -c "
+# Tom attack chain: ArenaController → tom-api service (find keys dynamically)
+ARENA_CTRL=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE node_key LIKE '%arena%controller%' AND node_type='controller' AND status='active' LIMIT 1" 2>/dev/null || echo "")
+TOM_SVC=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE node_key LIKE '%tom-api%' AND layer='service' AND status='active' LIMIT 1" 2>/dev/null || echo "")
+if [ -n "$ARENA_CTRL" ] && [ -n "$TOM_SVC" ]; then
+  TOM_PATH=$("$CHRONICLE" query path "$ARENA_CTRL" "$TOM_SVC" --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+  TOM_PATH_COUNT=$(echo "$TOM_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))" 2>/dev/null || echo "0")
+  if [ "$TOM_PATH_COUNT" -ge 1 ]; then
+    pass "ArenaController → tom-api: $TOM_PATH_COUNT path(s)"
+    echo "$TOM_PATH" | python3 -c "
 import sys,json
 p = json.load(sys.stdin)['paths'][0]
 print(f'    Path: {\" → \".join(n.split(\":\")[-1] for n in p[\"nodes\"])}')
 print(f'    Hops: {p[\"depth\"]}, Score: {p[\"path_score\"]}')
 " 2>/dev/null
+  else
+    fail "ArenaController → tom-api: no path found ($ARENA_CTRL → $TOM_SVC)"
+  fi
 else
-  fail "ArenaController → tom-api: no path found"
+  if [ -z "$ARENA_CTRL" ]; then fail "ArenaController node not found"; fi
+  if [ -z "$TOM_SVC" ]; then fail "tom-api service node not found"; fi
 fi
 
 # Tom ↔ Jerry: should NOT have direct path (only through arena)
@@ -293,17 +300,20 @@ fi
 
 # ── 3k: Kafka connectivity ──
 section "Kafka Flow"
-KAFKA_PATH=$("$CHRONICLE" query path code:provider:tomandjerry:battleresultproducer code:provider:tomandjerry:battleresultconsumer --mode connected --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
-KAFKA_PATH_COUNT=$(echo "$KAFKA_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))")
-if [ "$KAFKA_PATH_COUNT" -ge 1 ]; then
-  pass "Kafka flow: Producer → battle-results → Consumer"
-  echo "$KAFKA_PATH" | python3 -c "
-import sys,json
-p = json.load(sys.stdin)['paths'][0]
-print(f'    Path: {\" → \".join(n.split(\":\")[-1] for n in p[\"nodes\"])}')
-" 2>/dev/null
+# Find producer and consumer node keys dynamically (keys vary between scan runs)
+PRODUCER_KEY=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE (node_key LIKE '%producer%' OR name LIKE '%Producer%') AND layer='code' AND status='active' LIMIT 1" 2>/dev/null || echo "")
+CONSUMER_KEY=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE (node_key LIKE '%consumer%' OR name LIKE '%Consumer%') AND layer='code' AND status='active' LIMIT 1" 2>/dev/null || echo "")
+if [ -n "$PRODUCER_KEY" ] && [ -n "$CONSUMER_KEY" ]; then
+  KAFKA_PATH=$("$CHRONICLE" query path "$PRODUCER_KEY" "$CONSUMER_KEY" --mode connected --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+  KAFKA_PATH_COUNT=$(echo "$KAFKA_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))" 2>/dev/null || echo "0")
+  if [ "$KAFKA_PATH_COUNT" -ge 1 ]; then
+    pass "Kafka flow: $PRODUCER_KEY → topic → $CONSUMER_KEY"
+  else
+    fail "Kafka flow not connected ($PRODUCER_KEY ↛ $CONSUMER_KEY via topic)"
+  fi
 else
-  fail "Kafka flow not connected (Producer ↛ Consumer via topic)"
+  if [ -z "$PRODUCER_KEY" ]; then fail "No Kafka producer node found"; fi
+  if [ -z "$CONSUMER_KEY" ]; then fail "No Kafka consumer node found"; fi
 fi
 
 # ── 3l: Token/Context Efficiency ──
