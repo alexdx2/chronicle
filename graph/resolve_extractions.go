@@ -203,7 +203,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			Freshness:           1.0,
 			TrustScore:          0.9,
 			Metadata:            "{}",
-			ValidFromRevisionID: revisionID,
+			ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err != nil {
 			// Edge might already exist — that's fine
@@ -250,7 +250,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			FromNodeID: fromID, ToNodeID: toID,
 			EdgeType: "DEPENDS_ON", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -280,7 +280,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			ToNodeID:            toID,
 			EdgeType: "CALLS_SERVICE", DerivationKind: "linked", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -315,7 +315,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 					FromNodeKey: fromNodeKey, ToNodeKey: epNodeKey,
 					EdgeType: "CALLS_ENDPOINT", DerivationKind: "linked", Active: true,
 					LastSeenRevisionID: revisionID, Confidence: 0.80, Freshness: 1.0, TrustScore: 0.80,
-					Metadata: "{}", ValidFromRevisionID: revisionID,
+					Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 				})
 				if err3 == nil {
 					counts.edges++
@@ -367,7 +367,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				FromNodeKey: fromNodeKey, ToNodeKey: modelKey,
 				EdgeType: "USES_MODEL", DerivationKind: "hard", Active: true,
 				LastSeenRevisionID: revisionID, Confidence: 0.90, Freshness: 1.0, TrustScore: 0.90,
-				Metadata: "{}", ValidFromRevisionID: revisionID,
+				Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 			})
 			if err == nil {
 				counts.edges++
@@ -405,7 +405,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
 			EdgeType: "CALLS_SERVICE", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -434,7 +434,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			FromNodeKey: fromNodeKey, ToNodeKey: modelKey,
 			EdgeType: "USES_MODEL", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -462,7 +462,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			FromNodeKey: fromNodeKey, ToNodeKey: epKey,
 			EdgeType: "CALLS_ENDPOINT", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -484,7 +484,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
 			EdgeType: "INJECTS", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -534,7 +534,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			FromNodeID: fromID, ToNodeID: toID,
 			EdgeType: "PUBLISHES_TOPIC", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -566,7 +566,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			ToNodeID:            toID,
 			EdgeType: "CONSUMES_TOPIC", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -612,7 +612,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			ToNodeID:            toID,
 			EdgeType: "EXPOSES_ENDPOINT", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -656,7 +656,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				FromNodeKey: fromNodeKey, ToNodeKey: nodeKey,
 				EdgeType: "USES_MODEL", DerivationKind: "hard", Active: true,
 				LastSeenRevisionID: revisionID, Confidence: 0.90, Freshness: 1.0, TrustScore: 0.90,
-				Metadata: "{}", ValidFromRevisionID: revisionID,
+				Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 			})
 			if err == nil {
 				counts.edges++
@@ -692,7 +692,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
 			EdgeType: "REFERENCES_MODEL", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
-			Metadata: "{}", ValidFromRevisionID: revisionID,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
 			counts.edges++
@@ -742,7 +742,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				FromNodeKey: triggerKey, ToNodeKey: flowKey,
 				EdgeType: "TRIGGERS_FLOW", DerivationKind: "hard", Active: true,
 				LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
-				Metadata: "{}", ValidFromRevisionID: revisionID,
+				Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 			})
 			if err == nil {
 				counts.edges++
@@ -760,7 +760,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				FromNodeKey: flowKey, ToNodeKey: reqKey,
 				EdgeType: "REQUIRES", DerivationKind: "hard", Active: true,
 				LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
-				Metadata: "{}", ValidFromRevisionID: revisionID,
+				Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 			})
 			if err == nil {
 				counts.edges++
