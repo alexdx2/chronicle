@@ -106,6 +106,7 @@ infrastructure:
 CRITICAL RULES:
 - Follow the scan pipeline: chronicle_command → checkpoints → discover_files → scan_next_file → file_extracted → resolve_extractions
 - Do NOT use chronicle_import_all directly — use the scan pipeline (file_extracted for each file batch)
+- When calling chronicle_discover_files, set votes_needed=3 for voting mode (3 extraction passes per file for stability)
 - At each checkpoint, confirm with chronicle_scan_confirm
 - When scan completes, also do these post-scan tasks:
   1. Define domain language — chronicle_define_term for Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon. Include anti-patterns. Then chronicle_check_language.

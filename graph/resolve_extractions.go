@@ -1158,6 +1158,51 @@ func mergeVotedExtractions(extractions []store.ExtractionRow) []store.Extraction
 	return result
 }
 
+// isHardFact returns true for fact kinds that come from deterministic code evidence
+// (syntax, decorators, schema definitions). These should be accepted even with 1 vote.
+// Inferred/linked facts require majority.
+func isHardFact(fact map[string]any) bool {
+	kind, _ := fact["kind"].(string)
+	switch kind {
+	case "model", "enum", "model_relation", "endpoint", "provides", "injects",
+		"declares_service", "produces", "consumes", "decorator", "import":
+		return true
+	}
+	// Candidate decisions that accepted a hard fact
+	if decision, ok := fact["decision"].(string); ok && decision == "accept" {
+		if inner, ok := fact["fact"].(map[string]any); ok {
+			return isHardFact(inner)
+		}
+	}
+	return false
+}
+
+// voteConfidence returns the confidence for a voted fact.
+// Hard facts: accept even 1 vote (confidence scales with vote count).
+// Inferred facts: require 2/3 majority, otherwise dropped (returns 0).
+func voteConfidence(count, totalVotes int, sampleFact map[string]any) float64 {
+	if isHardFact(sampleFact) {
+		// Union strategy for hard facts — accept any vote
+		switch {
+		case count >= totalVotes:
+			return 0.95
+		case count*2 >= totalVotes:
+			return 0.80
+		default:
+			return 0.60 // Single vote — lower confidence but still accepted
+		}
+	}
+	// Majority strategy for inferred facts
+	switch {
+	case count >= totalVotes:
+		return 0.85
+	case count*3 >= totalVotes*2:
+		return 0.70
+	default:
+		return 0 // Drop — not enough votes
+	}
+}
+
 func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
 	totalVotes := len(votes)
 
@@ -1196,16 +1241,13 @@ func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
 	// Build merged facts
 	var mergedFacts []json.RawMessage
 
-	// Merge candidate votes
+	// Merge candidate votes — union strategy:
+	// Hard facts (model, endpoint, declares_service, etc.): accept even 1 vote
+	// Inferred facts (calls_service, etc.): require 2/3 majority
 	for _, factList := range candidateVotes {
 		count := len(factList)
-		var confidence float64
-		switch {
-		case count >= totalVotes:
-			confidence = 0.85
-		case count*3 >= totalVotes*2:
-			confidence = 0.70
-		default:
+		confidence := voteConfidence(count, totalVotes, factList[0])
+		if confidence == 0 {
 			continue
 		}
 		// Use first vote's fact, inject confidence
@@ -1224,16 +1266,11 @@ func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
 		}
 	}
 
-	// Merge free-form votes (fallback)
+	// Merge free-form votes (fallback) — same union strategy
 	for _, factList := range freeformVotes {
 		count := len(factList)
-		var confidence float64
-		switch {
-		case count >= totalVotes:
-			confidence = 0.85
-		case count*3 >= totalVotes*2:
-			confidence = 0.70
-		default:
+		confidence := voteConfidence(count, totalVotes, factList[0])
+		if confidence == 0 {
 			continue
 		}
 		fact := factList[0]
