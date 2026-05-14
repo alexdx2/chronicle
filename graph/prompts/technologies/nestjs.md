@@ -2,6 +2,20 @@
 
 Apply when the project uses NestJS or the file uses NestJS decorators/imports.
 
+## Service declaration (package.json)
+
+When processing a `package.json` file, emit a `declares_service` fact with the package name:
+`{"name": "orders-api"}` => `{"kind":"declares_service","to":"orders-api"}`
+
+This creates a service-layer node representing the deployable unit.
+
+## Cross-service HTTP calls
+
+When a provider makes HTTP calls to another service via injected HttpService, axios, or env-based URLs:
+`this.httpService.get(process.env.TOM_API_URL + '/tom/status')` => `{"kind":"calls_endpoint","method":"GET","target":"/tom/status"}` + `{"kind":"calls_service","to":"tom-api"}`
+
+Set `derivation_kind: "linked"` — these are inferred from env vars, not hard imports.
+
 ## Controllers
 
 `@Controller('users')` + `@Get(':id')` => `{"kind":"endpoint","method":"GET","target":"/users/:id"}`

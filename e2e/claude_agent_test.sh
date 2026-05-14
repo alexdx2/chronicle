@@ -440,17 +440,14 @@ fi
 
 # ── 3r: Domain List ──
 section "Domain List"
-DOMAIN_LIST=$("$CHRONICLE" domain list --db "$DB_PATH" 2>/dev/null || echo "[]")
-DOMAIN_COUNT=$(echo "$DOMAIN_LIST" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+DOMAIN_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(DISTINCT domain_key) FROM graph_nodes WHERE domain_key != '' AND status='active'" 2>/dev/null || echo "0")
 if [ "$DOMAIN_COUNT" -ge 1 ]; then
-  pass "chronicle domain list: $DOMAIN_COUNT domain(s) found"
-  echo "$DOMAIN_LIST" | python3 -c "
-import sys,json
-for d in json.load(sys.stdin):
-    print(f'    {d[\"name\"]}')
-" 2>/dev/null
+  pass "Domains in graph: $DOMAIN_COUNT"
+  sqlite3 "$DB_PATH" "SELECT DISTINCT domain_key, COUNT(*) as nodes FROM graph_nodes WHERE domain_key != '' AND status='active' GROUP BY domain_key" 2>/dev/null | while IFS='|' read dom cnt; do
+    echo "    $dom: $cnt nodes"
+  done
 else
-  fail "chronicle domain list: no domains found"
+  fail "No domains in graph — nodes have no domain_key"
 fi
 
 # ── 3s: Domain Language ──

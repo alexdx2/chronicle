@@ -101,8 +101,8 @@ Do NOT use for TypeScript type annotations or DTO usage.
 {"kind":"declares_service","to":"order-api"}
 ```
 
-Use when you identify a deployable service — typically from package.json `name` field, Dockerfile, docker-compose service name, or the top-level directory structure.
-Each microservice/API in the project should have exactly one `declares_service` fact.
+Use when you identify a deployable service/application boundary — from package.json `name`, build config, or entry point.
+Each independently deployable unit should have exactly one `declares_service` fact.
 The resolver creates `service:service:{domain}:{name}` nodes in the service layer.
 
 ## Events / messaging
