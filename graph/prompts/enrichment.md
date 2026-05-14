@@ -85,6 +85,7 @@ After classifying candidates, check for architectural facts NOT in candidates or
 Output them in `additional_facts`:
 
 ```json
+{"kind":"declares_service","to":"service-name"}
 {"kind":"http_call","method":"POST","target":"https://api.stripe.com/v1/charges"}
 {"kind":"produces","to":"order.created","method":"publishEvent"}
 {"kind":"consumes","to":"order.created","method":"handleEvent"}
@@ -92,12 +93,38 @@ Output them in `additional_facts`:
 {"kind":"enum","to":"EnumName"}
 {"kind":"model_relation","from":"A","to":"B"}
 {"kind":"calls_endpoint","method":"GET","target":"/api/users"}
+{"kind":"calls_service","to":"ServiceName"}
 {"kind":"uses_model","to":"User"}
 ```
 
 Do NOT re-emit facts already in `ast_facts`.
 Do NOT re-emit facts already accepted from candidates.
 Do NOT invent candidates or kind values.
+
+## File-type obligations (CRITICAL)
+
+These checks are NOT optional. You MUST verify them for every file.
+
+**Package/build manifest files** (package.json, go.mod, pyproject.toml, pom.xml):
+- MUST check: does this file confirm a deployable service boundary?
+- IF YES: emit `{"kind":"declares_service","to":"<package-name>"}`
+
+**Schema/contract files** (*.prisma, *.graphql, *.proto, openapi.yaml):
+- MUST check: all model definitions, enum definitions, model relations
+- EMIT: `model`, `enum`, `model_relation` for EVERY definition
+
+**Module/registration files** (@Module, providers arrays, DI containers):
+- MUST check: every controller and provider registered
+- EMIT: one `provides` fact per entry in controllers/providers. Set `from_type: "module"`.
+- MISSING provides = MISSING CONTAINS edges = broken graph
+
+**Controller/handler files**:
+- MUST check: every route/endpoint/handler method
+- EMIT: `endpoint` for each. `injects` for each DI dependency.
+
+**Service/provider files**:
+- MUST check: DI deps, model usage, cross-service calls, event pub/sub
+- EMIT: `injects`, `uses_model`, `calls_service`, `calls_endpoint`, `produces`, `consumes`
 
 # Empty output
 
