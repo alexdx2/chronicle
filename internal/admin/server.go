@@ -1046,7 +1046,7 @@ func (s *Server) handleDiagramBuild(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{
 		"session_id": sessionID,
-		"url":        fmt.Sprintf("http://localhost:%d/?diagram=%s", port, sessionID),
+		"url":        fmt.Sprintf("http://localhost:%d/diagram", port),
 		"node_count": len(diagramNodes),
 		"edge_count": len(diagramEdges),
 	}
