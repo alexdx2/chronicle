@@ -9,6 +9,39 @@ import (
 	"github.com/alexdx2/chronicle-core/internal/manifest"
 )
 
+func TestBoundaryPriority_Order(t *testing.T) {
+	cases := []struct {
+		path string
+		want int
+	}{
+		{"orders-api/package.json", 0},
+		{"Dockerfile", 1},
+		{"prisma/schema.prisma", 2},
+		{"src/main.ts", 3},
+		{"src/orders/orders.module.ts", 4},
+		{"src/orders/orders.service.ts", 5},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			got := boundaryPriority(tc.path)
+			if got != tc.want {
+				t.Errorf("boundaryPriority(%q) = %d, want %d", tc.path, got, tc.want)
+			}
+		})
+	}
+
+	// Verify ordering: each priority level should be <= the next
+	for i := 1; i < len(cases); i++ {
+		prev := boundaryPriority(cases[i-1].path)
+		curr := boundaryPriority(cases[i].path)
+		if prev > curr {
+			t.Errorf("ordering violation: %q (priority %d) > %q (priority %d)",
+				cases[i-1].path, prev, cases[i].path, curr)
+		}
+	}
+}
+
 func TestDiscoverFilesDomainAssignment(t *testing.T) {
 	g := setupGraphDefaults(t)
 	revID := makeRevision(t, g)
