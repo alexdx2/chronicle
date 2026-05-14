@@ -1152,7 +1152,7 @@ a{color:var(--primary);text-decoration:none}
 </div>
 
 <!-- Diagram Tab (completely separate from Graph) -->
-<div class="diagram-root" x-show="tab==='diagram'" x-cloak :style="tab==='diagram' ? 'display:flex' : 'display:none'">
+<div class="diagram-root" x-cloak :style="tab==='diagram' ? 'display:flex' : 'display:none'">
   <!-- Session tabs — full width above everything -->
   <div class="diagram-tabs" x-show="diagramSessions.length > 0">
     <template x-for="sess in diagramSessions" :key="sess.id">

@@ -133,15 +133,6 @@ __STAGES__`,
 3. Call chronicle_diagram_build with the appropriate payload
 4. Share the returned URL with user: "Open {url} to see the diagram"
 
-## CRITICAL: Fix the Graph, Not Just the Diagram
-
-If the user says a diagram is wrong (missing edge, wrong connection, missing node):
-1. FIRST fix the graph — use chronicle_import_all to add/correct the missing nodes/edges
-2. THEN rebuild the diagram from the corrected graph
-
-A diagram built with synthetic workarounds (explicit edges/nodes to paper over graph gaps) hides bugs.
-The graph is the source of truth. The diagram visualizes the graph.
-
 ## When to use node_keys vs nodes
 
 - **node_keys**: resolve REAL entities from the graph DB. Use for Domain Detail, Flow, Impact — when you need actual services/controllers/providers.

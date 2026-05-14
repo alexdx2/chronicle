@@ -14,6 +14,17 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+const serverInstructions = `Chronicle is a knowledge graph for codebases. The graph is the source of truth.
+
+CORE PRINCIPLE: The graph represents real architecture extracted from code.
+If something is wrong in the graph — fix the graph (import correct nodes/edges), not just the visualization.
+Diagrams, queries, and impact analysis all read from the graph. Patching outputs without fixing the graph hides bugs.
+
+When the user reports an error (missing connection, wrong dependency, missing service):
+1. Verify in the graph — use chronicle_node_list, chronicle_query_deps, chronicle_query_path
+2. If the graph is wrong — fix it with chronicle_import_all (add/correct nodes and edges)
+3. Then rebuild the output (diagram, query result, etc.) from the corrected graph`
+
 func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		start := time.Now()
@@ -373,10 +384,11 @@ func truncate(s string, max int) string {
 
 // NewServerWithLogging creates an MCP server with request logging to SQLite.
 func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServer {
-	var serverOpts []server.ServerOption
+	instructions := serverInstructions
 	if GetDebugLogger() != nil {
-		serverOpts = append(serverOpts, server.WithInstructions(debugInstructions))
+		instructions += "\n\n" + debugInstructions
 	}
+	serverOpts := []server.ServerOption{server.WithInstructions(instructions)}
 	s := server.NewMCPServer("chronicle", version.Version, serverOpts...)
 
 	add := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {
