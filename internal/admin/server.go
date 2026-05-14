@@ -241,6 +241,11 @@ func NewServerWithSlots(g *graph.Graph, s *store.Store, port int, manifestPath s
 	return srv
 }
 
+// HandleDiagramForTest exposes the diagram handler for use by e2e tests.
+func (s *Server) HandleDiagramForTest(w http.ResponseWriter, r *http.Request) {
+	s.handleDiagram(w, r)
+}
+
 // loadDiagramSessions restores diagram sessions from SQLite on startup.
 func (s *Server) loadDiagramSessions() {
 	sessions, err := s.getStore().ListDiagramSessions()
