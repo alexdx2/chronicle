@@ -2256,7 +2256,10 @@ function dashboard() {
     },
 
     highlightNode(nodeId, edges) {
-      const svg = d3.select('.graph-svg');
+      // Scope to the active tab's SVG — diagram or graph
+      const containerId = this.tab === 'diagram' ? '#diagram-canvas' : '#graph-canvas';
+      const svg = d3.select(containerId + ' .graph-svg');
+      if (svg.empty()) return;
       if (!nodeId) {
         // Clear highlight
         svg.classed('has-highlight', false);
