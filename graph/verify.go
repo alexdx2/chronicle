@@ -238,6 +238,78 @@ func (g *Graph) SatisfyFileObligation(revisionID int64, filePath string) error {
 	return g.store.SatisfyObligation(revisionID, "verify_file", filePath)
 }
 
+// LiveCheckItem is the result of a read-only evidence verification against the current file.
+type LiveCheckItem struct {
+	EvidenceID    int64  `json:"evidence_id"`
+	FilePath      string `json:"file_path"`
+	AssertionKind string `json:"assertion_kind"`
+	Status        string `json:"status"`        // valid, missing, moved, ambiguous, unsupported
+	ChangeType    string `json:"change_type,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// LiveCheckEvidence performs read-only mechanical verification of evidence assertions
+// against the current file contents on disk. Does NOT modify the database.
+// Groups evidence by file_path, reads each file once, and verifies each assertion.
+// Evidence without assertions or without file_path is skipped.
+func (g *Graph) LiveCheckEvidence(evidence []store.EvidenceRow) []LiveCheckItem {
+	if len(evidence) == 0 {
+		return nil
+	}
+
+	// Group evidence by file path.
+	byFile := make(map[string][]store.EvidenceRow)
+	for _, ev := range evidence {
+		if ev.FilePath == "" || ev.AssertionKind == "" || ev.Assertion == "" || ev.Assertion == "{}" {
+			continue
+		}
+		byFile[ev.FilePath] = append(byFile[ev.FilePath], ev)
+	}
+	if len(byFile) == 0 {
+		return nil
+	}
+
+	reg := verify.DefaultRegistry()
+	var items []LiveCheckItem
+
+	for filePath, evs := range byFile {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			// File gone — all evidence is missing.
+			for _, ev := range evs {
+				items = append(items, LiveCheckItem{
+					EvidenceID:    ev.EvidenceID,
+					FilePath:      ev.FilePath,
+					AssertionKind: ev.AssertionKind,
+					Status:        "missing",
+					Reason:        "file not found",
+				})
+			}
+			continue
+		}
+
+		for _, ev := range evs {
+			vResult, verr := reg.Verify(ev.AssertionKind, content, json.RawMessage(ev.Assertion), locatorFromEvidence(ev))
+			if verr != nil {
+				continue // verifier error — skip
+			}
+			// Only report non-valid results (something changed).
+			if vResult.Status != "valid" {
+				items = append(items, LiveCheckItem{
+					EvidenceID:    ev.EvidenceID,
+					FilePath:      ev.FilePath,
+					AssertionKind: ev.AssertionKind,
+					Status:        vResult.Status,
+					ChangeType:    vResult.ChangeType,
+					Reason:        vResult.Reason,
+				})
+			}
+		}
+	}
+
+	return items
+}
+
 func (g *Graph) recalcAffectedEdges(evidence []store.EvidenceRow) {
 	seen := map[int64]bool{}
 	for _, ev := range evidence {

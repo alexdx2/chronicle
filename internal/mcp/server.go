@@ -24,9 +24,11 @@ import (
 
 var manifestFilePath string
 var adminPortValue int
+var liveCheckEnabled bool
 
 func SetManifestPath(p string) { manifestFilePath = p }
 func SetAdminPort(p int)       { adminPortValue = p }
+func SetLiveCheck(v bool)      { liveCheckEnabled = v }
 
 // NewServer creates a new MCP server exposing all graph operations as tools.
 func NewServer(g *graph.Graph) *server.MCPServer {
@@ -289,10 +291,17 @@ func nodeGetHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
-		return jsonResult(map[string]any{
+		result := map[string]any{
 			"node":     node,
 			"evidence": evidence,
-		}), nil
+		}
+		// Live check: verify evidence assertions against current files on disk.
+		if liveCheckEnabled {
+			if changed := g.LiveCheckEvidence(evidence); len(changed) > 0 {
+				result["_changed"] = changed
+			}
+		}
+		return jsonResult(result), nil
 	}
 }
 

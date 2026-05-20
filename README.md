@@ -58,6 +58,20 @@ This is not a vector index or chat memory. It is a structured graph with traceab
 | After code changes | `chronicle update` | Updates the parts that changed |
 | Unsure if current | `chronicle status` | Reports what's fresh, stale, or missing |
 
+### Live check
+
+```bash
+claude mcp add chronicle -- chronicle mcp serve --live-check
+```
+
+With `--live-check`, Chronicle verifies evidence against source files at query time. When you inspect a node, each evidence assertion is re-checked against the current file on disk using mechanical verifiers (AST parsing, not LLM).
+
+- Import moved to a different line? Still valid — no flag.
+- Import removed or dependency deleted from `package.json`? Flagged as `_changed` in the response.
+- File deleted entirely? All its evidence flagged as `missing`.
+
+This is read-only — the graph is not modified, just annotated with what's drifted. Off by default to avoid filesystem overhead on every query.
+
 ## Commands
 
 | Command | What it does |

@@ -51,6 +51,9 @@ func newMCPCmd() *cobra.Command {
 			mcpserver.SetManifestPath(manifestPath)
 			mcpserver.SetGuideStore(g.Store())
 
+			liveCheck, _ := cmd.Flags().GetBool("live-check")
+			mcpserver.SetLiveCheck(liveCheck)
+
 			debugMode, _ := cmd.Flags().GetBool("debug")
 			if debugMode {
 				cwd, _ := os.Getwd()
@@ -119,6 +122,7 @@ func newMCPCmd() *cobra.Command {
 	serveCmd.Flags().Bool("no-admin", false, "Disable admin dashboard")
 	serveCmd.Flags().Bool("open", false, "Auto-open dashboard in browser")
 	serveCmd.Flags().Bool("debug", false, "Enable debug logging to .depbot/debug/")
+	serveCmd.Flags().Bool("live-check", false, "Verify evidence assertions against source files at query time")
 
 	cmd.AddCommand(serveCmd)
 	return cmd
