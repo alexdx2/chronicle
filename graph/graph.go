@@ -14,8 +14,9 @@ import (
 
 // Graph wraps the store with validation via the registry.
 type Graph struct {
-	store *store.Store
-	reg   *registry.Registry
+	store   *store.Store
+	reg     *registry.Registry
+	emitter EventEmitter
 }
 
 // defaultEvidenceConfidence returns the confidence for an evidence row.
@@ -30,7 +31,14 @@ func defaultEvidenceConfidence(explicit float64) float64 {
 
 // New creates a new Graph.
 func New(s *store.Store, r *registry.Registry) *Graph {
-	return &Graph{store: s, reg: r}
+	return &Graph{store: s, reg: r, emitter: noopEmitter{}}
+}
+
+// SetEventEmitter attaches a listener for scan events.
+func (g *Graph) SetEventEmitter(e EventEmitter) {
+	if e != nil {
+		g.emitter = e
+	}
 }
 
 // Store returns the underlying store.

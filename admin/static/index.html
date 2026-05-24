@@ -243,6 +243,10 @@ a{color:var(--primary);text-decoration:none}
 @media(max-width:1024px){.stat-grid{grid-template-columns:repeat(3,1fr)}.content-grid{grid-template-columns:1fr}}
 @media(max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
 <!-- SLOT:CSS -->
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
 </style>
 </head>
 <body x-data="dashboard()" x-init="init()">
@@ -334,6 +338,85 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Overview Tab -->
 <div class="container" x-show="tab==='overview'" x-cloak>
+  <!-- Scan Progress Panel -->
+  <template x-if="scanProgress && scanProgress.phase !== 'idle'">
+  <div class="card" style="margin-bottom:1.5rem; border-left:3px solid #7db87d;">
+      <h3 style="margin-top:0; display:flex; align-items:center; gap:0.5rem;">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#7db87d;animation:pulse 1.5s infinite;"></span>
+          Scan in progress
+          <span style="font-weight:normal;color:#888;font-size:0.85em;" x-text="'— ' + scanProgress.phase.replace(/_/g,' ')"></span>
+      </h3>
+
+      <template x-if="scanProgress.total_files > 0">
+      <div style="margin-bottom:1rem;">
+          <div style="display:flex;justify-content:space-between;font-size:0.85em;color:#aaa;margin-bottom:0.3rem;">
+              <span x-text="scanProgress.extracted_files + ' / ' + scanProgress.total_files + ' files'"></span>
+              <span x-text="Math.round(scanProgress.extracted_files / scanProgress.total_files * 100) + '%'"></span>
+          </div>
+          <div style="height:6px;background:#333;border-radius:3px;overflow:hidden;">
+              <div style="height:100%;background:#7db87d;border-radius:3px;transition:width 0.3s;"
+                   :style="'width:' + (scanProgress.extracted_files / scanProgress.total_files * 100) + '%'"></div>
+          </div>
+      </div>
+      </template>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:0.5rem;">
+          <template x-for="[type, count] in Object.entries(scanProgress.nodes_by_type || {}).sort((a,b) => b[1]-a[1]).slice(0,8)">
+              <div style="background:#1a1a2e;padding:0.4rem 0.6rem;border-radius:4px;font-size:0.85em;">
+                  <span x-text="count" style="font-weight:bold;color:#7db87d;"></span>
+                  <span x-text="type" style="color:#ccc;"></span>
+              </div>
+          </template>
+      </div>
+
+      <template x-if="scanProgress.total_edges > 0">
+      <div style="margin-top:0.8rem;font-size:0.85em;color:#aaa;">
+          <span style="color:#ccc;">Confidence:</span>
+          <template x-for="[deriv, count] in Object.entries(scanProgress.edges_by_derivation || {})">
+              <span style="margin-left:0.5rem;">
+                  <span x-text="Math.round(count / scanProgress.total_edges * 100) + '%'" style="color:#7db87d;"></span>
+                  <span x-text="deriv"></span>
+              </span>
+          </template>
+      </div>
+      </template>
+
+      <template x-if="Object.keys(scanProgress.facts_by_kind || {}).length > 0">
+      <div style="margin-top:0.8rem;">
+          <div style="font-size:0.8em;color:#888;margin-bottom:0.3rem;">Extraction facts (current scan):</div>
+          <div style="display:flex;flex-wrap:wrap;gap:0.3rem;">
+              <template x-for="[kind, count] in Object.entries(scanProgress.facts_by_kind).sort((a,b) => b[1]-a[1])">
+                  <span style="background:#252540;padding:0.2rem 0.5rem;border-radius:3px;font-size:0.8em;"
+                        x-text="count + ' ' + kind"></span>
+              </template>
+          </div>
+      </div>
+      </template>
+
+      <template x-if="scanEvents.length > 0">
+      <div style="margin-top:0.8rem;">
+          <div style="font-size:0.8em;color:#888;margin-bottom:0.3rem;">Recent events:</div>
+          <template x-for="event in scanEvents.slice(0, 5)">
+              <div style="font-size:0.8em;color:#aaa;padding:0.15rem 0;">
+                  <span style="color:#7db87d;" x-text="event.kind.replace(/_/g,' ')"></span>
+                  <span x-text="event.data?.message || ''"></span>
+              </div>
+          </template>
+      </div>
+      </template>
+  </div>
+  </template>
+
+  <template x-if="scanProgress && scanProgress.phase === 'idle' && scanProgress.total_nodes > 0">
+  <div class="card" style="margin-bottom:1.5rem; border-left:3px solid #6b9bd2; opacity:0.8;">
+      <h3 style="margin-top:0; font-size:0.95em; color:#aaa;">
+          Graph: <span x-text="scanProgress.total_nodes" style="color:#6b9bd2;"></span> nodes,
+          <span x-text="scanProgress.total_edges" style="color:#6b9bd2;"></span> edges,
+          <span x-text="scanProgress.total_evidence" style="color:#6b9bd2;"></span> evidence items
+      </h3>
+  </div>
+  </template>
+
   <!-- Onboarding banner for new projects -->
   <template x-if="(stats.graph?.node_count ?? 0) === 0">
     <div style="background:linear-gradient(135deg,#f5f0e8,#f0e9dd);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:16px">
@@ -583,7 +666,7 @@ a{color:var(--primary);text-decoration:none}
       <div class="mode-toggle">
         <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree</button>
         <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';history.pushState(null,'','/graph/explore');renderGraph()">Explore</button>
-        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;graphPreset='all';layerFilters=[...allLayers];hideStructural=false;history.pushState(null,'','/graph/workspace');renderGraph()">Workspace</button>
+        <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;history.pushState(null,'','/graph/workspace');renderGraph()">Workspace</button>
       </div>
 
       <!-- Workspace layout toggle -->
@@ -597,8 +680,17 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </template>
 
-      <!-- Filter presets (Tree + Explore only) -->
-      <template x-if="graphMode==='tree' || graphMode==='explore'">
+      <!-- C4 Zoom presets (workspace + explore) -->
+      <template x-if="graphMode==='workspace' || graphMode==='explore'">
+        <div class="mode-toggle">
+          <button class="mode-btn" :class="{active: graphPreset==='c1'}" @click="setPreset('c1')">C1 Context</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c2'}" @click="setPreset('c2')">C2 Container</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c3'}" @click="setPreset('c3')">C3 Component</button>
+          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all')">All</button>
+        </div>
+      </template>
+      <!-- Filter presets (tree only) -->
+      <template x-if="graphMode==='tree'">
         <div class="mode-toggle">
           <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all')">All</button>
           <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data')">Data Models</button>
@@ -634,6 +726,19 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </template>
 
+      <!-- Auto-filter notice for large graphs -->
+      <template x-if="autoFilteredNotice && graphMode==='tree'">
+        <div style="font-size:10px;color:var(--text-muted);background:var(--bg-offset,#f5f0e8);padding:2px 8px;border-radius:4px;display:flex;align-items:center;gap:6px">
+          <span x-text="autoFilteredNotice"></span>
+        </div>
+      </template>
+      <!-- Auto-filter notice for large graphs -->
+      <template x-if="autoFilteredNotice">
+        <div style="font-size:10px;color:var(--text-muted);background:var(--bg-offset,#f5f0e8);padding:2px 8px;border-radius:4px;display:flex;align-items:center;gap:6px">
+          <span x-text="autoFilteredNotice"></span>
+        </div>
+      </template>
+
       <!-- Right side controls -->
       <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
         <template x-if="graphMode==='workspace' && workspaceNodes.length > 0">
@@ -647,6 +752,7 @@ a{color:var(--primary);text-decoration:none}
         <template x-if="graphMode==='workspace'">
           <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
         </template>
+        <button class="mode-btn" @click="exportGraphText()" title="Copy graph as text to clipboard">Export</button>
         <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderGraph())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
       </div>
     </div>
@@ -1396,6 +1502,13 @@ function dashboard() {
     originalProject: '',
     graphData: { nodes: [], edges: [] },
     graphMode: 'tree',
+    // C4 Zoom state
+    zoomLevel: 'c2',
+    zoomScope: {},
+    zoomLens: 'all',
+    zoomMode: 'explore',
+    zoomDomainData: [],
+    zoomBreadcrumbs: [],
     explorePath: [],
     exploreCurrentId: null,
     graphFullscreen: false,
@@ -1432,6 +1545,7 @@ function dashboard() {
     //   hide: gone completely, edges severed
     nodeTypeFilter: {},       // { node_type: 'show'|'collapse'|'hide' } — default 'show'
     _collapsibleTypes: [],    // computed from nodeTypeFilter — types in 'collapse' state
+    autoFilteredNotice: '',   // shown when auto-preset kicks in for large graphs
     // Workspace state
     workspaceNodes: [],       // [{node_id, x, y, manual: bool}]
     workspacePaths: [],       // [{from, to, path: [node_ids]}]
@@ -1439,6 +1553,8 @@ function dashboard() {
     collapsedPaletteGroups: {},
     collapsedFilterSections: {},
     // SLOT:EXTRA_STATE
+    scanProgress: null,
+    scanEvents: [],
     // Diagram (live from Claude — tabbed sessions)
     diagramSessions: [],  // [{id, title, node_count, edge_count, created_at}]
     diagramSessionId: null,
@@ -1510,6 +1626,7 @@ function dashboard() {
         this.fetchGraphData().then(() => {
           this.loading.graph = false;
           this.loaded.graph = true;
+          if (this.graphMode === 'workspace' || this.graphMode === 'explore') this.autoPresetHighLevel();
           this.$nextTick(() => this.renderGraph());
         });
       }
@@ -1567,6 +1684,12 @@ function dashboard() {
       try { const info = await (await fetch('/api/info')).json(); this.version = info.version || ''; } catch(e) {}
 
       // SLOT:EXTRA_INIT
+
+      // Scan progress polling
+      setInterval(() => {
+        if (this.tab === 'overview') this.fetchScanProgress();
+      }, 3000);
+      this.fetchScanProgress();
 
       // Only load stats on init — everything else is lazy
       await this.fetchStats();
@@ -1859,6 +1982,15 @@ function dashboard() {
 
     // SLOT:EXTRA_METHODS
 
+    async fetchScanProgress() {
+      try {
+        const res = await fetch(`/api/scan-progress?domain=${this.domain}`);
+        this.scanProgress = await res.json();
+      } catch (e) {
+        this.scanProgress = null;
+      }
+    },
+
     connectWS() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       this.ws = new WebSocket(proto + '//' + location.host + '/ws');
@@ -1879,6 +2011,11 @@ function dashboard() {
               this.fetchStats();
               this.fetchDiscoveries();
             }, 2000);
+          }
+          if (msg.type === 'scan_event') {
+            this.scanEvents.unshift(msg.data);
+            if (this.scanEvents.length > 50) this.scanEvents.pop();
+            this.fetchScanProgress();
           }
           if (msg.type === 'diagram_update' || msg.type === 'diagram') {
             const session = msg.data?.session || msg.data;
@@ -1953,12 +2090,337 @@ function dashboard() {
       else this.layerFilters.push(l);
     },
 
+    autoPresetHighLevel() {
+      this.setPreset('c1');
+    },
+
+    // Double-click a node → zoom into its domain at the next C-level
+    zoomIntoNode(d) {
+      const domain = d.domain_key;
+      if (!domain) return;
+      const currentPreset = this.graphPreset;
+      if (currentPreset === 'c1') {
+        // C1 → C2: filter to this domain's container, show modules
+        this.setPreset('c2');
+      } else if (currentPreset === 'c2') {
+        // C2 → C3: show all components in this domain
+        this.setPreset('c3');
+      } else if (currentPreset === 'c3') {
+        // C3 → All
+        this.setPreset('all');
+      }
+      // Filter to clicked domain
+      if (domain && currentPreset !== 'all') {
+        const allDomains = [...new Set((this.graphData.nodes || []).map(n => n.domain_key).filter(Boolean))];
+        this.hiddenDomains = allDomains.filter(dk => dk !== domain);
+        this._syncNodeTypeFilter();
+        this.renderGraph();
+      }
+    },
+
+    setZoom(level) {
+      if (level === 'c3' && !this.zoomScope.container) {
+        this.zoomLevel = 'c2'; this.renderGraph(); return;
+      }
+      if (level === 'c4' && !this.zoomScope.domain) {
+        if (this.zoomScope.container) { this.zoomLevel = 'c3'; } else { this.zoomLevel = 'c2'; }
+        this.renderGraph(); return;
+      }
+      if (level === 'focus' && !this.zoomScope.node) {
+        if (this.zoomScope.domain) { this.zoomLevel = 'c4'; } else { this.zoomLevel = 'c2'; }
+        this.renderGraph(); return;
+      }
+      this.zoomLevel = level;
+      this.updateBreadcrumbs();
+      this.renderGraph();
+    },
+
+    updateBreadcrumbs() {
+      const bc = [];
+      const self = this;
+      bc.push({ label: 'Platform', action() { self.zoomScope = {}; self.setZoom('c1'); } });
+      if (this.zoomLevel !== 'c1') {
+        bc.push({ label: 'Containers', action() { self.zoomScope = {}; self.setZoom('c2'); } });
+      }
+      if (this.zoomScope.container && ['c3','c4','focus'].includes(this.zoomLevel)) {
+        const cName = this.zoomScope.containerName || this.zoomScope.container;
+        bc.push({ label: cName, action() { self.zoomScope = { container: self.zoomScope.container, containerName: self.zoomScope.containerName }; self.setZoom('c3'); } });
+      }
+      if (this.zoomScope.domain && ['c4','focus'].includes(this.zoomLevel)) {
+        const dName = this.zoomScope.domainName || this.zoomScope.domain;
+        bc.push({ label: dName, action() { self.zoomScope = { container: self.zoomScope.container, containerName: self.zoomScope.containerName, domain: self.zoomScope.domain, domainName: self.zoomScope.domainName }; self.setZoom('c4'); } });
+      }
+      if (this.zoomScope.node && this.zoomLevel === 'focus') {
+        bc.push({ label: this.zoomScope.nodeName || this.zoomScope.node });
+      }
+      this.zoomBreadcrumbs = bc;
+    },
+
+    renderZoomView() {
+      const container = this.$refs.graphCanvas || document.getElementById('graph-canvas');
+      if (!container) return;
+      const allNodes = this.graphData.nodes || [];
+      const allEdges = this.graphData.edges || [];
+      switch (this.zoomLevel) {
+        case 'c1': this.renderC1(container, allNodes, allEdges); break;
+        case 'c2': this.renderC2(container, allNodes, allEdges); break;
+        case 'c3': this.renderC3(container, allNodes, allEdges); break;
+        case 'c4': this.renderC4(container, allNodes, allEdges); break;
+        case 'focus': this.renderFocus(container, allNodes, allEdges); break;
+        default: this.renderC2(container, allNodes, allEdges);
+      }
+    },
+
+    renderC1(container, allNodes, allEdges) {
+      const serviceCount = allNodes.filter(n => n.layer === 'service').length;
+      const modelCount = allNodes.filter(n => n.node_type === 'model' || n.node_type === 'enum').length;
+      const epCount = allNodes.filter(n => n.node_type === 'endpoint').length;
+      const flowCount = allNodes.filter(n => n.layer === 'flow').length;
+      const externals = allNodes.filter(n => n.node_type === 'external_system');
+      const infra = allNodes.filter(n => n.layer === 'infra');
+      let html = '<div style="display:flex;flex-direction:column;align-items:center;gap:24px;padding:20px">';
+      if (externals.length > 0) {
+        html += '<div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px">External Systems</div>';
+        html += '<div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">';
+        externals.forEach(n => {
+          html += '<div style="background:#2a2a3e;border:1px dashed #3a3a5a;border-radius:6px;padding:10px 14px;text-align:center;min-width:100px"><div style="font-size:10px;color:#a0a0b0">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:#4a4a6a">' + n.node_type + '</div></div>';
+        });
+        html += '</div><div style="width:1px;height:16px;background:#2a3a5a"></div>';
+      }
+      html += '<div style="background:linear-gradient(135deg,#1e3a5f,#1a2d4d);border:2px solid #3a7bd5;border-radius:10px;padding:18px 32px;text-align:center;cursor:pointer;transition:all 0.2s" onmouseover="this.style.borderColor=\'#5a9bf5\'" onmouseout="this.style.borderColor=\'#3a7bd5\'" onclick="document.querySelector(\'[x-data]\').__x.$data.setZoom(\'c2\')"><div style="font-size:14px;color:#fff">Platform</div><div style="font-size:8px;color:#4a7aad;margin-top:4px">' + serviceCount + ' services \xb7 ' + modelCount + ' models \xb7 ' + epCount + ' endpoints \xb7 ' + flowCount + ' flows</div><div style="font-size:8px;color:#3a6a9a;margin-top:6px">Click to drill down \u2192</div></div>';
+      if (infra.length > 0) {
+        html += '<div style="width:1px;height:16px;background:#2a3a5a"></div><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px">Infrastructure</div><div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">';
+        infra.forEach(n => { html += '<div style="background:#1a2e1a;border:1px solid #2d5a2d;border-radius:6px;padding:8px 12px;text-align:center;min-width:90px"><div style="font-size:10px;color:#7db87d">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:#4a8a4a">' + n.node_type + '</div></div>'; });
+        html += '</div>';
+      }
+      html += '</div>';
+      container.innerHTML = html;
+    },
+
+    renderC2(container, allNodes, allEdges) {
+      const containers = {};
+      allNodes.forEach(n => {
+        const key = n.repo_name || n.domain_key || '_default';
+        if (!containers[key]) containers[key] = { key, nodes: [], layers: {}, types: {}, domains: new Set() };
+        containers[key].nodes.push(n);
+        containers[key].layers[n.layer] = (containers[key].layers[n.layer] || 0) + 1;
+        containers[key].types[n.node_type] = (containers[key].types[n.node_type] || 0) + 1;
+        if (n.domain_key) containers[key].domains.add(n.domain_key);
+      });
+      const nodeContainer = {};
+      allNodes.forEach(n => { nodeContainer[n.node_id] = n.repo_name || n.domain_key || '_default'; });
+      const edgeSet = new Set();
+      const uniqueCross = [];
+      allEdges.forEach(e => {
+        const from = nodeContainer[e.from_node_id], to = nodeContainer[e.to_node_id];
+        if (from && to && from !== to) {
+          const k = from + '\u2192' + to + ':' + e.edge_type;
+          if (!edgeSet.has(k)) { edgeSet.add(k); uniqueCross.push({ from, to, type: e.edge_type }); }
+        }
+      });
+      const cList = Object.values(containers).sort((a, b) => b.nodes.length - a.nodes.length);
+      let html = '<div style="padding:16px;max-width:900px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px">Containers</div><div style="display:flex;gap:12px;flex-wrap:wrap">';
+      cList.forEach(c => {
+        const epCount = c.layers['contract'] || 0;
+        const domCount = c.domains.size;
+        const modCount = (c.types['module'] || 0) + (c.types['controller'] || 0) + (c.types['provider'] || 0);
+        const safeKey = c.key.replace(/'/g, "\\'");
+        html += '<div style="background:linear-gradient(135deg,#1e3a5f,#162a48);border:2px solid #2a5a8a;border-radius:8px;padding:14px 18px;min-width:180px;flex:1;max-width:240px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.borderColor=\'#4a8ad5\';this.style.transform=\'translateY(-1px)\'" onmouseout="this.style.borderColor=\'#2a5a8a\';this.style.transform=\'\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC3(\'' + safeKey + '\',\'' + safeKey + '\')"><div style="font-size:12px;color:#fff;font-weight:600">' + c.key + '</div><div style="font-size:9px;color:#4a7aad;margin-top:2px">' + c.nodes.length + ' nodes</div><div style="display:flex;gap:8px;margin-top:8px;font-size:9px;color:#3a6a9a">' + (epCount ? '<span><b style="color:#6a9ad0">' + epCount + '</b> endpoints</span>' : '') + (domCount > 1 ? '<span><b style="color:#6a9ad0">' + domCount + '</b> domains</span>' : '') + (modCount ? '<span><b style="color:#6a9ad0">' + modCount + '</b> components</span>' : '') + '</div><div style="font-size:8px;color:#3a5a8a;margin-top:6px">\u2192 domains</div></div>';
+      });
+      html += '</div>';
+      if (uniqueCross.length > 0) {
+        html += '<div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin:16px 0 8px">Connections</div>';
+        uniqueCross.slice(0, 20).forEach(e => {
+          html += '<div style="font-size:10px;color:#4a6a8a;padding:2px 0"><span style="color:#6a9ad0;font-weight:500">' + e.from + '</span> <span style="font-size:8px;color:#3a5a7a;background:#111828;padding:1px 4px;border-radius:2px;margin:0 4px">' + e.type + '</span> <span style="color:#6a9ad0;font-weight:500">' + e.to + '</span></div>';
+        });
+      }
+      html += '</div>';
+      container.innerHTML = html;
+    },
+
+    drillToC3(containerKey, containerName) {
+      this.zoomScope = { container: containerKey, containerName: containerName || containerKey };
+      this.zoomLevel = 'c3';
+      this.updateBreadcrumbs();
+      this.renderGraph();
+    },
+
+    renderC3(container, allNodes, allEdges) {
+      const scope = this.zoomScope.container;
+      if (!scope) { this.renderC2(container, allNodes, allEdges); return; }
+      const containerNodes = allNodes.filter(n => (n.repo_name || n.domain_key || '_default') === scope);
+      const domains = {};
+      containerNodes.forEach(n => {
+        const dk = n.domain_key || '_unassigned';
+        if (!domains[dk]) domains[dk] = { key: dk, nodes: [], layers: {}, types: {}, endpoints: 0, models: 0, events: 0, modules: 0 };
+        const d = domains[dk];
+        d.nodes.push(n); d.layers[n.layer] = (d.layers[n.layer] || 0) + 1; d.types[n.node_type] = (d.types[n.node_type] || 0) + 1;
+        if (n.node_type === 'endpoint') d.endpoints++;
+        if (n.node_type === 'model' || n.node_type === 'enum') d.models++;
+        if (n.node_type === 'topic' || n.node_type === 'event') d.events++;
+        if (['module','controller','provider','gateway','resolver'].includes(n.node_type)) d.modules++;
+      });
+      const nodeDomain = {};
+      containerNodes.forEach(n => { nodeDomain[n.node_id] = n.domain_key || '_unassigned'; });
+      const crossDomains = {};
+      allEdges.forEach(e => {
+        const fd = nodeDomain[e.from_node_id], td = nodeDomain[e.to_node_id];
+        if (fd && td && fd !== td) { if (!crossDomains[fd]) crossDomains[fd] = new Set(); crossDomains[fd].add(td); }
+      });
+      const dList = Object.values(domains).sort((a, b) => b.nodes.length - a.nodes.length);
+      let html = '<div style="padding:16px;max-width:900px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px">Domains inside ' + (this.zoomScope.containerName || scope) + '</div>';
+      dList.forEach(d => {
+        const connected = crossDomains[d.key] ? [...crossDomains[d.key]].join(', ') : '';
+        const tags = [];
+        if (d.endpoints) tags.push(d.endpoints + ' ep');
+        if (d.modules) tags.push(d.modules + ' mod');
+        if (d.models) tags.push(d.models + ' models');
+        if (d.events) tags.push(d.events + ' events');
+        const safeKey = d.key.replace(/'/g, "\\'");
+        html += '<div style="background:#111128;border:1px solid #2a2a4a;border-radius:8px;padding:14px 18px;margin-bottom:10px;cursor:pointer;transition:all 0.15s;display:flex;justify-content:space-between;align-items:flex-start" onmouseover="this.style.borderColor=\'#3a4a6a\';this.style.background=\'#161638\'" onmouseout="this.style.borderColor=\'#2a2a4a\';this.style.background=\'#111128\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC4(\'' + safeKey + '\',\'' + safeKey + '\')"><div><div style="font-size:12px;color:#c0c0e0;font-weight:600;margin-bottom:2px">' + d.key + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + tags.map(t => '<span style="font-size:8px;color:#4a6a8a;background:#0a0a1a;padding:2px 6px;border-radius:3px">' + t + '</span>').join('') + '</div></div><div style="text-align:right">' + (connected ? '<div style="font-size:8px;color:#3a4a6a">Connected: <b style="color:#5a7a9a">' + connected + '</b></div>' : '') + '<div style="font-size:8px;color:#3a5a7a;margin-top:4px">\u2192 components</div></div></div>';
+      });
+      html += '</div>';
+      container.innerHTML = html;
+    },
+
+    drillToC4(domainKey, domainName) {
+      this.zoomScope = { ...this.zoomScope, domain: domainKey, domainName: domainName || domainKey };
+      this.zoomLevel = 'c4';
+      this.updateBreadcrumbs();
+      this.renderGraph();
+    },
+
+    renderC4(container, allNodes, allEdges) {
+      const domain = this.zoomScope.domain;
+      if (!domain) { this.renderC3(container, allNodes, allEdges); return; }
+      let domNodes = allNodes.filter(n => n.domain_key === domain);
+      if (this.zoomLens === 'api') domNodes = domNodes.filter(n => ['controller','resolver','endpoint','gateway','guard','interceptor','pipe'].includes(n.node_type) || n.layer === 'contract');
+      else if (this.zoomLens === 'data') domNodes = domNodes.filter(n => ['model','enum','repository','schema'].includes(n.node_type) || n.layer === 'data');
+      else if (this.zoomLens === 'events') domNodes = domNodes.filter(n => ['topic','event','consumer','producer','queue'].includes(n.node_type));
+      const roleMap = { 'controller':'API','resolver':'API','gateway':'API','guard':'API','interceptor':'API','pipe':'API','provider':'Application','service':'Application','module':'Module','model':'Domain / Data','enum':'Domain / Data','repository':'Domain / Data','schema':'Domain / Data','endpoint':'Contracts','topic':'Events','event':'Events','consumer':'Events','producer':'Events','queue':'Events' };
+      const groups = {};
+      domNodes.forEach(n => { const role = roleMap[n.node_type] || 'Other'; if (!groups[role]) groups[role] = []; groups[role].push(n); });
+      const domNodeIds = new Set(domNodes.map(n => n.node_id));
+      const nodeById = {}; allNodes.forEach(n => { nodeById[n.node_id] = n; });
+      const extDeps = [], extSeen = new Set();
+      allEdges.forEach(e => {
+        if (domNodeIds.has(e.from_node_id) && !domNodeIds.has(e.to_node_id)) {
+          const target = nodeById[e.to_node_id];
+          if (target && !extSeen.has(target.node_id)) { extSeen.add(target.node_id); extDeps.push({ ...target, _edgeType: e.edge_type }); }
+        }
+      });
+      if (extDeps.length > 0) groups['External Dependencies'] = extDeps;
+      const domEdges = {};
+      allEdges.forEach(e => { if (domNodeIds.has(e.from_node_id) && domNodeIds.has(e.to_node_id)) { if (!domEdges[e.from_node_id]) domEdges[e.from_node_id] = []; domEdges[e.from_node_id].push(e); } });
+      const typeColors = { 'module':'#d4915e','controller':'#4a9aea','resolver':'#4a9aea','gateway':'#d4d45e','provider':'#7db87d','service':'#7db87d','model':'#a87dc2','enum':'#a87dc2','repository':'#a87dc2','endpoint':'#6a9ad0','topic':'#d4d45e','event':'#d4d45e','guard':'#4a9aea','interceptor':'#4a9aea','consumer':'#d4d45e','producer':'#d4d45e' };
+      const roleOrder = ['Module','API','Application','Domain / Data','Contracts','Events','External Dependencies','Other'];
+      let html = '<div style="padding:16px;max-width:1000px">';
+      roleOrder.forEach(role => {
+        const items = groups[role]; if (!items || items.length === 0) return;
+        const isExt = role === 'External Dependencies';
+        html += '<div style="margin-bottom:14px"><div style="font-size:9px;color:#4a5a7a;text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:6px">' + role + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
+        items.forEach(n => {
+          const color = typeColors[n.node_type] || '#6a6a8a';
+          const edges = domEdges[n.node_id] || [];
+          const edgeSummary = edges.slice(0, 3).map(e => { const t = nodeById[e.to_node_id]; return t ? '\u2192 ' + t.name : ''; }).filter(Boolean).join(', ');
+          const safeName = (n.name || '').replace(/'/g, "\\'");
+          html += '<div style="background:#141430;border:1px solid #2a2a4a;border-left:3px solid ' + color + ';border-radius:6px;padding:8px 12px;min-width:140px;max-width:200px;flex:1;cursor:pointer;transition:all 0.15s;' + (isExt ? 'border-style:dashed;border-left-style:solid;' : '') + '" onmouseover="this.style.borderColor=\'#4a4a7a\';this.style.background=\'#1a1a3a\'" onmouseout="this.style.borderColor=\'#2a2a4a\';this.style.background=\'#141430\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToFocus(' + n.node_id + ',\'' + safeName + '\')"><div style="font-size:10px;color:#c0c0e0;font-weight:500">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:#4a4a6a;text-transform:uppercase;letter-spacing:0.3px">' + n.node_type + '</div>' + (edgeSummary ? '<div style="font-size:8px;color:#3a4a6a;margin-top:3px">' + edgeSummary + '</div>' : '') + (isExt && n._edgeType ? '<div style="font-size:8px;color:#5a4a3a;margin-top:2px">' + n._edgeType + '</div>' : '') + '</div>';
+        });
+        html += '</div></div>';
+      });
+      html += '</div>';
+      container.innerHTML = html;
+    },
+
+    drillToFocus(nodeId, nodeName) {
+      this.zoomScope = { ...this.zoomScope, node: nodeId, nodeName: nodeName };
+      this.zoomLevel = 'focus';
+      this.updateBreadcrumbs();
+      this.renderGraph();
+    },
+
+    renderFocus(container, allNodes, allEdges) {
+      const nodeId = this.zoomScope.node;
+      if (!nodeId) { this.renderC4(container, allNodes, allEdges); return; }
+      const nodeById = {}; allNodes.forEach(n => { nodeById[n.node_id] = n; });
+      const centerNode = nodeById[nodeId];
+      if (!centerNode) { container.innerHTML = '<div style="padding:20px;color:#6b6b8a">Node not found</div>'; return; }
+      const incoming = [], outgoing = [];
+      allEdges.forEach(e => {
+        if (e.to_node_id === nodeId && nodeById[e.from_node_id]) incoming.push({ node: nodeById[e.from_node_id], type: e.edge_type });
+        if (e.from_node_id === nodeId && nodeById[e.to_node_id]) outgoing.push({ node: nodeById[e.to_node_id], type: e.edge_type });
+      });
+      const deps = outgoing.filter(e => ['INJECTS','IMPORTS','CALLS_SYMBOL','REQUIRES'].includes(e.type));
+      const endpoints = outgoing.filter(e => ['EXPOSES_ENDPOINT','HANDLES_OPERATION'].includes(e.type));
+      const models = outgoing.filter(e => ['USES_MODEL','READS_DB','WRITES_DB','REFERENCES_MODEL'].includes(e.type));
+      const events = outgoing.filter(e => ['PUBLISHES_TOPIC','CONSUMES_TOPIC','USES_QUEUE'].includes(e.type));
+      const other = outgoing.filter(e => !deps.includes(e) && !endpoints.includes(e) && !models.includes(e) && !events.includes(e));
+      function renderRing(label, arrow, items) {
+        if (items.length === 0) return '';
+        let h = '<div style="margin-bottom:14px"><div style="font-size:9px;color:#4a5a7a;margin-bottom:6px"><span style="color:#3a5a7a">' + arrow + '</span> ' + label + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
+        items.forEach(e => { h += '<div style="background:#141430;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;text-align:center;min-width:110px"><div style="font-size:10px;color:#a0a0c0">' + (e.node.name || e.node.node_key) + '</div><div style="font-size:8px;color:#4a5a7a;margin-top:1px">' + e.type + '</div></div>'; });
+        return h + '</div></div>';
+      }
+      let html = '<div style="padding:16px;max-width:700px;margin:0 auto">';
+      html += '<div style="background:linear-gradient(135deg,#2a3a5f,#1a2d4d);border:2px solid #4a8ad5;border-radius:8px;padding:14px 20px;text-align:center;margin-bottom:20px"><div style="font-size:14px;color:#fff">' + (centerNode.name || centerNode.node_key) + '</div><div style="font-size:9px;color:#5a8abd">' + centerNode.node_type + ' \xb7 ' + (centerNode.domain_key || '') + '</div></div>';
+      html += renderRing('Incoming (who calls this)', '\u2190', incoming);
+      html += renderRing('Dependencies', '\u2192', deps);
+      html += renderRing('Endpoints', '\u2197', endpoints);
+      html += renderRing('Data (models)', '\u2193', models);
+      html += renderRing('Events', '\u26a1', events);
+      if (other.length > 0) html += renderRing('Other', '\xb7', other);
+      html += '<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px 14px;margin-top:16px"><div style="font-size:9px;color:#4a5a7a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Evidence</div><div style="font-size:9px;color:#5a6a8a">' + (centerNode.file_path ? '<div><b style="color:#7a8aaa">File:</b> ' + centerNode.file_path + '</div>' : '') + '<div><b style="color:#7a8aaa">Confidence:</b> ' + (centerNode.confidence || 'N/A') + '</div><div><b style="color:#7a8aaa">Status:</b> ' + (centerNode.status || 'active') + '</div></div></div>';
+      html += '</div>';
+      container.innerHTML = html;
+    },
+
     setPreset(preset) {
+      this.autoFilteredNotice = '';
       this.graphPreset = preset;
       switch (preset) {
+        case 'c1': {
+          // C1 Context: containers + infra, flat layout, hide everything else
+          this.layerFilters = ['service', 'infra'];
+          this.hideStructural = false;
+          this.groupByField = '';
+          this.hiddenDomains = [];
+          this.nodeTypeFilter = {};
+          // Hide (not collapse) noise types — we have direct container→infra edges
+          const c1Show = ['container', 'database', 'broker', 'cache', 'queue'];
+          const c1Types = [...new Set((this.graphData.nodes || []).map(n => n.node_type))];
+          c1Types.forEach(t => { if (!c1Show.includes(t)) this.nodeTypeFilter[t] = 'hide'; });
+          break;
+        }
+        case 'c2': {
+          // C2 Container: containers + modules, collapse providers/controllers, hide noise
+          this.layerFilters = [...this.allLayers];
+          this.hideStructural = true;
+          this.groupByField = 'domain_key';
+          this.hiddenDomains = [];
+          this.nodeTypeFilter = {};
+          const c2Show = ['container', 'module', 'database', 'broker', 'cache', 'queue'];
+          const c2Hide = ['external_system', 'service', 'middleware', 'config', 'generated'];
+          const c2Types = [...new Set((this.graphData.nodes || []).map(n => n.node_type))];
+          c2Types.forEach(t => {
+            if (c2Show.includes(t)) return; // visible
+            if (c2Hide.includes(t)) { this.nodeTypeFilter[t] = 'hide'; return; } // noise
+            this.nodeTypeFilter[t] = 'collapse'; // everything else collapsed for transitive edges
+          });
+          break;
+        }
+        case 'c3':
+          // C3 Component: code + contracts + data + flow, grouped by domain
+          this.layerFilters = ['code', 'contract', 'data', 'flow'];
+          this.hideStructural = true;
+          this.groupByField = 'domain_key';
+          this.nodeTypeFilter = {};
+          this.hiddenDomains = [];
+          break;
         case 'all':
           this.layerFilters = [...this.allLayers];
           this.hideStructural = false;
+          this.nodeTypeFilter = {};
+          this.hiddenDomains = [];
           break;
         case 'data':
           this.layerFilters = ['data'];
@@ -1977,6 +2439,7 @@ function dashboard() {
           this.hideStructural = false;
           break;
       }
+      this._syncNodeTypeFilter();
       this.renderGraph();
     },
 
@@ -2234,10 +2697,6 @@ function dashboard() {
       const search = (this.workspaceSearch || '').toLowerCase();
       // Respect current filters — only show nodes that would appear on canvas
       const nodes = (this.graphData.nodes || []).filter(n => {
-        if (!this.layerFilters.includes(n.layer)) return false;
-        if (this.hiddenNodeTypes.includes(n.node_type)) return false;
-        if (this.hiddenDomains.includes(n.domain_key || '_unassigned')) return false;
-        if (this.minConfidence > 0 && (n.confidence || 1) < this.minConfidence) return false;
         if (search && !n.name.toLowerCase().includes(search) && !(n.node_type || '').toLowerCase().includes(search)) return false;
         return true;
       });
@@ -2253,6 +2712,53 @@ function dashboard() {
     selectNodeByKey(key) {
       const node = (this.graphData.nodes || []).find(n => n.node_key === key);
       if (node) this.selectedNode = node;
+    },
+
+    exportGraphText() {
+      const data = this.getFilteredData();
+      const nodes = data.nodes || [];
+      const edges = data.edges || [];
+      const nodeById = {};
+      nodes.forEach(n => { nodeById[n.node_id] = n; });
+
+      // Group nodes by domain
+      const byDomain = {};
+      nodes.forEach(n => {
+        const dk = n.domain_key || '_unassigned';
+        if (!byDomain[dk]) byDomain[dk] = [];
+        byDomain[dk].push(n);
+      });
+
+      let text = '# Graph Export (' + nodes.length + ' nodes, ' + edges.length + ' edges)\n';
+      text += '# Preset: ' + this.graphPreset + ' | Mode: ' + this.graphMode + '\n\n';
+
+      // Nodes by domain
+      Object.keys(byDomain).sort().forEach(dk => {
+        text += '## ' + dk + '\n';
+        byDomain[dk].sort((a, b) => (a.node_type + a.name).localeCompare(b.node_type + b.name)).forEach(n => {
+          text += '  ' + n.node_type + ': ' + (n.name || n.node_key) + (n.layer !== 'code' ? ' [' + n.layer + ']' : '') + '\n';
+        });
+        text += '\n';
+      });
+
+      // Edges
+      text += '## Edges\n';
+      edges.forEach(e => {
+        const from = nodeById[e.from_node_id];
+        const to = nodeById[e.to_node_id];
+        if (from && to) {
+          text += '  ' + (from.name || from.node_key) + ' --' + e.edge_type + '--> ' + (to.name || to.node_key) + '\n';
+        }
+      });
+
+      navigator.clipboard.writeText(text).then(() => {
+        this.autoFilteredNotice = 'Copied ' + nodes.length + ' nodes + ' + edges.length + ' edges to clipboard';
+        setTimeout(() => { this.autoFilteredNotice = ''; }, 3000);
+      }).catch(() => {
+        // Fallback: open in new window
+        const w = window.open('', '_blank');
+        w.document.write('<pre>' + text.replace(/</g, '&lt;') + '</pre>');
+      });
     },
 
     highlightNode(nodeId, edges) {
@@ -2965,14 +3471,14 @@ function dashboard() {
       const nodeById = {};
       filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
       const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
-      const groupField = this.groupByField || 'domain_key';
+      const groupField = this.groupByField === '' ? null : (this.groupByField || 'domain_key');
 
       // --- Determine which nodes to show ---
       let graphNodes, pathEdgeKeys = new Set(), neighborIds = new Set();
 
       if (!isInvestigating) {
         graphNodes = filtered.nodes.map(n => ({
-          ...n, _group: n[groupField] || null,
+          ...n, _group: (groupField && n.node_type !== 'container') ? (n[groupField] || null) : null,
           _manual: false, _path: false, _neighbor: false
         }));
       } else {
@@ -3000,7 +3506,7 @@ function dashboard() {
           if (!n) return null;
           const isManual = this.workspaceNodes.some(w => w.node_id === nId && w.manual);
           return {
-            ...n, _group: n[groupField] || null,
+            ...n, _group: groupField ? (n[groupField] || null) : null,
             _manual: isManual,
             _path: pathNodeIds.has(nId) && !isManual,
             _neighbor: neighborIds.has(nId),
@@ -3045,6 +3551,9 @@ function dashboard() {
           onNodeClick(d, simEdges) {
             self.selectedNode = d;
             self.highlightNode(d.node_id || d.id, simEdges);
+          },
+          onNodeDblClick(d) {
+            self.zoomIntoNode(d);
           },
           onBackgroundClick(simEdges) {
             self.selectedNode = null;
@@ -3612,6 +4121,26 @@ function dashboard() {
         });
       }
 
+      // --- Zoom-in badge: small "+" on nodes that have CONTAINS children ---
+      if (self.graphPreset === 'c1' || self.graphPreset === 'c2') {
+        const parentIds = new Set();
+        (self.graphData.edges || []).forEach(e => {
+          if (e.edge_type === 'CONTAINS') {
+            parentIds.add(e.from_node_id);
+            parentIds.add(String(e.from_node_id));
+          }
+        });
+        node.filter(d => parentIds.has(d.id) || parentIds.has(d.node_id)).each(function(d) {
+          const g2 = d3.select(this);
+          g2.append('text')
+            .attr('x', 50).attr('y', -10).attr('text-anchor', 'middle')
+            .attr('font-size', '12px').attr('fill', 'var(--primary)').attr('cursor', 'pointer')
+            .attr('font-weight', 'bold').attr('font-family', 'sans-serif')
+            .text('+')
+            .on('click', (event) => { event.stopPropagation(); if (config.callbacks?.onNodeDblClick) config.callbacks.onNodeDblClick(d); });
+        });
+      }
+
       // --- Drag (free mode only) ---
       if (!isStrict) {
       node.style('cursor', 'grab');
@@ -3645,6 +4174,10 @@ function dashboard() {
       node.on('click', (event, d) => {
         event.stopPropagation();
         if (config.callbacks?.onNodeClick) config.callbacks.onNodeClick(d, simEdges);
+      });
+      node.on('dblclick', (event, d) => {
+        event.stopPropagation();
+        if (config.callbacks?.onNodeDblClick) config.callbacks.onNodeDblClick(d);
       });
       node.on('mouseenter', (event, d) => {
         self.highlightNode(d.id || d.node_id || d.key, simEdges);

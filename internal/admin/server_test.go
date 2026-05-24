@@ -363,3 +363,73 @@ func TestHandleRequestsSince(t *testing.T) {
 		t.Errorf("count = %d, want 1", len(entries))
 	}
 }
+
+func TestHandleGraphDomains(t *testing.T) {
+	s := setupTestServer(t)
+	rev, _ := s.getStore().CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+	s.getStore().UpsertNode(store.NodeRow{
+		NodeKey: "code:controller:orders:oc", Layer: "code", NodeType: "controller",
+		DomainKey: "orders", Name: "OrderController", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0,
+	})
+	s.getStore().UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:orders:os", Layer: "code", NodeType: "provider",
+		DomainKey: "orders", Name: "OrderService", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0,
+	})
+	s.getStore().UpsertNode(store.NodeRow{
+		NodeKey: "contract:endpoint:orders:post_orders", Layer: "contract", NodeType: "endpoint",
+		DomainKey: "orders", Name: "POST /orders", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0,
+	})
+	s.getStore().UpsertNode(store.NodeRow{
+		NodeKey: "code:controller:vouchers:vc", Layer: "code", NodeType: "controller",
+		DomainKey: "vouchers", Name: "VoucherController", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0,
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/graph/domains", nil)
+	s.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp struct {
+		Domains []struct {
+			DomainKey string         `json:"domain_key"`
+			NodeCount int            `json:"node_count"`
+			ByLayer   map[string]int `json:"by_layer"`
+			ByType    map[string]int `json:"by_type"`
+		} `json:"domains"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.Domains) < 2 {
+		t.Fatalf("expected at least 2 domains, got %d", len(resp.Domains))
+	}
+
+	var orders *struct {
+		DomainKey string         `json:"domain_key"`
+		NodeCount int            `json:"node_count"`
+		ByLayer   map[string]int `json:"by_layer"`
+		ByType    map[string]int `json:"by_type"`
+	}
+	for i := range resp.Domains {
+		if resp.Domains[i].DomainKey == "orders" {
+			orders = &resp.Domains[i]
+		}
+	}
+	if orders == nil {
+		t.Fatal("orders domain not found")
+	}
+	if orders.NodeCount != 3 {
+		t.Errorf("orders node_count = %d, want 3", orders.NodeCount)
+	}
+	if orders.ByLayer["code"] != 2 {
+		t.Errorf("orders code layer = %d, want 2", orders.ByLayer["code"])
+	}
+}

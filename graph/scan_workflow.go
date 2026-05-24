@@ -232,6 +232,20 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 			// Build per-batch pack selection from AST-detected imports/decorators
 			packSel := g.buildPackSelection(batch, filesWithAST, tech)
 
+			g.emitter.Emit(ScanEvent{
+				Kind:  EventBatchExtracted,
+				Phase: "phase1_extract",
+				Data: map[string]any{
+					"batch_size": len(batch),
+					"ast_facts":  countASTFacts(filesWithAST),
+				},
+				Progress: &ScanProgress{
+					Total:     run.TotalFiles,
+					Extracted: run.TotalFiles - pending,
+					Remaining: pending,
+				},
+			})
+
 			return &ScanAction{
 				ScanRunID:        run.RunID,
 				Phase:            "phase1_extract",
@@ -269,6 +283,13 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 		if err := g.store.TransitionScanRun(run.RunID, "phase1_resolve", 0); err != nil {
 			return nil, err
 		}
+		g.emitter.Emit(ScanEvent{
+			Kind:  EventPhaseChanged,
+			Phase: "phase1_resolve",
+			Data: map[string]any{
+				"message": "All files extracted. Resolving facts into graph...",
+			},
+		})
 		return &ScanAction{
 			ScanRunID: run.RunID,
 			Phase:     "phase1_resolve",
@@ -300,11 +321,18 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 		}, nil
 
 	case "finalized":
+		summary := g.buildScanSummary(run.DomainKey)
+		g.emitter.Emit(ScanEvent{
+			Kind:  EventScanComplete,
+			Phase: "finalized",
+			Data:  map[string]any{"message": "Scan complete."},
+		})
 		return &ScanAction{
 			ScanRunID: run.RunID,
 			Phase:     "finalized",
 			Action:    "none",
 			Done:      true,
+			Reason:    formatScanSummary(summary),
 		}, nil
 
 	default:
@@ -321,6 +349,7 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 	// Find trigger files: nodes that expose endpoints or consume topics
 	triggerFiles := make(map[string]bool)
+	var skippedNoFilePath int
 
 	for _, edgeType := range []string{"EXPOSES_ENDPOINT", "CONSUMES_TOPIC"} {
 		active := true
@@ -330,21 +359,67 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 		}
 		for _, e := range edges {
 			node, err := g.store.GetNodeByKey(e.FromNodeKey)
-			if err != nil || node == nil || node.FilePath == "" {
+			if err != nil || node == nil {
+				continue
+			}
+			if node.FilePath == "" {
+				skippedNoFilePath++
 				continue
 			}
 			triggerFiles[node.FilePath] = true
 		}
 	}
 
+	// Fallback: if primary lookup found edges but all had empty FilePath,
+	// scan all code-layer nodes with non-empty file_path that are connected
+	// to endpoint/topic nodes via EXPOSES_ENDPOINT or CONSUMES_TOPIC.
+	if len(triggerFiles) == 0 && skippedNoFilePath > 0 {
+		// Build set of node IDs that are sources of trigger edges
+		triggerNodeIDs := make(map[int64]bool)
+		for _, edgeType := range []string{"EXPOSES_ENDPOINT", "CONSUMES_TOPIC"} {
+			active := true
+			edges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: edgeType, Active: &active})
+			for _, e := range edges {
+				triggerNodeIDs[e.FromNodeID] = true
+			}
+		}
+		// Search all nodes with file_path set; if they match a trigger node ID, use them
+		allNodes, _ := g.store.ListNodes(store.NodeFilter{Domain: run.DomainKey})
+		for _, n := range allNodes {
+			if n.FilePath != "" && triggerNodeIDs[n.NodeID] {
+				triggerFiles[n.FilePath] = true
+			}
+		}
+		// Still empty? Last resort: find files via CONTAINS edges to trigger source nodes
+		if len(triggerFiles) == 0 {
+			allEdges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
+			parentFiles := make(map[int64]string) // child node ID → parent file_path
+			for _, e := range allEdges {
+				if triggerNodeIDs[e.ToNodeID] {
+					pNode, err := g.store.GetNodeByKey(e.FromNodeKey)
+					if err == nil && pNode != nil && pNode.FilePath != "" {
+						parentFiles[e.ToNodeID] = pNode.FilePath
+					}
+				}
+			}
+			for _, fp := range parentFiles {
+				triggerFiles[fp] = true
+			}
+		}
+	}
+
 	if len(triggerFiles) == 0 {
+		reason := "No trigger files found for flow tracing."
+		if skippedNoFilePath > 0 {
+			reason = fmt.Sprintf("Phase 2 skipped: found %d EXPOSES_ENDPOINT/CONSUMES_TOPIC edges but all source nodes have empty file_path. This usually means the controller/consumer nodes were created by import facts before endpoint facts could set the file path.", skippedNoFilePath)
+		}
 		g.store.CompleteScanRun(run.RunID)
 		return &ScanAction{
 			ScanRunID: run.RunID,
 			Phase:     "finalized",
 			Action:    "none",
 			Done:      true,
-			Reason:    "No trigger files found for flow tracing.",
+			Reason:    reason,
 		}, nil
 	}
 
@@ -356,6 +431,15 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 	ctx := g.buildGraphContext(run.DomainKey)
 
 	g.store.TransitionScanRun(run.RunID, "phase2_extract", len(triggerFiles))
+	g.emitter.Emit(ScanEvent{
+		Kind:  EventPhaseChanged,
+		Phase: "phase2_extract",
+		Data: map[string]any{
+			"trigger_files": len(triggerFiles),
+			"message":       fmt.Sprintf("Found %d trigger files for flow tracing.", len(triggerFiles)),
+		},
+	})
+	summary := g.buildScanSummary(run.DomainKey)
 	return &ScanAction{
 		ScanRunID:    run.RunID,
 		Phase:        "phase2_extract",
@@ -365,6 +449,12 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 		GraphContext: ctx,
 		Reason:       "Phase 2: trace business flows. Use graph_context to understand the full call chain. Emit ONLY flow facts.",
 		Progress:     &ScanProgress{Total: len(triggerFiles), Extracted: 0, Remaining: len(triggerFiles)},
+		Checkpoint: &ScanCheckpoint{
+			ID:       "phase1_summary",
+			Question: "Phase 1 complete. Here's what Chronicle found. Continue with flow tracing?",
+			Context:  summary,
+			Options:  []string{"yes", "skip flows"},
+		},
 	}, nil
 }
 
@@ -380,6 +470,15 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 		triggerFile := claimed[0].TargetKey
 		flowCtx := g.buildFlowContext(run.DomainKey, triggerFile)
 		pending, _ := g.store.CountPendingObligations(run.RevisionID, "trace_flow")
+
+		g.emitter.Emit(ScanEvent{
+			Kind:  EventFlowTraced,
+			Phase: "phase2_extract",
+			Data: map[string]any{
+				"trigger_file": flowCtx.TriggerFile,
+				"trigger_node": flowCtx.TriggerNode,
+			},
+		})
 
 		return &ScanAction{
 			ScanRunID:   run.RunID,
@@ -583,6 +682,74 @@ func (g *Graph) buildGraphContext(domainKey string) *GraphContext {
 	return ctx
 }
 
+// buildScanSummary returns a summary of the current graph state for the given domain.
+func (g *Graph) buildScanSummary(domainKey string) map[string]any {
+	summary := map[string]any{}
+
+	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	byLayer := map[string]int{}
+	byType := map[string]int{}
+	for _, n := range nodes {
+		byLayer[n.Layer]++
+		byType[n.NodeType]++
+	}
+	summary["nodes_total"] = len(nodes)
+	summary["nodes_by_layer"] = byLayer
+	summary["nodes_by_type"] = byType
+
+	edges, _ := g.store.ListEdges(store.EdgeFilter{})
+	byDeriv := map[string]int{}
+	for _, e := range edges {
+		if e.Active {
+			byDeriv[e.DerivationKind]++
+		}
+	}
+	activeEdges := 0
+	for _, c := range byDeriv {
+		activeEdges += c
+	}
+	summary["edges_total"] = activeEdges
+	summary["edges_by_derivation"] = byDeriv
+
+	return summary
+}
+
+// formatScanSummary formats a scan summary map as a human-readable string.
+func formatScanSummary(summary map[string]any) string {
+	nodes, _ := summary["nodes_total"].(int)
+	edges, _ := summary["edges_total"].(int)
+
+	byType, _ := summary["nodes_by_type"].(map[string]int)
+	byDeriv, _ := summary["edges_by_derivation"].(map[string]int)
+
+	parts := []string{fmt.Sprintf("Scan complete. %d nodes, %d edges.", nodes, edges)}
+
+	if len(byType) > 0 {
+		parts = append(parts, "\nFound:")
+		for t, c := range byType {
+			if c > 0 {
+				parts = append(parts, fmt.Sprintf("  %d %s", c, t))
+			}
+		}
+	}
+
+	if len(byDeriv) > 0 {
+		parts = append(parts, "\nConfidence:")
+		total := 0
+		for _, c := range byDeriv {
+			total += c
+		}
+		for d, c := range byDeriv {
+			if total > 0 {
+				pct := c * 100 / total
+				parts = append(parts, fmt.Sprintf("  %d%% %s (%d edges)", pct, d, c))
+			}
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
 // readFileContent tries to read a file, checking the path as-is first,
 // then trying subdirectories that contain a .depbot/ folder (the project root).
 func readFileContent(filePath string) []byte {
@@ -620,4 +787,19 @@ func mapKeys(m map[string]bool) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// countASTFacts counts total pre-extracted AST facts across a batch.
+func countASTFacts(files []FileWithAST) int {
+	count := 0
+	for _, f := range files {
+		if f.ASTFacts != "[]" && len(f.ASTFacts) > 2 {
+			for _, c := range f.ASTFacts {
+				if c == '}' {
+					count++
+				}
+			}
+		}
+	}
+	return count
 }

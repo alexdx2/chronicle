@@ -117,11 +117,21 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 	// A module = node with ≥2 outbound import edges, 0 endpoints, 0 service actions.
 	// This is generic (not framework-specific) — modules wire things, they don't DO things.
 	g.fixModuleEdges(domainKey)
-
 	// Mark all extractions as resolved
 	if err := g.store.MarkExtractionsResolved(revisionID, domainKey); err != nil {
 		return nil, fmt.Errorf("ResolveExtractions mark resolved: %w", err)
 	}
+
+	g.emitter.Emit(ScanEvent{
+		Kind:  EventResolveComplete,
+		Phase: "resolve",
+		Data: map[string]any{
+			"nodes_created":    result.NodesCreated,
+			"edges_created":    result.EdgesCreated,
+			"evidence_created": result.EvidenceCreated,
+			"files_processed":  result.FilesProcessed,
+		},
+	})
 
 	return result, nil
 }
@@ -856,6 +866,14 @@ func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) s
 func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, filePath string) int64 {
 	id, err := g.store.GetNodeIDByKey(nodeKey)
 	if err == nil {
+		// Patch FilePath if the existing node has none and we have one
+		if filePath != "" {
+			if existing, e2 := g.store.GetNodeByKey(nodeKey); e2 == nil && existing.FilePath == "" {
+				existing.FilePath = filePath
+				existing.LastSeenRevisionID = revisionID
+				g.store.UpsertNode(*existing)
+			}
+		}
 		return id
 	}
 	g.ensureNode(domainKey, revisionID, nodeKey, name, filePath)

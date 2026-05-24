@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	dashboard "github.com/alexdx2/chronicle-core/admin"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
+	"github.com/alexdx2/chronicle-core/internal/manifest"
 	"github.com/alexdx2/chronicle-core/internal/mcp"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
@@ -238,7 +240,17 @@ func NewServerWithSlots(g *graph.Graph, s *store.Store, port int, manifestPath s
 		dashboardHTML: dashboard.RenderDashboard(slots),
 	}
 	srv.loadDiagramSessions()
+	g.SetEventEmitter(&hubEmitter{hub: srv.hub})
 	return srv
+}
+
+// hubEmitter bridges graph.EventEmitter to the WebSocket Hub.
+type hubEmitter struct {
+	hub *Hub
+}
+
+func (h *hubEmitter) Emit(event graph.ScanEvent) {
+	h.hub.Send("scan_event", event)
 }
 
 // HandleDiagramForTest exposes the diagram handler for use by e2e tests.
@@ -362,18 +374,18 @@ func (s *Server) getDomain(r *http.Request) string {
 	return s.domainFromManifest()
 }
 
-// Start begins serving the admin dashboard on localhost.
-func (s *Server) Start() error {
-	mux := http.NewServeMux()
-
+// registerAPIRoutes registers all API routes on the given mux.
+func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/info", s.handleInfo)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/stats", s.handleStats)
+	mux.HandleFunc("/api/scan-progress", s.handleScanProgress)
 	mux.HandleFunc("/api/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/requests", s.handleRequests)
 	mux.HandleFunc("/api/low-confidence", s.handleLowConfidence)
 	mux.HandleFunc("/api/scans", s.handleScans)
 	mux.HandleFunc("/api/validate", s.handleValidate)
+	mux.HandleFunc("/api/graph/domains", s.handleGraphDomains)
 	mux.HandleFunc("/api/graph", s.handleGraph)
 	mux.HandleFunc("/api/manifest", s.handleManifest)
 	mux.HandleFunc("/api/settings/prompt", s.handlePromptSetting)
@@ -388,9 +400,21 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWebSocket(s.hub, w, r)
 	})
-
 	mux.HandleFunc("/api/diagram/", s.handleDiagram)
 	mux.HandleFunc("/api/diagram", s.handleDiagram)
+}
+
+// ServeHTTP implements http.Handler for testing.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	s.registerAPIRoutes(mux)
+	mux.ServeHTTP(w, r)
+}
+
+// Start begins serving the admin dashboard on localhost.
+func (s *Server) Start() error {
+	mux := http.NewServeMux()
+	s.registerAPIRoutes(mux)
 
 	dashboardBytes := []byte(s.dashboardHTML)
 
@@ -519,6 +543,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	httpJSON(w, map[string]any{"domain": domain, "graph": stats, "requests": reqStats})
 }
 
+func (s *Server) handleScanProgress(w http.ResponseWriter, r *http.Request) {
+	domain := s.getDomain(r)
+	progress, err := s.getStore().GetScanProgress(domain)
+	if err != nil {
+		httpError(w, err, 500)
+		return
+	}
+	httpJSON(w, progress)
+}
+
 func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 	sinceStr := r.URL.Query().Get("since")
 	if sinceStr != "" {
@@ -628,6 +662,193 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			"confidence": n.Confidence,
 		})
 	}
+
+	// Inject manifest domains and infra as virtual nodes for C1/C2 zoom views.
+	// These come directly from the manifest file, not the graph DB.
+	if m, err := manifest.LoadFile(s.manifestPath); err == nil {
+		virtualID := int64(-1)
+		virtualEdgeID := int64(-1)
+		containerIDs := map[string]int64{}
+
+		// Domain stats from graph
+		domainStats := map[string]struct{ nodes, endpoints, modules, models int }{}
+		for _, n := range nodes {
+			dk := n.DomainKey
+			if dk == "" { continue }
+			st := domainStats[dk]
+			st.nodes++
+			switch n.NodeType {
+			case "endpoint": st.endpoints++
+			case "module", "controller", "provider": st.modules++
+			case "model", "enum": st.models++
+			}
+			domainStats[dk] = st
+		}
+
+		for _, d := range m.Domains {
+			st := domainStats[d.Name]
+			desc := d.Description
+			if desc == "" {
+				desc = fmt.Sprintf("%d nodes, %d endpoints, %d components, %d models", st.nodes, st.endpoints, st.modules, st.models)
+			}
+			nodeList = append(nodeList, map[string]any{
+				"node_id": virtualID, "node_key": "service:container:" + d.Name,
+				"layer": "service", "node_type": "container",
+				"domain_key": d.Name, "name": d.Name,
+				"repo_name": "", "file_path": "", "status": "active",
+				"confidence": 1.0, "description": desc,
+			})
+			nodeIDSet[virtualID] = true
+			containerIDs[d.Name] = virtualID
+			virtualID--
+		}
+
+		// Map graph domain_keys that don't match manifest to nearest manifest domain
+		// (e.g. "otopoint" in graph → "packages" in manifest if they share scan paths)
+		// For now, just assign orphan nodes to the first manifest domain for CONTAINS edges
+
+		// Virtual edges: container→module CONTAINS + cross-domain
+		var edgeList []map[string]any
+		for _, n := range nodes {
+			if n.NodeType != "module" { continue }
+			cID, ok := containerIDs[n.DomainKey]
+			if !ok { continue }
+			edgeList = append(edgeList, map[string]any{
+				"edge_id": virtualEdgeID, "edge_key": "service:container:" + n.DomainKey + "->" + n.NodeKey + ":CONTAINS",
+				"from_node_id": cID, "to_node_id": n.NodeID,
+				"edge_type": "CONTAINS", "derivation": "hard",
+				"confidence": 1.0, "active": true,
+			})
+			virtualEdgeID--
+		}
+
+		// Cross-domain edges between containers (from real graph edges)
+		nodeDomain := map[int64]string{}
+		for _, n := range nodes { nodeDomain[n.NodeID] = n.DomainKey }
+		domainEdgeTypes := map[string]map[string]bool{}
+		for _, e := range edges {
+			fromDK, toDK := nodeDomain[e.FromNodeID], nodeDomain[e.ToNodeID]
+			if fromDK != "" && toDK != "" && fromDK != toDK {
+				key := fromDK + "→" + toDK
+				if domainEdgeTypes[key] == nil { domainEdgeTypes[key] = map[string]bool{} }
+				domainEdgeTypes[key][e.EdgeType] = true
+			}
+		}
+		for key, types := range domainEdgeTypes {
+			parts := strings.SplitN(key, "→", 2)
+			fromCID, ok1 := containerIDs[parts[0]]
+			toCID, ok2 := containerIDs[parts[1]]
+			if !ok1 || !ok2 { continue }
+			et := "DEPENDS_ON"
+			for _, t := range []string{"CALLS_SERVICE", "CALLS_ENDPOINT", "PUBLISHES_TOPIC", "CONSUMES_TOPIC"} {
+				if types[t] { et = t; break }
+			}
+			edgeList = append(edgeList, map[string]any{
+				"edge_id": virtualEdgeID,
+				"edge_key": "service:container:" + parts[0] + "->service:container:" + parts[1] + ":" + et,
+				"from_node_id": fromCID, "to_node_id": toCID,
+				"edge_type": et, "derivation": "hard",
+				"confidence": 1.0, "active": true,
+			})
+			virtualEdgeID--
+		}
+
+		// Infra edges: backend containers → infra nodes (from manifest)
+		infraIDs := map[string]int64{}
+		for _, n := range nodes {
+			if n.Layer == "infra" {
+				infraIDs[n.NodeKey] = n.NodeID
+			}
+		}
+		// Backend domains that use infra (have controllers — unambiguous server-side marker)
+		backendDomains := map[string]bool{}
+		for _, n := range nodes {
+			if n.NodeType == "controller" {
+				backendDomains[n.DomainKey] = true
+			}
+		}
+		for _, infra := range m.Infrastructure {
+			infraID, ok := infraIDs[infra.InfraNodeKey()]
+			if !ok { continue }
+			for dk := range backendDomains {
+				cID, ok2 := containerIDs[dk]
+				if !ok2 { continue }
+				et := "USES_INFRA"
+				edgeList = append(edgeList, map[string]any{
+					"edge_id": virtualEdgeID,
+					"edge_key": "service:container:" + dk + "->" + infra.InfraNodeKey() + ":" + et,
+					"from_node_id": cID, "to_node_id": infraID,
+					"edge_type": et, "derivation": "hard",
+					"confidence": 1.0, "active": true,
+				})
+				virtualEdgeID--
+			}
+		}
+
+		// Frontend→Backend edges: non-backend containers → first backend container
+		// (architecturally, frontends call the API backend)
+		var primaryBackend int64
+		for dk := range backendDomains {
+			if cID, ok := containerIDs[dk]; ok {
+				primaryBackend = cID
+				break
+			}
+		}
+		if primaryBackend != 0 {
+			for dk := range containerIDs {
+				if backendDomains[dk] { continue }
+				fromCID := containerIDs[dk]
+				edgeList = append(edgeList, map[string]any{
+					"edge_id": virtualEdgeID,
+					"edge_key": "service:container:" + dk + "->service:container:api:CALLS_ENDPOINT",
+					"from_node_id": fromCID, "to_node_id": primaryBackend,
+					"edge_type": "CALLS_ENDPOINT", "derivation": "hard",
+					"confidence": 0.8, "active": true,
+				})
+				virtualEdgeID--
+			}
+		}
+
+		// Inter-backend edges: if multiple backends, connect them
+		backendKeys := []string{}
+		for dk := range backendDomains { backendKeys = append(backendKeys, dk) }
+		for i := 0; i < len(backendKeys); i++ {
+			for j := i + 1; j < len(backendKeys); j++ {
+				a, b := backendKeys[i], backendKeys[j]
+				// Check real cross-domain edges
+				hasCross := false
+				for _, e := range edges {
+					fa, fb := nodeDomain[e.FromNodeID], nodeDomain[e.ToNodeID]
+					if (fa == a && fb == b) || (fa == b && fb == a) { hasCross = true; break }
+				}
+				if !hasCross { continue }
+				aID, bID := containerIDs[a], containerIDs[b]
+				edgeList = append(edgeList, map[string]any{
+					"edge_id": virtualEdgeID,
+					"edge_key": "service:container:" + a + "->service:container:" + b + ":CALLS_SERVICE",
+					"from_node_id": aID, "to_node_id": bID,
+					"edge_type": "CALLS_SERVICE", "derivation": "hard",
+					"confidence": 0.8, "active": true,
+				})
+				virtualEdgeID--
+			}
+		}
+
+		// Append real edges
+		for _, e := range edges {
+			if nodeIDSet[e.FromNodeID] || nodeIDSet[e.ToNodeID] {
+				edgeList = append(edgeList, map[string]any{
+					"edge_id": e.EdgeID, "edge_key": e.EdgeKey, "from_node_id": e.FromNodeID,
+					"to_node_id": e.ToNodeID, "edge_type": e.EdgeType, "derivation": e.DerivationKind,
+					"confidence": e.Confidence, "active": e.Active,
+				})
+			}
+		}
+		httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories()})
+		return
+	}
+
+	// Fallback: no manifest — just return graph as-is
 	var edgeList []map[string]any
 	for _, e := range edges {
 		if nodeIDSet[e.FromNodeID] || nodeIDSet[e.ToNodeID] {
@@ -639,6 +860,40 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories()})
+}
+
+func (s *Server) handleGraphDomains(w http.ResponseWriter, r *http.Request) {
+	nodes, _ := s.getStore().ListNodes(store.NodeFilter{})
+
+	type domainInfo struct {
+		DomainKey string         `json:"domain_key"`
+		NodeCount int            `json:"node_count"`
+		ByLayer   map[string]int `json:"by_layer"`
+		ByType    map[string]int `json:"by_type"`
+	}
+
+	dm := map[string]*domainInfo{}
+	for _, n := range nodes {
+		dk := n.DomainKey
+		if dk == "" {
+			dk = "_unassigned"
+		}
+		d, ok := dm[dk]
+		if !ok {
+			d = &domainInfo{DomainKey: dk, ByLayer: map[string]int{}, ByType: map[string]int{}}
+			dm[dk] = d
+		}
+		d.NodeCount++
+		d.ByLayer[n.Layer]++
+		d.ByType[n.NodeType]++
+	}
+
+	var out []domainInfo
+	for _, d := range dm {
+		out = append(out, *d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeCount > out[j].NodeCount })
+	httpJSON(w, map[string]any{"domains": out})
 }
 
 func (s *Server) handleEdgeCategorySettings(w http.ResponseWriter, r *http.Request) {
