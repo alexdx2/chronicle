@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-default-tab="<!-- SLOT:DEFAULT_TAB -->">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -320,10 +320,10 @@ a{color:var(--primary);text-decoration:none}
     </span>
   </div>
   <div class="tab-bar">
-    <button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button>
-    <button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button>
-    <button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button>
-    <button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button>
+    <!-- TAB_BTN:overview:start --><button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button><!-- TAB_BTN:overview:end -->
+    <!-- TAB_BTN:graph:start --><button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button><!-- TAB_BTN:graph:end -->
+    <!-- TAB_BTN:language:start --><button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button><!-- TAB_BTN:language:end -->
+    <!-- TAB_BTN:settings:start --><button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button><!-- TAB_BTN:settings:end -->
     <!-- SLOT:EXTRA_TABS -->
     <template x-if="diagramData">
       <button class="tab-btn" :class="{'live-session': true, active: tab==='diagram'}" @click="showDiagram()" style="position:relative">
@@ -337,6 +337,7 @@ a{color:var(--primary);text-decoration:none}
 <!-- SLOT:AFTER_HEADER -->
 
 <!-- Overview Tab -->
+<!-- TAB_PANEL:overview:start -->
 <div class="container" x-show="tab==='overview'" x-cloak>
   <!-- Scan Progress Panel -->
   <template x-if="scanProgress && scanProgress.phase !== 'idle'">
@@ -657,8 +658,10 @@ a{color:var(--primary);text-decoration:none}
     <button class="btn btn-primary btn-sm" @click="fetchValidation()">Re-check</button>
   </div>
 </div>
+<!-- TAB_PANEL:overview:end -->
 
 <!-- Graph Tab -->
+<!-- TAB_PANEL:graph:start -->
 <div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='graph'" x-cloak>
   <div class="graph-container" :style="graphFullscreen ? 'height:calc(100vh - 100px)' : ''">
     <div class="graph-toolbar" style="flex-wrap:wrap;gap:6px">
@@ -997,9 +1000,11 @@ a{color:var(--primary);text-decoration:none}
     </div>
   </div>
 </div>
+<!-- TAB_PANEL:graph:end -->
 
 <!-- Settings Tab -->
 <!-- Language Tab -->
+<!-- TAB_PANEL:language:start -->
 <div class="container" x-show="tab==='language'" x-cloak>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
     <!-- Glossary -->
@@ -1111,8 +1116,10 @@ a{color:var(--primary);text-decoration:none}
     </div>
   </div>
 </div>
+<!-- TAB_PANEL:language:end -->
 
 <!-- Settings Tab -->
+<!-- TAB_PANEL:settings:start -->
 <div class="container" x-show="tab==='settings'" x-cloak>
   <!-- SLOT:SETTINGS_TOP -->
   <div class="card" style="width:100%">
@@ -1256,6 +1263,7 @@ a{color:var(--primary);text-decoration:none}
     </div>
   </div>
 </div>
+<!-- TAB_PANEL:settings:end -->
 
 <!-- Diagram Tab (completely separate from Graph) -->
 <div class="diagram-root" x-cloak :style="tab==='diagram' ? 'display:flex' : 'display:none'">
@@ -1457,7 +1465,7 @@ a{color:var(--primary);text-decoration:none}
 <script>
 function dashboard() {
   return {
-    tab: 'overview',
+    tab: document.documentElement.dataset.defaultTab || 'overview',
     domain: '',
     settingsRepo: '',
     version: '',
