@@ -818,6 +818,13 @@ a{color:var(--primary);text-decoration:none}
                 <span x-text="cat" style="text-transform:capitalize"></span>
               </div>
             </template>
+            <div class="legend-title" style="margin-top:8px">Node Types</div>
+            <template x-for="nt in ['service','module','controller','provider','endpoint','topic','model','use_case']" :key="nt">
+              <div class="legend-row" :title="nodeTypeDescriptions[nt] || nt" style="cursor:help">
+                <span class="legend-color" style="border-radius:50%;width:6px;height:6px" :style="'background:'+layerColor(nt==='endpoint'||nt==='topic'?'contract':nt==='model'?'data':nt==='use_case'?'flow':nt==='service'?'service':'code')"></span>
+                <span x-text="nt.replace('_',' ')" style="text-transform:capitalize"></span>
+              </div>
+            </template>
             <hr class="legend-sep">
             <label>
               <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;renderGraph()">
@@ -842,8 +849,9 @@ a{color:var(--primary);text-decoration:none}
               <button @click="selectedNode=null" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:16px">&times;</button>
             </div>
             <div style="margin-bottom:8px">
-              <span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:500"
+              <span style="font-size:9px;padding:1px 6px;border-radius:8px;font-weight:500;cursor:help"
                     :style="{background: layerColor(selectedNode.layer)+'15', color: layerColor(selectedNode.layer)}"
+                    :title="nodeTypeDescriptions[selectedNode.node_type] || selectedNode.node_type"
                     x-text="selectedNode.node_type"></span>
               <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0e9dd;color:var(--text-secondary);margin-left:4px" x-text="selectedNode.layer"></span>
             </div>
@@ -1547,6 +1555,27 @@ function dashboard() {
     manifestError: '',
     allLayers: ['code','contract','service','data','flow','ownership','infra','ci'],
     layerFilters: ['code','contract','service','data','flow','ownership','infra','ci'],
+    nodeTypeDescriptions: {
+      container: 'Deployable system or domain boundary',
+      service: 'Backend service (API, worker, job)',
+      module: 'Code module — groups controllers and providers',
+      controller: 'HTTP/GraphQL/WebSocket entry point',
+      provider: 'Application/domain logic class (service, repository, client)',
+      endpoint: 'API route or WebSocket channel',
+      topic: 'Async message channel (Kafka, RabbitMQ, events)',
+      model: 'Persisted or transferred data structure',
+      enum: 'Enumeration / value object',
+      use_case: 'Reconstructed business flow (from scan)',
+      external_system: 'External dependency not in this codebase',
+      broker: 'Message broker infrastructure (Kafka, RabbitMQ)',
+      cache: 'Cache infrastructure (Redis, Memcached)',
+      database: 'Database infrastructure (Postgres, MySQL, MongoDB)',
+      queue: 'Job queue infrastructure (Bull, SQS)',
+      deployment: 'Deployment unit (container, serverless function)',
+      worker: 'Background worker process',
+      job: 'Scheduled or triggered batch job',
+      repository: 'Data access layer (ORM repository pattern)',
+    },
     hideStructural: false,
     // Workspace
     groupByField: 'domain_key',
