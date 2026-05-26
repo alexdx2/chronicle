@@ -19,7 +19,7 @@ import (
 	dashboard "github.com/alexdx2/chronicle-core/admin"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
-	"github.com/alexdx2/chronicle-core/internal/manifest"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/internal/mcp"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
@@ -402,6 +402,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/diagram/", s.handleDiagram)
 	mux.HandleFunc("/api/diagram", s.handleDiagram)
+	mux.HandleFunc("/api/evidence", s.handleEvidence)
 }
 
 // ServeHTTP implements http.Handler for testing.
@@ -1375,6 +1376,34 @@ func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id str
 	httpJSON(w, session)
 }
 
+
+func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
+	nodeKey := r.URL.Query().Get("node_key")
+	if nodeKey == "" {
+		httpJSON(w, []any{})
+		return
+	}
+	node, err := s.getStore().GetNodeByKey(nodeKey)
+	if err != nil {
+		httpJSON(w, []any{})
+		return
+	}
+	nodeEvidence, _ := s.getStore().ListEvidenceByNode(node.NodeID)
+	edges, _ := s.getStore().ListEdges(store.EdgeFilter{})
+	var edgeEvidence []store.EvidenceRow
+	for _, e := range edges {
+		if e.FromNodeID == node.NodeID || e.ToNodeID == node.NodeID {
+			ev, _ := s.getStore().ListEvidenceByEdge(e.EdgeID)
+			edgeEvidence = append(edgeEvidence, ev...)
+		}
+	}
+	httpJSON(w, map[string]any{
+		"node":           node,
+		"node_evidence":  nodeEvidence,
+		"edge_evidence":  edgeEvidence,
+		"total_evidence": len(nodeEvidence) + len(edgeEvidence),
+	})
+}
 
 func httpJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")

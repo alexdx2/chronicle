@@ -914,6 +914,59 @@ a{color:var(--primary);text-decoration:none}
             <template x-if="getNodeContext(selectedNode).incoming.length === 0 && getNodeContext(selectedNode).internal.length === 0 && getNodeContext(selectedNode).outgoing.length === 0">
               <div style="color:var(--border);font-style:italic">No connections</div>
             </template>
+
+            <!-- Evidence & Confidence -->
+            <template x-if="nodeEvidence && nodeEvidence.total_evidence > 0">
+              <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+                <div style="color:var(--text-muted);font-weight:600;margin-bottom:6px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">Evidence</div>
+
+                <!-- Confidence bar -->
+                <div style="margin-bottom:8px">
+                  <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px">
+                    <span style="color:var(--text-muted)">Confidence</span>
+                    <strong x-text="Math.round((selectedNode?.confidence || 0) * 100) + '%'"
+                            :style="{color: (selectedNode?.confidence||0) >= 0.85 ? '#2d6a30' : (selectedNode?.confidence||0) >= 0.65 ? '#b8963e' : '#c25757'}"></strong>
+                  </div>
+                  <div style="height:4px;background:#e8e0d4;border-radius:2px;overflow:hidden">
+                    <div :style="'width:'+Math.round((selectedNode?.confidence||0)*100)+'%;height:100%;border-radius:2px;background:'+((selectedNode?.confidence||0)>=0.85?'#2d6a30':(selectedNode?.confidence||0)>=0.65?'#b8963e':'#c25757')"></div>
+                  </div>
+                </div>
+
+                <!-- Evidence badges -->
+                <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">
+                  <template x-for="badge in (() => {
+                    const badges = [];
+                    const ev = [...(nodeEvidence.node_evidence||[]), ...(nodeEvidence.edge_evidence||[])];
+                    const kinds = new Set(ev.map(e => e.assertion_kind));
+                    if (kinds.has('import_specifier') || kinds.has('constructor_injection')) badges.push({label:'AST', color:'#2d6a30', bg:'#e8f5e9'});
+                    if (kinds.has('text_contains') || kinds.has('decorator_metadata')) badges.push({label:'Code evidence', color:'#1565c0', bg:'#e3f2fd'});
+                    if (kinds.has('prisma_model') || kinds.has('schema_enum')) badges.push({label:'Schema', color:'#6a1b9a', bg:'#f3e5f5'});
+                    if (ev.some(e => e.source_kind === 'llm' || e.extractor_id === 'claude')) badges.push({label:'LLM inferred', color:'#b8963e', bg:'#fff8e1'});
+                    if (ev.some(e => e.source_kind === 'user_feedback')) badges.push({label:'Manual', color:'#00695c', bg:'#e0f2f1'});
+                    if (badges.length === 0 && ev.length > 0) badges.push({label:'File evidence', color:'#1565c0', bg:'#e3f2fd'});
+                    return badges;
+                  })()" :key="badge.label">
+                    <span :style="'font-size:8px;padding:1px 6px;border-radius:8px;font-weight:500;background:'+badge.bg+';color:'+badge.color"
+                          x-text="badge.label"></span>
+                  </template>
+                </div>
+
+                <!-- Evidence count -->
+                <div style="font-size:9px;color:var(--text-muted)" x-text="nodeEvidence.total_evidence + ' evidence record' + (nodeEvidence.total_evidence !== 1 ? 's' : '')"></div>
+
+                <!-- Top evidence files -->
+                <template x-if="nodeEvidence.edge_evidence && nodeEvidence.edge_evidence.length > 0">
+                  <div style="margin-top:4px">
+                    <template x-for="ev in nodeEvidence.edge_evidence.slice(0, 3)" :key="ev.evidence_id">
+                      <div style="font-size:9px;color:var(--text-secondary);padding:1px 0;font-family:var(--font-mono)" x-text="ev.file_path || ev.source_kind"></div>
+                    </template>
+                    <template x-if="nodeEvidence.edge_evidence.length > 3">
+                      <div style="font-size:9px;color:var(--text-muted)" x-text="'+ ' + (nodeEvidence.edge_evidence.length - 3) + ' more'"></div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </template>
           </div>
         </template>
       </div>
@@ -1549,6 +1602,7 @@ function dashboard() {
     graphRepoFilter: '',
     allRepos: [],
     selectedNode: null,
+    nodeEvidence: null,
     manifestContent: '',
     manifestPath: '',
     manifestSaved: false,
@@ -2742,6 +2796,15 @@ function dashboard() {
       return { incoming, internal, outgoing };
     },
 
+    async fetchNodeEvidence(nodeKey) {
+      this.nodeEvidence = null;
+      if (!nodeKey) return;
+      try {
+        const res = await fetch('/api/evidence?node_key=' + encodeURIComponent(nodeKey));
+        if (res.ok) this.nodeEvidence = await res.json();
+      } catch(e) {}
+    },
+
     getNodeTypesForLayer(layer) {
       const types = new Set();
       (this.graphData.nodes || []).forEach(n => {
@@ -3235,6 +3298,7 @@ function dashboard() {
         g.on('click', (event) => {
           event.stopPropagation();
           self.selectedNode = n;
+          self.fetchNodeEvidence(n.node_key);
           self.highlightNode(n.node_id, allVisibleEdges);
         });
         g.on('dblclick', (event) => {
@@ -3248,6 +3312,7 @@ function dashboard() {
       // Click background to reset
       svg.on('click', () => {
         self.selectedNode = null;
+        self.nodeEvidence = null;
         self.highlightNode(null);
       });
 
@@ -3412,6 +3477,7 @@ function dashboard() {
               }
             }
             self.selectedNode = node;
+            self.fetchNodeEvidence(node.node_key);
             // Re-render to update expand state
             self.renderLayeredGraph(container, nodes, edges);
           });
@@ -3668,6 +3734,7 @@ function dashboard() {
         callbacks: {
           onNodeClick(d, simEdges) {
             self.selectedNode = d;
+            self.fetchNodeEvidence(d.node_key);
             self.highlightNode(d.node_id || d.id, simEdges);
           },
           onNodeDblClick(d) {
@@ -3675,6 +3742,7 @@ function dashboard() {
           },
           onBackgroundClick(simEdges) {
             self.selectedNode = null;
+            self.nodeEvidence = null;
             self.highlightNode(null, simEdges);
           },
           onDrag(id, x, y) {
@@ -4537,10 +4605,12 @@ function dashboard() {
           onNodeClick(d, simEdges) {
             const isAlready = self.selectedNode && self.selectedNode.id === d.id;
             self.selectedNode = isAlready ? null : d;
+            if (isAlready) { self.nodeEvidence = null; } else { self.fetchNodeEvidence(d.node_key); }
             self.highlightNode(isAlready ? null : d.id, simEdges);
           },
           onBackgroundClick(simEdges) {
             self.selectedNode = null;
+            self.nodeEvidence = null;
             self.highlightNode(null, simEdges);
           },
           onDrag(id, x, y) {
