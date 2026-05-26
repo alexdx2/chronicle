@@ -192,7 +192,8 @@ a{color:var(--primary);text-decoration:none}
 .graph-legend label input{margin:0;width:11px;height:11px}
 /* Transitive edges */
 .graph-svg .edge-line.transitive{stroke:#b8963e;stroke-dasharray:6,3;stroke-width:1.5}
-.graph-svg .via-label{font-size:8px;fill:#b8963e;font-weight:500}
+.graph-svg .via-label{font-size:9px;fill:#b8963e;font-weight:600;paint-order:stroke;stroke:#faf6ef;stroke-width:3px}
+.edge-tooltip{position:fixed;background:#3a2e1e;color:#f0e9dd;padding:4px 8px;border-radius:4px;font-size:10px;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.3)}
 .graph-svg .via-pill{fill:#fdf0d0;stroke:#b8963e;stroke-width:0.5;rx:4}
 .graph-svg .edge-short-label { font-size:8px; fill:#b8a898; pointer-events:none; text-anchor:middle; }
 .graph-svg.hide-edge-labels .edge-short-label { display:none; }
@@ -818,6 +819,10 @@ a{color:var(--primary);text-decoration:none}
                 <span x-text="cat" style="text-transform:capitalize"></span>
               </div>
             </template>
+            <div class="legend-row" title="Collapsed path through hidden nodes">
+              <span style="display:inline-block;width:12px;height:0;border-top:2px dashed #b8963e;margin-right:4px;vertical-align:middle"></span>
+              <span style="color:#b8963e">Transitive</span>
+            </div>
             <div class="legend-title" style="margin-top:8px">Node Types</div>
             <template x-for="nt in ['service','module','controller','provider','endpoint','topic','model','use_case']" :key="nt">
               <div class="legend-row" :title="nodeTypeDescriptions[nt] || nt" style="cursor:help">
@@ -4150,6 +4155,27 @@ function dashboard() {
           if (d._isPath || d._transitive) return 'url(#g-arrow-highlight)';
           const info = self.edgeCategoryLookup[d.edge_type];
           return info ? 'url(#g-arrow-' + info.category + ')' : 'url(#g-arrow)';
+        });
+
+      // Tooltip for transitive edges
+      link.filter(d => d._transitive)
+        .style('cursor', 'help')
+        .on('mouseenter', function(event, d) {
+          const tooltip = document.createElement('div');
+          tooltip.className = 'edge-tooltip';
+          tooltip.innerHTML = '<div style="font-weight:600;margin-bottom:2px">Collapsed path</div>' + (d._viaLabel || 'via unknown');
+          tooltip.id = '__edge_tooltip';
+          tooltip.style.left = event.clientX + 8 + 'px';
+          tooltip.style.top = event.clientY - 20 + 'px';
+          document.body.appendChild(tooltip);
+        })
+        .on('mousemove', function(event) {
+          const t = document.getElementById('__edge_tooltip');
+          if (t) { t.style.left = event.clientX + 8 + 'px'; t.style.top = event.clientY - 20 + 'px'; }
+        })
+        .on('mouseleave', function() {
+          const t = document.getElementById('__edge_tooltip');
+          if (t) t.remove();
         });
 
       // --- Via labels (transitive edges) ---
