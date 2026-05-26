@@ -477,6 +477,7 @@ a{color:var(--primary);text-decoration:none}
 
   <!-- Content grid -->
   <div class="content-grid">
+    <!-- SECTION:mcp_requests:start -->
     <!-- MCP Requests (left) -->
     <div class="card request-panel">
       <div class="card-header">
@@ -536,6 +537,7 @@ a{color:var(--primary);text-decoration:none}
         </template>
       </div>
     </div>
+    <!-- SECTION:mcp_requests:end -->
 
     <!-- Right column -->
     <div class="right-col">
@@ -850,45 +852,60 @@ a{color:var(--primary);text-decoration:none}
               <div style="color:var(--text-secondary);margin-bottom:8px;font-size:10px" x-text="(selectedNode.repo_name ? selectedNode.repo_name+'/' : '') + selectedNode.file_path"></div>
             </template>
 
-            <!-- Outgoing edges -->
-            <div style="margin-bottom:12px">
-              <div style="color:var(--text-muted);font-weight:600;margin-bottom:4px">Dependencies</div>
-              <template x-if="getNodeEdges(selectedNode, 'out').length === 0">
-                <div style="color:var(--border)">none</div>
-              </template>
-              <template x-for="e in getNodeEdges(selectedNode, 'out')" :key="e.edge_key || (e.from_node_id+'-'+e.to_node_id)">
-                <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.target_key)">
-                  <span style="color:#6b4423">→</span>
-                  <span x-text="e.target_name"></span>
-                  <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
-                        :style="{color: e.derivation==='hard' ? '#2d6a30' : '#b8963e'}"
-                        x-text="e.edge_type"></span>
-                  <span x-show="e.target_layer && e.target_layer !== selectedNode?.layer"
-                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0e9dd;color:var(--text-muted);margin-left:2px"
-                        x-text="e.target_layer"></span>
-                </div>
-              </template>
-            </div>
+            <!-- Focus: Incoming / Internal / Outgoing -->
+            <template x-if="getNodeContext(selectedNode).incoming.length > 0">
+              <div style="margin-bottom:10px">
+                <div style="color:var(--text-muted);font-weight:600;margin-bottom:4px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">↓ Incoming</div>
+                <template x-for="e in getNodeContext(selectedNode).incoming" :key="e.node_key+e.edge_type">
+                  <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.node_key)">
+                    <span style="color:#5a8a5a">←</span>
+                    <span x-text="e.name"></span>
+                    <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
+                          :style="{color: e.derivation==='hard' ? '#2d6a30' : '#b8963e'}"
+                          x-text="e.edge_type"></span>
+                    <span x-show="e.layer !== selectedNode?.layer"
+                          style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0e9dd;color:var(--text-muted);margin-left:2px"
+                          x-text="e.layer"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
 
-            <!-- Incoming edges -->
-            <div>
-              <div style="color:var(--text-muted);font-weight:600;margin-bottom:4px">Dependents</div>
-              <template x-if="getNodeEdges(selectedNode, 'in').length === 0">
-                <div style="color:var(--border)">none</div>
-              </template>
-              <template x-for="e in getNodeEdges(selectedNode, 'in')" :key="e.edge_key || (e.from_node_id+'-'+e.to_node_id)">
-                <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.source_key)">
-                  <span style="color:#b8963e">←</span>
-                  <span x-text="e.source_name"></span>
-                  <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
-                        :style="{color: e.derivation==='hard' ? '#2d6a30' : '#b8963e'}"
-                        x-text="e.edge_type"></span>
-                  <span x-show="e.source_layer && e.source_layer !== selectedNode?.layer"
-                        style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0e9dd;color:var(--text-muted);margin-left:2px"
-                        x-text="e.source_layer"></span>
-                </div>
-              </template>
-            </div>
+            <template x-if="getNodeContext(selectedNode).internal.length > 0">
+              <div style="margin-bottom:10px">
+                <div style="color:var(--text-muted);font-weight:600;margin-bottom:4px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">⟷ Internal</div>
+                <template x-for="e in getNodeContext(selectedNode).internal" :key="e.node_key+e.edge_type">
+                  <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.node_key)">
+                    <span style="color:#6b8ab0">·</span>
+                    <span x-text="e.name"></span>
+                    <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px;color:#6b8ab0"
+                          x-text="e.edge_type"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <template x-if="getNodeContext(selectedNode).outgoing.length > 0">
+              <div style="margin-bottom:10px">
+                <div style="color:var(--text-muted);font-weight:600;margin-bottom:4px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">↑ Outgoing</div>
+                <template x-for="e in getNodeContext(selectedNode).outgoing" :key="e.node_key+e.edge_type">
+                  <div style="padding:2px 0;cursor:pointer" @click="selectNodeByKey(e.node_key)">
+                    <span style="color:#b87333">→</span>
+                    <span x-text="e.name"></span>
+                    <span style="font-size:8px;padding:0 4px;border-radius:4px;margin-left:2px"
+                          :style="{color: e.derivation==='hard' ? '#2d6a30' : '#b8963e'}"
+                          x-text="e.edge_type"></span>
+                    <span x-show="e.layer !== selectedNode?.layer"
+                          style="font-size:8px;padding:0 3px;border-radius:3px;background:#f0e9dd;color:var(--text-muted);margin-left:2px"
+                          x-text="e.layer"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <template x-if="getNodeContext(selectedNode).incoming.length === 0 && getNodeContext(selectedNode).internal.length === 0 && getNodeContext(selectedNode).outgoing.length === 0">
+              <div style="color:var(--border);font-style:italic">No connections</div>
+            </template>
           </div>
         </template>
       </div>
@@ -1635,7 +1652,8 @@ function dashboard() {
           this.loading.graph = false;
           this.loaded.graph = true;
           if (this.graphMode === 'workspace' || this.graphMode === 'explore') this.autoPresetHighLevel();
-          this.$nextTick(() => this.renderGraph());
+          // Use setTimeout to let Alpine finish rendering the graph container (x-show/x-cloak)
+          setTimeout(() => this.renderGraph(), 100);
         });
       }
 
@@ -2114,8 +2132,8 @@ function dashboard() {
         // C2 → C3: show all components in this domain
         this.setPreset('c3');
       } else if (currentPreset === 'c3') {
-        // C3 → All
-        this.setPreset('all');
+        // C3 is deepest zoom level — no further drilling
+        return;
       }
       // Filter to clicked domain
       if (domain && currentPreset !== 'all') {
@@ -2406,8 +2424,8 @@ function dashboard() {
           this.groupByField = 'domain_key';
           this.hiddenDomains = [];
           this.nodeTypeFilter = {};
-          const c2Show = ['container', 'module', 'database', 'broker', 'cache', 'queue'];
-          const c2Hide = ['external_system', 'service', 'middleware', 'config', 'generated'];
+          const c2Show = ['service', 'module', 'topic', 'database', 'broker', 'cache', 'queue'];
+          const c2Hide = ['external_system', 'middleware', 'config', 'generated'];
           const c2Types = [...new Set((this.graphData.nodes || []).map(n => n.node_type))];
           c2Types.forEach(t => {
             if (c2Show.includes(t)) return; // visible
@@ -2492,7 +2510,8 @@ function dashboard() {
       if (hasCollapsibleHidden) {
         // Pass all layer-filtered nodes (before hiding) so collapsible nodes are available for bridging
         const allVisibleByLayer = allNodes.filter(n => this.layerFilters.includes(n.layer));
-        return this.computeTransitiveEdges(nodes, allVisibleByLayer, filteredEdges);
+        // Use ALL edges (including structural) for traversal so BFS can trace module→provider via CONTAINS
+        return this.computeTransitiveEdges(nodes, allVisibleByLayer, allEdges);
       }
 
       // No collapsible types hidden — standard filtering (hidden non-collapsible types just vanish)
@@ -2630,6 +2649,68 @@ function dashboard() {
         ...e, source_name: nodeById[e.from_node_id]?.name || '?', source_key: nodeById[e.from_node_id]?.node_key || '',
         source_layer: nodeById[e.from_node_id]?.layer || '?'
       }));
+    },
+
+    getNodeContext(node) {
+      if (!node) return { incoming: [], internal: [], outgoing: [] };
+      const allNodes = this.graphData.nodes || [];
+      const allEdges = this.graphData.edges || [];
+      const nodeById = {};
+      allNodes.forEach(n => { nodeById[n.node_id] = n; });
+
+      const structural = ['CONTAINS', 'HAS_FIELD'];
+
+      // Find parent via CONTAINS (who contains this node?)
+      const parentEdge = allEdges.find(e => e.to_node_id === node.node_id && e.edge_type === 'CONTAINS');
+      const parentId = parentEdge ? parentEdge.from_node_id : null;
+
+      // Siblings = nodes that share the same parent via CONTAINS
+      const siblingIds = new Set();
+      if (parentId) {
+        allEdges.forEach(e => {
+          if (e.from_node_id === parentId && e.edge_type === 'CONTAINS') {
+            siblingIds.add(e.to_node_id);
+          }
+        });
+      }
+      // Children = nodes this node CONTAINS
+      allEdges.forEach(e => {
+        if (e.from_node_id === node.node_id && e.edge_type === 'CONTAINS') {
+          siblingIds.add(e.to_node_id);
+        }
+      });
+      // Add parent itself
+      if (parentId) siblingIds.add(parentId);
+
+      const incoming = [];
+      const internal = [];
+      const outgoing = [];
+
+      // Outgoing edges (from this node)
+      allEdges.filter(e => e.from_node_id === node.node_id && !structural.includes(e.edge_type)).forEach(e => {
+        const target = nodeById[e.to_node_id];
+        if (!target) return;
+        const entry = { name: target.name, node_key: target.node_key, node_type: target.node_type, layer: target.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.confidence };
+        if (siblingIds.has(e.to_node_id)) {
+          internal.push(entry);
+        } else {
+          outgoing.push(entry);
+        }
+      });
+
+      // Incoming edges (to this node)
+      allEdges.filter(e => e.to_node_id === node.node_id && !structural.includes(e.edge_type)).forEach(e => {
+        const source = nodeById[e.from_node_id];
+        if (!source) return;
+        const entry = { name: source.name, node_key: source.node_key, node_type: source.node_type, layer: source.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.confidence };
+        if (siblingIds.has(e.from_node_id)) {
+          internal.push(entry);
+        } else {
+          incoming.push(entry);
+        }
+      });
+
+      return { incoming, internal, outgoing };
     },
 
     getNodeTypesForLayer(layer) {
@@ -4190,11 +4271,8 @@ function dashboard() {
       node.on('mouseenter', (event, d) => {
         self.highlightNode(d.id || d.node_id || d.key, simEdges);
       }).on('mouseleave', () => {
-        if (!self.selectedNode) {
-          self.highlightNode(null, simEdges);
-          // Restore step-based annotations if active
-          if (self.diagramStep >= 0) self.updateDiagramAnnotations();
-        }
+        self.highlightNode(null, simEdges);
+        if (self.diagramStep >= 0) self.updateDiagramAnnotations();
       });
       gRoot.on('click', () => {
         if (config.callbacks?.onBackgroundClick) config.callbacks.onBackgroundClick(simEdges);
