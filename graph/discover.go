@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alexdx2/chronicle-core/internal/manifest"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -136,6 +136,7 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 				Status:    "active",
 			})
 		}
+
 	}
 
 	return result, nil

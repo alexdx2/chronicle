@@ -9,7 +9,7 @@ import (
 	"github.com/alexdx2/chronicle-core/extract/ast"
 	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
-	"github.com/alexdx2/chronicle-core/internal/manifest"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 )
 

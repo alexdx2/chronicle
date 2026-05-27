@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/alexdx2/chronicle-core/internal/manifest"
+	"github.com/alexdx2/chronicle-core/manifest"
 )
 
 func TestBoundaryPriority_Order(t *testing.T) {

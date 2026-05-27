@@ -155,6 +155,15 @@ var DefaultEdgeCategories = map[string]EdgeCategory{
 			"USES_SCHEMA":       "schema",
 			"RETURNS_TYPE":      "returns",
 			"REGISTERS_SUBJECT": "reg",
+			"REFERENCES_MODEL":  "ref",
+			"USES_MODEL":        "uses",
+		},
+	},
+	"flow": {
+		Color: "#d4735e",
+		Types: map[string]string{
+			"TRIGGERS_FLOW": "triggers",
+			"REQUIRES":      "requires",
 		},
 	},
 	"structural": {
@@ -162,6 +171,8 @@ var DefaultEdgeCategories = map[string]EdgeCategory{
 		Types: map[string]string{
 			"CONTAINS":          "contains",
 			"DEPLOYS_AS":        "deploys",
+			"USES_INFRA":        "infra",
+			"DEPENDS_ON":        "dep",
 			"OWNED_BY":          "owns",
 			"MAINTAINED_BY":     "maintains",
 			"PART_OF_FLOW":      "flow",
@@ -171,7 +182,6 @@ var DefaultEdgeCategories = map[string]EdgeCategory{
 			"DEPENDS_ON_DOMAIN": "dep",
 			"PRECEDES":          "precedes",
 			"EMITS_AFTER":       "emits",
-			"REQUIRES":          "requires",
 			"TRIGGERS_ANALYSIS": "triggers",
 			"READS_OUTPUT":      "reads",
 			"ROUTES_TO":         "routes",

@@ -163,13 +163,15 @@ func TestEdgeLifecycle_SameEdgeTwice_StaysActive(t *testing.T) {
 	deps, _ := g.QueryDeps(node.NodeKey, 1, nil)
 	found := false
 	for _, d := range deps {
-		if d.Name == "OrderService" || d.NodeKey == "code:provider:myapp:orderservice" {
+		// resolveInjectTarget normalizes PascalCase: OrderService → order.service
+		if d.Name == "order.service" || d.Name == "OrderService" ||
+			d.NodeKey == "code:provider:myapp:order.service" || d.NodeKey == "code:provider:myapp:orderservice" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("INJECTS edge should be active after duplicate resolve")
+		t.Errorf("INJECTS edge should be active after duplicate resolve, got deps: %+v", deps)
 	}
 }
 

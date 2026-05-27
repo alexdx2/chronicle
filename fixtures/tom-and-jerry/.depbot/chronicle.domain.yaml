@@ -1,0 +1,34 @@
+# Chronicle Manifest — Tom & Jerry battle simulation
+domains:
+  - name: arena
+    description: "Battle orchestration — matchmaking, attack processing, score tracking"
+    owner: cartoon-team
+    scan:
+      include: ["arena-api/**", "shared/**"]
+      exclude: ["**/*.spec.ts", "**/*.test.ts"]
+
+  - name: characters
+    description: "Character services — Tom and Jerry abilities, weapons, traps"
+    owner: cartoon-team
+    scan:
+      include: ["tom-api/**", "jerry-api/**"]
+      exclude: ["**/*.spec.ts", "**/*.test.ts"]
+
+  - name: spectators
+    description: "Spectator experience — leaderboards, stats, notifications"
+    owner: cartoon-team
+    scan:
+      include: ["spectators-api/**"]
+      exclude: ["**/*.spec.ts", "**/*.test.ts"]
+
+tech: [nestjs, prisma, kafka, redis, websocket]
+
+infrastructure:
+  - name: kafka
+    type: broker
+    address: kafka:9092
+    description: Event bus for battle results
+  - name: redis
+    type: cache
+    address: redis:6379
+    description: Battle state cache and WebSocket adapter

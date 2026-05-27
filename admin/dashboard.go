@@ -44,6 +44,8 @@ type DashboardSlots struct {
 	EnabledTabs []string
 	// DefaultTab overrides the initially active tab.
 	DefaultTab string
+	// HideSections is a list of section IDs to remove (e.g. "mcp_requests").
+	HideSections []string
 }
 
 var titleRe = regexp.MustCompile(`<!-- SLOT:TITLE_START -->.*?<!-- SLOT:TITLE_END -->`)
@@ -99,6 +101,13 @@ func RenderDashboard(slots DashboardSlots) string {
 			panelEnd := "<!-- TAB_PANEL:" + tabID + ":end -->"
 			html = removeBetweenMarkers(html, panelStart, panelEnd)
 		}
+	}
+
+	// Hide sections
+	for _, id := range slots.HideSections {
+		start := "<!-- SECTION:" + id + ":start -->"
+		end := "<!-- SECTION:" + id + ":end -->"
+		html = removeBetweenMarkers(html, start, end)
 	}
 
 	return html

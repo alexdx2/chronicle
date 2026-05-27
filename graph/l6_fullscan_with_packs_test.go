@@ -246,9 +246,9 @@ func TestL6_FullScanWithCustomPacks(t *testing.T) {
 		from     string
 		to       string
 	}{
-		// Core scan edges
-		{"INJECTS", "arena.controller", "arenaservice"},
-		{"INJECTS", "arena.service", "battleresultproducer"},
+		// Core scan edges (PascalCase normalized to dot-case by resolveInjectTarget)
+		{"INJECTS", "arena.controller", "arena.service"},
+		{"INJECTS", "arena.service", "battle-result.producer"},
 		{"PUBLISHES_TOPIC", "battle-result.producer", "battle-results"},
 		{"CONSUMES_TOPIC", "battle-result.consumer", "battle-results"},
 		{"USES_MODEL", "arena.service", "battleevent"},

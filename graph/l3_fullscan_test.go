@@ -299,19 +299,19 @@ func TestL3_FullScan_MockedLLM(t *testing.T) {
 		from     string // substring match in from_node_key (case-insensitive)
 		to       string // substring match in to_node_key (case-insensitive)
 	}{
-		// Controller -> Service INJECTS (node keys derived from file paths)
-		{"INJECTS", "tom.controller", "tomservice"},
-		{"INJECTS", "jerry.controller", "jerryservice"},
-		{"INJECTS", "arena.controller", "arenaservice"},
-		{"INJECTS", "stats.controller", "spectatorservice"},
+		// Controller -> Service INJECTS (PascalCase normalized to dot-case)
+		{"INJECTS", "tom.controller", "tom.service"},
+		{"INJECTS", "jerry.controller", "jerry.service"},
+		{"INJECTS", "arena.controller", "arena.service"},
+		{"INJECTS", "stats.controller", "spectator.service"},
 		// Service -> PrismaService INJECTS
-		{"INJECTS", "tom.service", "prismaservice"},
-		{"INJECTS", "jerry.service", "prismaservice"},
-		{"INJECTS", "arena.service", "prismaservice"},
+		{"INJECTS", "tom.service", "prisma.service"},
+		{"INJECTS", "jerry.service", "prisma.service"},
+		{"INJECTS", "arena.service", "prisma.service"},
 		// ArenaService -> clients INJECTS
-		{"INJECTS", "arena.service", "tomclient"},
-		{"INJECTS", "arena.service", "jerryclient"},
-		{"INJECTS", "arena.service", "battleresultproducer"},
+		{"INJECTS", "arena.service", "tom.client"},
+		{"INJECTS", "arena.service", "jerry.client"},
+		{"INJECTS", "arena.service", "battle-result.producer"}, // fuzzy: BattleResultProducer → battle-result.producer
 		// Kafka
 		{"PUBLISHES_TOPIC", "battle-result.producer", "battle-results"},
 		{"CONSUMES_TOPIC", "battle-result.consumer", "battle-results"},

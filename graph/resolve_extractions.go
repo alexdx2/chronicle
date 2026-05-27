@@ -190,11 +190,28 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Try to find or create the edge — use fact-provided types
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		toName := inferNameFromImport(fact.To)
+
+		// Check if target already exists as a different type (e.g. controller)
+		// to avoid creating duplicate provider nodes for controllers
 		toNodeKey := typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
+		if fact.ToType == "" || fact.ToType == "provider" {
+			// Check if a controller node already exists with this name
+			ctrlKey := "code:controller:" + domainKey + ":" + strings.ToLower(toName)
+			if _, err := g.store.GetNodeIDByKey(ctrlKey); err == nil {
+				toNodeKey = ctrlKey
+			}
+			// Also try PascalCase→dot-case resolution
+			dotCase := normalizePascalCase(toName)
+			altKey := "code:provider:" + domainKey + ":" + strings.ToLower(dotCase)
+			if _, err := g.store.GetNodeIDByKey(altKey); err == nil {
+				toNodeKey = altKey
+			}
+		}
 
 		// Ensure nodes exist
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
-		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, inferNameFromImport(fact.To), "")
+		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
 
 		// Determine edge type based on from/to node types
 		edgeType := inferImportEdgeType(fromNodeKey, toNodeKey)
@@ -485,8 +502,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
-		toNodeKey := "code:provider:" + domainKey + ":" + strings.ToLower(fact.To)
-		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
+		// Resolve injection target — matches PascalCase class names to existing dot-case provider nodes
+		toNodeKey, toID := g.resolveInjectTarget(domainKey, revisionID, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -688,12 +705,24 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "model_relation":
-		// FK relationship between models — REFERENCES_MODEL edge
+		// Relationship between models, or model→enum field reference
 		if fact.From == "" || fact.To == "" {
 			return counts, nil
 		}
 		fromNodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.From)
-		toNodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
+		// Determine target type: check if To is an enum (by fact.ToType or existing node)
+		var toNodeKey string
+		if fact.ToType == "enum" {
+			toNodeKey = "data:enum:" + domainKey + ":" + strings.ToLower(fact.To)
+		} else {
+			// Check if an enum node already exists with this name
+			enumKey := "data:enum:" + domainKey + ":" + strings.ToLower(fact.To)
+			if _, err := g.store.GetNodeIDByKey(enumKey); err == nil {
+				toNodeKey = enumKey
+			} else {
+				toNodeKey = "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
+			}
+		}
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, fact.From, "")
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":REFERENCES_MODEL"
@@ -1455,6 +1484,82 @@ func inferNameFromImport(module string) string {
 		return parts[len(parts)-1]
 	}
 	return module
+}
+
+// normalizePascalCase converts PascalCase class names to dot-case file names
+// to match the file-based naming convention used by inferNameFromPath.
+// e.g. "ArenaService" → "arena.service", "BattleResultProducer" → "battle-result.producer"
+func normalizePascalCase(name string) string {
+	if name == "" || !strings.ContainsAny(name[:1], "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+		return name // already lowercase or dot-case
+	}
+	var parts []string
+	current := ""
+	for i, r := range name {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			if current != "" {
+				parts = append(parts, strings.ToLower(current))
+			}
+			current = string(r)
+		} else {
+			current += string(r)
+		}
+	}
+	if current != "" {
+		parts = append(parts, strings.ToLower(current))
+	}
+	return strings.Join(parts, ".")
+}
+
+// resolveInjectTarget finds an existing provider node that matches a PascalCase injection name.
+// Searches existing nodes with various naming conventions before creating a new one.
+func (g *Graph) resolveInjectTarget(domainKey string, revisionID int64, className string, filePath string) (string, int64) {
+	prefix := "code:provider:" + domainKey + ":"
+	dotCase := normalizePascalCase(className) // ArenaService → arena.service
+	flat := strings.ToLower(className)        // arenaservice
+
+	// Try each naming convention against existing nodes
+	candidates := []string{
+		strings.ToLower(dotCase),                                  // arena.service
+		strings.ReplaceAll(strings.ToLower(dotCase), ".", "-"),    // arena-service
+		flat,                                                      // arenaservice
+	}
+	for _, c := range candidates {
+		key := prefix + c
+		if id, err := g.store.GetNodeIDByKey(key); err == nil {
+			return key, id
+		}
+	}
+	// Also search controller nodes
+	for _, c := range candidates {
+		key := "code:controller:" + domainKey + ":" + c
+		if id, err := g.store.GetNodeIDByKey(key); err == nil {
+			return key, id
+		}
+	}
+
+	// Fuzzy: search all providers in domain where flat name matches
+	// e.g. "BattleResultProducer" (flat: "battleresultproducer") matches "battle-result.producer" (flat: "battleresultproducer")
+	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "provider"})
+	for _, n := range nodes {
+		nFlat := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(n.Name, ".", ""), "-", ""))
+		if nFlat == flat {
+			return n.NodeKey, n.NodeID
+		}
+	}
+	// Check controllers too
+	controllers, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "controller"})
+	for _, n := range controllers {
+		nFlat := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(n.Name, ".", ""), "-", ""))
+		if nFlat == flat {
+			return n.NodeKey, n.NodeID
+		}
+	}
+
+	// Not found — create with dot-case form
+	key := prefix + strings.ToLower(dotCase)
+	id := g.ensureNodeID(domainKey, revisionID, key, dotCase, "")
+	return key, id
 }
 
 // SaveFileExtraction stores extraction results from a scan agent.

@@ -1728,6 +1728,25 @@ function dashboard() {
       }
       // SLOT:EXTRA_ROUTES
 
+      // Query param overrides: ?preset=c1&mode=workspace
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('mode')) {
+        const m = urlParams.get('mode');
+        if (['tree','explore','workspace'].includes(m)) {
+          this.tab = 'graph';
+          this.graphMode = m;
+          if (m === 'workspace') this.filterSidebarOpen = true;
+        }
+      }
+      if (urlParams.get('preset')) {
+        this._initPreset = urlParams.get('preset'); // applied after data loads
+        this.tab = 'graph';
+        if (!urlParams.get('mode') && ['c1','c2','c3'].includes(this._initPreset)) {
+          this.graphMode = 'workspace';
+          this.filterSidebarOpen = true;
+        }
+      }
+
       if (this.tab === 'diagram') {
         this.loading.graph = false;
         this.loaded.graph = true;
@@ -1739,8 +1758,15 @@ function dashboard() {
         this.fetchGraphData().then(() => {
           this.loading.graph = false;
           this.loaded.graph = true;
-          if (this.graphMode === 'workspace' || this.graphMode === 'explore') this.autoPresetHighLevel();
-          // Use setTimeout to let Alpine finish rendering the graph container (x-show/x-cloak)
+          // Apply preset from query param, or auto-preset for workspace/explore
+          if (this._initPreset) {
+            this.setPreset(this._initPreset);
+            // Apply focus filter (e.g. ?preset=c3&focus=arena-api or ?preset=c2&focus=tomandjerry)
+            const focusParam = new URLSearchParams(window.location.search).get('focus');
+            if (focusParam) this.applyFocus(focusParam);
+          } else if (this.graphMode === 'workspace' || this.graphMode === 'explore') {
+            this.autoPresetHighLevel();
+          }
           setTimeout(() => this.renderGraph(), 100);
         });
       }
@@ -2208,28 +2234,103 @@ function dashboard() {
       this.setPreset('c1');
     },
 
-    // Double-click a node → zoom into its domain at the next C-level
+    // Apply focus filter at the current preset level.
+    // C2 focus: filter to a domain's services/modules/topics/infra
+    // C3 focus: filter to a service/module's components + connected nodes
+    applyFocus(focusName) {
+      if (!focusName) return;
+      const allNodes = this.graphData.nodes || [];
+      const allEdges = this.graphData.edges || [];
+      const preset = this.graphPreset;
+
+      if (preset === 'c2') {
+        // Focus = domain name → show focused domain's nodes + cross-domain connected nodes
+        // Use workspaceNodes (investigation mode) to show exactly the right set
+        const c2Types = new Set(['service','module','topic','database','broker','cache','queue']);
+        const focusNodes = allNodes.filter(n => n.domain_key === focusName && c2Types.has(n.node_type));
+        const focusIds = new Set(focusNodes.map(n => n.node_id));
+        // Add cross-domain nodes connected to focus nodes
+        const extendedIds = new Set(focusIds);
+        allEdges.forEach(e => {
+          if (focusIds.has(e.from_node_id)) {
+            const t = allNodes.find(n => n.node_id === e.to_node_id);
+            if (t && c2Types.has(t.node_type)) extendedIds.add(e.to_node_id);
+          }
+          if (focusIds.has(e.to_node_id)) {
+            const s = allNodes.find(n => n.node_id === e.from_node_id);
+            if (s && c2Types.has(s.node_type)) extendedIds.add(e.from_node_id);
+          }
+        });
+        // Also add infra nodes (always visible)
+        allNodes.forEach(n => { if (n.layer === 'infra') extendedIds.add(n.node_id); });
+        this.workspaceNodes = allNodes.filter(n => extendedIds.has(n.node_id));
+        this.workspacePaths = [];
+        this._wsPositionCache = {};
+      } else if (preset === 'c3') {
+        // Focus = service or module name → show only its components
+        const svcPrefix = focusName.replace(/-api$/, '').replace(/\.module$/, '');
+        const mod = allNodes.find(n => n.node_type === 'module' && n.name === svcPrefix + '.module');
+        if (!mod) return;
+        const moduleId = mod.node_id;
+        // Contained nodes
+        const containedIds = new Set([moduleId]);
+        allEdges.forEach(e => {
+          if (e.edge_type === 'CONTAINS' && e.from_node_id === moduleId) containedIds.add(e.to_node_id);
+        });
+        // Extended: grab endpoints, topics, flows, models connected to contained nodes
+        // Only extend to: same-domain nodes OR contract/data/flow layer nodes (endpoints, topics, models)
+        // Never pull in providers from other domains
+        const nodeById = {};
+        allNodes.forEach(n => { nodeById[n.node_id] = n; });
+        const focusDomain = mod.domain_key;
+        const crossDomainAllowedLayers = new Set(['contract', 'data', 'flow']);
+        const skipTypes = new Set(['module', 'container', 'service', 'external_system']);
+        const extendedIds = new Set(containedIds);
+        allEdges.forEach(e => {
+          if (containedIds.has(e.from_node_id)) {
+            const target = nodeById[e.to_node_id];
+            if (!target || skipTypes.has(target.node_type)) return;
+            // Same domain: always include. Cross-domain: only contract/data/flow
+            if (target.domain_key === focusDomain || crossDomainAllowedLayers.has(target.layer)) {
+              extendedIds.add(e.to_node_id);
+            }
+          }
+          if (containedIds.has(e.to_node_id)) {
+            const source = nodeById[e.from_node_id];
+            if (!source || skipTypes.has(source.node_type)) return;
+            if (source.domain_key === focusDomain || crossDomainAllowedLayers.has(source.layer)) {
+              extendedIds.add(e.from_node_id);
+            }
+          }
+        });
+        this.workspaceNodes = allNodes.filter(n => extendedIds.has(n.node_id) && ['code','contract','data','flow'].includes(n.layer));
+        this.workspacePaths = [];
+        this._wsPositionCache = {};
+      }
+    },
+
+    // Double-click a node → zoom to next C-level with focus on clicked node
     zoomIntoNode(d) {
-      const domain = d.domain_key;
-      if (!domain) return;
       const currentPreset = this.graphPreset;
+      const focusName = d.name || d.domain_key || '';
       if (currentPreset === 'c1') {
-        // C1 → C2: filter to this domain's container, show modules
         this.setPreset('c2');
+        this.applyFocus(focusName);
       } else if (currentPreset === 'c2') {
-        // C2 → C3: show all components in this domain
+        // Only zoom to C3 for services and modules — topics/infra can't focus
+        if (!['service', 'module'].includes(d.node_type)) return;
         this.setPreset('c3');
+        this.applyFocus(focusName);
       } else if (currentPreset === 'c3') {
-        // C3 is deepest zoom level — no further drilling
         return;
       }
-      // Filter to clicked domain
-      if (domain && currentPreset !== 'all') {
-        const allDomains = [...new Set((this.graphData.nodes || []).map(n => n.domain_key).filter(Boolean))];
-        this.hiddenDomains = allDomains.filter(dk => dk !== domain);
-        this._syncNodeTypeFilter();
-        this.renderGraph();
+      // Update URL with focus
+      if (focusName) {
+        const url = new URL(window.location);
+        url.searchParams.set('focus', focusName);
+        history.replaceState(null, '', url);
       }
+      this.renderGraph();
     },
 
     setZoom(level) {
@@ -2491,6 +2592,14 @@ function dashboard() {
     setPreset(preset) {
       this.autoFilteredNotice = '';
       this.graphPreset = preset;
+      // Update URL with preset for sharing/bookmarking
+      const url = new URL(window.location);
+      url.pathname = '/';
+      url.searchParams.set('preset', preset);
+      url.searchParams.set('mode', this.graphMode);
+      // Clear focus when changing preset (focus is set by zoomIntoNode)
+      url.searchParams.delete('focus');
+      history.replaceState(null, '', url);
       switch (preset) {
         case 'c1': {
           // C1 Context: containers + infra, flat layout, hide everything else
@@ -2512,7 +2621,7 @@ function dashboard() {
           this.groupByField = 'domain_key';
           this.hiddenDomains = [];
           this.nodeTypeFilter = {};
-          const c2Show = ['service', 'module', 'topic', 'database', 'broker', 'cache', 'queue'];
+          const c2Show = ['service', 'topic', 'database', 'broker', 'cache', 'queue'];
           const c2Hide = ['external_system', 'middleware', 'config', 'generated'];
           const c2Types = [...new Set((this.graphData.nodes || []).map(n => n.node_type))];
           c2Types.forEach(t => {
@@ -2598,8 +2707,9 @@ function dashboard() {
       if (hasCollapsibleHidden) {
         // Pass all layer-filtered nodes (before hiding) so collapsible nodes are available for bridging
         const allVisibleByLayer = allNodes.filter(n => this.layerFilters.includes(n.layer));
-        // Use ALL edges (including structural) for traversal so BFS can trace module→provider via CONTAINS
-        return this.computeTransitiveEdges(nodes, allVisibleByLayer, allEdges);
+        // Use filtered edges for transitive BFS — structural edges (CONTAINS) create noise
+        // Service-to-service connections come from the API as direct edges, not via collapse
+        return this.computeTransitiveEdges(nodes, allVisibleByLayer, filteredEdges);
       }
 
       // No collapsible types hidden — standard filtering (hidden non-collapsible types just vanish)
@@ -2703,18 +2813,29 @@ function dashboard() {
         }
       });
 
-      const transitiveEdges = Object.entries(transitiveMap).map(([key, val]) => {
-        const [fromId, toId] = key.split('->');
-        return {
-          from_node_id: fromId, from: fromId,
-          to_node_id: toId, to: toId,
-          edge_type: 'TRANSITIVE',
-          derivation: 'transitive',
-          confidence: val.confidence,
-          _transitive: true,
-          _viaLabel: 'via ' + val.viaNames.join(', ')
-        };
-      });
+      // Filter transitive edges:
+      // 1. Skip duplicates of direct edges
+      // 2. Skip edges FROM contract-layer nodes (topics, endpoints are channels, not callers)
+      const contractIds = new Set(visibleNodes.filter(n => (n.layer || '') === 'contract').map(n => nid(n)));
+      const transitiveEdges = Object.entries(transitiveMap)
+        .filter(([key]) => {
+          if (directEdgeKeys.has(key)) return false;
+          const fromId = key.split('->')[0];
+          if (contractIds.has(fromId) || contractIds.has(parseInt(fromId))) return false;
+          return true;
+        })
+        .map(([key, val]) => {
+          const [fromId, toId] = key.split('->');
+          return {
+            from_node_id: fromId, from: fromId,
+            to_node_id: toId, to: toId,
+            edge_type: 'TRANSITIVE',
+            derivation: 'transitive',
+            confidence: val.confidence,
+            _transitive: true,
+            _viaLabel: 'via ' + val.viaNames.join(', ')
+          };
+        });
 
       return { nodes: visibleNodes, edges: [...directEdges, ...transitiveEdges] };
     },
@@ -2746,8 +2867,6 @@ function dashboard() {
       const nodeById = {};
       allNodes.forEach(n => { nodeById[n.node_id] = n; });
 
-      const structural = ['CONTAINS', 'HAS_FIELD'];
-
       // Find parent via CONTAINS (who contains this node?)
       const parentEdge = allEdges.find(e => e.to_node_id === node.node_id && e.edge_type === 'CONTAINS');
       const parentId = parentEdge ? parentEdge.from_node_id : null;
@@ -2761,21 +2880,29 @@ function dashboard() {
           }
         });
       }
-      // Children = nodes this node CONTAINS
-      allEdges.forEach(e => {
-        if (e.from_node_id === node.node_id && e.edge_type === 'CONTAINS') {
-          siblingIds.add(e.to_node_id);
-        }
-      });
-      // Add parent itself
-      if (parentId) siblingIds.add(parentId);
 
       const incoming = [];
       const internal = [];
       const outgoing = [];
 
+      // Children this node CONTAINS → internal
+      allEdges.filter(e => e.from_node_id === node.node_id && e.edge_type === 'CONTAINS').forEach(e => {
+        const child = nodeById[e.to_node_id];
+        if (!child) return;
+        internal.push({ name: child.name, node_key: child.node_key, node_type: child.node_type, layer: child.layer, edge_type: 'CONTAINS', derivation: 'hard', confidence: 1.0 });
+      });
+
+      // Parent that CONTAINS this node → internal
+      if (parentId && nodeById[parentId]) {
+        const parent = nodeById[parentId];
+        internal.push({ name: parent.name, node_key: parent.node_key, node_type: parent.node_type, layer: parent.layer, edge_type: 'CONTAINED_BY', derivation: 'hard', confidence: 1.0 });
+      }
+
+      // Non-structural edges
+      const skipTypes = ['CONTAINS', 'HAS_FIELD'];
+
       // Outgoing edges (from this node)
-      allEdges.filter(e => e.from_node_id === node.node_id && !structural.includes(e.edge_type)).forEach(e => {
+      allEdges.filter(e => e.from_node_id === node.node_id && !skipTypes.includes(e.edge_type)).forEach(e => {
         const target = nodeById[e.to_node_id];
         if (!target) return;
         const entry = { name: target.name, node_key: target.node_key, node_type: target.node_type, layer: target.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.confidence };
@@ -2787,7 +2914,7 @@ function dashboard() {
       });
 
       // Incoming edges (to this node)
-      allEdges.filter(e => e.to_node_id === node.node_id && !structural.includes(e.edge_type)).forEach(e => {
+      allEdges.filter(e => e.to_node_id === node.node_id && !skipTypes.includes(e.edge_type)).forEach(e => {
         const source = nodeById[e.from_node_id];
         if (!source) return;
         const entry = { name: source.name, node_key: source.node_key, node_type: source.node_type, layer: source.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.confidence };

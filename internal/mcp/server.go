@@ -14,7 +14,7 @@ import (
 
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
-	"github.com/alexdx2/chronicle-core/internal/manifest"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
 	"github.com/alexdx2/chronicle-core/version"
