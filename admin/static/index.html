@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" data-default-tab="<!-- SLOT:DEFAULT_TAB -->">
+<script>if(new URLSearchParams(location.search).get('embed')==='true')document.documentElement.classList.add('embed-mode')</script>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -243,6 +244,10 @@ a{color:var(--primary);text-decoration:none}
 /* Responsive */
 @media(max-width:1024px){.stat-grid{grid-template-columns:repeat(3,1fr)}.content-grid{grid-template-columns:1fr}}
 @media(max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+/* Embed mode: graph-only, no chrome */
+.embed-mode header{display:none!important}
+.embed-mode .fed-bar{display:none!important}
+.embed-mode body{padding:0!important;margin:0!important;overflow:hidden;height:100vh;background:#faf6ef}
 <!-- SLOT:CSS -->
 @keyframes pulse {
     0%, 100% { opacity: 1; }
