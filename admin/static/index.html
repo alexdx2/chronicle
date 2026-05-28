@@ -2578,12 +2578,18 @@ function dashboard() {
     setPreset(preset) {
       this.autoFilteredNotice = '';
       this.graphPreset = preset;
+      // Clear ALL focus state — investigation mode, domain filters, position cache
+      this.workspaceNodes = [];
+      this.workspacePaths = [];
+      this._wsPositionCache = {};
+      this.hiddenDomains = [];
+      this.selectedNode = null;
+      this.nodeEvidence = null;
       // Update URL with preset for sharing/bookmarking
       const url = new URL(window.location);
       url.pathname = '/';
       url.searchParams.set('preset', preset);
       url.searchParams.set('mode', this.graphMode);
-      // Clear focus when changing preset (focus is set by zoomIntoNode)
       url.searchParams.delete('focus');
       history.replaceState(null, '', url);
       switch (preset) {
