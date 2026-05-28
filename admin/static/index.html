@@ -980,7 +980,7 @@ a{color:var(--primary);text-decoration:none}
                 :title="nodeTypeDescriptions[selectedNode.node_type] || selectedNode.node_type"
                 x-text="selectedNode.node_type"></span>
           <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0e9dd;color:var(--text-secondary)" x-text="selectedNode.layer"></span>
-          <template x-if="['service','module'].includes(selectedNode.node_type) && ['c1','c2'].includes(graphPreset)">
+          <template x-if="['service','module','container'].includes(selectedNode.node_type) && ['c1','c2'].includes(graphPreset)">
             <button @click="zoomIntoNode(selectedNode)"
                     style="font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer">
               Zoom in ↓
@@ -4495,13 +4495,19 @@ function dashboard() {
       );
       }
 
-      // --- Click handlers ---
+      // --- Click handlers (with click/dblclick disambiguation) ---
+      let _clickTimer = null;
       node.on('click', (event, d) => {
         event.stopPropagation();
-        if (config.callbacks?.onNodeClick) config.callbacks.onNodeClick(d, simEdges);
+        if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; return; }
+        _clickTimer = setTimeout(() => {
+          _clickTimer = null;
+          if (config.callbacks?.onNodeClick) config.callbacks.onNodeClick(d, simEdges);
+        }, 250);
       });
       node.on('dblclick', (event, d) => {
         event.stopPropagation();
+        if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
         if (config.callbacks?.onNodeDblClick) config.callbacks.onNodeDblClick(d);
       });
       node.on('mouseenter', (event, d) => {
