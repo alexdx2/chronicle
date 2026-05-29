@@ -708,6 +708,9 @@ a{color:var(--primary);text-decoration:none}
           <button class="mode-btn" :class="{active: graphPreset==='c1'}" @click="setPreset('c1');renderGraph()">C1 Context</button>
           <button class="mode-btn" :class="{active: graphPreset==='c2'}" @click="setPreset('c2');renderGraph()">C2 Container</button>
           <button class="mode-btn" :class="{active: graphPreset==='c3'}" @click="setPreset('c3');renderGraph()">C3 Component</button>
+          <template x-if="_focusNodeIds">
+            <button class="mode-btn" @click="_focusNodeIds=null;_focusPrimaryIds=null;const u=new URL(location);u.searchParams.delete('focus');history.replaceState(null,'',u);renderGraph()" style="color:var(--error);border-color:var(--error)">✕ Clear focus</button>
+          </template>
           <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all');renderGraph()">All</button>
         </div>
       </template>
