@@ -703,20 +703,20 @@ a{color:var(--primary);text-decoration:none}
       <!-- C4 Zoom presets (workspace + explore) -->
       <template x-if="graphMode==='workspace' || graphMode==='explore'">
         <div class="mode-toggle">
-          <button class="mode-btn" :class="{active: graphPreset==='c1'}" @click="setPreset('c1')">C1 Context</button>
-          <button class="mode-btn" :class="{active: graphPreset==='c2'}" @click="setPreset('c2')">C2 Container</button>
-          <button class="mode-btn" :class="{active: graphPreset==='c3'}" @click="setPreset('c3')">C3 Component</button>
-          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all')">All</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c1'}" @click="setPreset('c1');renderGraph()">C1 Context</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c2'}" @click="setPreset('c2');renderGraph()">C2 Container</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c3'}" @click="setPreset('c3');renderGraph()">C3 Component</button>
+          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all');renderGraph()">All</button>
         </div>
       </template>
       <!-- Filter presets (tree only) -->
       <template x-if="graphMode==='tree'">
         <div class="mode-toggle">
-          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all')">All</button>
-          <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data')">Data Models</button>
-          <button class="mode-btn" :class="{active: graphPreset==='api'}" @click="setPreset('api')">API Surface</button>
-          <button class="mode-btn" :class="{active: graphPreset==='services'}" @click="setPreset('services')">Services</button>
-          <button class="mode-btn" :class="{active: graphPreset==='flows'}" @click="setPreset('flows')">Flows</button>
+          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all');renderGraph()">All</button>
+          <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data');renderGraph()">Data Models</button>
+          <button class="mode-btn" :class="{active: graphPreset==='api'}" @click="setPreset('api');renderGraph()">API Surface</button>
+          <button class="mode-btn" :class="{active: graphPreset==='services'}" @click="setPreset('services');renderGraph()">Services</button>
+          <button class="mode-btn" :class="{active: graphPreset==='flows'}" @click="setPreset('flows');renderGraph()">Flows</button>
         </div>
       </template>
 
@@ -2218,6 +2218,7 @@ function dashboard() {
 
     autoPresetHighLevel() {
       this.setPreset('c1');
+      this.renderGraph();
     },
 
     // Apply focus filter at the current preset level.
@@ -2655,7 +2656,7 @@ function dashboard() {
           break;
       }
       this._syncNodeTypeFilter();
-      this.renderGraph();
+      // Don't auto-render here — caller (setPreset button click, zoomIntoNode) renders after applying focus
     },
 
     getFilteredData() {
