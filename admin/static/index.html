@@ -2232,11 +2232,9 @@ function dashboard() {
 
       if (preset === 'c2') {
         // Focus = domain name → show focused domain's nodes + cross-domain connected nodes
-        // Use workspaceNodes (investigation mode) to show exactly the right set
-        const c2Types = new Set(['service','module','topic','database','broker','cache','queue']);
+        const c2Types = new Set(['service','topic','database','broker','cache','queue']);
         const focusNodes = allNodes.filter(n => n.domain_key === focusName && c2Types.has(n.node_type));
         const focusIds = new Set(focusNodes.map(n => n.node_id));
-        // Add cross-domain nodes connected to focus nodes
         const extendedIds = new Set(focusIds);
         allEdges.forEach(e => {
           if (focusIds.has(e.from_node_id)) {
@@ -2248,12 +2246,11 @@ function dashboard() {
             if (s && c2Types.has(s.node_type)) extendedIds.add(e.from_node_id);
           }
         });
-        // Also add infra nodes (always visible)
         allNodes.forEach(n => { if (n.layer === 'infra') extendedIds.add(n.node_id); });
         this.workspaceNodes = allNodes.filter(n => extendedIds.has(n.node_id));
         this.workspacePaths = [];
         this._wsPositionCache = {};
-        console.log('[applyFocus] C2 focus=' + focusName, 'focusNodes=' + focusNodes.length, 'extended=' + extendedIds.size, 'workspaceNodes=' + this.workspaceNodes.length);
+        console.log('[applyFocus C2] focus=' + focusName, 'result=' + this.workspaceNodes.length + ' nodes');
       } else if (preset === 'c3') {
         // Focus = service or module name → show only its components
         const svcPrefix = focusName.replace(/-api$/, '').replace(/\.module$/, '');
@@ -3789,6 +3786,7 @@ function dashboard() {
       // --- Determine which nodes to show ---
       let graphNodes, pathEdgeKeys = new Set(), neighborIds = new Set();
 
+      console.log('[renderWorkspaceGraph] isInvestigating=' + isInvestigating, 'workspaceNodes=' + this.workspaceNodes.length, 'filteredNodes=' + filtered.nodes.length);
       if (!isInvestigating) {
         graphNodes = filtered.nodes.map(n => ({
           ...n, _group: (groupField && n.node_type !== 'container') ? (n[groupField] || null) : null,
