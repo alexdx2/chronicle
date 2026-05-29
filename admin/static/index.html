@@ -3075,15 +3075,23 @@ function dashboard() {
     },
 
     highlightNode(nodeId, edges) {
+      const self = this;
       // Scope to the active tab's SVG — diagram or graph
       const containerId = this.tab === 'diagram' ? '#diagram-canvas' : '#graph-canvas';
       const svg = d3.select(containerId + ' .graph-svg');
       if (svg.empty()) return;
       if (!nodeId) {
-        // Clear highlight
+        // Clear highlight — restore out-of-focus on context nodes
         svg.classed('has-highlight', false);
         svg.selectAll('.dimmed').classed('dimmed', false);
         svg.selectAll('.highlighted').classed('highlighted', false);
+        svg.selectAll('.node-g').each(function() {
+          const el = d3.select(this);
+          const d = el.datum?.();
+          const nid = d ? (d.id || d.node_id || d.key) : null;
+          const shouldDim = self._focusPrimaryIds && nid && !self._focusPrimaryIds.has(nid);
+          el.classed('out-of-focus', shouldDim);
+        });
         svg.selectAll('.edge-short-label').classed('dimmed', false).classed('highlighted', false)
           .each(function() {
             const d = d3.select(this).datum?.();
@@ -3124,8 +3132,11 @@ function dashboard() {
         const el = d3.select(this);
         const d = el.datum?.();
         const nid = d ? (d.id || d.node_id || d.key) : parseInt(el.attr('data-node-id'));
-        el.classed('dimmed', !connectedNodes.has(nid));
-        el.select('.node-rect, .node-circle').classed('dimmed', !connectedNodes.has(nid));
+        const isConnected = connectedNodes.has(nid);
+        el.classed('dimmed', !isConnected);
+        // Lift out-of-focus dimming for connected context nodes
+        if (isConnected) el.classed('out-of-focus', false);
+        el.select('.node-rect, .node-circle').classed('dimmed', !isConnected);
       });
 
       // Dim/highlight edges
