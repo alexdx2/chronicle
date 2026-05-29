@@ -155,6 +155,8 @@ a{color:var(--primary);text-decoration:none}
 .graph-svg .node-circle:hover{opacity:.85}
 .graph-svg .node-rect.selected,.graph-svg .node-circle.selected{stroke:#000;stroke-width:3}
 .graph-svg.has-highlight .node-g.dimmed,.graph-svg.has-highlight .node-rect.dimmed{opacity:.15}
+.graph-svg .node-g.out-of-focus{opacity:.35}
+.graph-svg .node-g.out-of-focus .node-rect{stroke-dasharray:4,3}
 .graph-svg.has-highlight .edge-line.dimmed{opacity:.06}
 .graph-svg.has-highlight .edge-line.highlighted{stroke:var(--primary);stroke-width:2.5;opacity:1}
 .graph-svg .edge-label{font-size:9px;fill:var(--primary);font-weight:600;display:none}
@@ -1595,6 +1597,7 @@ function dashboard() {
     selectedNode: null,
     nodeEvidence: null,
     _focusNodeIds: null,
+    _focusPrimaryIds: null,
     manifestContent: '',
     manifestPath: '',
     manifestSaved: false,
@@ -2248,8 +2251,10 @@ function dashboard() {
           }
         });
         allNodes.forEach(n => { if (n.layer === 'infra') extendedIds.add(n.node_id); });
-        // Store as a filter — getFilteredData will use this
+        // _focusNodeIds = all visible (primary + context)
+        // _focusPrimaryIds = focused domain only (rendered fully opaque)
         this._focusNodeIds = extendedIds;
+        this._focusPrimaryIds = focusIds;
       } else if (preset === 'c3') {
         // Focus = service or module name → show only its components
         const svcPrefix = focusName.replace(/-api$/, '').replace(/\.module$/, '');
@@ -2287,8 +2292,8 @@ function dashboard() {
             }
           }
         });
-        // Filter to these node IDs — getFilteredData will apply this
         this._focusNodeIds = extendedIds;
+        this._focusPrimaryIds = containedIds;
       }
     },
 
@@ -2581,6 +2586,7 @@ function dashboard() {
       this._wsPositionCache = {};
       this.hiddenDomains = [];
       this._focusNodeIds = null;
+      this._focusPrimaryIds = null;
       this.selectedNode = null;
       this.nodeEvidence = null;
       // Update URL with preset for sharing/bookmarking
@@ -4344,7 +4350,12 @@ function dashboard() {
       // --- Nodes ---
       const node = gRoot.selectAll('.node-g')
         .data(simNodes).join('g')
-        .attr('class', d => 'node-g' + (d._neighbor ? ' neighbor-node' : ''))
+        .attr('class', d => {
+          let cls = 'node-g';
+          if (d._neighbor) cls += ' neighbor-node';
+          if (self._focusPrimaryIds && !self._focusPrimaryIds.has(d.node_id)) cls += ' out-of-focus';
+          return cls;
+        })
         .attr('transform', d => `translate(${d.x},${d.y})`);
 
       // White background for cleaner rounded corners
