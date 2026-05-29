@@ -1594,6 +1594,7 @@ function dashboard() {
     allRepos: [],
     selectedNode: null,
     nodeEvidence: null,
+    _focusNodeIds: null,
     manifestContent: '',
     manifestPath: '',
     manifestSaved: false,
@@ -2231,7 +2232,7 @@ function dashboard() {
       const preset = this.graphPreset;
 
       if (preset === 'c2') {
-        // Focus = domain name → show focused domain's nodes + cross-domain connected nodes
+        // Focus = domain name → store focused node IDs for getFilteredData to use
         const c2Types = new Set(['service','topic','database','broker','cache','queue']);
         const focusNodes = allNodes.filter(n => n.domain_key === focusName && c2Types.has(n.node_type));
         const focusIds = new Set(focusNodes.map(n => n.node_id));
@@ -2247,10 +2248,8 @@ function dashboard() {
           }
         });
         allNodes.forEach(n => { if (n.layer === 'infra') extendedIds.add(n.node_id); });
-        this.workspaceNodes = allNodes.filter(n => extendedIds.has(n.node_id));
-        this.workspacePaths = [];
-        this._wsPositionCache = {};
-        console.log('[applyFocus C2] focus=' + focusName, 'result=' + this.workspaceNodes.length + ' nodes');
+        // Store as a filter — getFilteredData will use this
+        this._focusNodeIds = extendedIds;
       } else if (preset === 'c3') {
         // Focus = service or module name → show only its components
         const svcPrefix = focusName.replace(/-api$/, '').replace(/\.module$/, '');
@@ -2288,9 +2287,8 @@ function dashboard() {
             }
           }
         });
-        this.workspaceNodes = allNodes.filter(n => extendedIds.has(n.node_id) && ['code','contract','data','flow'].includes(n.layer));
-        this.workspacePaths = [];
-        this._wsPositionCache = {};
+        // Filter to these node IDs — getFilteredData will apply this
+        this._focusNodeIds = extendedIds;
       }
     },
 
@@ -2299,11 +2297,8 @@ function dashboard() {
       const currentPreset = this.graphPreset;
       const focusName = d.name || d.domain_key || '';
       if (currentPreset === 'c1') {
-        console.log('[zoomIntoNode] C1→C2, focusName=' + focusName, 'nodeType=' + d.node_type);
         this.setPreset('c2');
-        console.log('[zoomIntoNode] after setPreset, workspaceNodes=' + this.workspaceNodes.length);
         this.applyFocus(focusName);
-        console.log('[zoomIntoNode] after applyFocus, workspaceNodes=' + this.workspaceNodes.length);
       } else if (currentPreset === 'c2') {
         // Only zoom to C3 for services and modules — topics/infra can't focus
         if (!['service', 'module'].includes(d.node_type)) return;
@@ -2585,6 +2580,7 @@ function dashboard() {
       this.workspacePaths = [];
       this._wsPositionCache = {};
       this.hiddenDomains = [];
+      this._focusNodeIds = null;
       this.selectedNode = null;
       this.nodeEvidence = null;
       // Update URL with preset for sharing/bookmarking
@@ -2681,6 +2677,10 @@ function dashboard() {
       // Domain filter
       if (hiddenDomainsSet.size > 0) {
         nodes = nodes.filter(n => !hiddenDomainsSet.has(n.domain_key || '_unassigned'));
+      }
+      // Focus filter (from applyFocus — limits to specific node set)
+      if (this._focusNodeIds && this._focusNodeIds.size > 0) {
+        nodes = nodes.filter(n => this._focusNodeIds.has(n.node_id));
       }
       // Confidence filter
       if (this.minConfidence > 0) {
@@ -3786,7 +3786,6 @@ function dashboard() {
       // --- Determine which nodes to show ---
       let graphNodes, pathEdgeKeys = new Set(), neighborIds = new Set();
 
-      console.log('[renderWorkspaceGraph] isInvestigating=' + isInvestigating, 'workspaceNodes=' + this.workspaceNodes.length, 'filteredNodes=' + filtered.nodes.length);
       if (!isInvestigating) {
         graphNodes = filtered.nodes.map(n => ({
           ...n, _group: (groupField && n.node_type !== 'container') ? (n[groupField] || null) : null,
