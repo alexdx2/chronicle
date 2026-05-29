@@ -2253,6 +2253,7 @@ function dashboard() {
         this.workspaceNodes = allNodes.filter(n => extendedIds.has(n.node_id));
         this.workspacePaths = [];
         this._wsPositionCache = {};
+        console.log('[applyFocus] C2 focus=' + focusName, 'focusNodes=' + focusNodes.length, 'extended=' + extendedIds.size, 'workspaceNodes=' + this.workspaceNodes.length);
       } else if (preset === 'c3') {
         // Focus = service or module name → show only its components
         const svcPrefix = focusName.replace(/-api$/, '').replace(/\.module$/, '');
@@ -2301,8 +2302,11 @@ function dashboard() {
       const currentPreset = this.graphPreset;
       const focusName = d.name || d.domain_key || '';
       if (currentPreset === 'c1') {
+        console.log('[zoomIntoNode] C1→C2, focusName=' + focusName, 'nodeType=' + d.node_type);
         this.setPreset('c2');
+        console.log('[zoomIntoNode] after setPreset, workspaceNodes=' + this.workspaceNodes.length);
         this.applyFocus(focusName);
+        console.log('[zoomIntoNode] after applyFocus, workspaceNodes=' + this.workspaceNodes.length);
       } else if (currentPreset === 'c2') {
         // Only zoom to C3 for services and modules — topics/infra can't focus
         if (!['service', 'module'].includes(d.node_type)) return;
