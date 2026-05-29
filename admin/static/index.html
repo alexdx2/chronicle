@@ -277,6 +277,7 @@ a{color:var(--primary);text-decoration:none}
       <span class="logo-subtitle"><!-- SLOT:SUBTITLE_START -->Knowledge Graph <template x-if="version"><span x-text="'v' + version" style="opacity:0.6"></span></template><!-- SLOT:SUBTITLE_END --></span>
     </div>
   </div>
+  <!-- SECTION:project_switcher:start -->
   <div class="meta">
     <!-- Project name + switcher -->
     <span style="position:relative">
@@ -336,6 +337,7 @@ a{color:var(--primary);text-decoration:none}
       <template x-if="!wsConnected"><span>&#9675;</span></template>
     </span>
   </div>
+  <!-- SECTION:project_switcher:end -->
   <div class="tab-bar">
     <!-- TAB_BTN:overview:start --><button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button><!-- TAB_BTN:overview:end -->
     <!-- TAB_BTN:graph:start --><button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button><!-- TAB_BTN:graph:end -->
