@@ -219,9 +219,42 @@ var scanStages = []ScanStage{
 
   RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger launches by 2-3s.`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
-  b. Call chronicle_scan_next_file(domain) to check for phase 2
+  b. Call chronicle_scan_next_file(domain) to check next phase
+  c. If action is "reconcile_endpoints" → continue to endpoint reconciliation stage
+  d. If action is "trace_flow" → skip reconciliation, continue to flow tracing
+  e. If action is "done" → skip all remaining phases, finalize:
+     1. chronicle_snapshot_create(domain, revision_id) — captures current graph state
+     2. chronicle_stale_mark(domain, revision_id) — marks nodes not seen in this revision as stale
+     CRITICAL: Use the SAME revision_id for snapshot and stale_mark. Do NOT create a new revision.`,
+	},
+
+	// ─── Phase 1.5: Endpoint reconciliation ───
+	{
+		ID:         "endpoint_reconcile",
+		Name:       "Phase 1.5 — endpoint reconciliation",
+		Type:       "agents",
+		AgentModel: "haiku",
+		Instruction: `scan_next_file returned "reconcile_endpoints" with endpoint_reconcile context.
+  This means some HTTP calls could not be automatically matched to known endpoints
+  (e.g. client calls /users/usr-abc-123 but the endpoint is GET /users/:id).
+
+  For each unmatched call, review the known_endpoints list and emit calls_endpoint facts
+  for matches you can identify. Then call chronicle_file_extracted with the facts.
+
+  Example — unmatched call:
+    from: "UsersClient", path: "/v1/users/usr-abc-123", method: "GET"
+    known_endpoints: ["GET /v1/users", "GET /v1/users/:id", "POST /v1/users"]
+  → emit: {"kind": "calls_endpoint", "from": "UsersClient", "from_type": "provider", "target": "/v1/users/:id", "method": "GET"}
+
+  Rules:
+  - Match concrete values to parameterized paths (UUIDs, IDs, slugs → :param)
+  - Respect HTTP method — GET /users/123 matches GET /users/:id, NOT POST /users/:id
+  - If no match exists, skip it — don't force matches
+  - If action is NOT "reconcile_endpoints": STOP — nothing to reconcile`,
+		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id) to apply matched endpoints
+  b. Call chronicle_scan_next_file(domain) to proceed to phase 2
   c. If action is "trace_flow" → continue to next stage
-  d. If action is "done" → skip phase 2, scan complete`,
+  d. If action is "done" → skip phase 2, finalize`,
 	},
 
 	// ─── Phase 2: Flow tracing ───
@@ -237,7 +270,11 @@ var scanStages = []ScanStage{
     3. If action is NOT "trace_flow": STOP`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
   b. Call chronicle_scan_next_file(domain) — should return done=true
-  c. Report scan results to user`,
+  c. Finalize the graph:
+     1. chronicle_snapshot_create(domain, revision_id) — captures current graph state
+     2. chronicle_stale_mark(domain, revision_id) — marks nodes not seen in this revision as stale
+     CRITICAL: Use the SAME revision_id for snapshot and stale_mark. Do NOT create a new revision.
+  d. Report scan results to user`,
 	},
 }
 
