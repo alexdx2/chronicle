@@ -35,7 +35,7 @@ func TestStageSystem_StageOrder(t *testing.T) {
 	}
 
 	// Verify key ordering
-	expected := []string{"discover", "scope", "packs", "create_packs", "scan_mode", "final_review", "finalize_setup", "phase1", "phase2"}
+	expected := []string{"discover", "scope", "packs", "create_packs", "scan_mode", "final_review", "finalize_setup", "phase1", "endpoint_reconcile", "phase2"}
 	for i, exp := range expected {
 		if i >= len(ids) || ids[i] != exp {
 			t.Errorf("stage %d: expected %s, got %v", i, exp, ids)
@@ -94,26 +94,26 @@ func TestStageSystem_BuildInstruction(t *testing.T) {
 func TestStageSystem_ModelAssignment(t *testing.T) {
 	text := BuildScanStagesInstruction()
 
-	// create_packs and phase2 use sonnet
+	// Verify role-based model assignment
 	for _, s := range GetScanStages() {
-		if s.ID == "create_packs" || s.ID == "phase2" {
-			if s.AgentModel != "sonnet" {
-				t.Errorf("stage %s must use sonnet, got %s", s.ID, s.AgentModel)
-			}
+		if s.Type != "agents" {
+			continue
 		}
-		if s.ID == "phase1" {
-			if s.AgentModel != "haiku" {
-				t.Errorf("stage phase1 must use haiku, got %s", s.AgentModel)
+		switch s.ID {
+		case "phase1":
+			if s.AgentModel != "fast" {
+				t.Errorf("stage phase1 must use fast role, got %s", s.AgentModel)
+			}
+		case "create_packs", "endpoint_reconcile", "phase2":
+			if s.AgentModel != "strong" {
+				t.Errorf("stage %s must use strong role, got %s", s.ID, s.AgentModel)
 			}
 		}
 	}
 
-	// Text should reflect this
-	phase1Section := between(text, "Phase 1", "Phase 2")
-	assertContains(t, phase1Section, "haiku", "phase 1 must mention haiku")
-
-	phase2Section := between(text, "Phase 2", "")
-	assertContains(t, phase2Section, "sonnet", "phase 2 must mention sonnet")
+	// Text should use role-based language, not hardcoded model names
+	assertContains(t, text, "fast model", "must mention fast model role")
+	assertContains(t, text, "strong model", "must mention strong model role")
 }
 
 func TestStageSystem_Extensible(t *testing.T) {

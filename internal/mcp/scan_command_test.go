@@ -24,17 +24,17 @@ func TestScanCommand_HasPackCreationFlow(t *testing.T) {
 func TestScanCommand_OrchestratorAfterAgents(t *testing.T) {
 	cmd := CommandInstructions["scan"]
 
-	// The stage system generates "AFTER ALL <MODEL> AGENTS FINISH"
-	assertContains(t, cmd, "AFTER ALL HAIKU AGENTS FINISH",
-		"must have post-agent steps for haiku")
-	assertContains(t, cmd, "AFTER ALL SONNET AGENTS FINISH",
-		"must have post-agent steps for sonnet")
+	// The stage system generates "AFTER ALL AGENTS FINISH"
+	afterCount := strings.Count(cmd, "AFTER ALL AGENTS FINISH")
+	if afterCount < 3 {
+		t.Errorf("expected at least 3 'AFTER ALL AGENTS FINISH' markers (phase1 + reconcile + phase2), got %d", afterCount)
+	}
 
 	// Must include resolve + check pattern in after-agents
 	assertContains(t, cmd, "chronicle_resolve_extractions",
 		"after-agents must call resolve")
-	assertContains(t, cmd, "check for phase 2",
-		"after phase 1 must check for phase 2")
+	assertContains(t, cmd, "check next phase",
+		"after phase 1 must check next phase")
 }
 
 func TestScanCommand_DomainPassing(t *testing.T) {
@@ -47,24 +47,25 @@ func TestScanCommand_DomainPassing(t *testing.T) {
 
 func TestScanCommand_PackCreationUsesStrongModel(t *testing.T) {
 	cmd := CommandInstructions["scan"]
-	assertContains(t, cmd, "sonnet/opus",
-		"pack creation must specify sonnet/opus model")
-	assertContains(t, cmd, "NOT haiku",
-		"must explicitly exclude haiku for pack creation")
+	assertContains(t, cmd, "STRONG MODEL",
+		"pack creation must specify strong model role")
+	assertContains(t, cmd, "NOT a fast model",
+		"must explicitly exclude fast model for pack creation")
 }
 
 func TestScanCommand_SequenceIsCorrect(t *testing.T) {
 	cmd := CommandInstructions["scan"]
 
-	// Verify order: checkpoints → pack creation → scan mode → finalize → extraction → flows
+	// Verify order: checkpoints → pack creation → scan mode → finalize → extraction → reconcile → flows
 	steps := []string{
 		"CHECKPOINT 1",          // scope
 		"CHECKPOINT 2",          // packs
-		"STEP 1",                // create_packs (sonnet agents)
+		"STEP 1",                // create_packs (strong)
 		"CHECKPOINT 3",          // scan mode
 		"Finalize setup",        // save manifest + discover
-		"STEP 2",                // phase1 extraction (haiku)
-		"STEP 3",                // phase2 flow tracing (sonnet)
+		"STEP 2",                // phase1 extraction (fast)
+		"STEP 3",                // phase1.5 reconciliation (strong)
+		"STEP 4",                // phase2 flow tracing (strong)
 	}
 
 	lastIdx := -1

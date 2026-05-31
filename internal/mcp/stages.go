@@ -15,9 +15,13 @@ type ScanStage struct {
 	Name        string
 	Type        string // "checkpoint", "action", "agents"
 	Instruction string
-	AgentModel  string // for "agents": "haiku", "sonnet"
+	AgentModel  string // for "agents": role hint — "fast" or "strong" (orchestrator picks actual model)
 	AfterAgents string // for "agents": orchestrator steps after agents finish
 }
+
+// AgentRole describes the capability needed, not a specific model.
+// "fast"   — high-throughput extraction, pattern matching (e.g. Haiku, GPT-4o-mini, Gemini Flash)
+// "strong" — reasoning, flow tracing, pack authoring (e.g. Sonnet, GPT-4o, Gemini Pro)
 
 // scanStages is the complete ordered scan pipeline.
 var scanStages = []ScanStage{
@@ -95,9 +99,9 @@ var scanStages = []ScanStage{
 		ID:         "create_packs",
 		Name:       "Create missing instruction packs",
 		Type:       "agents",
-		AgentModel: "sonnet",
-		Instruction: `For each confirmed MISSING pack, spawn ONE sonnet subagent.
-  ⚠️ USE A STRONG MODEL (sonnet/opus) — NOT haiku.
+		AgentModel: "strong",
+		Instruction: `For each confirmed MISSING pack, spawn ONE strong-model subagent.
+  ⚠️ USE A STRONG MODEL (sonnet/gpt-4o/gemini-pro) — NOT a fast model.
   Each agent:
     1. Calls chronicle_get_instruction_pack(id="guide/pack_authoring")
     2. Reads 3-5 representative project files
@@ -193,8 +197,8 @@ var scanStages = []ScanStage{
 		ID:         "phase1",
 		Name:       "Phase 1 — extraction",
 		Type:       "agents",
-		AgentModel: "haiku",
-		Instruction: `Spawn haiku subagents.
+		AgentModel: "fast",
+		Instruction: `Spawn fast-model subagents (3-5 in parallel).
   Each agent runs this loop:
     1. Call chronicle_scan_next_file — each file in the batch includes a domain_key
     2. Check "action" field:
@@ -214,7 +218,7 @@ var scanStages = []ScanStage{
     → {"kind":"provides","to":"OrderController"} + {"kind":"provides","to":"OrderService"} with from_type="module"
 
   Parallelism:
-  - votes=1: spawn 3-5 parallel haiku agents
+  - votes=1: spawn 3-5 parallel fast-model agents
   - votes>1: spawn votes_needed agents per file with vote_group/vote_index
 
   RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger launches by 2-3s.`,
@@ -233,7 +237,7 @@ var scanStages = []ScanStage{
 		ID:         "endpoint_reconcile",
 		Name:       "Phase 1.5 — endpoint reconciliation",
 		Type:       "agents",
-		AgentModel: "haiku",
+		AgentModel: "strong",
 		Instruction: `scan_next_file returned "reconcile_endpoints" with endpoint_reconcile context.
   This means some HTTP calls could not be automatically matched to known endpoints
   (e.g. client calls /users/usr-abc-123 but the endpoint is GET /users/:id).
@@ -262,9 +266,9 @@ var scanStages = []ScanStage{
 		ID:         "phase2",
 		Name:       "Phase 2 — flow tracing",
 		Type:       "agents",
-		AgentModel: "sonnet",
+		AgentModel: "strong",
 		Instruction: `scan_next_file returned "trace_flow" with flow_context.
-  Spawn sonnet subagents (2-3). Each agent loops:
+  Spawn strong-model subagents (2-3). Each agent loops:
     1. Call chronicle_scan_next_file — each file includes a domain_key
     2. If action is "trace_flow": read trigger file + files_to_read, use the file's domain_key, emit flow facts, go to 1
     3. If action is NOT "trace_flow": STOP`,
@@ -313,11 +317,12 @@ ORCHESTRATOR PATTERN — applies to ALL agent stages:
 
 		case "agents":
 			stepNum++
-			section = fmt.Sprintf("STEP %d — %s (%s subagents):\n  %s",
-				stepNum, stage.Name, stage.AgentModel, stage.Instruction)
+			roleDesc := expandRole(stage.AgentModel)
+			section = fmt.Sprintf("STEP %d — %s (%s):\n  %s",
+				stepNum, stage.Name, roleDesc, stage.Instruction)
 			if stage.AfterAgents != "" {
-				section += fmt.Sprintf("\n\n  ⚠️ AFTER ALL %s AGENTS FINISH — orchestrator does this:\n  %s",
-					strings.ToUpper(stage.AgentModel), stage.AfterAgents)
+				section += fmt.Sprintf("\n\n  ⚠️ AFTER ALL AGENTS FINISH — orchestrator does this:\n  %s",
+					stage.AfterAgents)
 			}
 		}
 
@@ -325,6 +330,18 @@ ORCHESTRATOR PATTERN — applies to ALL agent stages:
 	}
 
 	return strings.Join(parts, "\n\n")
+}
+
+// expandRole converts a role hint into a human-readable description.
+func expandRole(role string) string {
+	switch role {
+	case "fast":
+		return "fast model — e.g. haiku, gpt-4o-mini, gemini-flash"
+	case "strong":
+		return "strong model — e.g. sonnet, gpt-4o, gemini-pro"
+	default:
+		return role + " subagents"
+	}
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
