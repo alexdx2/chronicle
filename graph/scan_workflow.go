@@ -36,8 +36,9 @@ type ScanAction struct {
 	Progress     *ScanProgress  `json:"progress,omitempty"`
 	FactSchema   string         `json:"fact_schema,omitempty"`  // included with extract_files/trace_flow to guide agents
 	VotesNeeded  int            `json:"votes_needed,omitempty"` // how many LLM enrichment runs per file (0 or 1 = no voting)
-	GraphContext     *GraphContext          `json:"graph_context,omitempty"`      // phase 2 select — flat list of known entities
-	FlowContext      *FlowContext           `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
+	GraphContext         *GraphContext          `json:"graph_context,omitempty"`      // phase 2 select — flat list of known entities
+	FlowContext          *FlowContext           `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
+	EndpointReconcile    []UnmatchedHTTPCall    `json:"endpoint_reconcile,omitempty"` // unmatched http_calls + candidate endpoints for LLM matching
 	InstructionPacks *prompts.PackSelection `json:"instruction_packs,omitempty"` // loaded + available instruction packs
 	Infrastructure   []manifest.InfraEntry  `json:"infrastructure,omitempty"`    // from manifest — agents use to link topics to brokers
 	CandidateBoundaries []string            `json:"candidate_boundaries,omitempty"` // from manifest include patterns — hints, not truth
@@ -305,6 +306,9 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 			Blocked:   true,
 		}, nil
 
+	case "endpoint_reconcile":
+		return g.endpointReconcileAction(run)
+
 	case "phase2_select":
 		return g.phase2SelectAction(run)
 
@@ -343,6 +347,32 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 			Reason:    "unknown phase: " + run.Phase,
 		}, nil
 	}
+}
+
+// endpointReconcileAction presents unmatched HTTP calls to the LLM
+// along with the list of known endpoints so it can emit calls_endpoint facts.
+func (g *Graph) endpointReconcileAction(run *store.ScanRunRow) (*ScanAction, error) {
+	unmatched := g.FindUnmatchedHTTPCalls(run.DomainKey)
+
+	if len(unmatched) == 0 {
+		// Nothing to reconcile — skip to phase2
+		g.store.TransitionScanRun(run.RunID, "phase2_select", 0)
+		return g.phase2SelectAction(run)
+	}
+
+	return &ScanAction{
+		Domain:    run.DomainKey,
+		ScanRunID: run.RunID,
+		Phase:     "endpoint_reconcile",
+		Action:    "reconcile_endpoints",
+		Reason: "Some HTTP calls could not be automatically matched to known endpoints. " +
+			"Review each unmatched call and emit calls_endpoint facts for matches you can identify. " +
+			"For example, if a client calls /users/123 and the known endpoint is GET /users/:id, " +
+			"emit: {\"kind\": \"calls_endpoint\", \"from\": \"ClientName\", \"from_type\": \"provider\", \"target\": \"/users/:id\", \"method\": \"GET\"}. " +
+			"Then call chronicle_resolve_extractions to apply your matches.",
+		EndpointReconcile: unmatched,
+		Blocked:           true,
+	}, nil
 }
 
 // phase2SelectAction finds trigger files (endpoints, consumers) and creates trace_flow obligations.

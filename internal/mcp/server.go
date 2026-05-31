@@ -1012,6 +1012,9 @@ func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 			switch run.Phase {
 			case "phase1_resolve":
 				g.Store().SetScanRunResolved(run.RunID, result.NodesCreated+result.EdgesCreated)
+				g.Store().TransitionScanRun(run.RunID, "endpoint_reconcile", 0)
+			case "endpoint_reconcile":
+				// After reconciliation, proceed to phase 2
 				g.Store().TransitionScanRun(run.RunID, "phase2_select", 0)
 			case "phase2_resolve":
 				g.Store().CompleteScanRun(run.RunID)

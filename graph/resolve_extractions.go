@@ -50,6 +50,99 @@ type UnresolvedRef struct {
 	Reason   string `json:"reason"`
 }
 
+// UnmatchedHTTPCall represents an http_call that created a CALLS_SERVICE edge
+// but couldn't be matched to a specific endpoint. Presented to the LLM
+// in the endpoint_reconcile phase so it can emit calls_endpoint facts.
+type UnmatchedHTTPCall struct {
+	FromNodeKey string   `json:"from_node_key"`         // the client node
+	FromName    string   `json:"from_name"`              // human-readable name
+	FromFile    string   `json:"from_file"`              // source file
+	TargetHost  string   `json:"target_host"`            // e.g. "tom-api"
+	TargetURL   string   `json:"target_url"`             // full URL from fact
+	Method      string   `json:"method"`                 // HTTP method
+	Path        string   `json:"path"`                   // extracted path from URL
+	Endpoints   []string `json:"known_endpoints"`        // endpoints exposed by the matched/similar service
+}
+
+// FindUnmatchedHTTPCalls identifies http_call edges that have CALLS_SERVICE
+// but no corresponding CALLS_ENDPOINT. For each, it finds known endpoints
+// on the target service so the LLM can match them.
+func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
+	// Get all CALLS_SERVICE edges (from http_call facts)
+	callsServiceEdges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "CALLS_SERVICE"})
+	// Get all CALLS_ENDPOINT edges
+	callsEndpointEdges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "CALLS_ENDPOINT"})
+
+	// Build set of from_node_keys that already have CALLS_ENDPOINT
+	hasEndpoint := map[string]bool{}
+	for _, e := range callsEndpointEdges {
+		hasEndpoint[e.FromNodeKey] = true
+	}
+
+	// Get all endpoints in this domain
+	endpointNodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "endpoint"})
+
+	// Group endpoints by service: find which service exposes which endpoints
+	exposeEdges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "EXPOSES_ENDPOINT"})
+	// Map: service controller key → endpoint names
+	controllerEndpoints := map[string][]string{}
+	for _, e := range exposeEdges {
+		epNode, _ := g.store.GetNodeByKey(e.ToNodeKey)
+		if epNode != nil {
+			controllerEndpoints[e.FromNodeKey] = append(controllerEndpoints[e.FromNodeKey], epNode.Name)
+		}
+	}
+
+	// Build flat list of all endpoint names for fallback
+	allEndpoints := make([]string, 0, len(endpointNodes))
+	for _, ep := range endpointNodes {
+		allEndpoints = append(allEndpoints, ep.Name)
+	}
+
+	var result []UnmatchedHTTPCall
+	for _, e := range callsServiceEdges {
+		if hasEndpoint[e.FromNodeKey] {
+			continue // already matched
+		}
+		fromNode, _ := g.store.GetNodeByKey(e.FromNodeKey)
+		if fromNode == nil {
+			continue
+		}
+		// Extract host from the target service key
+		parts := strings.SplitN(e.ToNodeKey, ":", 4)
+		host := ""
+		if len(parts) >= 4 {
+			host = parts[3]
+		}
+
+		// Find evidence to get original URL
+		evidence, _ := g.store.ListEvidenceByEdge(e.EdgeID)
+		targetURL := ""
+		method := "GET"
+		for _, ev := range evidence {
+			var assertion map[string]any
+			if json.Unmarshal([]byte(ev.Assertion), &assertion) == nil {
+				if sub, ok := assertion["substring"].(string); ok {
+					targetURL = sub
+				}
+			}
+		}
+		path := extractPathFromURL(targetURL)
+
+		result = append(result, UnmatchedHTTPCall{
+			FromNodeKey: e.FromNodeKey,
+			FromName:    fromNode.Name,
+			FromFile:    fromNode.FilePath,
+			TargetHost:  host,
+			TargetURL:   targetURL,
+			Method:      method,
+			Path:        path,
+			Endpoints:   allEndpoints,
+		})
+	}
+	return result
+}
+
 // ResolveExtractions takes all pending extractions and builds the graph.
 // Creates nodes, edges, and evidence from the collected facts.
 func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*ResolveExtractionsResult, error) {
@@ -292,13 +385,30 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "http_call":
-		// External HTTP call — create external system node + edge + evidence
+		// External HTTP call — create service edge + evidence
+		// First, try to resolve hostname against known service aliases
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		targetName := inferExternalSystemName(fact.Target)
-		toNodeKey := "service:external_system:" + domainKey + ":" + strings.ToLower(targetName)
-		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
+
+		// Check if hostname matches a known service via DNS alias
+		var toNodeKey string
+		var toID int64
+		resolved := false
+		if aliases, err := g.store.ListAliasesByNormalized(strings.ToLower(targetName), "dns"); err == nil && len(aliases) > 0 {
+			// Found a matching alias — link to existing service node
+			if node, err := g.store.GetNodeByID(aliases[0].NodeID); err == nil {
+				toNodeKey = node.NodeKey
+				toID = node.NodeID
+				resolved = true
+			}
+		}
+		if !resolved {
+			// No alias match — create external_system node
+			toNodeKey = "service:external_system:" + domainKey + ":" + strings.ToLower(targetName)
+			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
+		}
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -328,12 +438,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Also create CALLS_ENDPOINT edge if we can extract a path from the URL
 		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" {
-			method := strings.ToUpper(fact.Method)
-			if method == "" {
-				method = "GET"
-			}
-			endpointName := method + " " + endpointPath
-			epNodeKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(endpointName, " ", "_"), "/", "_"))
+			epNodeKey, _ := normalizeEndpointKey(domainKey, fact.Method, endpointPath)
 			// Only create edge if the endpoint node already exists (was exposed by another file)
 			if epID, err2 := g.store.GetNodeIDByKey(epNodeKey); err2 == nil {
 				callEpEdgeKey := fromNodeKey + "->" + epNodeKey + ":CALLS_ENDPOINT"
@@ -475,12 +580,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
-		method := strings.ToUpper(fact.Method)
-		if method == "" {
-			method = "GET"
-		}
-		epName := method + " " + fact.Target
-		epKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(epName, " ", "_"))
+		epKey, epName := normalizeEndpointKey(domainKey, fact.Method, fact.Target)
 		epID := g.ensureNodeID(domainKey, revisionID, epKey, epName, "")
 
 		edgeKey := fromNodeKey + "->" + epKey + ":CALLS_ENDPOINT"
@@ -619,17 +719,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if path == "" {
 			path = fact.To
 		}
-		// If AST provided a prefix (e.g. from @Controller('prefix')), combine it
-		if fact.From != "" && path != "" {
-			path = "/" + fact.From + "/" + path
-		} else if fact.From != "" {
-			path = "/" + fact.From
-		}
-		endpointName := path
-		if fact.Method != "" {
-			endpointName = fact.Method + " " + path
-		}
-		toNodeKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(endpointName, " ", "_"), "/", "_"))
+		toNodeKey, endpointName := normalizeEndpointKey(domainKey, fact.Method, path)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, endpointName, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":EXPOSES_ENDPOINT"
@@ -1603,14 +1693,44 @@ func fileTypeOrderFromFacts(facts []Fact) int {
 
 func extractPathFromURL(url string) string {
 	// "http://tom-api:3001/tom/status" → "/tom/status"
+	// "http://api:3000/orders/stats?from=2024" → "/orders/stats"
 	u := url
 	for _, prefix := range []string{"https://", "http://"} {
 		u = strings.TrimPrefix(u, prefix)
 	}
 	if idx := strings.Index(u, "/"); idx >= 0 {
-		return u[idx:]
+		path := u[idx:]
+		// Strip query string
+		if qIdx := strings.Index(path, "?"); qIdx >= 0 {
+			path = path[:qIdx]
+		}
+		// Strip fragment
+		if fIdx := strings.Index(path, "#"); fIdx >= 0 {
+			path = path[:fIdx]
+		}
+		// Strip trailing slash for consistent matching
+		path = strings.TrimRight(path, "/")
+		return path
 	}
 	return ""
+}
+
+// normalizeEndpointKey builds a consistent endpoint node key from method + path.
+// Format: "contract:endpoint:{domain}:{method}:{path}" where path preserves slashes.
+// This MUST be used by all code that creates or looks up endpoint nodes.
+func normalizeEndpointKey(domainKey, method, path string) (nodeKey string, displayName string) {
+	method = strings.ToUpper(method)
+	if method == "" {
+		method = "GET"
+	}
+	// Normalize path: ensure leading slash, strip trailing slash
+	path = strings.TrimRight(path, "/")
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	displayName = method + " " + path
+	nodeKey = "contract:endpoint:" + domainKey + ":" + strings.ToLower(method+":"+path)
+	return
 }
 
 func inferExternalSystemName(url string) string {
