@@ -117,19 +117,26 @@ var scanStages = []ScanStage{
 		ID:   "scan_mode",
 		Name: "Scan quality",
 		Type: "checkpoint",
-		Instruction: `Show how many agents per file and what it costs. Let user pick a number.
+		Instruction: `Show scan profiles as A/B/C/D cards. Each profile defines agents-per-file and model tier.
 
-  Show a table:
-  Agents | Reads    | Time     | Quality
-  1      | X reads  | ~Y min   | fast iteration
-  2      | 2X reads | ~Y min   | moderate
-  3      | 3X reads | ~Y min   | reliable (agents vote)
-  5      | 5X reads | ~Y min   | maximum consensus
+  A. Fast — 1 agent, fast model (haiku/gpt-4o-mini)
+     ~X reads, ~Y min. First scan, exploring. May miss path params.
 
-  Make a recommendation: "I recommend N for this project because [reason]."
-  Ask: "How many agents per file? (1/2/3/5)"
+  B. Balanced — 1 agent, strong model (sonnet/gpt-4o) ← RECOMMENDED
+     ~X reads, ~Y min. Accurate endpoint linking, cross-service patterns.
 
-  The user answers with a number. Accept any positive integer.`,
+  C. Voting — 3 agents, fast model
+     ~3X reads, ~Y min. Agents vote on disagreements. Large codebases.
+
+  D. Maximum — 3 agents, strong model
+     ~3X reads, ~Y min. Highest confidence. Critical systems.
+
+  Replace X/Y with actual file count and time estimate.
+  Recommend B for most projects. Recommend A for speed.
+  Ask: "Choose A/B/C/D."
+
+  After user chooses, confirm:
+  "Profile: [name], [N agents], [model]. A) Continue  B) Change"`,
 	},
 
 	// ─── Checkpoint: Final review ───

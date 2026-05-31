@@ -109,9 +109,9 @@ func TestScanCommand_StructuredCheckpoints(t *testing.T) {
 	assertContains(t, cmd, "CHECKPOINT 1: Scope", "checkpoint 1 must be about scope")
 	assertContains(t, cmd, "CHECKPOINT 2: Instruction packs", "checkpoint 2 must be about packs")
 	assertContains(t, cmd, "CHECKPOINT 3: Scan quality", "checkpoint 3 must be about scan quality")
-	assertContains(t, cmd, "Agents", "checkpoint 3 must show agents column")
-	assertContains(t, cmd, "Reads", "checkpoint 3 must show reads column")
-	assertContains(t, cmd, "How many agents per file", "checkpoint 3 must ask for a number")
+	assertContains(t, cmd, "fast model", "checkpoint 3 must show fast model option")
+	assertContains(t, cmd, "strong model", "checkpoint 3 must show strong model option")
+	assertContains(t, cmd, "RECOMMENDED", "checkpoint 3 must recommend a profile")
 }
 
 func TestScanCommand_OrchestratorPattern(t *testing.T) {
