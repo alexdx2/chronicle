@@ -9,13 +9,13 @@ import (
 )
 
 type EdgeTypeDef struct {
-	FromLayers []string `yaml:"from_layers"`
-	ToLayers   []string `yaml:"to_layers"`
+	FromLayers []string `yaml:"from_layers" json:"from_layers"`
+	ToLayers   []string `yaml:"to_layers" json:"to_layers"`
 }
 
 type TraversalPolicyDef struct {
-	StructuralEdgeTypes []string `yaml:"structural_edge_types"`
-	NoReverseImpact     []string `yaml:"no_reverse_impact"`
+	StructuralEdgeTypes []string `yaml:"structural_edge_types" json:"structural_edge_types"`
+	NoReverseImpact     []string `yaml:"no_reverse_impact" json:"no_reverse_impact"`
 }
 
 type TraversalPolicy struct {
@@ -36,15 +36,15 @@ func (p *TraversalPolicy) AllowsReverseImpact(edgeType string) bool {
 }
 
 type RegistryFile struct {
-	Version             string                 `yaml:"version"`
-	Layers              []string               `yaml:"layers"`
-	NodeTypes           map[string][]string    `yaml:"node_types"`
-	EdgeTypes           map[string]EdgeTypeDef `yaml:"edge_types"`
-	DerivationKinds     []string               `yaml:"derivation_kinds"`
-	SourceKinds         []string               `yaml:"source_kinds"`
-	NodeStatuses        []string               `yaml:"node_statuses"`
-	TriggerKinds        []string               `yaml:"trigger_kinds"`
-	TraversalPolicyDef  *TraversalPolicyDef    `yaml:"traversal_policy"`
+	Version            string                 `yaml:"version" json:"version"`
+	Layers             []string               `yaml:"layers" json:"layers"`
+	NodeTypes          map[string][]string    `yaml:"node_types" json:"node_types"`
+	EdgeTypes          map[string]EdgeTypeDef `yaml:"edge_types" json:"edge_types"`
+	DerivationKinds    []string               `yaml:"derivation_kinds" json:"derivation_kinds"`
+	SourceKinds        []string               `yaml:"source_kinds" json:"source_kinds"`
+	NodeStatuses       []string               `yaml:"node_statuses" json:"node_statuses"`
+	TriggerKinds       []string               `yaml:"trigger_kinds" json:"trigger_kinds"`
+	TraversalPolicyDef *TraversalPolicyDef    `yaml:"traversal_policy" json:"traversal_policy"`
 }
 
 type Registry struct {
@@ -113,6 +113,15 @@ func Load(data []byte) (*Registry, error) {
 	r.traversalPolicy = policy
 
 	return r, nil
+}
+
+// AsFile returns a JSON-serializable representation of the registry.
+func AsFile() (*RegistryFile, error) {
+	var f RegistryFile
+	if err := yaml.Unmarshal(DefaultRegistryYAML, &f); err != nil {
+		return nil, fmt.Errorf("parsing registry: %w", err)
+	}
+	return &f, nil
 }
 
 func (r *Registry) TraversalPolicy() *TraversalPolicy {

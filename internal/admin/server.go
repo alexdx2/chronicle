@@ -407,6 +407,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/glossary/delete", s.handleDeleteTerm)
 	mux.HandleFunc("/api/glossary/dismiss", s.handleDismissViolation)
 	mux.HandleFunc("/api/glossary/save", s.handleSaveTerm)
+	mux.HandleFunc("/api/registry", s.handleRegistry)
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWebSocket(s.hub, w, r)
 	})
@@ -1133,6 +1134,16 @@ func (s *Server) handlePromptSetting(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDefaultGuide(w http.ResponseWriter, r *http.Request) {
 	guide := mcp.ExtractionGuide("")
 	httpJSON(w, map[string]string{"guide": guide})
+}
+
+func (s *Server) handleRegistry(w http.ResponseWriter, r *http.Request) {
+	f, err := registry.AsFile()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(f)
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
