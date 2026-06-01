@@ -64,7 +64,7 @@ func TestStageSystem_BuildInstruction(t *testing.T) {
 	text := BuildScanStagesInstruction()
 
 	// Must have the orchestrator pattern
-	assertContains(t, text, "ORCHESTRATOR PATTERN",
+	assertContains(t, text, "WORKER POOL PATTERN",
 		"must explain the common orchestrator pattern")
 	assertContains(t, text, "AFTER AGENTS",
 		"must reference after-agents steps")

@@ -1,34 +1,28 @@
-# Chronicle Manifest — Tom & Jerry battle simulation
 domains:
-  - name: arena
-    description: "Battle orchestration — matchmaking, attack processing, score tracking"
-    owner: cartoon-team
+  - name: tom-and-jerry
+    description: Tom and Jerry microservices — 4 NestJS services with Prisma, HTTP, and Kafka
+    owner: alex
     scan:
-      include: ["arena-api/**", "shared/**"]
-      exclude: ["**/*.spec.ts", "**/*.test.ts"]
+      include:
+        - "arena-api/src/**"
+        - "tom-api/src/**"
+        - "jerry-api/src/**"
+        - "spectators-api/src/**"
+        - "shared/src/**"
+        - "arena-api/prisma/**"
+        - "tom-api/prisma/**"
+        - "jerry-api/prisma/**"
+      exclude:
+        - "**/*.test.ts"
+        - "**/*.spec.ts"
+        - "**/node_modules/**"
 
-  - name: characters
-    description: "Character services — Tom and Jerry abilities, weapons, traps"
-    owner: cartoon-team
-    scan:
-      include: ["tom-api/**", "jerry-api/**"]
-      exclude: ["**/*.spec.ts", "**/*.test.ts"]
-
-  - name: spectators
-    description: "Spectator experience — leaderboards, stats, notifications"
-    owner: cartoon-team
-    scan:
-      include: ["spectators-api/**"]
-      exclude: ["**/*.spec.ts", "**/*.test.ts"]
-
-tech: [nestjs, prisma, kafka, redis, websocket]
+tech: [nestjs, prisma, kafka, typescript]
 
 infrastructure:
   - name: kafka
     type: broker
     address: kafka:9092
-    description: Event bus for battle results
-  - name: redis
-    type: cache
-    address: redis:6379
-    description: Battle state cache and WebSocket adapter
+    description: Event bus connecting all services
+
+instruction_packs: [language/typescript, framework/nestjs, framework/graphql, orm/prisma]

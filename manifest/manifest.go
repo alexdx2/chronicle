@@ -38,11 +38,41 @@ func (e InfraEntry) InfraNodeKey() string {
 	return "infra:" + e.Type + ":" + id
 }
 
+type ServiceEntry struct {
+	Key  string `yaml:"key"`
+	Path string `yaml:"path"`
+	Role string `yaml:"role,omitempty"`
+}
+
 type Manifest struct {
-	Domains          []DomainEntry `yaml:"domains"`
-	Tech             []string      `yaml:"tech,omitempty"`
-	Infrastructure   []InfraEntry  `yaml:"infrastructure,omitempty"`
-	InstructionPacks []string      `yaml:"instruction_packs,omitempty"`
+	Domains          []DomainEntry  `yaml:"domains"`
+	Tech             []string       `yaml:"tech,omitempty"`
+	Infrastructure   []InfraEntry   `yaml:"infrastructure,omitempty"`
+	Services         []ServiceEntry `yaml:"services,omitempty"`
+	InstructionPacks []string       `yaml:"instruction_packs,omitempty"`
+}
+
+// InferServices returns explicit services if defined, otherwise derives them
+// from scan.include patterns by extracting top-level directory names.
+func (m *Manifest) InferServices() []ServiceEntry {
+	if len(m.Services) > 0 {
+		return m.Services
+	}
+	seen := map[string]bool{}
+	var services []ServiceEntry
+	for _, d := range m.Domains {
+		for _, pattern := range d.Scan.Include {
+			parts := strings.SplitN(pattern, "/", 2)
+			if len(parts) > 0 && parts[0] != "**" && parts[0] != "*" {
+				dir := parts[0]
+				if !seen[dir] {
+					seen[dir] = true
+					services = append(services, ServiceEntry{Key: dir, Path: dir})
+				}
+			}
+		}
+	}
+	return services
 }
 
 func LoadFile(path string) (*Manifest, error) {

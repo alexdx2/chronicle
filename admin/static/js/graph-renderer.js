@@ -46,6 +46,7 @@ export class GraphRenderer {
     edgeCategoryLookup = {},
     showEdgeLabels = true,
   }) {
+    if (!this._container) return;
     this._container.innerHTML = '';
     this._currentEdges = null;
 
@@ -64,14 +65,23 @@ export class GraphRenderer {
     const groupMap = {};
     if (groupField) {
       nodes.forEach(n => {
-        const gk = n[groupField] || n._group;
+        // Infra nodes are shared resources — never inside domain groups
+        if (n.layer === 'infra') return;
+        const gk = n._group || n[groupField];
         if (gk) {
           if (!groupMap[gk]) groupMap[gk] = [];
           groupMap[gk].push(n);
         }
       });
     }
-    const groupKeys = Object.keys(groupMap).sort();
+    // Groups with 1 node: the node IS the group, no box needed
+    const groupKeys = Object.keys(groupMap).filter(gk => groupMap[gk].length >= 2).sort();
+    const activeGroups = new Set(groupKeys);
+    for (const [gk, members] of Object.entries(groupMap)) {
+      if (!activeGroups.has(gk)) {
+        members.forEach(n => { n._group = null; });
+      }
+    }
     const useCompound = groupKeys.length > 0;
 
     let simNodes = [], simNodeMap = {}, simEdges = [];
@@ -159,6 +169,7 @@ export class GraphRenderer {
     this._currentEdges = simEdges;
 
     const svg = d3.select(this._container).append('svg')
+      .attr('class', 'graph-svg')
       .attr('width', '100%').attr('height', '100%')
       .attr('viewBox', `0 0 ${width} ${height}`)
       .style('min-height', '500px');
@@ -190,21 +201,20 @@ export class GraphRenderer {
     }
 
     if (useCompound && gDag) {
+      const boxGroup = g.append('g').attr('class', 'domain-boxes');
       groupKeys.forEach(gk => {
         const gNode = gDag.node('group_' + gk);
         if (!gNode) return;
-        const gg = g.append('g').attr('class', 'group-g');
+        const gg = boxGroup.append('g').attr('class', 'domain-g');
         gg.append('rect')
+          .attr('class', 'domain-box')
           .attr('x', gNode.x - gNode.width / 2).attr('y', gNode.y - gNode.height / 2)
-          .attr('width', gNode.width).attr('height', gNode.height)
-          .attr('rx', 8).attr('ry', 8)
-          .attr('fill', 'var(--bg-alt, #1a1a2e)').attr('stroke', 'var(--border, #333)')
-          .attr('stroke-dasharray', '4,2').attr('opacity', 0.6);
+          .attr('width', gNode.width).attr('height', gNode.height);
         gg.append('text')
+          .attr('class', 'domain-label')
           .attr('x', gNode.x - gNode.width / 2 + 10)
-          .attr('y', gNode.y - gNode.height / 2 + 16)
-          .text(gk)
-          .attr('fill', 'var(--text-muted, #888)').attr('font-size', 11).attr('font-weight', 600);
+          .attr('y', gNode.y - gNode.height / 2 + 14)
+          .text(gk.toUpperCase());
       });
     }
 
@@ -258,17 +268,26 @@ export class GraphRenderer {
       return 0.5;
     });
 
+    // White background for clean rounded corners
     nodeG.append('rect')
       .attr('x', -nw / 2).attr('y', -nh / 2)
       .attr('width', nw).attr('height', nh)
       .attr('rx', 6).attr('ry', 6)
-      .attr('fill', 'var(--bg-card, #1e1e2e)')
+      .attr('fill', '#fff');
+
+    // Semi-transparent layer-colored rect on top
+    nodeG.append('rect')
+      .attr('class', 'node-rect')
+      .attr('x', -nw / 2).attr('y', -nh / 2)
+      .attr('width', nw).attr('height', nh)
+      .attr('rx', 6).attr('ry', 6)
+      .attr('fill', d => self.layerColor(d.layer) + '40')
       .attr('stroke', d => self.layerColor(d.layer))
       .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : 1.5);
 
     nodeG.append('text')
       .attr('text-anchor', 'middle').attr('dy', -2)
-      .attr('fill', 'var(--text, #eee)').attr('font-size', 11)
+      .attr('fill', 'var(--text, #333)').attr('font-size', 11)
       .text(d => {
         const name = d.name || d.node_key || d.id;
         return name.length > 18 ? name.slice(0, 16) + '...' : name;

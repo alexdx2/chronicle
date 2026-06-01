@@ -157,3 +157,47 @@ func TestInfraNodeKeyNoAddress(t *testing.T) {
 		t.Errorf("InfraNodeKey() = %q, want %q", e.InfraNodeKey(), "infra:broker:my-kafka")
 	}
 }
+
+func TestInferServicesFromIncludePatterns(t *testing.T) {
+	m := &Manifest{
+		Domains: []DomainEntry{
+			{
+				Name: "test-domain",
+				Scan: ScanConfig{
+					Include: []string{"arena-api/src/**", "tom-api/src/**", "shared/src/**", "arena-api/prisma/**"},
+				},
+			},
+		},
+	}
+
+	services := m.InferServices()
+	if len(services) != 3 {
+		t.Fatalf("want 3 services (arena-api, tom-api, shared), got %d: %v", len(services), services)
+	}
+
+	expected := map[string]bool{"arena-api": true, "tom-api": true, "shared": true}
+	for _, svc := range services {
+		if !expected[svc.Key] {
+			t.Errorf("unexpected service: %s", svc.Key)
+		}
+	}
+}
+
+func TestInferServicesExplicitOverride(t *testing.T) {
+	m := &Manifest{
+		Services: []ServiceEntry{
+			{Key: "my-api", Path: "apps/api", Role: "api"},
+		},
+		Domains: []DomainEntry{
+			{Name: "d", Scan: ScanConfig{Include: []string{"apps/api/**", "apps/admin/**"}}},
+		},
+	}
+
+	services := m.InferServices()
+	if len(services) != 1 {
+		t.Fatalf("want 1 explicit service, got %d", len(services))
+	}
+	if services[0].Key != "my-api" {
+		t.Errorf("want my-api, got %s", services[0].Key)
+	}
+}

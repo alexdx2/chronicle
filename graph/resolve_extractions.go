@@ -715,9 +715,17 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
-		path := fact.Target
-		if path == "" {
-			path = fact.To
+		route := fact.Target
+		if route == "" {
+			route = fact.To
+		}
+		// Use joinRoutePath only when route is relative (no leading slash).
+		// If route already starts with "/", it is absolute and fact.From is a class name, not a prefix.
+		var path string
+		if strings.HasPrefix(route, "/") {
+			path = route
+		} else {
+			path = joinRoutePath(fact.From, route)
 		}
 		toNodeKey, endpointName := normalizeEndpointKey(domainKey, fact.Method, path)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, endpointName, "")
@@ -1010,6 +1018,10 @@ func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, fi
 			layer = parts[0]
 			nodeType = parts[1]
 		}
+		supportKind := ""
+		if nodeType == "provider" {
+			supportKind = classifyProviderRole(name)
+		}
 		g.store.UpsertNode(store.NodeRow{
 			NodeKey:            nodeKey,
 			Layer:              layer,
@@ -1023,7 +1035,36 @@ func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, fi
 			Freshness:          1.0,
 			TrustScore:         0.9,
 			Metadata:           "{}",
+			SupportKind:        supportKind,
 		})
+	}
+}
+
+// classifyProviderRole returns a support kind string for NestJS support providers
+// identified by well-known name suffixes (guard, interceptor, pipe, middleware,
+// filter, task, cron, processor). Gateway is intentionally excluded — it is an
+// API entrypoint, not a support provider.
+func classifyProviderRole(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, "guard"):
+		return "guard"
+	case strings.HasSuffix(lower, "interceptor"):
+		return "interceptor"
+	case strings.HasSuffix(lower, "pipe"):
+		return "pipe"
+	case strings.HasSuffix(lower, "middleware"):
+		return "middleware"
+	case strings.HasSuffix(lower, "filter"):
+		return "filter"
+	case strings.HasSuffix(lower, "task"):
+		return "task"
+	case strings.HasSuffix(lower, "cron"):
+		return "cron"
+	case strings.HasSuffix(lower, "processor"):
+		return "processor"
+	default:
+		return ""
 	}
 }
 
@@ -1713,6 +1754,23 @@ func extractPathFromURL(url string) string {
 		return path
 	}
 	return ""
+}
+
+// joinRoutePath joins a controller prefix and a route segment into a normalized path.
+// Strips surrounding slashes from each part, then reassembles with a leading slash.
+func joinRoutePath(prefix, route string) string {
+	prefix = strings.Trim(prefix, "/")
+	route = strings.Trim(route, "/")
+	switch {
+	case prefix == "" && route == "":
+		return "/"
+	case prefix == "":
+		return "/" + route
+	case route == "":
+		return "/" + prefix
+	default:
+		return "/" + prefix + "/" + route
+	}
 }
 
 // normalizeEndpointKey builds a consistent endpoint node key from method + path.

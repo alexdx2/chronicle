@@ -285,33 +285,56 @@ a{color:var(--primary);text-decoration:none}
   </div>
   <!-- SECTION:project_switcher:start -->
   <div class="meta">
-    <!-- Project name + switcher -->
+    <!-- Project switcher -->
     <span style="position:relative">
-      <button @click="showProjectSwitcher=!showProjectSwitcher"
-              style="background:none;border:1px solid var(--border);border-radius:6px;padding:2px 10px;cursor:pointer;font-size:12px;color:var(--text);display:flex;align-items:center;gap:4px">
-        <strong x-text="domain || 'Project'"></strong> ▾
+      <button @click="showProjectSwitcher=!showProjectSwitcher; if(showProjectSwitcher) fetch('/api/projects/discover').then(r=>r.json()).then(d=>{discoveredProjects=d||[]}).catch(()=>{})"
+              style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px"
+              @mouseenter="$el.style.borderColor='var(--primary)';$el.style.background='var(--primary)08'"
+              @mouseleave="$el.style.borderColor='var(--border)';$el.style.background='none'"
+              title="Switch project">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <strong x-text="projectName || domain || originalProject?.split('/').pop() || 'Project'"></strong>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
       <div x-show="showProjectSwitcher" x-cloak @click.outside="showProjectSwitcher=false"
-           style="position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);width:350px;z-index:200;padding:12px">
-        <!-- Default project -->
+           style="position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);width:380px;z-index:200;padding:14px">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px">Switch Project</div>
+
+        <!-- Current project -->
         <template x-if="originalProject">
-          <div style="margin-bottom:8px">
-            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Default project:</div>
-            <div @click="resetToDefault()" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;border:1px solid var(--primary);cursor:pointer;background:var(--primary)08"
-               @mouseenter="$el.style.background='#f5f0e8'" @mouseleave="$el.style.background='var(--primary)08'">
-              <span style="font-weight:500" x-text="originalProject.split('/').pop()"></span>
+          <div style="margin-bottom:10px">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Current</div>
+            <div @click="resetToDefault()" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:6px;color:var(--text);font-size:12px;border:1px solid var(--primary);cursor:pointer;background:var(--primary)08">
+              <span style="font-weight:600" x-text="originalProject.split('/').pop()"></span>
               <span style="color:var(--text-muted);font-size:10px;font-family:var(--font-mono)" x-text="originalProject"></span>
+            </div>
+          </div>
+        </template>
+
+        <!-- Discovered projects (auto-scanned .depbot/ folders) -->
+        <template x-if="discoveredProjects && discoveredProjects.length > 0">
+          <div style="margin-bottom:10px">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Discovered</div>
+            <div style="max-height:200px;overflow-y:auto">
+              <template x-for="p in discoveredProjects" :key="p.path">
+                <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:8px 10px;border-radius:6px;color:var(--text);font-size:12px;margin-bottom:3px;border:1px solid var(--border);cursor:pointer"
+                   :style="p.path === (originalProject || '') ? 'border-color:var(--primary);background:var(--primary)08' : ''"
+                   @mouseenter="$el.style.background='#f5f0e8';$el.style.borderColor='var(--primary)'" @mouseleave="$el.style.background=p.path===(originalProject||'')?'var(--primary)08':'';$el.style.borderColor=p.path===(originalProject||'')?'var(--primary)':'var(--border)'">
+                  <span x-text="p.name" style="font-weight:500"></span>
+                  <span style="color:var(--text-muted);font-size:10px;font-family:var(--font-mono)" x-text="p.path"></span>
+                </div>
+              </template>
             </div>
           </div>
         </template>
 
         <!-- Recent projects from localStorage -->
         <template x-if="getRecentProjects().length > 0">
-          <div style="margin-bottom:8px">
-            <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Recent projects:</div>
+          <div style="margin-bottom:10px">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Recent</div>
             <template x-for="p in getRecentProjects()" :key="p.path">
-              <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:6px 8px;border-radius:4px;color:var(--text);font-size:11px;margin-bottom:2px;border:1px solid #f0e9dd;cursor:pointer"
-                 @mouseenter="$el.style.background='#f5f0e8'" @mouseleave="$el.style.background=''">
+              <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:8px 10px;border-radius:6px;color:var(--text);font-size:12px;margin-bottom:3px;border:1px solid var(--border);cursor:pointer"
+                 @mouseenter="$el.style.background='#f5f0e8';$el.style.borderColor='var(--primary)'" @mouseleave="$el.style.background='';$el.style.borderColor='var(--border)'">
                 <span x-text="p.name" style="font-weight:500"></span>
                 <span style="color:var(--text-muted);font-size:10px;font-family:var(--font-mono)" x-text="p.path"></span>
               </div>
@@ -319,16 +342,17 @@ a{color:var(--primary);text-decoration:none}
           </div>
         </template>
 
-        <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">Enter project path:</div>
+        <!-- Open by path -->
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Open by path</div>
         <div style="display:flex;gap:6px">
           <input x-model="switchPath" placeholder="/home/user/my-project"
                  @keydown.enter="switchProject()"
-                 style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:var(--font-mono)">
-          <button @click="switchProject()" class="btn btn-primary btn-sm">Open</button>
+                 style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:var(--font-mono)">
+          <button @click="switchProject()" class="btn btn-primary btn-sm" style="padding:7px 14px">Open</button>
         </div>
         <div x-show="switchError" style="color:var(--error);font-size:11px;margin-top:6px" x-text="switchError"></div>
         <template x-if="switchResult && switchResult.url">
-          <div style="margin-top:8px;padding:8px;background:#f5f0e8;border-radius:6px;font-size:11px">
+          <div style="margin-top:8px;padding:8px 10px;background:#f5f0e8;border-radius:6px;font-size:11px">
             <div style="margin-bottom:4px"><strong x-text="switchResult.name"></strong> — <span x-text="switchResult.node_count + ' nodes'"></span></div>
             <a :href="switchResult.url" target="_blank" style="color:var(--primary);font-weight:500">Open dashboard →</a>
             <span style="font-size:10px;color:var(--text-muted);margin-left:4px" x-text="switchResult.url"></span>
@@ -336,9 +360,9 @@ a{color:var(--primary);text-decoration:none}
         </template>
       </div>
     </span>
-    <span x-show="revision">Rev: <strong x-text="revision"></strong></span>
-    <span x-show="lastScan">Last scan: <strong x-text="lastScan"></strong></span>
-    <span :style="{color: wsConnected ? 'var(--success)' : 'var(--error)'}">
+    <span x-show="revision" style="font-size:12px">Rev: <strong x-text="revision"></strong></span>
+    <span x-show="lastScan" style="font-size:12px">Last scan: <strong x-text="lastScan"></strong></span>
+    <span :style="{color: wsConnected ? 'var(--success)' : 'var(--error)'}" :title="wsConnected ? 'Connected' : 'Disconnected'">
       <template x-if="wsConnected"><span>&#9679;</span></template>
       <template x-if="!wsConnected"><span>&#9675;</span></template>
     </span>
@@ -806,21 +830,26 @@ a{color:var(--primary);text-decoration:none}
                     x-text="'Clear canvas (' + workspaceNodes.filter(w=>w.manual).length + ')'"></button>
           </template>
           <div style="flex:1;overflow-y:auto">
-            <template x-for="group in getWorkspacePaletteGroups()" :key="group.type">
-              <div>
-                <div class="ws-group-label" @click="collapsedPaletteGroups[group.type] = !collapsedPaletteGroups[group.type]">
-                  <span x-text="group.type + ' (' + group.nodes.length + ')'"></span>
-                  <span class="chevron" x-text="collapsedPaletteGroups[group.type] ? '▼' : '▶'"></span>
+            <template x-for="domGroup in getWorkspacePaletteGroups()" :key="domGroup.domain">
+              <div style="margin-bottom:4px">
+                <!-- Domain header — draggable to drop entire domain -->
+                <div class="ws-group-label"
+                     style="font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer"
+                     draggable="true"
+                     @dragstart="$event.dataTransfer.setData('text/plain', 'domain:' + domGroup.domain); $event.dataTransfer.effectAllowed='copy'"
+                     @click="collapsedPaletteGroups[domGroup.domain] = !collapsedPaletteGroups[domGroup.domain]">
+                  <span style="color:var(--text-muted);font-size:9px">⠿</span>
+                  <span x-text="domGroup.domain + ' (' + domGroup.totalNodes + ')'"></span>
+                  <span class="chevron" x-text="collapsedPaletteGroups[domGroup.domain] ? '▼' : '▶'"></span>
                 </div>
-                <template x-if="collapsedPaletteGroups[group.type]">
-                  <div>
-                    <template x-for="n in group.nodes" :key="n.node_id">
+                <template x-if="collapsedPaletteGroups[domGroup.domain]">
+                  <div style="padding-left:6px">
+                    <template x-for="n in domGroup.allNodes" :key="n.node_id">
                       <div class="ws-item"
                            :style="'border-left:3px solid '+layerColor(n.layer)"
                            draggable="true"
-                           @dragstart="$event.dataTransfer.setData('text/plain', n.node_id); $event.dataTransfer.effectAllowed='copy'"
+                           @dragstart="$event.dataTransfer.setData('text/plain', String(n.node_id)); $event.dataTransfer.effectAllowed='copy'"
                            :class="{'opacity-50': workspaceNodes.some(w => w.node_id === n.node_id)}">
-                        <span style="color:var(--text-muted);font-size:9px">⠿</span>
                         <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
                         <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
                       </div>
@@ -841,7 +870,21 @@ a{color:var(--primary);text-decoration:none}
                if (!rawId) return;
                const canvas = document.getElementById('graph-canvas');
                const rect = canvas.getBoundingClientRect();
-               graphController.handleDrop(rawId, $event.clientX - rect.left, $event.clientY - rect.top);
+               if (rawId.startsWith('domain:')) {
+                 // Drop entire domain — add all nodes in that domain
+                 const dk = rawId.slice(7);
+                 const domainNodes = graphController.store.nodes.filter(n =>
+                   (n.layer === 'infra' ? '_infrastructure' : (n.domain_key || '_unassigned')) === dk
+                 );
+                 const cx = $event.clientX - rect.left, cy = $event.clientY - rect.top;
+                 domainNodes.forEach((n, i) => {
+                   const angle = (i / domainNodes.length) * Math.PI * 2;
+                   graphController.workspace.dropNode(n.node_id, cx + Math.cos(angle) * 150, cy + Math.sin(angle) * 150);
+                 });
+                 graphController.render();
+               } else {
+                 graphController.handleDrop(rawId, $event.clientX - rect.left, $event.clientY - rect.top);
+               }
              } else {
                handleWorkspaceDrop($event);
              }
@@ -1555,10 +1598,7 @@ a{color:var(--primary);text-decoration:none}
 </div>
 <!-- SLOT:EXTRA_CONTENT -->
 
-<script type="module">
-  import { GraphController } from './js/graph-controller.js';
-  window.GraphController = GraphController;
-</script>
+<!-- GraphController loaded via dynamic import() in init() -->
 <script>
 function dashboard() {
   return {
@@ -1601,10 +1641,12 @@ function dashboard() {
       status: 'Graph status',
     },
     showProjectSwitcher: false,
+    discoveredProjects: [],
     switchPath: '',
     switchError: '',
     switchResult: null,
     originalProject: '',
+    projectName: '',
     graphData: { nodes: [], edges: [] },
     graphMode: 'tree',
     // C4 Zoom state
@@ -1779,17 +1821,18 @@ function dashboard() {
           this.loading.graph = false;
           this.loaded.graph = true;
           // Apply preset from query param, or auto-preset for workspace/explore
-          if (this._initPreset) {
+          if (this._initPreset && this.graphMode !== 'workspace') {
             this.setPreset(this._initPreset);
-            // Apply focus filter (e.g. ?preset=c3&focus=arena-api or ?preset=c2&focus=tomandjerry)
             const focusParam = new URLSearchParams(window.location.search).get('focus');
             if (focusParam) this.applyFocus(focusParam);
-          } else if (this.graphMode === 'workspace' || this.graphMode === 'explore') {
+          } else if (this.graphMode === 'explore') {
             this.autoPresetHighLevel();
           }
+          // Workspace mode: controller handles preset + focus via restoreFromUrl()
           // Initialize graph controller for workspace mode
-          if (!this.graphController && window.GraphController) {
-            this.graphController = new window.GraphController({
+          try {
+            const { GraphController } = await import('./js/graph-controller.js');
+            this.graphController = new GraphController({
               onStateChange: (state) => {
                 if ('preset' in state) this.graphPreset = state.preset;
                 if ('focus' in state) this.graphFocusName = state.focus;
@@ -1802,13 +1845,16 @@ function dashboard() {
               },
             });
             const graphCanvas = document.getElementById('graph-canvas');
-            if (graphCanvas) {
-              await this.graphController.init(graphCanvas);
+            await this.graphController.init(graphCanvas);
+            if (this.graphData && this.graphData.nodes) {
               this.graphController.loadGraph(this.graphData);
-              this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
-              this.graphController.setShowEdgeLabels(this.showEdgeLabels);
-              this.graphController.restoreFromUrl();
             }
+            this.graphController._projectPath = localStorage.getItem('chronicle_current_project') || this.originalProject || '';
+            this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
+            this.graphController.setShowEdgeLabels(this.showEdgeLabels);
+            this.graphController.restoreFromUrl();
+          } catch (e) {
+            console.warn('GraphController module not available:', e);
           }
           setTimeout(() => this.renderGraph(), 100);
         });
@@ -1851,16 +1897,13 @@ function dashboard() {
         const p = await fetch('/api/projects');
         const pData = await p.json();
         this.originalProject = pData.original || pData.current || '';
+        if (!this.projectName) this.projectName = this.originalProject.split('/').pop() || '';
       } catch(e) {}
 
       // Restore last selected project
       const lastProject = localStorage.getItem('chronicle_current_project');
-      if (lastProject) {
-        try {
-          const r = await fetch('/api/projects?path=' + encodeURIComponent(lastProject));
-          const data = await r.json();
-          if (data.error) localStorage.removeItem('chronicle_current_project');
-        } catch(e) {}
+      if (lastProject && lastProject !== this.originalProject) {
+        await this.switchProject(lastProject);
       }
 
       // Fetch version
@@ -2056,17 +2099,44 @@ function dashboard() {
         if (history.length > 10) history.pop();
         localStorage.setItem('chronicle_projects', JSON.stringify(history));
 
-        // Reload — stats first, rest lazy
-        this.domain = '';
+        // Reload everything for new project
+        this.projectName = data.name || data.path.split('/').pop() || '';
+        this.domain = '';  // Let fetchStats discover the domain from the graph
         this.showProjectSwitcher = false;
+        // Clear URL focus/preset params from previous project
+        history.replaceState(null, '', window.location.pathname);
+        if (this.graphController) {
+          this.graphController._focusNodeIds = null;
+          this.graphController.setPreset('all');
+        }
         this.loading = { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true };
         this.loaded = { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false };
         this.requests = [];
         this.discoveries = [];
         this.scans = [];
+        this.graphData = { nodes: [], edges: [] };
+        this.selectedNode = null;
+        this.nodeEvidence = null;
+
+        // Reload stats
         await this.fetchStats();
         this.loading.stats = false;
         this.lazyLoadOverview();
+
+        // Reload graph data if graph tab is active
+        if (this.tab === 'graph' || this.loaded.graph) {
+          this.loading.graph = true;
+          await this.fetchGraphData();
+          this.loading.graph = false;
+          this.loaded.graph = true;
+          this.$nextTick(() => this.renderGraph());
+        }
+
+        // Reload glossary if language tab is active
+        if (this.tab === 'language') {
+          this.fetchGlossary();
+          this.fetchLanguageCheck();
+        }
       } catch(e) { this.switchError = e.message; }
     },
 
@@ -2150,6 +2220,7 @@ function dashboard() {
         }
         if (this.graphController) {
           this.graphController.loadGraph(this.graphData);
+          this.graphController._projectPath = localStorage.getItem('chronicle_current_project') || this.originalProject || '';
           this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
         }
         // Extract unique repos for filter dropdown
@@ -2357,25 +2428,32 @@ function dashboard() {
     // Double-click a node → zoom to next C-level with focus on clicked node
     zoomIntoNode(d) {
       const currentPreset = this.graphPreset;
-      const focusName = d.name || d.domain_key || '';
+      if (currentPreset === 'c3') return;
+
+      let nextPreset;
       if (currentPreset === 'c1') {
-        this.setPreset('c2');
-        this.applyFocus(focusName);
+        nextPreset = 'c2';
       } else if (currentPreset === 'c2') {
-        // Only zoom to C3 for services and modules — topics/infra can't focus
         if (!['service', 'module'].includes(d.node_type)) return;
-        this.setPreset('c3');
+        nextPreset = 'c3';
+      }
+
+      if (this.graphController && this.graphMode === 'workspace') {
+        this.graphController.setPreset(nextPreset);
+        // C1→C2: focus on domain (all nodes in that domain), not on the container node
+        if (currentPreset === 'c1' && d.domain_key) {
+          this.graphController.focusOnDomain(d.domain_key);
+        } else {
+          this.graphController.focusOn(d.node_id);
+        }
+        this.graphPreset = nextPreset;
+      } else {
+        // Fallback for tree/explore modes
+        this.setPreset(nextPreset);
+        const focusName = d.name || d.domain_key || '';
         this.applyFocus(focusName);
-      } else if (currentPreset === 'c3') {
-        return;
+        this.renderGraph();
       }
-      // Update URL with focus
-      if (focusName) {
-        const url = new URL(window.location);
-        url.searchParams.set('focus', focusName);
-        history.replaceState(null, '', url);
-      }
-      this.renderGraph();
     },
 
     setZoom(level) {
@@ -3074,16 +3152,31 @@ function dashboard() {
       const search = (this.workspaceSearch || '').toLowerCase();
       const allNodes = (this.graphController ? this.graphController.store.nodes : this.graphData.nodes || []);
       const nodes = allNodes.filter(n => {
-        if (search && !n.name.toLowerCase().includes(search) && !(n.node_type || '').toLowerCase().includes(search)) return false;
+        if (search && !n.name.toLowerCase().includes(search) && !(n.node_type || '').toLowerCase().includes(search) && !(n.domain_key || '').toLowerCase().includes(search)) return false;
         return true;
       });
-      const groups = {};
+      // Group by domain first, then by type within each domain
+      const domains = {};
       nodes.forEach(n => {
+        const dk = n.layer === 'infra' ? '_infrastructure' : (n.domain_key || '_unassigned');
+        if (!domains[dk]) domains[dk] = { domain: dk, nodeIds: [], byType: {} };
+        domains[dk].nodeIds.push(n.node_id);
         const t = n.node_type || 'unknown';
-        if (!groups[t]) groups[t] = { type: t, nodes: [] };
-        groups[t].nodes.push(n);
+        if (!domains[dk].byType[t]) domains[dk].byType[t] = [];
+        domains[dk].byType[t].push(n);
       });
-      return Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
+      // Convert to sorted array
+      return Object.values(domains)
+        .map(d => ({
+          ...d,
+          allNodes: Object.values(d.byType).flat().sort((a, b) => a.name.localeCompare(b.name)),
+          totalNodes: d.nodeIds.length,
+        }))
+        .sort((a, b) => {
+          if (a.domain === '_infrastructure') return 1;
+          if (b.domain === '_infrastructure') return -1;
+          return a.domain.localeCompare(b.domain);
+        });
     },
 
     selectNodeByKey(key) {

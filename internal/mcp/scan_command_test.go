@@ -116,7 +116,7 @@ func TestScanCommand_StructuredCheckpoints(t *testing.T) {
 
 func TestScanCommand_OrchestratorPattern(t *testing.T) {
 	cmd := CommandInstructions["scan"]
-	assertContains(t, cmd, "ORCHESTRATOR PATTERN",
+	assertContains(t, cmd, "WORKER POOL PATTERN",
 		"must explain the common pattern for all agent stages")
 }
 

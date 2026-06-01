@@ -205,38 +205,47 @@ var scanStages = []ScanStage{
 		Name:       "Phase 1 — extraction",
 		Type:       "agents",
 		AgentModel: "fast",
-		Instruction: `Spawn fast-model subagents (3-5 in parallel).
-  Each agent runs this loop:
-    1. Call chronicle_scan_next_file — each file in the batch includes a domain_key
-    2. Check "action" field:
-       - "extract_files": read the files, use each file's domain_key when calling chronicle_file_extracted, go to 1
-       - "call_resolve_extractions": call chronicle_resolve_extractions, go to 1
-       - "wait": sleep a few seconds, go to 1
-       - "done" or "trace_flow": STOP — agent is done
-    3. Response includes fact_schema + instruction_packs — follow them exactly
-    4. Each file includes a domain_key field — use it for tool calls on that file
+		Instruction: `Worker pool pattern — you are the pool manager, NOT a worker.
+
+  LOOP:
+    1. Call chronicle_scan_pool_status(domain)
+       -> returns { claimable_now, in_progress, completed, spawn_count, batch_size, ... }
+    2. If claimable_now = 0 AND in_progress = 0: EXIT LOOP — all work done
+    3. If claimable_now = 0 AND in_progress > 0: wait 10 seconds, go to 1
+    4. Spawn spawn_count fast-model subagents in parallel
+
+    Each agent (ONE batch, then DONE — agent must NOT loop):
+      a. Call chronicle_scan_next_file(domain)
+         -> returns { action: "extract_files", files_with_ast: [...] }
+         Each file includes: obligation_id, path, domain_key, ast_facts, vote_group, vote_index
+      b. For each file in the batch:
+         - Read the file
+         - Extract facts following the fact_schema
+         - Call chronicle_file_extracted with:
+           obligation_id, file_path, domain, revision_id, status, facts,
+           vote_group, vote_index (pass exactly what scan_next_file returned)
+      c. Agent is DONE — do NOT call scan_next_file again, do NOT loop
+
+    5. Wait for ALL agents to finish
+    6. Go back to step 1
 
   CRITICAL — CONTAINS edges (structural backbone of the graph):
   - For every @Module file: emit "provides" facts for EVERY controller AND provider declared in it
-    → set from_type="module" so the resolver creates CONTAINS edges (module→controller, module→provider)
+    -> set from_type="module" so the resolver creates CONTAINS edges (module->controller, module->provider)
   - For every repository root: emit a "provides" fact pointing to its main module
   - Missing "provides" from module files = missing CONTAINS edges = broken graph structure
   Example: @Module({ controllers: [OrderController], providers: [OrderService] })
-    → {"kind":"provides","to":"OrderController"} + {"kind":"provides","to":"OrderService"} with from_type="module"
+    -> {"kind":"provides","to":"OrderController"} + {"kind":"provides","to":"OrderService"} with from_type="module"
 
-  Parallelism:
-  - votes=1: spawn 3-5 parallel fast-model agents
-  - votes>1: spawn votes_needed agents per file with vote_group/vote_index
-
-  RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger launches by 2-3s.`,
+  RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger agent launches by 2-3s.`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
-  b. Call chronicle_scan_next_file(domain) to check next phase
-  c. If action is "reconcile_endpoints" → continue to endpoint reconciliation stage
-  d. If action is "trace_flow" → skip reconciliation, continue to flow tracing
-  e. If action is "done" → skip all remaining phases, finalize:
-     1. chronicle_snapshot_create(domain, revision_id) — captures current graph state
-     2. chronicle_stale_mark(domain, revision_id) — marks nodes not seen in this revision as stale
-     CRITICAL: Use the SAME revision_id for snapshot and stale_mark. Do NOT create a new revision.`,
+  b. Call chronicle_scan_pool_status(domain) to check next phase
+  c. If action is "reconcile_endpoints" -> continue to endpoint reconciliation stage
+  d. If action is "trace_flow" -> skip reconciliation, continue to flow tracing
+  e. If action is "done" -> skip all remaining phases, finalize:
+     1. chronicle_snapshot_create(domain, revision_id)
+     2. chronicle_stale_mark(domain, revision_id)
+     CRITICAL: Use the SAME revision_id for snapshot and stale_mark.`,
 	},
 
 	// ─── Phase 1.5: Endpoint reconciliation ───
@@ -301,11 +310,13 @@ func BuildScanStagesInstruction() string {
   - The user should be able to answer with a single letter.
   - Do NOT ask yes/no questions unless user chose Custom.
 
-ORCHESTRATOR PATTERN — applies to ALL agent stages:
-  1. Spawn agents — each file batch entry includes its own domain_key
-  2. Wait for ALL agents to finish
-  3. Run the "AFTER AGENTS" steps yourself — do NOT skip them
-  4. Then proceed to the next stage`)
+WORKER POOL PATTERN — applies to ALL agent stages:
+  1. Call chronicle_scan_pool_status to get claimable count and spawn recommendation
+  2. Spawn recommended number of agents — each agent processes ONE batch, then dies
+  3. Wait for ALL agents to finish
+  4. Check pool status again — if claimable > 0, spawn more agents
+  5. When claimable = 0 and in_progress = 0: run the "AFTER AGENTS" steps
+  6. Then proceed to the next stage`)
 
 	stepNum := 0
 	checkpointNum := 0

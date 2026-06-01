@@ -159,6 +159,8 @@ When the user says any of these, call chronicle_command with the command name an
 | "chronicle deps X" or "what depends on X" | chronicle_command(command='deps') | Dependency analysis |
 | "chronicle path A B" or "how does A connect to B" | chronicle_command(command='path') | Path between nodes |
 | "chronicle services" or "show service architecture" | chronicle_command(command='services') | Service dependency map |
+| "chronicle topology" or "show domain topology" | chronicle_command(command='topology') | Federation domain map |
+| "chronicle connections" or "show cross-repo edges" | chronicle_command(command='connections') | Cross-repo edge inventory |
 | "chronicle status" or "chronicle dashboard" | chronicle_command(command='status') | Graph state + dashboard URL |
 | "chronicle help" | chronicle_command(command='help') | Show all commands |
 

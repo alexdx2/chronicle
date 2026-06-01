@@ -387,6 +387,7 @@ func (s *Server) getDomain(r *http.Request) string {
 // registerAPIRoutes registers all API routes on the given mux.
 func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/info", s.handleInfo)
+	mux.HandleFunc("/api/projects/discover", s.handleDiscoverProjects)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/scan-progress", s.handleScanProgress)
@@ -544,6 +545,71 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleDiscoverProjects(w http.ResponseWriter, r *http.Request) {
+	searchRoot := filepath.Dir(s.originalPath)
+	grandparent := filepath.Dir(searchRoot)
+
+	found := []map[string]string{}
+	seen := map[string]bool{}
+	skip := map[string]bool{"node_modules": true, ".git": true, ".cache": true, ".npm": true, ".nvm": true}
+
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if depth > 4 || dir == "" || dir == "/" {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() || e.Name()[0] == '.' || skip[e.Name()] {
+				continue
+			}
+			candidate := filepath.Join(dir, e.Name())
+			depbotDir := filepath.Join(candidate, ".depbot")
+			if _, err := os.Stat(depbotDir); err == nil {
+				abs, _ := filepath.Abs(candidate)
+				if !seen[abs] {
+					seen[abs] = true
+					found = append(found, map[string]string{
+						"name": e.Name(),
+						"path": abs,
+					})
+				}
+			}
+			walk(candidate, depth+1)
+		}
+	}
+
+	// Also check the root itself
+	if _, err := os.Stat(filepath.Join(searchRoot, ".depbot")); err == nil {
+		abs, _ := filepath.Abs(searchRoot)
+		seen[abs] = true
+		found = append(found, map[string]string{
+			"name": filepath.Base(searchRoot),
+			"path": abs,
+		})
+	}
+
+	walk(searchRoot, 0)
+	if grandparent != searchRoot {
+		if _, err := os.Stat(filepath.Join(grandparent, ".depbot")); err == nil {
+			abs, _ := filepath.Abs(grandparent)
+			if !seen[abs] {
+				seen[abs] = true
+				found = append(found, map[string]string{
+					"name": filepath.Base(grandparent),
+					"path": abs,
+				})
+			}
+		}
+		walk(grandparent, 0)
+	}
+
+	httpJSON(w, found)
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
 	stats, err := s.getGraph().QueryStats(domain)
@@ -697,8 +763,24 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			domainStats[dk] = st
 		}
 
+		// Find the actual graph domain_key for each manifest domain.
+		// Manifest may say "tom-and-jerry" but graph uses "tomandjerry".
+		manifestToGraphDK := map[string]string{}
+		graphDomainKeys := map[string]bool{}
+		for _, n := range nodes { if n.DomainKey != "" { graphDomainKeys[n.DomainKey] = true } }
 		for _, d := range m.Domains {
-			st := domainStats[d.Name]
+			if graphDomainKeys[d.Name] {
+				manifestToGraphDK[d.Name] = d.Name
+			} else if len(graphDomainKeys) == 1 {
+				// Single domain in graph — map manifest domain to it
+				for dk := range graphDomainKeys { manifestToGraphDK[d.Name] = dk }
+			}
+		}
+
+		for _, d := range m.Domains {
+			graphDK := manifestToGraphDK[d.Name]
+			if graphDK == "" { graphDK = d.Name }
+			st := domainStats[graphDK]
 			desc := d.Description
 			if desc == "" {
 				desc = fmt.Sprintf("%d nodes, %d endpoints, %d components, %d models", st.nodes, st.endpoints, st.modules, st.models)
@@ -706,18 +788,22 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			nodeList = append(nodeList, map[string]any{
 				"node_id": virtualID, "node_key": "service:container:" + d.Name,
 				"layer": "service", "node_type": "container",
-				"domain_key": d.Name, "name": d.Name,
+				"domain_key": graphDK, "name": d.Name,
 				"repo_name": "", "file_path": "", "status": "active",
 				"confidence": 1.0, "description": desc,
 			})
 			nodeIDSet[virtualID] = true
-			containerIDs[d.Name] = virtualID
+			containerIDs[graphDK] = virtualID
 			virtualID--
 		}
 
-		// Map graph domain_keys that don't match manifest to nearest manifest domain
-		// (e.g. "otopoint" in graph → "packages" in manifest if they share scan paths)
-		// For now, just assign orphan nodes to the first manifest domain for CONTAINS edges
+		// Ensure all graph domain_keys have a container mapping
+		for dk := range graphDomainKeys {
+			if _, ok := containerIDs[dk]; ok { continue }
+			if len(containerIDs) == 1 {
+				for _, cID := range containerIDs { containerIDs[dk] = cID }
+			}
+		}
 
 		// Virtual edges: container→module CONTAINS + cross-domain
 		var edgeList []map[string]any
@@ -821,29 +907,288 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Inter-backend edges: if multiple backends, connect them
-		backendKeys := []string{}
-		for dk := range backendDomains { backendKeys = append(backendKeys, dk) }
-		for i := 0; i < len(backendKeys); i++ {
-			for j := i + 1; j < len(backendKeys); j++ {
-				a, b := backendKeys[i], backendKeys[j]
-				// Check real cross-domain edges
-				hasCross := false
-				for _, e := range edges {
-					fa, fb := nodeDomain[e.FromNodeID], nodeDomain[e.ToNodeID]
-					if (fa == a && fb == b) || (fa == b && fb == a) { hasCross = true; break }
+		// --- Rollup / derived edges for C1/C2 projection ---
+		// Trace code-level edges up to their owning service via CONTAINS.
+		// e.g. provider→endpoint becomes service→endpoint (EXPOSES/CALLS_ENDPOINT)
+		//      provider→topic becomes service→topic (PUBLISHES/CONSUMES_TOPIC)
+		//      provider→provider across services becomes service→service (CALLS_SERVICE)
+
+		// Build ownership map: nodeID → service nodeID (via CONTAINS chain)
+		nodeByID := map[int64]store.NodeRow{}
+		for _, n := range nodes { nodeByID[n.NodeID] = n }
+
+		// CONTAINS: module→controller/provider. Service→module doesn't exist in DB,
+		// so we match module to service by domain_key + name convention.
+		moduleToService := map[int64]int64{} // module nodeID → service nodeID
+		serviceByDomain := map[string][]store.NodeRow{}
+		for _, n := range nodes {
+			if n.Layer == "service" && (n.NodeType == "service" || n.NodeType == "external_system") {
+				serviceByDomain[n.DomainKey] = append(serviceByDomain[n.DomainKey], n)
+			}
+		}
+		for _, n := range nodes {
+			if n.NodeType != "module" { continue }
+			// Match module to service: arena.module → arena-api, tom.module → tom-api
+			modPrefix := strings.TrimSuffix(n.Name, ".module")
+			for _, svc := range serviceByDomain[n.DomainKey] {
+				svcPrefix := strings.TrimSuffix(svc.Name, "-api")
+				if modPrefix == svcPrefix {
+					moduleToService[n.NodeID] = svc.NodeID
+					break
 				}
-				if !hasCross { continue }
-				aID, bID := containerIDs[a], containerIDs[b]
+			}
+		}
+
+		// Code node → owning service (via CONTAINS to module, then module→service)
+		codeToService := map[int64]int64{}
+		for _, e := range edges {
+			if e.EdgeType != "CONTAINS" { continue }
+			parentNode := nodeByID[e.FromNodeID]
+			if parentNode.NodeType != "module" { continue }
+			svcID, ok := moduleToService[e.FromNodeID]
+			if !ok { continue }
+			codeToService[e.ToNodeID] = svcID
+			codeToService[e.FromNodeID] = svcID // module itself belongs to service
+		}
+
+		// Fallback 1: if a code node shares a name with a mapped node, use the same service.
+		// Handles duplicates like stats.controller (controller, id=21) vs stats.controller (provider, id=50).
+		nameToService := map[string]int64{}
+		for id, svcID := range codeToService {
+			n := nodeByID[id]
+			if n.Name != "" { nameToService[n.Name] = svcID }
+		}
+		for _, n := range nodes {
+			if n.Layer != "code" { continue }
+			if _, ok := codeToService[n.NodeID]; ok { continue }
+			if svcID, ok := nameToService[n.Name]; ok {
+				codeToService[n.NodeID] = svcID
+			}
+		}
+
+		// Fallback 2: orphan code nodes — match by name prefix to service name.
+		for _, n := range nodes {
+			if n.Layer != "code" { continue }
+			if _, ok := codeToService[n.NodeID]; ok { continue }
+			svcs := serviceByDomain[n.DomainKey]
+			if len(svcs) == 0 { continue }
+			if len(svcs) == 1 {
+				codeToService[n.NodeID] = svcs[0].NodeID
+				continue
+			}
+			codeName := strings.Split(n.Name, ".")[0]
+			for _, svc := range svcs {
+				svcPrefix := strings.TrimSuffix(svc.Name, "-api")
+				if codeName == svcPrefix || codeName+"s" == svcPrefix || svcPrefix+"s" == codeName {
+					codeToService[n.NodeID] = svc.NodeID
+					break
+				}
+			}
+		}
+
+		// Fallback 3: still unmapped nodes — check INJECTS edges to find what module they belong to.
+		// If node A INJECTS node B, and B is mapped, A likely belongs to the same service.
+		for changed := true; changed; {
+			changed = false
+			for _, e := range edges {
+				if e.EdgeType != "INJECTS" { continue }
+				_, fromMapped := codeToService[e.FromNodeID]
+				_, toMapped := codeToService[e.ToNodeID]
+				if fromMapped && !toMapped {
+					codeToService[e.ToNodeID] = codeToService[e.FromNodeID]
+					changed = true
+				} else if !fromMapped && toMapped {
+					codeToService[e.FromNodeID] = codeToService[e.ToNodeID]
+					changed = true
+				}
+			}
+		}
+
+		// Build name→serviceID map for resolving provider targets that shadow service names
+		// e.g. provider "tom-api" (code) → service "tom-api" (service layer)
+		serviceByName := map[string]int64{}
+		for _, n := range nodes {
+			if n.Layer == "service" && (n.NodeType == "service" || n.NodeType == "external_system") {
+				serviceByName[n.Name] = n.NodeID
+			}
+		}
+
+		// Generate rollup edges
+		rollupSeen := map[string]bool{}
+		rollupEdgeTypes := map[string]bool{
+			"EXPOSES_ENDPOINT": true, "CALLS_ENDPOINT": true,
+			"PUBLISHES_TOPIC": true, "CONSUMES_TOPIC": true,
+			"CALLS_SERVICE": true,
+		}
+		for _, e := range edges {
+			if !rollupEdgeTypes[e.EdgeType] { continue }
+			fromSvc, fromHas := codeToService[e.FromNodeID]
+			if !fromHas { continue }
+
+			var toID int64
+			var toNode store.NodeRow
+			toNode = nodeByID[e.ToNodeID]
+
+			switch e.EdgeType {
+			case "EXPOSES_ENDPOINT", "CALLS_ENDPOINT", "PUBLISHES_TOPIC", "CONSUMES_TOPIC":
+				// code→contract: rollup to service→contract
+				toID = e.ToNodeID
+			case "CALLS_SERVICE":
+				// code→code/service: rollup to service→service
+				if toNode.Layer == "service" {
+					// Direct call to service-layer node (e.g. external_system)
+					toID = e.ToNodeID
+				} else if svcID, ok := serviceByName[toNode.Name]; ok {
+					// Provider shadows a service name (e.g. provider "jerry-api" → service "jerry-api")
+					if fromSvc == svcID { continue } // skip internal
+					toID = svcID
+				} else if toSvc, ok := codeToService[e.ToNodeID]; ok {
+					if fromSvc == toSvc { continue } // skip internal
+					toID = toSvc
+				} else {
+					continue
+				}
+			default:
+				continue
+			}
+
+			if fromSvc == toID { continue } // skip self-loops
+			key := fmt.Sprintf("%d->%d:%s", fromSvc, toID, e.EdgeType)
+			if rollupSeen[key] { continue }
+			rollupSeen[key] = true
+
+			edgeList = append(edgeList, map[string]any{
+				"edge_id": virtualEdgeID,
+				"edge_key": key,
+				"from_node_id": fromSvc, "to_node_id": toID,
+				"edge_type": e.EdgeType, "derivation": "rollup",
+				"confidence": e.Confidence, "active": true,
+				"virtual": true, "derived": true,
+			})
+			virtualEdgeID--
+		}
+
+		// Service→infra rollup: if a domain's code uses infra, its services should connect
+		infraNodes := map[int64]bool{}
+		for _, n := range nodes {
+			if n.Layer == "infra" { infraNodes[n.NodeID] = true }
+		}
+		// For each service, check if any code in that service connects to infra
+		svcInfraEdges := map[string]bool{}
+		for codeID, svcID := range codeToService {
+			neighbors := map[int64]bool{}
+			for _, e := range edges {
+				if e.FromNodeID == codeID && infraNodes[e.ToNodeID] { neighbors[e.ToNodeID] = true }
+				if e.ToNodeID == codeID && infraNodes[e.FromNodeID] { neighbors[e.FromNodeID] = true }
+			}
+			for infraID := range neighbors {
+				key := fmt.Sprintf("%d->%d:USES_INFRA", svcID, infraID)
+				if svcInfraEdges[key] || rollupSeen[key] { continue }
+				svcInfraEdges[key] = true
 				edgeList = append(edgeList, map[string]any{
-					"edge_id": virtualEdgeID,
-					"edge_key": "service:container:" + a + "->service:container:" + b + ":CALLS_SERVICE",
-					"from_node_id": aID, "to_node_id": bID,
-					"edge_type": "CALLS_SERVICE", "derivation": "hard",
-					"confidence": 0.8, "active": true,
+					"edge_id": virtualEdgeID, "edge_key": key,
+					"from_node_id": svcID, "to_node_id": infraID,
+					"edge_type": "USES_INFRA", "derivation": "rollup",
+					"confidence": 0.9, "active": true,
+					"virtual": true, "derived": true,
 				})
 				virtualEdgeID--
 			}
+		}
+		// Also: all backend services use shared infra from manifest
+		for _, infra := range m.Infrastructure {
+			infraID, ok := infraIDs[infra.InfraNodeKey()]
+			if !ok { continue }
+			for dk := range backendDomains {
+				for _, svc := range serviceByDomain[dk] {
+					key := fmt.Sprintf("%d->%d:USES_INFRA", svc.NodeID, infraID)
+					if svcInfraEdges[key] || rollupSeen[key] { continue }
+					svcInfraEdges[key] = true
+					edgeList = append(edgeList, map[string]any{
+						"edge_id": virtualEdgeID, "edge_key": key,
+						"from_node_id": svc.NodeID, "to_node_id": infraID,
+						"edge_type": "USES_INFRA", "derivation": "rollup",
+						"confidence": 0.8, "active": true,
+						"virtual": true, "derived": true,
+					})
+					virtualEdgeID--
+				}
+			}
+		}
+
+		// Container-level rollup for C1: if any service in a domain connects to
+		// an external_system or infra node, create container→target edge
+		serviceToContainer := map[int64]int64{} // serviceNodeID → containerNodeID
+		for _, n := range nodes {
+			if n.Layer == "service" && n.NodeType == "service" {
+				if cID, ok := containerIDs[n.DomainKey]; ok {
+					serviceToContainer[n.NodeID] = cID
+				}
+			}
+		}
+		// Also map code nodes to containers via codeToService→serviceToContainer
+		for codeID, svcID := range codeToService {
+			if cID, ok := serviceToContainer[svcID]; ok {
+				_ = cID
+				_ = codeID
+			}
+		}
+
+		// Scan rollup edges + real edges for service→external/infra connections
+		containerRollupSeen := map[string]bool{}
+		for _, e := range edgeList {
+			fromID, _ := e["from_node_id"].(int64)
+			toID, _ := e["to_node_id"].(int64)
+			if fromID == 0 || toID == 0 { continue }
+			cID, fromIsService := serviceToContainer[fromID]
+			if !fromIsService { continue }
+			if cID == toID { continue } // skip self-loops
+			toNode := nodeByID[toID]
+			if toNode.NodeType != "external_system" { continue }
+			et := "CALLS_SERVICE"
+			key := fmt.Sprintf("%d->%d:%s", cID, toID, et)
+			if containerRollupSeen[key] { continue }
+			containerRollupSeen[key] = true
+			edgeList = append(edgeList, map[string]any{
+				"edge_id": virtualEdgeID, "edge_key": key,
+				"from_node_id": cID, "to_node_id": toID,
+				"edge_type": et, "derivation": "rollup",
+				"confidence": 0.9, "active": true,
+				"virtual": true, "derived": true,
+			})
+			virtualEdgeID--
+		}
+		// Also check raw edges: code→external_system (for C1 container→external)
+		for _, e := range edges {
+			if e.EdgeType != "CALLS_SERVICE" { continue }
+			toNode := nodeByID[e.ToNodeID]
+			if toNode.NodeType != "external_system" { continue }
+			fromNode := nodeByID[e.FromNodeID]
+			// Find container by service mapping or direct domain
+			var cID int64
+			if svcID, ok := codeToService[e.FromNodeID]; ok {
+				if c, ok2 := serviceToContainer[svcID]; ok2 {
+					cID = c
+				}
+			}
+			if cID == 0 {
+				if c, ok := containerIDs[fromNode.DomainKey]; ok {
+					cID = c
+				}
+			}
+			if cID == 0 { continue }
+			et := "CALLS_SERVICE"
+			key := fmt.Sprintf("%d->%d:%s", cID, e.ToNodeID, et)
+			if containerRollupSeen[key] { continue }
+			containerRollupSeen[key] = true
+			edgeList = append(edgeList, map[string]any{
+				"edge_id": virtualEdgeID, "edge_key": key,
+				"from_node_id": cID, "to_node_id": e.ToNodeID,
+				"edge_type": et, "derivation": "rollup",
+				"confidence": e.Confidence, "active": true,
+				"virtual": true, "derived": true,
+			})
+			virtualEdgeID--
 		}
 
 		// Append real edges

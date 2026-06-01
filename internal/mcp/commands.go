@@ -21,8 +21,10 @@ var UserCommands = map[string]string{
 	"update":  "Incremental update — rescan only changed files since last scan via git diff",
 	"verify":  "Verify low-confidence edges — find code evidence to confirm or reject inferred relationships",
 	"help":    "Show available Chronicle commands",
-	"diagram": "Show a live diagram to explain architecture",
-	"setup":   "Configure which directories to scan — interactive manifest builder",
+	"diagram":     "Show a live diagram to explain architecture",
+	"topology":    "Show federation topology — how domains connect via cross-repo edges",
+	"connections": "Show cross-repo connections — external node inventory with resolution status",
+	"setup":       "Configure which directories to scan — interactive manifest builder",
 }
 
 var CommandInstructions = map[string]string{
@@ -220,6 +222,83 @@ Example:
     annotations: '{"service:code:core:OrdersService":{"highlight":"#ef4444","note":"CHANGED"},"service:code:crm:CrmConsumer":{"highlight":"#f59e0b","note":"Consumes order.created events"}}'
   )
 
+### Type 5: Federation Topology
+Trigger: "show topology", "how do domains connect", "federation overview", "cross-repo map"
+Purpose: Domains as blocks connected by cross-repo edges. Shows how independently-scanned repos relate.
+
+CRITICAL: Use ONLY "nodes" (synthetic). NEVER use "node_keys". Each domain → one node with kind "domain".
+
+Construction:
+1. Call chronicle_query_stats("") for aggregated stats
+2. Call chronicle_node_list with status="external" to find all external nodes
+3. Group external nodes by source domain → target domain (extract domain from node_key's 3rd segment)
+4. For each domain: create one node with kind "domain", metadata with node/edge/service counts
+5. For each domain pair: aggregate edge types into one label (e.g., "CONSUMES_TOPIC ×2, CALLS_SERVICE ×1")
+6. Pick edge kind: if any CONSUMES_TOPIC/PUBLISHES_TOPIC → "async", else if CALLS_ENDPOINT/CALLS_SERVICE → "http", else "data"
+7. Annotate domains with unresolved externals: {"highlight":"#fbbf24","note":"N unresolved"}
+8. Call chronicle_diagram_build
+
+Example:
+  chronicle_diagram_build(
+    title: "Federation Topology",
+    nodes: '[{"key":"domain:tomandjerry","label":"tom-and-jerry","kind":"domain","metadata":{"nodes":"60","services":"4"}},{"key":"domain:orders","label":"orders","kind":"domain","metadata":{"nodes":"21","services":"2"}},{"key":"domain:analytics","label":"analytics","kind":"domain","metadata":{"nodes":"29","services":"1"}}]',
+    edges: '[{"from":"domain:analytics","to":"domain:tomandjerry","label":"CONSUMES_TOPIC, CALLS_SERVICE, CALLS_ENDPOINT, USES_MODEL, READS_DB","kind":"async"},{"from":"domain:analytics","to":"domain:orders","label":"CONSUMES_TOPIC, DEPENDS_ON_DOMAIN","kind":"async"}]',
+    annotations: '{"domain:analytics":{"note":"9 external refs, 1 unresolved","highlight":"#fbbf24"}}'
+  )
+
+### Type 6: Cross-repo Connections
+Trigger: "show connections", "cross-repo edges", "what connects the repos", "external nodes"
+Purpose: Detailed view of every cross-repo edge — actual nodes that cross boundaries, not domain-level aggregation.
+
+Construction:
+1. Call chronicle_node_list with status="external" to find all external nodes
+2. For each external node: note its node_key, the edge type connecting to it (from edge_list), and source node
+3. Collect source providers (local nodes) and external targets
+4. Use node_keys for source providers + resolved targets (auto-discovers edges between them)
+5. Add synthetic nodes (kind "external") for unresolved externals
+6. Set groups: {"field":"domain"} to group by domain
+7. Annotate unresolved nodes: {"highlight":"#fbbf24","note":"UNRESOLVED — no matching repo"}
+8. Cap at 20 node_keys. If more, show top-connected domains only.
+
+Example:
+  chronicle_diagram_build(
+    title: "Cross-repo Connections",
+    node_keys: '["code:provider:analytics:battlestatsconsumer","code:provider:analytics:leaderboardclient","contract:topic:tomandjerry:battle-results","service:service:tomandjerry:spectators-api"]',
+    nodes: '[{"key":"ext:ghost-api","label":"ghost-api","kind":"external","domain":"nonexistent"}]',
+    edges: '[{"from":"code:provider:analytics:ghostserviceclient","to":"ext:ghost-api","label":"CALLS_SERVICE","kind":"http"}]',
+    groups: '{"field":"domain"}',
+    annotations: '{"ext:ghost-api":{"highlight":"#fbbf24","note":"UNRESOLVED — no matching repo"}}'
+  )
+
+### Type 7: Federated Impact
+Trigger: "federated impact", "cross-repo blast radius", "what breaks across repos if I change X"
+Purpose: Like Type 4 (Impact) but explicitly shows cross-repo boundary crossings with steps per depth level.
+
+Construction:
+1. Call chronicle_impact(node_key, max_depth=4, min_score=0)
+2. Group impacted nodes by depth level
+3. Use node_keys for changed node + up to 15 highest-scoring impacted nodes
+4. Set groups: {"field":"domain"} — CRITICAL for showing repo boundaries
+5. Annotations — score-based heatmap:
+   - Changed node: {"highlight":"#ef4444","note":"CHANGED"}
+   - Score >= 70: {"highlight":"#f87171","note":"score: N — EDGE_CHAIN"}
+   - Score >= 40: {"highlight":"#fb923c","note":"score: N — EDGE_CHAIN"}
+   - Score < 40: {"highlight":"#fbbf24","note":"score: N — EDGE_CHAIN"}
+   - Cross-repo nodes: append " [cross-repo]" to note
+6. Steps: one per depth level + final "Full blast radius" step
+   - Step 1: "Direct dependents" — highlights depth-1 nodes
+   - Step N: "Transitive (depth N)" — highlights depth-N nodes
+   - Final: "Full blast radius" — all impacted nodes highlighted
+
+Example:
+  chronicle_diagram_build(
+    title: "Impact: battle-results topic",
+    node_keys: '["contract:topic:tomandjerry:battle-results","code:provider:tomandjerry:battleresultconsumer","code:provider:analytics:battlestatsconsumer","code:provider:analytics:analyticsservice","code:controller:analytics:dashboardcontroller"]',
+    groups: '{"field":"domain"}',
+    annotations: '{"contract:topic:tomandjerry:battle-results":{"highlight":"#ef4444","note":"CHANGED"},"code:provider:tomandjerry:battleresultconsumer":{"highlight":"#f87171","note":"score: 75.0 — CONSUMES_TOPIC"},"code:provider:analytics:battlestatsconsumer":{"highlight":"#f87171","note":"score: 75.0 — CONSUMES_TOPIC [cross-repo]"},"code:provider:analytics:analyticsservice":{"highlight":"#fb923c","note":"score: 53.4 — CONSUMES_TOPIC → INJECTS"},"code:controller:analytics:dashboardcontroller":{"highlight":"#fbbf24","note":"score: 38.1 — CONSUMES_TOPIC → INJECTS → INJECTS"}}',
+    steps: '[{"title":"Direct dependents","description":"Nodes that directly consume battle-results","highlights":{"code:provider:tomandjerry:battleresultconsumer":"#f87171","code:provider:analytics:battlestatsconsumer":"#f87171"}},{"title":"Transitive (depth 2)","description":"Nodes that inject the direct consumers","highlights":{"code:provider:analytics:analyticsservice":"#fb923c"}},{"title":"Transitive (depth 3)","description":"Controllers depending on AnalyticsService","highlights":{"code:controller:analytics:dashboardcontroller":"#fbbf24"}},{"title":"Full blast radius","description":"All 4 impacted nodes across 2 repos","highlights":{"code:provider:tomandjerry:battleresultconsumer":"#f87171","code:provider:analytics:battlestatsconsumer":"#f87171","code:provider:analytics:analyticsservice":"#fb923c","code:controller:analytics:dashboardcontroller":"#fbbf24"}}]'
+  )
+
 ## Cross-cutting Rules
 
 - Node kinds: domain, infrastructure, external, service, endpoint, model, topic, queue, database
@@ -230,6 +309,45 @@ Example:
 - Kafka topics: include topic names as edge labels.
 - Annotate focal nodes explaining WHY they matter.
 - Use groups: {"field":"domain"} for types 2-4 to show domain boundaries.`,
+
+	"topology": `Federation topology — show how domains connect:
+
+1. Call chronicle_query_stats("") for aggregated node/edge counts per domain
+2. Call chronicle_node_list with status="external" to find all external node references
+3. Group externals by domain pair:
+   - Extract source domain from the repo/context that has the external node
+   - Extract target domain from the node_key (3rd segment, e.g., "tomandjerry" from "contract:topic:tomandjerry:battle-results")
+   - Aggregate edge types per domain pair
+4. Build the diagram following Type 5 (Federation Topology) from the diagram catalog:
+   - One synthetic "domain" node per domain with metadata (node count, edge count, service count)
+   - One edge per domain pair with aggregated edge type labels
+   - Annotate domains that have unresolved externals with yellow highlight
+5. Call chronicle_diagram_build
+6. Share the URL: "Open {url} to see the federation topology"
+7. Also provide a text summary: N domains, N cross-repo edges, N unresolved`,
+
+	"connections": `Cross-repo connections — show every edge that crosses repo boundaries:
+
+1. Call chronicle_node_list with status="external" to find all external nodes
+2. For each external node:
+   a. Note: node_key, name, layer, node_type
+   b. Call chronicle_edge_list to find edges pointing TO this external node — note the edge_type and source node
+   c. Check if node_key exists as "active" in another domain — resolved vs unresolved
+3. Group results two ways:
+   a. By edge type: CONSUMES_TOPIC (N), CALLS_SERVICE (N), CALLS_ENDPOINT (N), etc.
+   b. By domain pair: analytics→tomandjerry (N links), analytics→orders (N links)
+4. Build the diagram following Type 6 (Cross-repo Connections) from the diagram catalog:
+   - node_keys for source providers and resolved target nodes
+   - Synthetic "external" nodes for unresolved references
+   - Group by domain
+   - Annotate unresolved nodes in yellow
+5. Call chronicle_diagram_build
+6. Share the URL: "Open {url} to see cross-repo connections"
+7. Report text summary:
+   - N external nodes total, N resolved, N unresolved
+   - Breakdown by edge type
+   - Breakdown by domain pair
+   - List unresolved nodes with their source domain and edge type`,
 
 	"setup": `Project setup — configure scan scope:
 1. Call chronicle_file_groups — shows all git-tracked files grouped by directory with counts
@@ -258,6 +376,8 @@ User makes DIRECTORY-level decisions, not file-level.`,
 - /chronicle-update — Incremental update (changed files only)
 - /chronicle-verify — Verify low-confidence edges with code evidence
 - /chronicle-diagram — Live architecture diagram
+- /chronicle-topology — Federation domain topology map
+- /chronicle-connections — Cross-repo edge inventory
 - /chronicle-status — Current graph state
 - /chronicle-help — This help
 

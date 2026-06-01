@@ -21,6 +21,7 @@ export class GraphController {
     this._layoutMode = 'dagre';
     this._edgeCategoryLookup = {};
     this._showEdgeLabels = true;
+    this._projectPath = '';
   }
 
   async init(containerEl) {
@@ -40,7 +41,7 @@ export class GraphController {
 
   async loadGraph(graphApiResponse) {
     this.store.load(graphApiResponse);
-    this.workspace.clear();
+    if (this.workspace) this.workspace.clear();
     this.render();
   }
 
@@ -50,6 +51,13 @@ export class GraphController {
     this._focusNodeIds = null;
     this.workspace.clear();
     this._onStateChange({ preset: name, focus: null });
+    // Clear focus from URL so it doesn't re-apply on next render
+    try {
+      const url = new URL(window.location);
+      url.searchParams.delete('focus');
+      url.searchParams.set('preset', name);
+      history.replaceState(null, '', url);
+    } catch {}
     this.render();
   }
 
@@ -72,6 +80,24 @@ export class GraphController {
 
     this._focusNodeIds = focusIds;
     this._onStateChange({ focus: node.name || node.node_id });
+    this.render();
+  }
+
+  focusOnDomain(domainKey) {
+    // Show all nodes in this domain + their neighbors (for cross-domain edges)
+    const domainNodes = this.store.nodes.filter(n => n.domain_key === domainKey);
+    if (domainNodes.length === 0) return;
+
+    const focusIds = new Set();
+    for (const n of domainNodes) {
+      focusIds.add(n.node_id);
+      // Include neighbors so cross-domain edges show
+      const neighbors = this.store.getNeighbors(n.node_id);
+      neighbors.forEach(id => focusIds.add(id));
+    }
+
+    this._focusNodeIds = focusIds;
+    this._onStateChange({ focus: domainKey });
     this.render();
   }
 
@@ -113,59 +139,91 @@ export class GraphController {
   render() {
     if (!this.renderer || !this.presets) return;
 
+    // Always start with the preset-filtered overview
+    const config = {
+      ...this._currentPreset,
+      ...this._sidebarState,
+      // Preserve preset's nodeTypes whitelist (sidebar can't override it)
+      nodeTypes: this._currentPreset.nodeTypes,
+      focusNodeIds: this._focusNodeIds,
+    };
+    const filtered = filterGraph(this.store, config);
+    const groupField = this._currentPreset.groupByField;
+
+    let nodes = filtered.nodes.map(n => ({
+      ...n,
+      // Infra nodes are shared resources — never grouped into a domain
+      _group: (groupField && n.layer !== 'infra') ? (n[groupField] || null) : null,
+    }));
+    let edges = filtered.edges;
+    let marks = {};
+    let layout = this._layoutMode;
+    let positionCache = {};
+
+    // If investigating, merge dropped nodes on top of the overview
     if (this.workspace.isInvestigating) {
       const view = this.workspace.getViewData();
-      this.renderer.render({
-        nodes: view.nodes,
-        edges: view.edges,
-        marks: view.marks,
-        layout: 'cached',
-        positionCache: view.positionCache,
-        groups: this._currentPreset.groupByField
-          ? { field: this._currentPreset.groupByField }
-          : null,
-        callbacks: this._makeCallbacks(),
-        edgeCategoryLookup: this._edgeCategoryLookup,
-        showEdgeLabels: this._showEdgeLabels,
-      });
-    } else {
-      const config = {
-        ...this._currentPreset,
-        ...this._sidebarState,
-        focusNodeIds: this._focusNodeIds,
-      };
-      const { nodes, edges } = filterGraph(this.store, config);
-      this.renderer.render({
-        nodes: nodes.map(n => ({
-          ...n,
-          _group: this._currentPreset.groupByField
-            ? (n[this._currentPreset.groupByField] || null)
-            : null,
-        })),
-        edges,
-        marks: {},
-        layout: this._layoutMode,
-        groups: this._currentPreset.groupByField
-          ? { field: this._currentPreset.groupByField }
-          : null,
-        callbacks: this._makeCallbacks(),
-        edgeCategoryLookup: this._edgeCategoryLookup,
-        showEdgeLabels: this._showEdgeLabels,
-      });
+      const overviewIds = new Set(nodes.map(n => n.node_id));
+
+      // Add workspace nodes that aren't already in the overview
+      for (const n of view.nodes) {
+        if (!overviewIds.has(n.node_id)) {
+          nodes.push({
+            ...n,
+            _group: (groupField && n.layer !== 'infra') ? (n[groupField] || null) : null,
+          });
+        }
+      }
+
+      // Add workspace edges that aren't already in filtered edges
+      const edgeKeys = new Set(edges.map(e => e.from_node_id + '->' + e.to_node_id));
+      for (const e of view.edges) {
+        const key = e.from_node_id + '->' + e.to_node_id;
+        if (!edgeKeys.has(key)) {
+          edges.push(e);
+        }
+      }
+
+      // Only keep edges where both endpoints are in the final node set
+      const allIds = new Set(nodes.map(n => n.node_id));
+      edges = edges.filter(e => allIds.has(e.from_node_id) && allIds.has(e.to_node_id));
+
+      marks = view.marks;
+      positionCache = view.positionCache;
     }
+
+    this.renderer.render({
+      nodes,
+      edges,
+      marks,
+      layout,
+      positionCache,
+      groups: groupField ? { field: groupField } : null,
+      callbacks: this._makeCallbacks(),
+      edgeCategoryLookup: this._edgeCategoryLookup,
+      showEdgeLabels: this._showEdgeLabels,
+    });
   }
 
   exportGraphText() {
-    let nodes, edges;
+    // Export the same merged view that render() shows
+    const config = { ...this._currentPreset, ...this._sidebarState, nodeTypes: this._currentPreset.nodeTypes, focusNodeIds: this._focusNodeIds };
+    const filtered = filterGraph(this.store, config);
+    let nodes = [...filtered.nodes];
+    let edges = [...filtered.edges];
+
     if (this.workspace.isInvestigating) {
       const view = this.workspace.getViewData();
-      nodes = view.nodes;
-      edges = view.edges;
-    } else {
-      const config = { ...this._currentPreset, ...this._sidebarState, focusNodeIds: this._focusNodeIds };
-      const filtered = filterGraph(this.store, config);
-      nodes = filtered.nodes;
-      edges = filtered.edges;
+      const overviewIds = new Set(nodes.map(n => n.node_id));
+      for (const n of view.nodes) {
+        if (!overviewIds.has(n.node_id)) nodes.push(n);
+      }
+      const edgeKeys = new Set(edges.map(e => e.from_node_id + '->' + e.to_node_id));
+      for (const e of view.edges) {
+        if (!edgeKeys.has(e.from_node_id + '->' + e.to_node_id)) edges.push(e);
+      }
+      const allIds = new Set(nodes.map(n => n.node_id));
+      edges = edges.filter(e => allIds.has(e.from_node_id) && allIds.has(e.to_node_id));
     }
 
     const nodeById = {};
@@ -173,13 +231,16 @@ export class GraphController {
 
     const byDomain = {};
     nodes.forEach(n => {
-      const dk = n.domain_key || '_unassigned';
+      // Infra is shared — group separately, not under any domain
+      const dk = n.layer === 'infra' ? '_infrastructure' : (n.domain_key || '_unassigned');
       if (!byDomain[dk]) byDomain[dk] = [];
       byDomain[dk].push(n);
     });
 
     let text = `# Graph Export (${nodes.length} nodes, ${edges.length} edges)\n`;
-    text += `# Preset: ${this._currentPresetName} | Mode: ${this.workspace.isInvestigating ? 'investigation' : 'overview'}\n\n`;
+    text += `# Preset: ${this._currentPresetName} | Mode: ${this.workspace.isInvestigating ? 'investigation' : 'overview'}`;
+    if (this._projectPath) text += ` | Project: ${this._projectPath}`;
+    text += '\n\n';
 
     Object.keys(byDomain).sort().forEach(dk => {
       text += `## ${dk}\n`;

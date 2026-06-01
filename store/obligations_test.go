@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -133,6 +134,86 @@ func TestSatisfyObligation_ClearsClaimFields(t *testing.T) {
 	}
 }
 
+func TestObligationVoteColumns(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+
+	id, err := s.CreateObligation(revID, "test-domain", "scan_file", "src/foo.ts", "scan")
+	if err != nil {
+		t.Fatalf("CreateObligation: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("expected non-zero obligation_id")
+	}
+
+	// Verify vote columns exist and default to zero values
+	var voteGroup string
+	var voteIndex int
+	err = s.db.QueryRow(`SELECT COALESCE(vote_group,''), COALESCE(vote_index,0) FROM scan_obligations WHERE obligation_id = ?`, id).Scan(&voteGroup, &voteIndex)
+	if err != nil {
+		t.Fatalf("QueryRow vote columns: %v", err)
+	}
+	if voteGroup != "" {
+		t.Errorf("expected vote_group='', got %q", voteGroup)
+	}
+	if voteIndex != 0 {
+		t.Errorf("expected vote_index=0, got %d", voteIndex)
+	}
+}
+
+func TestCreateObligationWithVote(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+
+	id, err := s.CreateObligationWithVote(revID, "test-domain", "scan_file", "src/foo.ts", "scan", "scan_1:test:abc123", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == 0 {
+		t.Fatal("expected non-zero id")
+	}
+
+	var voteGroup string
+	var voteIndex int
+	s.db.QueryRow(`SELECT vote_group, vote_index FROM scan_obligations WHERE obligation_id = ?`, id).Scan(&voteGroup, &voteIndex)
+	if voteGroup != "scan_1:test:abc123" {
+		t.Errorf("want scan_1:test:abc123, got %s", voteGroup)
+	}
+	if voteIndex != 2 {
+		t.Errorf("want 2, got %d", voteIndex)
+	}
+}
+
+func TestMultiplyObligationsByVotes(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+
+	for i := 1; i <= 3; i++ {
+		s.CreateObligationWithVote(revID, "test-domain", "scan_file", "src/foo.ts", "scan", "scan_1:test:abc123", i)
+	}
+
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM scan_obligations WHERE revision_id = ? AND target_key = ?`, revID, "src/foo.ts").Scan(&count)
+	if count != 3 {
+		t.Errorf("want 3, got %d", count)
+	}
+}
+
 func TestCountPendingObligations(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -163,5 +244,199 @@ func TestCountPendingObligations(t *testing.T) {
 	count, _ = s.CountPendingObligations(revID, "scan_file")
 	if count != 2 {
 		t.Fatalf("expected 2 pending after satisfy, got %d", count)
+	}
+}
+
+func TestClaimObligationsUniqueVoteGroup(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+
+	// Create 3 votes for file A, 3 votes for file B
+	for i := 1; i <= 3; i++ {
+		s.CreateObligationWithVote(revID, "d", "scan_file", "src/a.ts", "", "vg_a", i)
+		s.CreateObligationWithVote(revID, "d", "scan_file", "src/b.ts", "", "vg_b", i)
+	}
+
+	// Claim batch of 4 — should get at most 1 per vote_group (2 total, not 4)
+	claimed, err := s.ClaimObligations(revID, "scan_file", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 2 {
+		t.Fatalf("want 2 claimed (one per vote_group), got %d", len(claimed))
+	}
+
+	voteGroups := map[string]bool{}
+	for _, c := range claimed {
+		if voteGroups[c.VoteGroup] {
+			t.Errorf("duplicate vote_group in batch: %s", c.VoteGroup)
+		}
+		voteGroups[c.VoteGroup] = true
+	}
+}
+
+func TestClaimObligationsNoVoteGroupStillWorksFull(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+
+	// Create 5 obligations with empty vote_group (votes=1 mode)
+	for i := 0; i < 5; i++ {
+		s.CreateObligation(revID, "d", "scan_file", fmt.Sprintf("src/f%d.ts", i), "")
+	}
+
+	// Should claim all 5 — empty vote_group means no dedup
+	claimed, err := s.ClaimObligations(revID, "scan_file", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 5 {
+		t.Fatalf("want 5, got %d", len(claimed))
+	}
+}
+
+func TestObligationPoolStatus(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+
+	for i := 1; i <= 3; i++ {
+		s.CreateObligationWithVote(revID, "d", "scan_file", "a.ts", "", "vg_a", i)
+		s.CreateObligationWithVote(revID, "d", "scan_file", "b.ts", "", "vg_b", i)
+	}
+
+	status, err := s.ObligationPoolStatus(revID, "scan_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.RemainingTotal != 6 {
+		t.Errorf("remaining: want 6, got %d", status.RemainingTotal)
+	}
+	if status.ClaimableNow != 6 {
+		t.Errorf("claimable: want 6, got %d", status.ClaimableNow)
+	}
+
+	s.ClaimObligations(revID, "scan_file", 2)
+	status, _ = s.ObligationPoolStatus(revID, "scan_file")
+	if status.ClaimableNow != 4 {
+		t.Errorf("claimable after claim: want 4, got %d", status.ClaimableNow)
+	}
+	if status.InProgress != 2 {
+		t.Errorf("in_progress: want 2, got %d", status.InProgress)
+	}
+}
+
+func TestPoolStatusCountsExpiredAsClaimable(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+
+	s.CreateObligation(revID, "d", "scan_file", "a.ts", "")
+	s.CreateObligation(revID, "d", "scan_file", "b.ts", "")
+	s.ClaimObligations(revID, "scan_file", 2)
+
+	// Expire one claim
+	s.db.Exec(`UPDATE scan_obligations SET claim_expires_at = '2020-01-01T00:00:00Z' WHERE target_key = 'a.ts'`)
+
+	status, _ := s.ObligationPoolStatus(revID, "scan_file")
+	if status.RemainingTotal != 2 {
+		t.Errorf("remaining: want 2, got %d", status.RemainingTotal)
+	}
+	if status.ClaimableNow != 1 {
+		t.Errorf("claimable: want 1, got %d", status.ClaimableNow)
+	}
+	if status.InProgress != 1 {
+		t.Errorf("in_progress: want 1, got %d", status.InProgress)
+	}
+	if status.Expired != 1 {
+		t.Errorf("expired: want 1, got %d", status.Expired)
+	}
+}
+
+func TestClaimObligationsReclaimsExpiredClaim(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+	s.CreateObligation(revID, "d", "scan_file", "a.ts", "")
+
+	// Claim it
+	claimed1, _ := s.ClaimObligations(revID, "scan_file", 1)
+	if len(claimed1) != 1 {
+		t.Fatal("expected 1 claimed")
+	}
+
+	// Nothing claimable now
+	claimed2, _ := s.ClaimObligations(revID, "scan_file", 1)
+	if len(claimed2) != 0 {
+		t.Fatal("expected 0 claimed")
+	}
+
+	// Expire the claim manually
+	s.db.Exec(`UPDATE scan_obligations SET claim_expires_at = '2020-01-01T00:00:00Z' WHERE obligation_id = ?`, claimed1[0].ObligationID)
+
+	// Should be reclaimable now
+	claimed3, _ := s.ClaimObligations(revID, "scan_file", 1)
+	if len(claimed3) != 1 {
+		t.Fatalf("expected 1 reclaimed, got %d", len(claimed3))
+	}
+	if claimed3[0].ObligationID != claimed1[0].ObligationID {
+		t.Errorf("expected same obligation_id, got %d vs %d", claimed3[0].ObligationID, claimed1[0].ObligationID)
+	}
+}
+
+func TestSatisfyObligationByIDIsIdempotent(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("test", "sha1", "", "manual", "full", "{}")
+	id, err := s.CreateObligationWithVote(revID, "d", "scan_file", "a.ts", "", "vg_a", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.SatisfyObligationByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second call — idempotent, no error
+	err = s.SatisfyObligationByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := s.ObligationPoolStatus(revID, "scan_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Completed != 1 {
+		t.Errorf("completed: want 1, got %d", status.Completed)
+	}
+	if status.RemainingTotal != 0 {
+		t.Errorf("remaining: want 0, got %d", status.RemainingTotal)
 	}
 }

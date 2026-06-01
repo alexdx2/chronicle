@@ -1,6 +1,9 @@
 package graph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -47,7 +50,7 @@ type DiscoverResult struct {
 // Only git-tracked files are considered — no temp files, no untracked junk.
 // If manifest is provided, uses MergedScanConfig for filtering and DomainForFile for per-file domain.
 // Falls back to domainKey for all files when manifest is nil.
-func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *manifest.Manifest) (*DiscoverResult, error) {
+func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *manifest.Manifest, votesNeeded ...int) (*DiscoverResult, error) {
 	// Get git-tracked files
 	gitFiles, err := gitTrackedFiles(rootDir)
 	if err != nil {
@@ -108,14 +111,32 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 		}
 	}
 
-	// Create scan_file obligation for each discovered file — per-file domain from manifest
+	// Resolve votes_needed from variadic param (default 1)
+	vn := 1
+	if len(votesNeeded) > 0 && votesNeeded[0] > 1 {
+		vn = votesNeeded[0]
+	}
+
+	// Create scan_file obligations for each discovered file — per-file domain from manifest
+	// When votes_needed > 1, create N obligations per file with vote metadata
 	for _, f := range filtered {
 		if revisionID > 0 {
 			domain := domainKey
 			if m != nil {
 				domain = m.DomainForFile(f)
 			}
-			g.store.CreateObligation(revisionID, domain, "scan_file", f, "git-tracked, matches scan config")
+			if vn <= 1 {
+				// votes=1: single obligation, no vote metadata (existing behavior)
+				g.store.CreateObligation(revisionID, domain, "scan_file", f, "git-tracked, matches scan config")
+			} else {
+				// votes>1: create N obligations per file with vote metadata
+				hash := sha256.Sum256([]byte(f))
+				shortHash := hex.EncodeToString(hash[:6]) // 12 hex chars
+				voteGroup := fmt.Sprintf("%d:%s:%s", revisionID, domain, shortHash)
+				for i := 1; i <= vn; i++ {
+					g.store.CreateObligationWithVote(revisionID, domain, "scan_file", f, "git-tracked, matches scan config", voteGroup, i)
+				}
+			}
 		}
 	}
 
@@ -136,7 +157,31 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 				Status:    "active",
 			})
 		}
+	}
 
+	// Create service nodes from manifest
+	if m != nil && revisionID > 0 {
+		services := m.InferServices()
+		for _, svc := range services {
+			svcDomain := domainKey
+			if len(m.Domains) > 0 {
+				svcDomain = m.Domains[0].Name
+			}
+			nodeKey := "service:service:" + svcDomain + ":" + svc.Key
+			g.store.UpsertNode(store.NodeRow{
+				NodeKey:            nodeKey,
+				Layer:              "service",
+				NodeType:           "service",
+				DomainKey:          svcDomain,
+				Name:               svc.Key,
+				Status:             "active",
+				LastSeenRevisionID: revisionID,
+				Confidence:         1.0,
+				Freshness:          1.0,
+				TrustScore:         1.0,
+				Metadata:           "{}",
+			})
+		}
 	}
 
 	return result, nil

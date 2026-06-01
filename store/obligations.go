@@ -4,8 +4,11 @@ import "fmt"
 
 // ClaimedObligation is returned by ClaimObligations with both target and domain.
 type ClaimedObligation struct {
-	TargetKey string
-	DomainKey string
+	ObligationID int64  `json:"obligation_id"`
+	TargetKey    string `json:"target_key"`
+	DomainKey    string `json:"domain_key"`
+	VoteGroup    string `json:"vote_group"`
+	VoteIndex    int    `json:"vote_index"`
 }
 
 // ObligationRow represents a scan obligation.
@@ -34,6 +37,18 @@ func (s *Store) CreateObligation(revisionID int64, domainKey, obligationType, ta
 	return res.LastInsertId()
 }
 
+// CreateObligationWithVote inserts a new scan obligation with vote group and index.
+func (s *Store) CreateObligationWithVote(revisionID int64, domainKey, obligationType, targetKey, reason, voteGroup string, voteIndex int) (int64, error) {
+	res, err := s.db.Exec(`
+		INSERT INTO scan_obligations (revision_id, domain_key, obligation_type, target_key, reason, vote_group, vote_index)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, revisionID, domainKey, obligationType, targetKey, reason, voteGroup, voteIndex)
+	if err != nil {
+		return 0, fmt.Errorf("CreateObligationWithVote: %w", err)
+	}
+	return res.LastInsertId()
+}
+
 // SatisfyObligation marks an obligation as satisfied and clears claim fields.
 func (s *Store) SatisfyObligation(revisionID int64, obligationType, targetKey string) error {
 	_, err := s.db.Exec(`
@@ -44,6 +59,23 @@ func (s *Store) SatisfyObligation(revisionID int64, obligationType, targetKey st
 		WHERE revision_id = ? AND obligation_type = ? AND target_key = ? AND status = 'open'
 	`, revisionID, obligationType, targetKey)
 	return err
+}
+
+// SatisfyObligationByID marks a single obligation as satisfied by its ID.
+// Idempotent: if already satisfied (or not found), returns nil.
+func (s *Store) SatisfyObligationByID(obligationID int64) error {
+	_, err := s.db.Exec(`
+		UPDATE scan_obligations
+		SET status = 'satisfied',
+		    claimed_at = NULL, claim_expires_at = NULL,
+		    resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE obligation_id = ? AND status = 'open'
+	`, obligationID)
+	if err != nil {
+		return fmt.Errorf("SatisfyObligationByID: %w", err)
+	}
+	// If 0 rows affected = already satisfied = idempotent, not an error
+	return nil
 }
 
 // ClaimObligations atomically claims up to `limit` unclaimed (or expired) open obligations.
@@ -63,13 +95,21 @@ func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit 
 		    claim_expires_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+15 minutes'),
 		    attempt_count = attempt_count + 1
 		WHERE obligation_id IN (
-			SELECT obligation_id FROM scan_obligations
-			WHERE revision_id = ? AND obligation_type = ? AND status = 'open'
-			  AND (claimed_at IS NULL OR claim_expires_at < strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+			WITH candidates AS (
+				SELECT obligation_id, vote_group,
+				       ROW_NUMBER() OVER (
+				           PARTITION BY CASE WHEN vote_group = '' THEN CAST(obligation_id AS TEXT) ELSE vote_group END
+				           ORDER BY obligation_id
+				       ) AS rn
+				FROM scan_obligations
+				WHERE revision_id = ? AND obligation_type = ? AND status = 'open'
+				  AND (claimed_at IS NULL OR claim_expires_at < strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+			)
+			SELECT obligation_id FROM candidates WHERE rn = 1
 			ORDER BY obligation_id
 			LIMIT ?
 		)
-		RETURNING target_key, domain_key
+		RETURNING obligation_id, target_key, domain_key, vote_group, vote_index
 	`, revisionID, obligationType, limit)
 	if err != nil {
 		return nil, fmt.Errorf("ClaimObligations: %w", err)
@@ -79,7 +119,7 @@ func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit 
 	var claimed []ClaimedObligation
 	for rows.Next() {
 		var c ClaimedObligation
-		if err := rows.Scan(&c.TargetKey, &c.DomainKey); err != nil {
+		if err := rows.Scan(&c.ObligationID, &c.TargetKey, &c.DomainKey, &c.VoteGroup, &c.VoteIndex); err != nil {
 			return nil, err
 		}
 		claimed = append(claimed, c)
@@ -143,6 +183,58 @@ func (s *Store) ListOpenObligations(revisionID int64) ([]ObligationRow, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// PoolStatus holds aggregated counts for scan obligation pool monitoring.
+type PoolStatus struct {
+	RemainingTotal int `json:"remaining_total"`
+	ClaimableNow   int `json:"claimable_now"`
+	InProgress     int `json:"in_progress"`
+	Completed      int `json:"completed"`
+	Failed         int `json:"failed"`
+	Expired        int `json:"expired"`
+}
+
+// ObligationPoolStatus returns aggregated counts of obligations by state.
+// Read-only — does not claim or modify any obligations.
+func (s *Store) ObligationPoolStatus(revisionID int64, obligationType string) (*PoolStatus, error) {
+	row := s.db.QueryRow(`
+		SELECT
+			SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN status = 'open' AND (claimed_at IS NULL OR claim_expires_at < strftime('%Y-%m-%dT%H:%M:%SZ','now')) THEN 1 ELSE 0 END),
+			SUM(CASE WHEN status = 'open' AND claimed_at IS NOT NULL AND claim_expires_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now') THEN 1 ELSE 0 END),
+			SUM(CASE WHEN status = 'satisfied' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN status = 'open' AND claimed_at IS NOT NULL AND claim_expires_at < strftime('%Y-%m-%dT%H:%M:%SZ','now') THEN 1 ELSE 0 END)
+		FROM scan_obligations
+		WHERE revision_id = ? AND obligation_type = ?
+	`, revisionID, obligationType)
+
+	var ps PoolStatus
+	var rt, cn, ip, co, fa, ex *int
+	err := row.Scan(&rt, &cn, &ip, &co, &fa, &ex)
+	if err != nil {
+		return nil, fmt.Errorf("ObligationPoolStatus: %w", err)
+	}
+	if rt != nil {
+		ps.RemainingTotal = *rt
+	}
+	if cn != nil {
+		ps.ClaimableNow = *cn
+	}
+	if ip != nil {
+		ps.InProgress = *ip
+	}
+	if co != nil {
+		ps.Completed = *co
+	}
+	if fa != nil {
+		ps.Failed = *fa
+	}
+	if ex != nil {
+		ps.Expired = *ex
+	}
+	return &ps, nil
 }
 
 // ListAllObligations returns all obligations for a revision (any status).

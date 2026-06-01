@@ -13,12 +13,17 @@ export function filterGraph(store, config) {
   // 1. Layer
   nodes = nodes.filter(n => layerSet.has(n.layer));
 
-  // 2. Repo
+  // 2. Node type whitelist (from preset — e.g. C1 only shows modules, not providers)
+  if (config.nodeTypes) {
+    nodes = nodes.filter(n => config.nodeTypes.has(n.node_type));
+  }
+
+  // 3. Repo
   if (config.repoFilter) {
     nodes = nodes.filter(n => !n.repo_name || n.repo_name === config.repoFilter);
   }
 
-  // 3. Node type
+  // 4. Node type blacklist (from sidebar toggles)
   if (hiddenNodeTypes.size > 0) {
     nodes = nodes.filter(n => !hiddenNodeTypes.has(n.node_type));
   }

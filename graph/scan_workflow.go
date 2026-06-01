@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/extract/ast"
+	"github.com/alexdx2/chronicle-core/extract/prisma"
 	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/manifest"
@@ -15,11 +16,14 @@ import (
 
 // FileWithAST is a file path paired with pre-extracted AST facts and enrichment candidates.
 type FileWithAST struct {
-	Path       string `json:"path"`
-	DomainKey  string `json:"domain_key,omitempty"` // which domain this file belongs to (from manifest)
-	ASTFacts   string `json:"ast_facts"`            // JSON array of semantic facts, or "[]"
-	FromType   string `json:"from_type"`            // detected by AST: controller, module, or ""
-	Candidates string `json:"candidates"`           // JSON array of enrichment candidates for LLM classification
+	Path         string `json:"path"`
+	DomainKey    string `json:"domain_key,omitempty"`    // which domain this file belongs to (from manifest)
+	ASTFacts     string `json:"ast_facts"`               // JSON array of semantic facts, or "[]"
+	FromType     string `json:"from_type"`               // detected by AST: controller, module, or ""
+	Candidates   string `json:"candidates"`              // JSON array of enrichment candidates for LLM classification
+	ObligationID int64  `json:"obligation_id,omitempty"` // obligation that claimed this file
+	VoteGroup    string `json:"vote_group,omitempty"`    // vote group for deduplication
+	VoteIndex    int    `json:"vote_index,omitempty"`    // which vote pass this is (1-based)
 }
 
 // ScanAction is what chronicle_scan_next_file returns to Claude.
@@ -173,12 +177,23 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 		if len(claimed) > 0 {
 			pending, _ := g.store.CountPendingObligations(run.RevisionID, "scan_file")
 
-			// Build domain lookup from claimed obligations
-			domainByFile := make(map[string]string, len(claimed))
+			// Build metadata lookup from claimed obligations
+			type claimMeta struct {
+				domain       string
+				obligationID int64
+				voteGroup    string
+				voteIndex    int
+			}
+			metaByFile := make(map[string]claimMeta, len(claimed))
 			batch := make([]string, 0, len(claimed))
 			for _, c := range claimed {
 				batch = append(batch, c.TargetKey)
-				domainByFile[c.TargetKey] = c.DomainKey
+				metaByFile[c.TargetKey] = claimMeta{
+					domain:       c.DomainKey,
+					obligationID: c.ObligationID,
+					voteGroup:    c.VoteGroup,
+					voteIndex:    c.VoteIndex,
+				}
 			}
 
 			// Run tree-sitter AST + rules on each file
@@ -186,7 +201,16 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 			ruleRegistry := rules.NewRegistry(rules.RulesetsForTech(tech)...)
 			filesWithAST := make([]FileWithAST, 0, len(batch))
 			for _, filePath := range batch {
-				fwa := FileWithAST{Path: filePath, DomainKey: domainByFile[filePath], ASTFacts: "[]", Candidates: "[]"}
+				meta := metaByFile[filePath]
+				fwa := FileWithAST{
+					Path:         filePath,
+					DomainKey:    meta.domain,
+					ASTFacts:     "[]",
+					Candidates:   "[]",
+					ObligationID: meta.obligationID,
+					VoteGroup:    meta.voteGroup,
+					VoteIndex:    meta.voteIndex,
+				}
 				if isTypeScriptFile(filePath) {
 					if content := readFileContent(filePath); content != nil {
 						rawResult := ast.ExtractTypeScript(content)
@@ -199,6 +223,37 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 							if cb, err := json.Marshal(rawResult.Candidates); err == nil {
 								fwa.Candidates = string(cb)
 							}
+						}
+					}
+				}
+				if strings.HasSuffix(filePath, ".prisma") {
+					if content := readFileContent(filePath); content != nil {
+						prismaResult := prisma.Extract(content)
+						var facts []map[string]any
+						for _, m := range prismaResult.Models {
+							facts = append(facts, map[string]any{
+								"kind": "model", "name": m.Name,
+								"file_path": filePath, "line": m.Line,
+							})
+						}
+						for _, e := range prismaResult.Enums {
+							facts = append(facts, map[string]any{
+								"kind": "enum", "name": e.Name,
+								"file_path": filePath, "line": e.Line,
+							})
+						}
+						for _, r := range prismaResult.Relations {
+							facts = append(facts, map[string]any{
+								"kind": "model_relation", "from": r.From,
+								"to": r.To, "field_name": r.FieldName,
+							})
+						}
+						if len(facts) > 0 {
+							factsJSON, _ := json.Marshal(facts)
+							fwa.ASTFacts = string(factsJSON)
+							fwa.FromType = "schema"
+							fmt.Fprintf(os.Stderr, "Prisma: %s → %d models, %d enums, %d relations\n",
+								filePath, len(prismaResult.Models), len(prismaResult.Enums), len(prismaResult.Relations))
 						}
 					}
 				}

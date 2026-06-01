@@ -67,6 +67,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(saveCustomPackTool(), saveCustomPackHandler(g))
 	s.AddTool(scanConfirmTool(), scanConfirmHandler(g))
 	s.AddTool(scanStatusTool(), scanStatusHandler(g))
+	s.AddTool(scanPoolStatusTool(), scanPoolStatusHandler(g))
 	s.AddTool(saveManifestTool(), saveManifestHandler(g))
 	s.AddTool(resetDBTool(), resetDBHandler(g))
 	s.AddTool(reportDiscoveryTool(), reportDiscoveryHandler(g))
@@ -612,6 +613,12 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
 		}
 
+		// Parse votes_needed early — needed for obligation multiplication
+		votesNeeded := int(int64Param(args, "votes_needed"))
+		if votesNeeded < 1 {
+			votesNeeded = 1
+		}
+
 		// Load manifest for scan config + per-file domain assignment
 		rootDir, _ := os.Getwd()
 		var m *manifest.Manifest
@@ -619,7 +626,7 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			m = loaded
 		}
 
-		result, err := g.DiscoverFiles(rootDir, domain, revisionID, m)
+		result, err := g.DiscoverFiles(rootDir, domain, revisionID, m, votesNeeded)
 		if err != nil {
 			return errorResult(err), nil
 		}
@@ -646,29 +653,32 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 		// NOTE: Repository/service node creation from manifest removed in v2.
 		// The scan pipeline (Task 4) will create domain-scoped nodes per file.
 
-		// Create or update scan run — transition to confirm_scope (checkpoint)
-		votesNeeded := int(int64Param(args, "votes_needed"))
-		if votesNeeded < 1 {
-			votesNeeded = 1
+		// Total obligations = files * votes (scan run tracks obligations, not unique files)
+		totalObligations := result.TotalFiles
+		if votesNeeded > 1 {
+			totalObligations = result.TotalFiles * votesNeeded
 		}
+
+		// Create or update scan run — transition to confirm_scope (checkpoint)
 		run, _ := g.Store().GetActiveScanRun(domain)
 		if run == nil {
 			runID, _ := g.Store().CreateScanRun(revisionID, domain, votesNeeded)
-			g.Store().TransitionScanRun(runID, "confirm_scope", result.TotalFiles)
+			g.Store().TransitionScanRun(runID, "confirm_scope", totalObligations)
 		} else {
-			g.Store().TransitionScanRun(run.RunID, "confirm_scope", result.TotalFiles)
+			g.Store().TransitionScanRun(run.RunID, "confirm_scope", totalObligations)
 		}
 
 		// Return summary (not full file list — can be huge)
 		response := map[string]any{
 			"domain":          domain,
 			"total_files":     result.TotalFiles,
+			"total_obligations": totalObligations,
 			"total_git_files": result.TotalGit,
 			"excluded":        result.Excluded,
 			"by_directory":    result.ByDirectory,
 			"by_extension":    result.ByExtension,
 			"votes_needed":    votesNeeded,
-			"estimated_reads": result.TotalFiles * votesNeeded,
+			"estimated_reads": totalObligations,
 			"scan_config":     result.ScanConfig,
 		}
 		// Only include file list if small enough
@@ -794,6 +804,7 @@ func fileExtractedTool() mcp.Tool {
 		mcp.WithString("error_message", mcp.Description("Error description (for status=failed)")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("obligation_id", mcp.Description("Obligation ID from scan_next_file response. Marks this obligation as completed.")),
 		mcp.WithString("vote_group", mcp.Description("Vote group ID (for multi-agent voting mode)")),
 		mcp.WithNumber("vote_index", mcp.Description("Vote index within group (1, 2, 3...)")),
 	)
@@ -811,6 +822,7 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 		domain := strParam(args, "domain")
 		voteGroup := strParam(args, "vote_group")
 		voteIndex := int(int64Param(args, "vote_index"))
+		obligationID := int64Param(args, "obligation_id")
 
 		if filePath == "" || status == "" || revisionID == 0 || domain == "" {
 			return errorResult(fmt.Errorf("file_path, status, revision_id, and domain are required")), nil
@@ -843,6 +855,10 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 				return errorResult(fmt.Errorf("write extraction file: %w", err)), nil
 			}
 
+			if obligationID > 0 {
+				_ = g.Store().SatisfyObligationByID(obligationID)
+			}
+
 			return jsonResult(map[string]any{
 				"file":      outPath,
 				"file_path": filePath,
@@ -860,6 +876,9 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 		_ = g.SatisfyFileObligation(revisionID, filePath)
 		_ = g.Store().SatisfyObligation(revisionID, "scan_file", filePath)
 		_ = g.Store().SatisfyObligation(revisionID, "trace_flow", filePath)
+		if obligationID > 0 {
+			_ = g.Store().SatisfyObligationByID(obligationID)
+		}
 		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
 			g.Store().IncrementScanRunExtracted(run.RunID)
 		}
@@ -1770,6 +1789,61 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 		result["admin_dashboard"] = fmt.Sprintf("http://localhost:%d", port)
 
 		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_scan_pool_status
+// ---------------------------------------------------------------------------
+
+func scanPoolStatusTool() mcp.Tool {
+	return mcp.NewTool("chronicle_scan_pool_status",
+		mcp.WithDescription("Get scan worker pool status. Read-only — does not claim work. Returns remaining, claimable, in-progress counts and spawn recommendations."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func scanPoolStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		domain := strParam(req.GetArguments(), "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+
+		run, err := g.Store().GetActiveScanRun(domain)
+		if err != nil || run == nil {
+			return errorResult(fmt.Errorf("no active scan run for domain %s", domain)), nil
+		}
+
+		status, err := g.Store().ObligationPoolStatus(run.RevisionID, "scan_file")
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		batchSize := 8
+		maxWorkers := 5
+		spawnCount := (status.ClaimableNow + batchSize - 1) / batchSize
+		if spawnCount > maxWorkers {
+			spawnCount = maxWorkers
+		}
+		if spawnCount < 0 {
+			spawnCount = 0
+		}
+
+		return jsonResult(map[string]any{
+			"phase":           run.Phase,
+			"remaining_total": status.RemainingTotal,
+			"claimable_now":   status.ClaimableNow,
+			"in_progress":     status.InProgress,
+			"completed":       status.Completed,
+			"failed":          status.Failed,
+			"expired":         status.Expired,
+			"spawn_count":     spawnCount,
+			"batch_size":      batchSize,
+			"votes_needed":    run.VotesNeeded,
+			"scan_run_id":     run.RunID,
+			"revision_id":     run.RevisionID,
+		}), nil
 	}
 }
 

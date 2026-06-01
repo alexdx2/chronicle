@@ -155,6 +155,12 @@ func (s *Store) migrate() error {
 		`ALTER TABLE scan_runs ADD COLUMN votes_needed INTEGER NOT NULL DEFAULT 1`,
 		// Claim attempt tracking
 		`ALTER TABLE scan_obligations ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
+		// Vote routing for obligations
+		`ALTER TABLE scan_obligations ADD COLUMN vote_group TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE scan_obligations ADD COLUMN vote_index INTEGER NOT NULL DEFAULT 0`,
+		// Symbol-level metadata on nodes
+		`ALTER TABLE graph_nodes ADD COLUMN symbol_name TEXT`,
+		`ALTER TABLE graph_nodes ADD COLUMN support_kind TEXT`,
 	}
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
@@ -322,7 +328,9 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
                            CHECK (freshness >= 0 AND freshness <= 1),
   trust_score            REAL NOT NULL DEFAULT 1.0
                            CHECK (trust_score >= 0 AND trust_score <= 1),
-  metadata               TEXT NOT NULL DEFAULT '{}'
+  metadata               TEXT NOT NULL DEFAULT '{}',
+  symbol_name            TEXT,
+  support_kind           TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_node_key ON graph_nodes(node_key);
@@ -533,6 +541,8 @@ CREATE TABLE IF NOT EXISTS scan_obligations (
     claimed_at       TEXT,
     claim_expires_at TEXT,
     attempt_count    INTEGER NOT NULL DEFAULT 0,
+    vote_group       TEXT NOT NULL DEFAULT '',
+    vote_index       INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     resolved_at      TEXT
 );

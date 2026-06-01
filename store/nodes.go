@@ -28,6 +28,8 @@ type NodeRow struct {
 	Freshness           float64 `json:"freshness"`
 	TrustScore          float64 `json:"trust_score"`
 	Metadata            string  `json:"metadata"`
+	SymbolName          string  `json:"symbol_name,omitempty"`
+	SupportKind         string  `json:"support_kind,omitempty"`
 	ValidFromRevisionID int64   `json:"valid_from_revision_id,omitempty"`
 	ValidToRevisionID   int64   `json:"valid_to_revision_id,omitempty"`
 	ContextID           int64   `json:"context_id,omitempty"`
@@ -86,13 +88,15 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 		UPDATE graph_nodes
 		SET name=?, qualified_name=?, repo_name=?, file_path=?, lang=?, owner_key=?,
 		    environment=?, visibility=?, status=?, last_seen_revision_id=?,
-		    confidence=?, freshness=?, trust_score=?, metadata=?
+		    confidence=?, freshness=?, trust_score=?, metadata=?,
+		    symbol_name=?, support_kind=?
 		WHERE node_id=?
 	`
 	_, err = s.db.Exec(updQ,
 		n.Name, nullableStr(n.QualifiedName), nullableStr(n.RepoName), nullableStr(n.FilePath),
 		nullableStr(n.Lang), nullableStr(n.OwnerKey), nullableStr(n.Environment),
 		nullableStr(n.Visibility), n.Status, n.LastSeenRevisionID, n.Confidence, n.Freshness, n.TrustScore, n.Metadata,
+		nullableStr(n.SymbolName), nullableStr(n.SupportKind),
 		existingID,
 	)
 	if err != nil {
@@ -108,8 +112,9 @@ func (s *Store) insertNodeVersion(n NodeRow) (int64, error) {
 		  (node_key, layer, node_type, domain_key, name, qualified_name, repo_name,
 		   file_path, lang, owner_key, environment, visibility, status,
 		   first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
+		   symbol_name, support_kind,
 		   valid_from_revision_id, valid_to_revision_id, context_id)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`
 	res, err := s.db.Exec(insQ,
 		n.NodeKey, n.Layer, n.NodeType, n.DomainKey, n.Name,
@@ -117,6 +122,7 @@ func (s *Store) insertNodeVersion(n NodeRow) (int64, error) {
 		nullableStr(n.Lang), nullableStr(n.OwnerKey), nullableStr(n.Environment),
 		nullableStr(n.Visibility), n.Status,
 		n.FirstSeenRevisionID, n.LastSeenRevisionID, n.Confidence, n.Freshness, n.TrustScore, n.Metadata,
+		nullableStr(n.SymbolName), nullableStr(n.SupportKind),
 		nullableInt64(n.ValidFromRevisionID), nullableInt64(n.ValidToRevisionID), nullableInt64(n.ContextID),
 	)
 	if err != nil {
