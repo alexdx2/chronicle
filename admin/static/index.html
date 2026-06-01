@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" data-default-tab="<!-- SLOT:DEFAULT_TAB -->">
-<script>if(new URLSearchParams(location.search).get('embed')==='true')document.documentElement.classList.add('embed-mode')</script>
+<script>if(new URLSearchParams(location.search).get('embed')==='true')document.documentElement.classList.add('embed-mode');if(new URLSearchParams(location.search).has('demo'))document.documentElement.classList.add('demo-mode');if(new URLSearchParams(location.search).has('screenshot'))document.documentElement.classList.add('screenshot-mode')</script>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -260,6 +260,12 @@ a{color:var(--primary);text-decoration:none}
 .embed-mode .fed-bar{display:none!important}
 .embed-mode body{padding:0!important;margin:0!important;overflow:hidden;height:100vh;background:#faf6ef}
 <!-- SLOT:CSS -->
+/* Screenshot mode: disable all transitions and hide tooltips */
+.screenshot-mode *{transition:none!important;animation:none!important}
+.screenshot-mode .node-hover-tooltip,.screenshot-mode .edge-tooltip,.screenshot-mode #__node_tooltip,.screenshot-mode #__edge_tooltip{display:none!important}
+.screenshot-mode .bottom-panel{transition:none!important}
+/* Demo mode: disable graph animations */
+.demo-mode .graph-svg *{transition:none!important}
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
@@ -340,7 +346,7 @@ a{color:var(--primary);text-decoration:none}
   <!-- SECTION:project_switcher:end -->
   <div class="tab-bar">
     <!-- TAB_BTN:overview:start --><button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button><!-- TAB_BTN:overview:end -->
-    <!-- TAB_BTN:graph:start --><button class="tab-btn" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button><!-- TAB_BTN:graph:end -->
+    <!-- TAB_BTN:graph:start --><button class="tab-btn" data-testid="graph-tab" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button><!-- TAB_BTN:graph:end -->
     <!-- TAB_BTN:language:start --><button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button><!-- TAB_BTN:language:end -->
     <!-- TAB_BTN:settings:start --><button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button><!-- TAB_BTN:settings:end -->
     <!-- SLOT:EXTRA_TABS -->
@@ -707,14 +713,14 @@ a{color:var(--primary);text-decoration:none}
       <!-- C4 Zoom presets (workspace + explore) -->
       <template x-if="graphMode==='workspace' || graphMode==='explore'">
         <div class="mode-toggle">
-          <button class="mode-btn" :class="{active: graphPreset==='c1'}" @click="setPreset('c1');renderGraph()">C1 Context</button>
-          <button class="mode-btn" :class="{active: graphPreset==='c2'}" @click="setPreset('c2');renderGraph()">C2 Container</button>
-          <button class="mode-btn" :class="{active: graphPreset==='c3'}" @click="setPreset('c3');renderGraph()">C3 Component</button>
-          <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="setPreset('data');renderGraph()">Data Models</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c1'}" @click="if(graphController && graphMode==='workspace'){graphController.setPreset('c1')}else{setPreset('c1');renderGraph()}">C1 Context</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c2'}" @click="if(graphController && graphMode==='workspace'){graphController.setPreset('c2')}else{setPreset('c2');renderGraph()}">C2 Container</button>
+          <button class="mode-btn" :class="{active: graphPreset==='c3'}" @click="if(graphController && graphMode==='workspace'){graphController.setPreset('c3')}else{setPreset('c3');renderGraph()}">C3 Component</button>
+          <button class="mode-btn" :class="{active: graphPreset==='data'}" @click="if(graphController && graphMode==='workspace'){graphController.setPreset('data')}else{setPreset('data');renderGraph()}">Data Models</button>
           <template x-if="_focusNodeIds">
             <button class="mode-btn" @click="_focusNodeIds=null;_focusPrimaryIds=null;const u=new URL(location);u.searchParams.delete('focus');history.replaceState(null,'',u);renderGraph()" style="color:var(--error);border-color:var(--error)">✕ Clear focus</button>
           </template>
-          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="setPreset('all');renderGraph()">All</button>
+          <button class="mode-btn" :class="{active: graphPreset==='all'}" @click="if(graphController && graphMode==='workspace'){graphController.setPreset('all')}else{setPreset('all');renderGraph()}">All</button>
         </div>
       </template>
       <!-- Filter presets (tree only) -->
@@ -793,7 +799,7 @@ a{color:var(--primary);text-decoration:none}
         <div class="ws-palette">
           <input type="text" placeholder="Search entities..." x-model="workspaceSearch">
           <template x-if="workspaceNodes.length > 0">
-            <button @click="workspaceNodes=[];workspacePaths=[];_wsPositionCache={};renderGraph()"
+            <button @click="if(graphController){graphController.clearWorkspace()}else{workspaceNodes=[];workspacePaths=[];_wsPositionCache={};renderGraph()}"
                     style="margin:0 8px;padding:3px 8px;font-size:10px;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer;color:var(--text-muted);white-space:nowrap"
                     @mouseenter="$el.style.background='var(--danger, #e74c3c)';$el.style.color='white';$el.style.borderColor='var(--danger, #e74c3c)'"
                     @mouseleave="$el.style.background='var(--bg)';$el.style.color='var(--text-muted)';$el.style.borderColor='var(--border)'"
@@ -829,7 +835,17 @@ a{color:var(--primary);text-decoration:none}
 
       <div id="graph-canvas" style="flex:1;overflow:auto;position:relative"
            @dragover.prevent="$event.dataTransfer.dropEffect='copy'"
-           @drop.prevent="handleWorkspaceDrop($event)">
+           @drop.prevent="
+             if (graphController && graphMode==='workspace') {
+               const rawId = $event.dataTransfer.getData('text/plain');
+               if (!rawId) return;
+               const canvas = document.getElementById('graph-canvas');
+               const rect = canvas.getBoundingClientRect();
+               graphController.handleDrop(rawId, $event.clientX - rect.left, $event.clientY - rect.top);
+             } else {
+               handleWorkspaceDrop($event);
+             }
+           ">
         <template x-if="loading.graph"><div class="loader" style="min-height:200px"><div class="spinner"></div> Loading graph data...</div></template>
         <!-- Floating legend + display toggles -->
         <template x-if="graphMode==='workspace' || graphMode==='tree' || graphMode==='explore'">
@@ -854,7 +870,7 @@ a{color:var(--primary);text-decoration:none}
             </template>
             <hr class="legend-sep">
             <label>
-              <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;renderGraph()">
+              <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;if(graphController)graphController.setShowEdgeLabels(showEdgeLabels);renderGraph()">
               <span>Edge labels</span>
             </label>
             <template x-if="graphMode==='workspace'">
@@ -875,7 +891,7 @@ a{color:var(--primary);text-decoration:none}
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
             <div style="display:flex;gap:4px;align-items:center">
-              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';nodeTypeFilter={};_collapsibleTypes=[];renderWorkspace()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
+              <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';nodeTypeFilter={};_collapsibleTypes=[];syncSidebarToController();renderWorkspace()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
               <button @click="filterSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
             </div>
           </div>
@@ -965,7 +981,7 @@ a{color:var(--primary);text-decoration:none}
             <div x-show="!collapsedFilterSections.confidence" style="display:flex;align-items:center;gap:6px">
               <input type="range" min="0" max="100" step="5"
                      :value="minConfidence * 100"
-                     @input="minConfidence = $event.target.value / 100; renderGraph()"
+                     @input="minConfidence = $event.target.value / 100; syncSidebarToController(); renderGraph()"
                      style="flex:1">
               <span style="font-size:10px;min-width:28px" x-text="minConfidence.toFixed(2)"></span>
             </div>
@@ -977,7 +993,7 @@ a{color:var(--primary);text-decoration:none}
   </div>
 </div>
 <!-- Bottom panel for selected node -->
-<div class="bottom-panel" x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='workspace')" x-cloak x-transition>
+<div class="bottom-panel" data-testid="node-detail-panel" x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='workspace')" x-cloak x-transition>
   <template x-if="selectedNode">
     <div>
       <div class="bottom-panel-header">
@@ -1539,6 +1555,10 @@ a{color:var(--primary);text-decoration:none}
 </div>
 <!-- SLOT:EXTRA_CONTENT -->
 
+<script type="module">
+  import { GraphController } from './js/graph-controller.js';
+  window.GraphController = GraphController;
+</script>
 <script>
 function dashboard() {
   return {
@@ -1597,6 +1617,7 @@ function dashboard() {
     explorePath: [],
     exploreCurrentId: null,
     graphFullscreen: false,
+    graphController: null,
     graphPreset: 'all',
     graphRepoFilter: '',
     allRepos: [],
@@ -1632,6 +1653,9 @@ function dashboard() {
       repository: 'Data access layer (ORM repository pattern)',
     },
     hideStructural: false,
+    // Demo / screenshot mode (via ?demo and ?screenshot query params)
+    isDemoMode: new URLSearchParams(window.location.search).has('demo'),
+    isScreenshot: new URLSearchParams(window.location.search).has('screenshot'),
     // Workspace
     groupByField: 'domain_key',
     wsLayout: 'strict',  // 'strict' or 'free'
@@ -1751,7 +1775,7 @@ function dashboard() {
       } else if (this.tab === 'graph') {
         // Graph tab on page load — fetch data
         this.loading.graph = true;
-        this.fetchGraphData().then(() => {
+        this.fetchGraphData().then(async () => {
           this.loading.graph = false;
           this.loaded.graph = true;
           // Apply preset from query param, or auto-preset for workspace/explore
@@ -1762,6 +1786,29 @@ function dashboard() {
             if (focusParam) this.applyFocus(focusParam);
           } else if (this.graphMode === 'workspace' || this.graphMode === 'explore') {
             this.autoPresetHighLevel();
+          }
+          // Initialize graph controller for workspace mode
+          if (!this.graphController && window.GraphController) {
+            this.graphController = new window.GraphController({
+              onStateChange: (state) => {
+                if ('preset' in state) this.graphPreset = state.preset;
+                if ('focus' in state) this.graphFocusName = state.focus;
+                if ('selectedNode' in state) {
+                  this.selectedNode = state.selectedNode;
+                  if (state.selectedNode) this.fetchNodeEvidence(state.selectedNode.node_key);
+                  else this.nodeEvidence = null;
+                }
+                if ('zoomNode' in state) this.zoomIntoNode(state.zoomNode);
+              },
+            });
+            const graphCanvas = document.getElementById('graph-canvas');
+            if (graphCanvas) {
+              await this.graphController.init(graphCanvas);
+              this.graphController.loadGraph(this.graphData);
+              this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
+              this.graphController.setShowEdgeLabels(this.showEdgeLabels);
+              this.graphController.restoreFromUrl();
+            }
           }
           setTimeout(() => this.renderGraph(), 100);
         });
@@ -2100,6 +2147,10 @@ function dashboard() {
         if (this.graphData.edgeCategories) {
           this.edgeCategories = this.graphData.edgeCategories;
           this.buildEdgeCategoryLookup();
+        }
+        if (this.graphController) {
+          this.graphController.loadGraph(this.graphData);
+          this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
         }
         // Extract unique repos for filter dropdown
         const repos = new Set();
@@ -2711,17 +2762,6 @@ function dashboard() {
         filteredEdges = filteredEdges.filter(e => !hiddenEdgesSet.has(e.edge_type));
       }
 
-      // Check if any hidden types are collapsible (should produce transitive edges)
-      const hasCollapsibleHidden = this.hiddenNodeTypes.some(t => (this._collapsibleTypes || []).includes(t));
-      if (hasCollapsibleHidden) {
-        // Pass all layer-filtered nodes (before hiding) so collapsible nodes are available for bridging
-        const allVisibleByLayer = allNodes.filter(n => this.layerFilters.includes(n.layer));
-        // Use filtered edges for transitive BFS — structural edges (CONTAINS) create noise
-        // Service-to-service connections come from the API as direct edges, not via collapse
-        return this.computeTransitiveEdges(nodes, allVisibleByLayer, filteredEdges);
-      }
-
-      // No collapsible types hidden — standard filtering (hidden non-collapsible types just vanish)
       const nodeIds = new Set(nodes.map(n => n.node_id));
       const edges = filteredEdges.filter(e => nodeIds.has(e.from_node_id) && nodeIds.has(e.to_node_id));
       return { nodes, edges };
@@ -2972,6 +3012,7 @@ function dashboard() {
       const idx = this.hiddenNodeTypes.indexOf(nt);
       if (idx >= 0) this.hiddenNodeTypes.splice(idx, 1);
       else this.hiddenNodeTypes.push(nt);
+      this.syncSidebarToController();
       this.renderGraph();
     },
 
@@ -2998,13 +3039,26 @@ function dashboard() {
       }
       this.hiddenNodeTypes = hidden;
       this._collapsibleTypes = collapsible;
+      this.syncSidebarToController();
     },
 
+
+    syncSidebarToController() {
+      if (!this.graphController || this.graphMode !== 'workspace') return;
+      this.graphController.updateFilters({
+        hiddenDomains: this.hiddenDomains || [],
+        hiddenEdgeTypes: this.hiddenEdgeTypes || [],
+        hiddenNodeTypes: this.hiddenNodeTypes || [],
+        minConfidence: this.minConfidence || 0,
+        repoFilter: this.graphRepoFilter || '',
+      });
+    },
 
     toggleDomain(d) {
       const idx = this.hiddenDomains.indexOf(d);
       if (idx >= 0) this.hiddenDomains.splice(idx, 1);
       else this.hiddenDomains.push(d);
+      this.syncSidebarToController();
       this.renderGraph();
     },
 
@@ -3012,13 +3066,14 @@ function dashboard() {
       const idx = this.hiddenEdgeTypes.indexOf(et);
       if (idx >= 0) this.hiddenEdgeTypes.splice(idx, 1);
       else this.hiddenEdgeTypes.push(et);
+      this.syncSidebarToController();
       this.renderGraph();
     },
 
     getWorkspacePaletteGroups() {
       const search = (this.workspaceSearch || '').toLowerCase();
-      // Respect current filters — only show nodes that would appear on canvas
-      const nodes = (this.graphData.nodes || []).filter(n => {
+      const allNodes = (this.graphController ? this.graphController.store.nodes : this.graphData.nodes || []);
+      const nodes = allNodes.filter(n => {
         if (search && !n.name.toLowerCase().includes(search) && !(n.node_type || '').toLowerCase().includes(search)) return false;
         return true;
       });
@@ -3037,6 +3092,17 @@ function dashboard() {
     },
 
     exportGraphText() {
+      if (this.graphController && this.graphMode === 'workspace') {
+        const text = this.graphController.exportGraphText();
+        navigator.clipboard.writeText(text).then(() => {
+          this.autoFilteredNotice = 'Copied to clipboard';
+          setTimeout(() => { this.autoFilteredNotice = ''; }, 3000);
+        }).catch(() => {
+          const w = window.open('', '_blank');
+          w.document.write('<pre>' + text.replace(/</g, '&lt;') + '</pre>');
+        });
+        return;
+      }
       const data = this.getFilteredData();
       const nodes = data.nodes || [];
       const edges = data.edges || [];
@@ -3179,17 +3245,21 @@ function dashboard() {
     renderGraph() {
       const container = document.getElementById('graph-canvas');
       if (!container) return;
-      // Don't clear workspace canvas if just re-filtering
-      if (this.graphMode !== 'workspace') container.innerHTML = '';
-      const data = this.getFilteredData();
       if (this.graphMode === 'workspace') {
         if (this.wsDataSource === 'diagram') {
           this.renderDiagram();
+        } else if (this.graphController) {
+          this.graphController.render();
         } else {
+          // Fallback to old code
+          const data = this.getFilteredData();
           this.renderWorkspaceGraph(container, data.nodes, data.edges);
         }
         return;
       }
+      // Non-workspace modes
+      container.innerHTML = '';
+      const data = this.getFilteredData();
       if (data.nodes.length === 0) {
         container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">No nodes to display. Adjust filters or import data.</div>';
         return;
@@ -3421,7 +3491,7 @@ function dashboard() {
       // Draw nodes
       Object.values(nodePos).forEach(({ x, y, node: n, external }) => {
         const hasChildren = !!(childrenOf[n.node_id] && childrenOf[n.node_id].length > 0);
-        const g = rootG.append('g').attr('class', 'node-g').attr('data-node-id', n.node_id)
+        const g = rootG.append('g').attr('class', 'node-g').attr('data-testid', 'graph-node').attr('data-node-id', n.node_id).attr('data-node-kind', n.node_type || '')
           .attr('transform', `translate(${x - nodeW/2},${y - nodeH/2})`).style('cursor', 'pointer');
 
         g.append('rect').attr('class', 'node-rect' + (self.selectedNode?.node_id === n.node_id ? ' selected' : ''))
@@ -3565,7 +3635,9 @@ function dashboard() {
           const row = document.createElement('div');
           row.style.cssText = `display:flex;align-items:center;gap:6px;padding:4px 8px;margin:2px 0;margin-left:${depth*20}px;border-radius:6px;cursor:pointer;transition:background .15s;border-left:3px solid ${self.layerColor(node.layer)};`;
           row.className = 'tree-node';
+          row.dataset.testid = 'graph-node';
           row.dataset.nodeId = node.node_id;
+          row.dataset.nodeKind = node.node_kind || '';
 
           // Highlight selected
           if (self.selectedNode?.node_id === node.node_id) {
@@ -3747,14 +3819,14 @@ function dashboard() {
 
       this.workspaceNodes.push({ node_id: nodeId, x, y, manual: true });
 
-      // Use filtered edges for BFS (respects sidebar filters)
-      const filtered = this.getFilteredData();
+      // Use ALL edges for BFS — workspace investigation ignores preset filters
+      const allEdges = this.graphData.edges || [];
       const manualNodes = this.workspaceNodes.filter(w => w.manual);
       if (manualNodes.length >= 2) {
         this.workspacePaths = [];
         for (let i = 0; i < manualNodes.length; i++) {
           for (let j = i + 1; j < manualNodes.length; j++) {
-            const path = this.bfsShortestPath(manualNodes[i].node_id, manualNodes[j].node_id, filtered.edges);
+            const path = this.bfsShortestPath(manualNodes[i].node_id, manualNodes[j].node_id, allEdges);
             if (path) {
               this.workspacePaths.push({ from: manualNodes[i].node_id, to: manualNodes[j].node_id, path });
             }
@@ -3766,15 +3838,16 @@ function dashboard() {
     },
 
     expandWorkspaceNode(nodeId) {
-      const filtered = this.getFilteredData();
+      // Use ALL edges — workspace investigation ignores preset filters
+      const allEdges = this.graphData.edges || [];
       const neighbors = new Set();
-      filtered.edges.forEach(e => {
+      allEdges.forEach(e => {
         if (e.from_node_id === nodeId) neighbors.add(e.to_node_id);
         if (e.to_node_id === nodeId) neighbors.add(e.from_node_id);
       });
       const existing = new Set(this.workspaceNodes.map(w => w.node_id));
       const nodeById = {};
-      filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
+      (this.graphData.nodes || []).forEach(n => { nodeById[n.node_id] = n; });
       // Promote the clicked node to a workspace node if it's just a neighbor
       if (!existing.has(nodeId) && nodeById[nodeId]) {
         this.workspaceNodes.push({ node_id: nodeId, x: 400, y: 300, manual: true });
@@ -3803,25 +3876,29 @@ function dashboard() {
     renderWorkspaceGraph(container, allFilteredNodes, allFilteredEdges) {
       const self = this;
       const isInvestigating = this.workspaceNodes.length > 0;
-      const filtered = this.getFilteredData();
-      const nodeById = {};
-      filtered.nodes.forEach(n => { nodeById[n.node_id] = n; });
-      const filteredNodeIds = new Set(filtered.nodes.map(n => n.node_id));
       const groupField = this.groupByField === '' ? null : (this.groupByField || 'domain_key');
+
+      // Investigation mode uses ALL graph data — preset filters only affect the overview (no nodes dropped)
+      const filtered = this.getFilteredData();
+      const allNodeById = {};
+      (this.graphData.nodes || []).forEach(n => { allNodeById[n.node_id] = n; });
+      const allEdges = this.graphData.edges || [];
 
       // --- Determine which nodes to show ---
       let graphNodes, pathEdgeKeys = new Set(), neighborIds = new Set();
 
       if (!isInvestigating) {
+        // No nodes dropped — show preset-filtered graph
         graphNodes = filtered.nodes.map(n => ({
           ...n, _group: (groupField && n.node_type !== 'container') ? (n[groupField] || null) : null,
           _manual: false, _path: false, _neighbor: false
         }));
       } else {
-        const canvasNodeIds = new Set(this.workspaceNodes.map(w => w.node_id).filter(id => filteredNodeIds.has(id)));
+        // Nodes dropped — ignore preset filters, use all graph data
+        const canvasNodeIds = new Set(this.workspaceNodes.map(w => w.node_id));
         const pathNodeIds = new Set();
         this.workspacePaths.forEach(p => {
-          p.path.forEach(nId => { if (filteredNodeIds.has(nId)) { pathNodeIds.add(nId); canvasNodeIds.add(nId); } });
+          p.path.forEach(nId => { pathNodeIds.add(nId); canvasNodeIds.add(nId); });
           for (let i = 0; i < p.path.length - 1; i++) {
             pathEdgeKeys.add(p.path[i] + '->' + p.path[i + 1]);
             pathEdgeKeys.add(p.path[i + 1] + '->' + p.path[i]);
@@ -3829,7 +3906,7 @@ function dashboard() {
         });
         if (this.wsShowNeighbors) {
           this.workspaceNodes.filter(w => w.manual).forEach(w => {
-            filtered.edges.forEach(e => {
+            allEdges.forEach(e => {
               if (e.from_node_id === w.node_id && !canvasNodeIds.has(e.to_node_id)) neighborIds.add(e.to_node_id);
               if (e.to_node_id === w.node_id && !canvasNodeIds.has(e.from_node_id)) neighborIds.add(e.from_node_id);
             });
@@ -3838,7 +3915,7 @@ function dashboard() {
         }
 
         graphNodes = [...canvasNodeIds].map(nId => {
-          const n = nodeById[nId];
+          const n = allNodeById[nId];
           if (!n) return null;
           const isManual = this.workspaceNodes.some(w => w.node_id === nId && w.manual);
           return {
@@ -3850,9 +3927,10 @@ function dashboard() {
         }).filter(Boolean);
       }
 
-      // Build edges with path marking
+      // Build edges with path marking — use all edges in investigation, filtered in overview
       const nodeIdSet = new Set(graphNodes.map(n => n.node_id));
-      const graphEdges = filtered.edges
+      const edgeSource = isInvestigating ? allEdges : filtered.edges;
+      const graphEdges = edgeSource
         .filter(e => nodeIdSet.has(e.from_node_id) && nodeIdSet.has(e.to_node_id))
         .map(e => ({
           ...e,
@@ -3873,7 +3951,7 @@ function dashboard() {
         if (w.x != null && w.y != null) this._wsPositionCache[w.node_id] = { x: w.x, y: w.y };
       });
 
-      const wsMode = this.wsLayout === 'free' ? 'free' : 'strict';
+      const wsMode = this.isDemoMode ? 'strict' : (this.wsLayout === 'free' ? 'free' : 'strict');
 
       const result = this._renderGraphSVG({
         container,
@@ -4304,8 +4382,8 @@ function dashboard() {
           return info ? 'url(#g-arrow-' + info.category + ')' : 'url(#g-arrow)';
         });
 
-      // Tooltip for transitive edges
-      link.filter(d => d._transitive)
+      // Tooltip for transitive edges (suppressed in screenshot mode)
+      link.filter(d => d._transitive && !self.isScreenshot)
         .style('cursor', 'help')
         .on('mouseenter', function(event, d) {
           const tooltip = document.createElement('div');
@@ -4376,6 +4454,9 @@ function dashboard() {
           if (self._focusPrimaryIds && !self._focusPrimaryIds.has(d.node_id)) cls += ' out-of-focus';
           return cls;
         })
+        .attr('data-testid', 'graph-node')
+        .attr('data-node-id', d => d.id || d.node_id || d.key)
+        .attr('data-node-kind', d => d.node_type || d.kind || '')
         .attr('transform', d => `translate(${d.x},${d.y})`);
 
       // White background for cleaner rounded corners
@@ -4551,6 +4632,7 @@ function dashboard() {
       });
       node.on('mouseenter', (event, d) => {
         self.highlightNode(d.id || d.node_id || d.key, simEdges);
+        if (self.isScreenshot) return; // suppress tooltips in screenshot mode
         // Hover tooltip
         const existing = document.getElementById('__node_tooltip');
         if (existing) existing.remove();
@@ -4801,7 +4883,7 @@ function dashboard() {
         container,
         nodes: filtered.nodes,
         edges: filtered.edges,
-        mode: this.diagramMode,
+        mode: this.isDemoMode ? 'strict' : this.diagramMode,
         positionCache: this._diagramPositions,
         groups: diagramGroups,
         features: { annotations },
