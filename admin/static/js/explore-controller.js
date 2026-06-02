@@ -145,10 +145,11 @@ export class ExploreController {
     const { nodes: filteredNodes, edges: filteredEdges } = filterGraph(this._store, config);
     const filteredNodeIds = new Set(filteredNodes.map(n => n.node_id));
 
-    // Include the parent scope node so its edges to children are visible
+    // At C3+, include the parent scope node so its edges to children are visible
     // e.g. at C3 inside petshop-api, include petshop-api so service→endpoint edges show
+    // At C2 this isn't needed — rollup edges connect services directly
     const refNodeIds = new Set();
-    if (scope) {
+    if (scope && depth >= 2) {
       const parentNode = this._store.getNode(scope.nodeId);
       if (parentNode && !filteredNodeIds.has(parentNode.node_id)) {
         refNodeIds.add(parentNode.node_id);
