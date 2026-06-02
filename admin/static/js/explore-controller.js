@@ -194,6 +194,20 @@ export class ExploreController {
       };
     });
 
+    // Debug: expose on window — call window.__explore in console
+    const _nb = {};
+    allNodes.forEach(n => { _nb[n.node_id] = n; });
+    window.__explore = {
+      depth, level: levelCfg.label, scope: scope?.label,
+      nodes: nodes.map(n => ({ name: n.name, type: n.node_type, layer: n.layer, domain: n.domain_key, group: n._group, ref: n._isRef, drillable: n._drillable })),
+      edges: visibleEdges.map(e => ({ from: _nb[e.from_node_id]?.name || '?', to: _nb[e.to_node_id]?.name || '?', type: e.edge_type, derived: !!e.derived })),
+      groups: [...new Set(nodes.map(n => n._group).filter(Boolean))],
+      summary: `${levelCfg.label}: ${nodes.length} nodes, ${visibleEdges.length} edges, groups=[${[...new Set(nodes.map(n => n._group).filter(Boolean))].join(',')}]`,
+    };
+    console.log('[explore]', window.__explore.summary);
+    console.table(window.__explore.nodes);
+    if (visibleEdges.length) console.table(window.__explore.edges);
+
     // Marks: dim ref nodes
     const marks = {
       manual: new Set(),
@@ -246,12 +260,12 @@ export class ExploreController {
     return this._store.nodes.filter(n => levelCfg.nodeTypes.has(n.node_type));
   }
 
-  exportText() {
+  // Get the current view data (same as what render() uses)
+  _getViewData() {
     const depth = this._scopeStack.length;
     const levelCfg = LEVEL_CONFIG[Math.min(depth, LEVEL_CONFIG.length - 1)];
     const scope = this._scopeStack.length > 0 ? this._scopeStack[this._scopeStack.length - 1] : null;
 
-    // Run same filter as render
     const config = {
       layers: [...this._store.layers],
       nodeTypes: levelCfg.nodeTypes,
@@ -280,32 +294,63 @@ export class ExploreController {
       config.focusNodeIds = domainFocusIds;
     }
 
-    const { nodes, edges } = filterGraph(this._store, config);
-    const nodeById = {};
-    nodes.forEach(n => { nodeById[n.node_id] = n; });
+    const { nodes: filteredNodes } = filterGraph(this._store, config);
+    const filteredNodeIds = new Set(filteredNodes.map(n => n.node_id));
 
-    const infraTypes = new Set(['broker', 'database', 'cache', 'queue', 'infrastructure']);
+    const refNodeIds = new Set();
+    if (scope && depth >= 2) {
+      const parentNode = this._store.getNode(scope.nodeId);
+      if (parentNode && !filteredNodeIds.has(parentNode.node_id)) {
+        refNodeIds.add(parentNode.node_id);
+      }
+    }
+    const refNodes = [...refNodeIds].map(id => this._store.getNode(id)).filter(Boolean);
+    const allNodes = [...filteredNodes, ...refNodes];
+    const allNodeIds = new Set(allNodes.map(n => n.node_id));
+
+    const edges = this._store.getEdgesBetween(allNodeIds).filter(e => {
+      if (e.edge_type === 'CONTAINS') return false;
+      if (this._structuralEdgeTypes.has(e.edge_type)) return false;
+      const hiddenET = new Set(this._sidebarFilters.hiddenEdgeTypes || []);
+      return !hiddenET.has(e.edge_type);
+    });
+
+    return { allNodes, edges, refNodeIds, scope, depth };
+  }
+
+  exportText() {
+    const { allNodes, edges, refNodeIds, scope, depth } = this._getViewData();
+
+    const nodeById = {};
+    allNodes.forEach(n => { nodeById[n.node_id] = n; });
+
+    const sharedTypes = new Set(['broker', 'database', 'cache', 'queue', 'infrastructure', 'external_system', 'topic', 'async_channel']);
     const scopeLabel = scope ? scope.label : null;
 
     const byGroup = {};
-    nodes.forEach(n => {
-      const isInfra = n.layer === 'infra' || infraTypes.has(n.node_type);
+    allNodes.forEach(n => {
+      const isShared = n.layer === 'infra' || sharedTypes.has(n.node_type);
+      const isRef = refNodeIds.has(n.node_id);
       let gk;
-      if (isInfra) gk = '_infrastructure';
-      else if (scope && n.domain_key !== scope.domainKey) gk = '_external';
+      if (isRef) gk = '_ref (' + n.node_type + ')';
+      else if (isShared) gk = '_shared';
+      else if (scope && depth >= 2 && n.domain_key !== scope.domainKey) gk = '_external';
       else gk = scopeLabel || n.domain_key || '_unassigned';
       if (!byGroup[gk]) byGroup[gk] = [];
       byGroup[gk].push(n);
     });
 
     const path = this.breadcrumbs.map(b => b.label).join(' > ');
-    let text = `# ${path} (${nodes.length} nodes, ${edges.length} edges)\n`;
+    let text = `# ${path} (${allNodes.length} nodes, ${edges.length} edges)\n`;
     text += `# Level: ${this.currentDepthLabel}\n\n`;
 
     Object.keys(byGroup).sort().forEach(gk => {
       text += `## ${gk}\n`;
       byGroup[gk].sort((a, b) => (a.node_type + a.name).localeCompare(b.node_type + b.name)).forEach(n => {
-        text += `  ${n.node_type}: ${n.name || n.node_key}${n.layer !== 'code' ? ' [' + n.layer + ']' : ''}\n`;
+        const flags = [];
+        if (refNodeIds.has(n.node_id)) flags.push('ref');
+        if (n.layer !== 'code') flags.push(n.layer);
+        text += `  ${n.node_type}: ${n.name || n.node_key}${flags.length ? ' [' + flags.join(', ') + ']' : ''}\n`;
       });
       text += '\n';
     });
