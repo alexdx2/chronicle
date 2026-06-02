@@ -54,6 +54,51 @@ export class GraphStore {
       this._edgesByNode.get(e.from_node_id).outgoing.push(e);
       this._edgesByNode.get(e.to_node_id).incoming.push(e);
     }
+
+    // Always reset hierarchy — even if API response has no hierarchy field
+    this._loadHierarchy(apiResponse.hierarchy || { roots: [], links: [] });
+  }
+
+  _loadHierarchy(hierarchy) {
+    this._hierarchyRoots = (hierarchy.roots || []).map(String);
+    this._childrenOf = new Map();
+    this._parentOf = new Map();
+    this._hierarchyLinksByChild = new Map();
+
+    for (const link of (hierarchy.links || [])) {
+      const parentId = String(link.parentId);
+      const childId = String(link.childId);
+
+      if (!this._childrenOf.has(parentId)) {
+        this._childrenOf.set(parentId, []);
+      }
+      this._childrenOf.get(parentId).push(childId);
+      this._parentOf.set(childId, parentId);
+      this._hierarchyLinksByChild.set(childId, {
+        parentId, childId,
+        kind: link.kind, reason: link.reason, confidence: link.confidence,
+      });
+    }
+  }
+
+  get hierarchyRoots() { return this._hierarchyRoots || []; }
+
+  getChildren(nodeId) {
+    return this._childrenOf ? (this._childrenOf.get(String(nodeId)) || []) : [];
+  }
+
+  getParent(nodeId) {
+    return this._parentOf ? (this._parentOf.get(String(nodeId)) || null) : null;
+  }
+
+  hasChildren(nodeId) {
+    const children = this._childrenOf ? this._childrenOf.get(String(nodeId)) : null;
+    return children != null && children.length > 0;
+  }
+
+  getHierarchyLink(childNodeId) {
+    if (!this._hierarchyLinksByChild) return null;
+    return this._hierarchyLinksByChild.get(String(childNodeId)) || null;
   }
 
   getNode(id) {

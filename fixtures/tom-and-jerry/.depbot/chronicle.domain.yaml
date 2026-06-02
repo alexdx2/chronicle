@@ -24,5 +24,9 @@ infrastructure:
     type: broker
     address: kafka:9092
     description: Event bus connecting all services
+  - name: redis
+    type: cache
+    address: redis:6379
+    description: Shared cache for battle state and session data
 
 instruction_packs: [language/typescript, framework/nestjs, framework/graphql, orm/prisma]

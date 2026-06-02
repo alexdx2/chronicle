@@ -66,7 +66,9 @@ export class GraphRenderer {
     if (groupField) {
       nodes.forEach(n => {
         // Infra nodes are shared resources — never inside domain groups
-        if (n.layer === 'infra') return;
+        // Shared resources always float outside domain groups
+        const sharedTypes = new Set(['broker', 'database', 'cache', 'queue', 'infrastructure', 'external_system', 'topic', 'async_channel']);
+        if (n.layer === 'infra' || sharedTypes.has(n.node_type)) return;
         const gk = n._group || n[groupField];
         if (gk) {
           if (!groupMap[gk]) groupMap[gk] = [];
@@ -261,6 +263,8 @@ export class GraphRenderer {
       .style('cursor', 'pointer');
 
     nodeG.attr('opacity', d => {
+      // Ref nodes (external references in Explore) are always dimmed
+      if (d._isRef) return 0.4;
       if (!marks.manual || marks.manual.size === 0) return 1;
       if (marks.manual.has(d.id)) return 1;
       if (marks.path && marks.path.has(d.id)) return 0.9;

@@ -442,6 +442,7 @@ func (s *Server) Start() error {
 			}
 			path := filepath.Join(staticDir, r.URL.Path)
 			if _, err := os.Stat(path); err == nil {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				fileServer.ServeHTTP(w, r)
 				return
 			}
@@ -724,6 +725,166 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	httpJSON(w, map[string]any{"issues": issues, "nodes_checked": len(nodes), "edges_checked": len(edges), "valid": len(issues) == 0})
 }
 
+func buildHierarchy(nodeList []map[string]any, edgeList []map[string]any) map[string]any {
+	type hlink struct {
+		ParentID   string  `json:"parentId"`
+		ChildID    string  `json:"childId"`
+		Kind       string  `json:"kind"`
+		Reason     string  `json:"reason"`
+		Confidence float64 `json:"confidence"`
+	}
+
+	nodeByID := map[string]map[string]any{}
+	for _, n := range nodeList {
+		id := fmt.Sprintf("%v", n["node_id"])
+		nodeByID[id] = n
+	}
+
+	rootTypes := map[string]bool{
+		"container": true, "external_system": true,
+		"broker": true, "database": true, "cache": true,
+		"queue": true, "infrastructure": true,
+	}
+
+	var roots []string
+	for _, n := range nodeList {
+		nt, _ := n["node_type"].(string)
+		if rootTypes[nt] {
+			roots = append(roots, fmt.Sprintf("%v", n["node_id"]))
+		}
+	}
+
+	links := []hlink{}
+	placed := map[string]bool{}
+
+	// 1. Real CONTAINS edges from DB
+	for _, e := range edgeList {
+		et, _ := e["edge_type"].(string)
+		if et != "CONTAINS" { continue }
+		deriv, _ := e["derivation"].(string)
+		if deriv == "rollup" || deriv == "virtual" { continue }
+		fromID := fmt.Sprintf("%v", e["from_node_id"])
+		toID := fmt.Sprintf("%v", e["to_node_id"])
+		if placed[toID] { continue }
+		placed[toID] = true
+		links = append(links, hlink{
+			ParentID: fromID, ChildID: toID,
+			Kind: "real", Reason: "db_contains", Confidence: 1.0,
+		})
+	}
+
+	// 2. container → service/external_system by domain_key
+	containerByDomain := map[string]string{}
+	for _, n := range nodeList {
+		nt, _ := n["node_type"].(string)
+		if nt != "container" { continue }
+		dk, _ := n["domain_key"].(string)
+		if dk != "" { containerByDomain[dk] = fmt.Sprintf("%v", n["node_id"]) }
+	}
+	for _, n := range nodeList {
+		id := fmt.Sprintf("%v", n["node_id"])
+		if placed[id] { continue }
+		nt, _ := n["node_type"].(string)
+		if nt != "service" && nt != "external_system" { continue }
+		dk, _ := n["domain_key"].(string)
+		cID, ok := containerByDomain[dk]
+		if !ok { continue }
+		placed[id] = true
+		links = append(links, hlink{
+			ParentID: cID, ChildID: id,
+			Kind: "virtual", Reason: "domain_key", Confidence: 0.9,
+		})
+	}
+
+	// 3. service → module by domain_key + name prefix
+	serviceByDomain := map[string][]map[string]any{}
+	for _, n := range nodeList {
+		nt, _ := n["node_type"].(string)
+		if nt != "service" { continue }
+		dk, _ := n["domain_key"].(string)
+		serviceByDomain[dk] = append(serviceByDomain[dk], n)
+	}
+	for _, n := range nodeList {
+		id := fmt.Sprintf("%v", n["node_id"])
+		if placed[id] { continue }
+		nt, _ := n["node_type"].(string)
+		if nt != "module" { continue }
+		dk, _ := n["domain_key"].(string)
+		name, _ := n["name"].(string)
+		modPrefix := strings.TrimSuffix(name, ".module")
+		for _, svc := range serviceByDomain[dk] {
+			svcName, _ := svc["name"].(string)
+			svcPrefix := strings.TrimSuffix(svcName, "-api")
+			if modPrefix == svcPrefix || modPrefix+"s" == svcPrefix || svcPrefix+"s" == modPrefix {
+				placed[id] = true
+				links = append(links, hlink{
+					ParentID: fmt.Sprintf("%v", svc["node_id"]), ChildID: id,
+					Kind: "virtual", Reason: "name_prefix", Confidence: 0.8,
+				})
+				break
+			}
+		}
+	}
+
+	// 4. controller/provider → endpoint from EXPOSES_ENDPOINT edges
+	for _, e := range edgeList {
+		et, _ := e["edge_type"].(string)
+		if et != "EXPOSES_ENDPOINT" { continue }
+		toID := fmt.Sprintf("%v", e["to_node_id"])
+		if placed[toID] { continue }
+		fromID := fmt.Sprintf("%v", e["from_node_id"])
+		placed[toID] = true
+		links = append(links, hlink{
+			ParentID: fromID, ChildID: toID,
+			Kind: "virtual", Reason: "exposes_endpoint", Confidence: 1.0,
+		})
+	}
+
+	// 5. provider → topic from PUBLISHES_TOPIC (only if single publisher)
+	topicPublishers := map[string][]string{}
+	for _, e := range edgeList {
+		et, _ := e["edge_type"].(string)
+		if et != "PUBLISHES_TOPIC" { continue }
+		toID := fmt.Sprintf("%v", e["to_node_id"])
+		fromID := fmt.Sprintf("%v", e["from_node_id"])
+		topicPublishers[toID] = append(topicPublishers[toID], fromID)
+	}
+	for topicID, publishers := range topicPublishers {
+		if placed[topicID] { continue }
+		if len(publishers) != 1 { continue }
+		placed[topicID] = true
+		links = append(links, hlink{
+			ParentID: publishers[0], ChildID: topicID,
+			Kind: "virtual", Reason: "topic_edge", Confidence: 0.8,
+		})
+	}
+
+	// Fallback: if no roots found (no containers), promote services/external/infra
+	if len(roots) == 0 {
+		fallbackTypes := map[string]bool{"service": true, "external_system": true, "broker": true, "database": true, "cache": true, "queue": true, "infrastructure": true}
+		for _, n := range nodeList {
+			nt, _ := n["node_type"].(string)
+			if fallbackTypes[nt] {
+				roots = append(roots, fmt.Sprintf("%v", n["node_id"]))
+			}
+		}
+	}
+
+	// Remove placed nodes from roots (they're children now)
+	filteredRoots := []string{}
+	for _, r := range roots {
+		if !placed[r] {
+			filteredRoots = append(filteredRoots, r)
+		}
+	}
+
+	_ = nodeByID
+	return map[string]any{
+		"roots": filteredRoots,
+		"links": links,
+	}
+}
+
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
 	nodes, _ := s.getStore().ListNodes(store.NodeFilter{Domain: domain})
@@ -814,7 +975,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			edgeList = append(edgeList, map[string]any{
 				"edge_id": virtualEdgeID, "edge_key": "service:container:" + n.DomainKey + "->" + n.NodeKey + ":CONTAINS",
 				"from_node_id": cID, "to_node_id": n.NodeID,
-				"edge_type": "CONTAINS", "derivation": "hard",
+				"edge_type": "CONTAINS", "derivation": "virtual",
 				"confidence": 1.0, "active": true,
 			})
 			virtualEdgeID--
@@ -1201,7 +1362,8 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories()})
+		hierarchy := buildHierarchy(nodeList, edgeList)
+		httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories(), "hierarchy": hierarchy})
 		return
 	}
 
@@ -1216,7 +1378,8 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories()})
+	hierarchy := buildHierarchy(nodeList, edgeList)
+	httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories(), "hierarchy": hierarchy})
 }
 
 func (s *Server) handleGraphDomains(w http.ResponseWriter, r *http.Request) {

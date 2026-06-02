@@ -370,7 +370,7 @@ a{color:var(--primary);text-decoration:none}
   <!-- SECTION:project_switcher:end -->
   <div class="tab-bar">
     <!-- TAB_BTN:overview:start --><button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button><!-- TAB_BTN:overview:end -->
-    <!-- TAB_BTN:graph:start --><button class="tab-btn" data-testid="graph-tab" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(()=>{loading.graph=false;loaded.graph=true;$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button><!-- TAB_BTN:graph:end -->
+    <!-- TAB_BTN:graph:start --><button class="tab-btn" data-testid="graph-tab" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(async ()=>{loading.graph=false;loaded.graph=true;await initGraphControllers();$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button><!-- TAB_BTN:graph:end -->
     <!-- TAB_BTN:language:start --><button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button><!-- TAB_BTN:language:end -->
     <!-- TAB_BTN:settings:start --><button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button><!-- TAB_BTN:settings:end -->
     <!-- SLOT:EXTRA_TABS -->
@@ -719,8 +719,9 @@ a{color:var(--primary);text-decoration:none}
       <!-- View toggle -->
       <div class="mode-toggle">
         <button class="mode-btn" :class="{active:graphMode==='tree'}" @click="graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree</button>
-        <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';history.pushState(null,'','/graph/explore');renderGraph()">Explore</button>
+        <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="graphMode='explore';if(modeController){modeController.setMode('explore')}else{renderGraph()};history.pushState(null,'','/graph/explore')">Explore</button>
         <button class="mode-btn" :class="{active:graphMode==='workspace'}" @click="graphMode='workspace';wsDataSource='graph';filterSidebarOpen=true;history.pushState(null,'','/graph/workspace');renderGraph()">Workspace</button>
+        <button class="mode-btn" :class="{active:graphMode==='investigate'}" @click="graphMode='investigate';if(modeController){modeController.setMode('investigate')};history.pushState(null,'','/graph/investigate')">Investigate</button>
       </div>
 
       <!-- Workspace layout toggle -->
@@ -734,8 +735,27 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </template>
 
-      <!-- C4 Zoom presets (workspace + explore) -->
-      <template x-if="graphMode==='workspace' || graphMode==='explore'">
+      <!-- Breadcrumbs (Explore mode with ModeController) -->
+      <!-- Breadcrumbs (Explore mode) -->
+      <template x-if="graphMode==='explore' && modeController">
+        <div style="display:flex;align-items:center;gap:4px;font-size:12px;padding:2px 8px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+          <template x-for="(crumb, i) in exploreBreadcrumbs" :key="i">
+            <span style="display:flex;align-items:center;gap:4px">
+              <template x-if="i > 0"><span style="color:var(--border);font-size:10px">/</span></template>
+              <button @click="modeController.explore.navigateTo(i)"
+                      style="background:none;border:none;cursor:pointer;padding:3px 8px;border-radius:4px;font-size:12px;font-family:inherit"
+                      :style="i === exploreBreadcrumbs.length - 1 ? 'color:var(--primary);font-weight:600' : 'color:var(--text-muted)'"
+                      @mouseenter="$el.style.background='#f5f0e8'"
+                      @mouseleave="$el.style.background='none'"
+                      x-text="crumb.label"></button>
+            </span>
+          </template>
+          <span style="color:var(--text-muted);font-size:9px;margin-left:6px;padding:1px 6px;background:#f0e9dd;border-radius:8px" x-text="exploreDepthLabel"></span>
+        </div>
+      </template>
+
+      <!-- C4 Zoom presets (workspace only) -->
+      <template x-if="graphMode==='workspace'">
         <div class="mode-toggle">
           <button class="mode-btn" :class="{active: graphPreset==='c1'}" @click="if(graphController && graphMode==='workspace'){graphController.setPreset('c1')}else{setPreset('c1');renderGraph()}">C1 Context</button>
           <button class="mode-btn" :class="{active: graphPreset==='c2'}" @click="if(graphController && graphMode==='workspace'){graphController.setPreset('c2')}else{setPreset('c2');renderGraph()}">C2 Container</button>
@@ -807,7 +827,7 @@ a{color:var(--primary);text-decoration:none}
             <input type="checkbox" x-model="hideStructural" @change="renderGraph()"> Hide CONTAINS/OWNS
           </label>
         </template>
-        <template x-if="graphMode==='workspace'">
+        <template x-if="graphMode==='workspace' || graphMode==='explore' || graphMode==='investigate'">
           <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
         </template>
         <button class="mode-btn" @click="exportGraphText()" title="Copy graph as text to clipboard">Export</button>
@@ -818,8 +838,8 @@ a{color:var(--primary);text-decoration:none}
     <!-- Main area: palette (workspace) + canvas + side panel + filter sidebar -->
     <div style="display:flex;flex:1;overflow:hidden">
 
-      <!-- Workspace search palette (only in workspace mode) -->
-      <template x-if="graphMode==='workspace'">
+      <!-- Workspace search palette (workspace + investigate modes) -->
+      <template x-if="graphMode==='workspace' || graphMode==='investigate'">
         <div class="ws-palette">
           <input type="text" placeholder="Search entities..." x-model="workspaceSearch">
           <template x-if="workspaceNodes.length > 0">
@@ -865,7 +885,13 @@ a{color:var(--primary);text-decoration:none}
       <div id="graph-canvas" style="flex:1;overflow:auto;position:relative"
            @dragover.prevent="$event.dataTransfer.dropEffect='copy'"
            @drop.prevent="
-             if (graphController && graphMode==='workspace') {
+             if (modeController && graphMode==='investigate') {
+               const rawId = $event.dataTransfer.getData('text/plain');
+               if (!rawId) return;
+               const canvas = document.getElementById('graph-canvas');
+               const rect = canvas.getBoundingClientRect();
+               modeController.investigate.handleDrop(rawId, $event.clientX - rect.left, $event.clientY - rect.top);
+             } else if (graphController && graphMode==='workspace') {
                const rawId = $event.dataTransfer.getData('text/plain');
                if (!rawId) return;
                const canvas = document.getElementById('graph-canvas');
@@ -929,7 +955,7 @@ a{color:var(--primary);text-decoration:none}
 
 
       <!-- Filter sidebar (Workspace mode) -->
-      <template x-if="filterSidebarOpen && graphMode==='workspace'">
+      <template x-if="filterSidebarOpen && (graphMode==='workspace' || graphMode==='explore' || graphMode==='investigate')">
         <div class="filter-sidebar">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
@@ -1036,7 +1062,7 @@ a{color:var(--primary);text-decoration:none}
   </div>
 </div>
 <!-- Bottom panel for selected node -->
-<div class="bottom-panel" data-testid="node-detail-panel" x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='workspace')" x-cloak x-transition>
+<div class="bottom-panel" data-testid="node-detail-panel" x-show="selectedNode && (graphMode==='tree' || graphMode==='explore' || graphMode==='workspace' || graphMode==='investigate')" x-cloak x-transition>
   <template x-if="selectedNode">
     <div>
       <div class="bottom-panel-header">
@@ -1052,6 +1078,19 @@ a{color:var(--primary);text-decoration:none}
                     style="font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer">
               Zoom in ↓
             </button>
+          </template>
+          <template x-if="modeController">
+            <span style="display:flex;gap:4px">
+              <button @click="modeController.addToInvestigation(selectedNode.node_id || selectedNode.id)"
+                      style="font-size:10px;padding:2px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text);cursor:pointer"
+                      title="Add this node to the investigation canvas">+ Investigate</button>
+              <template x-if="graphMode==='explore' && modeController.store && modeController.store.hasChildren(selectedNode.node_id || selectedNode.id)">
+                <button @click="modeController.explore.drillInto(selectedNode.node_id || selectedNode.id)"
+                        style="font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer">
+                  Open ↓
+                </button>
+              </template>
+            </span>
           </template>
         </div>
         <button @click="selectedNode=null;nodeEvidence=null" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:18px;padding:0 4px">&times;</button>
@@ -1660,6 +1699,9 @@ function dashboard() {
     exploreCurrentId: null,
     graphFullscreen: false,
     graphController: null,
+    modeController: null,
+    exploreBreadcrumbs: [{ nodeId: null, label: 'System', depth: 0 }],
+    exploreDepthLabel: 'C1',
     graphPreset: 'all',
     graphRepoFilter: '',
     allRepos: [],
@@ -1828,34 +1870,9 @@ function dashboard() {
           } else if (this.graphMode === 'explore') {
             this.autoPresetHighLevel();
           }
-          // Workspace mode: controller handles preset + focus via restoreFromUrl()
-          // Initialize graph controller for workspace mode
-          try {
-            const { GraphController } = await import('./js/graph-controller.js');
-            this.graphController = new GraphController({
-              onStateChange: (state) => {
-                if ('preset' in state) this.graphPreset = state.preset;
-                if ('focus' in state) this.graphFocusName = state.focus;
-                if ('selectedNode' in state) {
-                  this.selectedNode = state.selectedNode;
-                  if (state.selectedNode) this.fetchNodeEvidence(state.selectedNode.node_key);
-                  else this.nodeEvidence = null;
-                }
-                if ('zoomNode' in state) this.zoomIntoNode(state.zoomNode);
-              },
-            });
-            const graphCanvas = document.getElementById('graph-canvas');
-            await this.graphController.init(graphCanvas);
-            if (this.graphData && this.graphData.nodes) {
-              this.graphController.loadGraph(this.graphData);
-            }
-            this.graphController._projectPath = localStorage.getItem('chronicle_current_project') || this.originalProject || '';
-            this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
-            this.graphController.setShowEdgeLabels(this.showEdgeLabels);
-            this.graphController.restoreFromUrl();
-          } catch (e) {
-            console.warn('GraphController module not available:', e);
-          }
+          // Initialize graph controllers (shared method — also called from Graph tab click)
+          await this.initGraphControllers();
+
           setTimeout(() => this.renderGraph(), 100);
         });
       }
@@ -2208,6 +2225,63 @@ function dashboard() {
       } catch(e) { console.error('discoveries:', e); }
     },
 
+    async initGraphControllers() {
+      if (this.graphController && this.modeController) return; // already initialized
+      try {
+        if (!this.graphController) {
+          const { GraphController } = await import('/js/graph-controller.js');
+          this.graphController = new GraphController({
+            onStateChange: (state) => {
+              if ('preset' in state) this.graphPreset = state.preset;
+              if ('focus' in state) this.graphFocusName = state.focus;
+              if ('selectedNode' in state) {
+                this.selectedNode = state.selectedNode;
+                if (state.selectedNode) this.fetchNodeEvidence(state.selectedNode.node_key);
+                else this.nodeEvidence = null;
+              }
+              if ('zoomNode' in state) this.zoomIntoNode(state.zoomNode);
+            },
+          });
+          const graphCanvas = document.getElementById('graph-canvas');
+          await this.graphController.init(graphCanvas);
+          if (this.graphData && this.graphData.nodes) {
+            this.graphController.loadGraph(this.graphData);
+          }
+          this.graphController._projectPath = localStorage.getItem('chronicle_current_project') || this.originalProject || '';
+          this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
+          this.graphController.setShowEdgeLabels(this.showEdgeLabels);
+          this.graphController.restoreFromUrl();
+        }
+      } catch (e) { console.warn('GraphController module not available:', e); }
+
+      try {
+        if (!this.modeController) {
+          const { ModeController } = await import('/js/mode-controller.js');
+          this.modeController = new ModeController({
+            onStateChange: (state) => {
+              if ('selectedNode' in state) {
+                this.selectedNode = state.selectedNode;
+                if (state.selectedNode) this.fetchNodeEvidence(state.selectedNode.node_key);
+                else this.nodeEvidence = null;
+              }
+              if ('mode' in state) this.graphMode = state.mode;
+              if ('breadcrumbs' in state) {
+                this.exploreBreadcrumbs = state.breadcrumbs;
+                const labels = ['C1', 'C2', 'C3', 'C4'];
+                this.exploreDepthLabel = labels[Math.min(state.breadcrumbs.length - 1, labels.length - 1)] || '';
+              }
+            },
+          });
+          const graphCanvas = document.getElementById('graph-canvas');
+          await this.modeController.init(graphCanvas);
+          if (this.graphData && this.graphData.nodes) {
+            this.modeController.loadGraph(this.graphData);
+            this.modeController.setEdgeCategoryLookup(this.edgeCategoryLookup);
+          }
+        }
+      } catch (e) { console.warn('ModeController not available:', e); }
+    },
+
     async fetchGraphData() {
       try {
         // Try federation endpoint first (pro only — endpoint doesn't exist in core)
@@ -2222,6 +2296,10 @@ function dashboard() {
           this.graphController.loadGraph(this.graphData);
           this.graphController._projectPath = localStorage.getItem('chronicle_current_project') || this.originalProject || '';
           this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
+        }
+        if (this.modeController) {
+          this.modeController.loadGraph(this.graphData);
+          this.modeController.setEdgeCategoryLookup(this.edgeCategoryLookup);
         }
         // Extract unique repos for filter dropdown
         const repos = new Set();
@@ -3185,6 +3263,17 @@ function dashboard() {
     },
 
     exportGraphText() {
+      if (this.modeController && (this.graphMode === 'explore' || this.graphMode === 'investigate')) {
+        const text = this.modeController.exportText();
+        navigator.clipboard.writeText(text).then(() => {
+          this.autoFilteredNotice = 'Copied to clipboard';
+          setTimeout(() => { this.autoFilteredNotice = ''; }, 3000);
+        }).catch(() => {
+          const w = window.open('', '_blank');
+          w.document.write('<pre>' + text.replace(/</g, '&lt;') + '</pre>');
+        });
+        return;
+      }
       if (this.graphController && this.graphMode === 'workspace') {
         const text = this.graphController.exportGraphText();
         navigator.clipboard.writeText(text).then(() => {
@@ -3338,6 +3427,15 @@ function dashboard() {
     renderGraph() {
       const container = document.getElementById('graph-canvas');
       if (!container) return;
+      // Explore and Investigate modes — delegate to modeController
+      if (this.graphMode === 'explore' || this.graphMode === 'investigate') {
+        if (this.modeController) {
+          this.modeController.render();
+        } else {
+          container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">Loading...</div>';
+        }
+        return;
+      }
       if (this.graphMode === 'workspace') {
         if (this.wsDataSource === 'diagram') {
           this.renderDiagram();
@@ -3359,8 +3457,6 @@ function dashboard() {
       }
       if (this.graphMode === 'tree') {
         this.renderLayeredGraph(container, data.nodes, data.edges);
-      } else if (this.graphMode === 'explore') {
-        this.renderExploreGraph(container, data.nodes, data.edges);
       }
     },
 
