@@ -229,13 +229,15 @@ var scanStages = []ScanStage{
     5. Wait for ALL agents to finish
     6. Go back to step 1
 
-  CRITICAL — CONTAINS edges (structural backbone of the graph):
-  - For every @Module file: emit "provides" facts for EVERY controller AND provider declared in it
-    -> set from_type="module" so the resolver creates CONTAINS edges (module->controller, module->provider)
-  - For every repository root: emit a "provides" fact pointing to its main module
-  - Missing "provides" from module files = missing CONTAINS edges = broken graph structure
-  Example: @Module({ controllers: [OrderController], providers: [OrderService] })
-    -> {"kind":"provides","to":"OrderController"} + {"kind":"provides","to":"OrderService"} with from_type="module"
+  CRITICAL — HIERARCHY facts (structural backbone of the graph):
+  1. "provides" — For every @Module file: emit for EVERY controller AND provider in its arrays.
+     Set from_type="module". Missing provides = missing CONTAINS edges.
+     Example: @Module({ controllers: [OrderController] }) -> {"kind":"provides","to":"OrderController"}
+  2. "parent" — For every controller/provider: emit parent fact pointing to the owning module.
+     Only emit when evidence is clear (declared in @Module, not just imported/used).
+     Example: {"kind":"parent","to":"arena.module","reason":"declared in @Module.controllers"}
+  3. "declares_service" — For every package.json with a server entrypoint: emit service declaration.
+     Example: {"kind":"declares_service","to":"arena-api"}
 
   RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger agent launches by 2-3s.`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
