@@ -118,10 +118,9 @@ CRITICAL RULES:
 
 Do NOT ask questions. Execute immediately."
 
-claude --print \
+claude -p \
   --dangerously-skip-permissions \
-  --mcp-config "$MCP_CONFIG" \
-  --strict-mcp-config \
+  "--mcp-config=$MCP_CONFIG" \
   "$CLAUDE_PROMPT" > "$RESULTS_DIR/claude_output.txt" 2>&1 || true
 
 CLAUDE_EXIT=$?
