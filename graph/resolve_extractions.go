@@ -1151,6 +1151,8 @@ func (g *Graph) findNodeByNameInDomain(domainKey, name string) *store.NodeRow {
 }
 
 // ensureNodeID ensures a node exists and returns its ID.
+// If the exact key doesn't exist but a stem-based node with the same name does,
+// merges by updating the old node's key to the new path-based key.
 func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, filePath string) int64 {
 	id, err := g.store.GetNodeIDByKey(nodeKey)
 	if err == nil {
@@ -1164,6 +1166,24 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 		}
 		return id
 	}
+
+	// Key doesn't exist — check if a stem-based node with the same name exists.
+	// This happens when an import fact created a node from a class name (stem key)
+	// before the actual file was scanned (path key).
+	if filePath != "" && name != "" {
+		existing := g.findNodeByNameInDomain(domainKey, name)
+		if existing != nil && existing.Layer == "code" && existing.FilePath == "" {
+			// Found a stem-based node — merge by updating its key and file path
+			g.store.Exec("UPDATE graph_nodes SET node_key = ?, file_path = ?, last_seen_revision_id = ? WHERE node_id = ?",
+				nodeKey, filePath, revisionID, existing.NodeID)
+			// Also update edge keys that reference the old node key
+			g.store.Exec("UPDATE graph_edges SET from_node_key = ? WHERE from_node_id = ?", nodeKey, existing.NodeID)
+			g.store.Exec("UPDATE graph_edges SET to_node_key = ? WHERE to_node_id = ?", nodeKey, existing.NodeID)
+			g.store.Exec("UPDATE graph_edges SET edge_key = from_node_key || '->' || to_node_key || ':' || edge_type WHERE from_node_id = ? OR to_node_id = ?", existing.NodeID, existing.NodeID)
+			return existing.NodeID
+		}
+	}
+
 	g.ensureNode(domainKey, revisionID, nodeKey, name, filePath)
 	id, _ = g.store.GetNodeIDByKey(nodeKey)
 	return id
