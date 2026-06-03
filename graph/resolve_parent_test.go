@@ -44,8 +44,8 @@ func TestParentFact_CreatesContainsEdge(t *testing.T) {
 	}
 
 	// Verify edge direction: module → controller
-	moduleNodeKey := "code:module:testapp:arena.module"
-	controllerNodeKey := "code:controller:testapp:arena.controller"
+	moduleNodeKey := "code:module:testapp:src/arena/arena.module"
+	controllerNodeKey := "code:controller:testapp:src/arena/arena.controller"
 	found := false
 	for _, e := range edges {
 		if e.FromNodeKey == moduleNodeKey && e.ToNodeKey == controllerNodeKey {

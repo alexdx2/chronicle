@@ -66,6 +66,61 @@ func (s *Store) ListAliasesByNormalized(normalized, kind string) ([]AliasRow, er
 	return scanAliases(rows)
 }
 
+// ListAliasesByNormalizedAnyKind returns aliases matching a normalized value across all kinds.
+func (s *Store) ListAliasesByNormalizedAnyKind(normalized string) ([]AliasRow, error) {
+	rows, err := s.db.Query(`
+		SELECT alias_id, node_id, alias, normalized_alias, alias_kind, confidence
+		FROM node_aliases WHERE normalized_alias = ?
+	`, normalized)
+	if err != nil {
+		return nil, fmt.Errorf("ListAliasesByNormalizedAnyKind: %w", err)
+	}
+	defer rows.Close()
+	return scanAliases(rows)
+}
+
+// FindCodeNodesByAlias searches code-layer nodes by normalized alias.
+// pathPrefix optionally scopes to a directory (empty = all).
+func (s *Store) FindCodeNodesByAlias(domain, alias, pathPrefix string) ([]NodeRow, error) {
+	normalized := strings.ToLower(alias)
+	// Also try without dots/dashes for fuzzy match
+	normalizedClean := strings.NewReplacer(".", "", "-", "", "_", "").Replace(normalized)
+
+	aliases, err := s.ListAliasesByNormalizedAnyKind(normalized)
+	if err != nil {
+		return nil, err
+	}
+	// Also search cleaned version
+	if normalizedClean != normalized {
+		aliases2, _ := s.ListAliasesByNormalizedAnyKind(normalizedClean)
+		aliases = append(aliases, aliases2...)
+	}
+
+	seen := map[int64]bool{}
+	var results []NodeRow
+	for _, a := range aliases {
+		if seen[a.NodeID] {
+			continue
+		}
+		seen[a.NodeID] = true
+		node, err := s.GetNodeByID(a.NodeID)
+		if err != nil || node == nil {
+			continue
+		}
+		if node.Layer != "code" {
+			continue
+		}
+		if domain != "" && node.DomainKey != domain {
+			continue
+		}
+		if pathPrefix != "" && !strings.HasPrefix(node.FilePath, pathPrefix) {
+			continue
+		}
+		results = append(results, *node)
+	}
+	return results, nil
+}
+
 // RemoveAlias deletes an alias by ID.
 func (s *Store) RemoveAlias(aliasID int64) error {
 	res, err := s.db.Exec(`DELETE FROM node_aliases WHERE alias_id = ?`, aliasID)

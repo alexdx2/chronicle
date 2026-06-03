@@ -156,7 +156,7 @@ func TestEdgeLifecycle_SameEdgeTwice_StaysActive(t *testing.T) {
 	g.ResolveExtractions("myapp", revID)
 
 	// Edge should exist and be queryable
-	node, _ := g.Store().GetNodeByKey("code:controller:myapp:controller")
+	node, _ := g.Store().GetNodeByKey("code:controller:myapp:src/controller")
 	if node == nil {
 		t.Fatal("controller node should exist")
 	}

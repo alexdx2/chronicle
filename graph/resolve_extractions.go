@@ -307,7 +307,17 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Ensure nodes exist
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
-		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
+
+		// Try to resolve target via alias before creating new node
+		var toID int64
+		if candidates, err := g.store.FindCodeNodesByAlias(domainKey, toName, ""); err == nil && len(candidates) == 1 {
+			toID = candidates[0].NodeID
+			toNodeKey = candidates[0].NodeKey
+		} else {
+			// Fallback: create as before
+			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
+		}
 
 		// Determine edge type based on from/to node types
 		edgeType := inferImportEdgeType(fromNodeKey, toNodeKey)
@@ -518,6 +528,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		toName := fact.To
 		// Try service layer first (service:service:domain:name)
@@ -582,6 +593,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		epKey, epName := normalizeEndpointKey(domainKey, fact.Method, fact.Target)
 		epID := g.ensureNodeID(domainKey, revisionID, epKey, epName, "")
@@ -605,6 +617,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 		// Resolve injection target — matches PascalCase class names to existing dot-case provider nodes
 		toNodeKey, toID := g.resolveInjectTarget(domainKey, revisionID, fact.To, "")
 
@@ -654,6 +667,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Produces to topic/queue
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
@@ -685,6 +699,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Consumes from topic/queue
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
@@ -717,6 +732,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Endpoint — contract node + evidence
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		route := fact.Target
 		if route == "" {
@@ -756,6 +772,24 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
 		counts.evidence++
+
+		// Controller CONTAINS endpoint for hierarchy
+		containsKey := fromNodeKey + "->" + toNodeKey + ":CONTAINS"
+		g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey:            containsKey,
+			FromNodeKey:        fromNodeKey,
+			ToNodeKey:          toNodeKey,
+			FromNodeID:         fromID,
+			ToNodeID:           toID,
+			EdgeType:           "CONTAINS",
+			DerivationKind:     "hard",
+			Active:             true,
+			LastSeenRevisionID: revisionID,
+			Confidence:         0.95,
+			Freshness:          1.0,
+			TrustScore:         0.95,
+			Metadata:           "{}",
+		})
 
 	case "model":
 		// Data model — node + USES_MODEL edge from source file
@@ -1037,6 +1071,19 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	}
 
 	return counts, nil
+}
+
+// registerNodeAlias stores a name as an alias for a node.
+func (g *Graph) registerNodeAlias(nodeID int64, alias, aliasKind string) {
+	if alias == "" || nodeID == 0 {
+		return
+	}
+	g.store.AddAlias(store.AliasRow{
+		NodeID:     nodeID,
+		Alias:      alias,
+		AliasKind:  aliasKind,
+		Confidence: 0.9,
+	})
 }
 
 // resolveTopicKey finds an existing topic node by normalized name, or creates a canonical key.
@@ -1817,8 +1864,8 @@ func typedNodeKey(domain, name, nodeType string) string {
 }
 
 func typedNodeKeyFromFile(domain, filePath, nodeType string) string {
-	name := inferNameFromPath(filePath)
-	return typedNodeKey(domain, name, nodeType)
+	pathKey := inferPathKey(filePath)
+	return typedNodeKey(domain, pathKey, nodeType)
 }
 
 func typedNodeKeyFromImport(domain, module, nodeType string) string {
@@ -1848,6 +1895,20 @@ func extractNodeType(nodeKey string) string {
 		return parts[1]
 	}
 	return ""
+}
+
+// inferPathKey derives a canonical key segment from a file path.
+// Uses the relative path without extension to avoid collisions.
+// e.g. "arena-api/src/arena/arena.service.ts" → "arena-api/src/arena/arena.service"
+func inferPathKey(filePath string) string {
+	p := filePath
+	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".go", ".py", ".json", ".yaml", ".yml", ".prisma", ".graphql", ".proto"} {
+		p = strings.TrimSuffix(p, ext)
+	}
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimPrefix(p, "./")
+	p = strings.TrimPrefix(p, "/")
+	return p
 }
 
 func inferNameFromPath(filePath string) string {
