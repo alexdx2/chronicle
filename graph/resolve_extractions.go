@@ -1071,15 +1071,35 @@ func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) s
 }
 
 // findNodeByNameInDomain searches for an existing node by name within a domain.
-// Returns nil if no match is found.
+// Tries exact match first, then normalized match (strip dots/dashes/underscores, case-insensitive).
+// e.g. "arena.module" matches "ArenaModule", "tom-api" matches "TomApi".
 func (g *Graph) findNodeByNameInDomain(domainKey, name string) *store.NodeRow {
 	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
 	lower := strings.ToLower(name)
+
+	// Exact case-insensitive match first
 	for _, n := range nodes {
 		if strings.ToLower(n.Name) == lower {
 			return &n
 		}
 	}
+
+	// Normalized match: strip separators, compare
+	normalize := func(s string) string {
+		s = strings.ToLower(s)
+		s = strings.ReplaceAll(s, ".", "")
+		s = strings.ReplaceAll(s, "-", "")
+		s = strings.ReplaceAll(s, "_", "")
+		s = strings.ReplaceAll(s, " ", "")
+		return s
+	}
+	normName := normalize(name)
+	for _, n := range nodes {
+		if normalize(n.Name) == normName {
+			return &n
+		}
+	}
+
 	return nil
 }
 
@@ -1216,7 +1236,38 @@ func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
 			continue
 		}
 
-		// Multiple parents — keep highest confidence
+		// Group by parent node — same parent = duplicate (merge), different parent = conflict
+		byParent := map[int64][]store.EdgeRow{}
+		for _, p := range parents {
+			byParent[p.FromNodeID] = append(byParent[p.FromNodeID], p)
+		}
+
+		// Deduplicate: same parent, multiple edges → keep highest confidence, remove rest
+		for _, edges := range byParent {
+			if len(edges) <= 1 {
+				continue
+			}
+			best := edges[0]
+			for _, e := range edges[1:] {
+				if e.Confidence > best.Confidence {
+					best = e
+				}
+			}
+			for _, e := range edges {
+				if e.EdgeID == best.EdgeID {
+					continue
+				}
+				// Silent dedup — same relationship, just remove the duplicate
+				g.store.Exec("DELETE FROM graph_edges WHERE edge_id = ?", e.EdgeID)
+			}
+		}
+
+		// True conflict: different parents for the same child
+		if len(byParent) <= 1 {
+			continue
+		}
+
+		// Keep the edge with highest confidence across all parents
 		best := parents[0]
 		for _, p := range parents[1:] {
 			if p.Confidence > best.Confidence {
@@ -1225,13 +1276,11 @@ func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
 		}
 
 		for _, p := range parents {
-			if p.EdgeID == best.EdgeID {
-				continue
+			if p.FromNodeID == best.FromNodeID {
+				continue // keep all edges from the winning parent
 			}
-			// Deactivate the losing edge
 			g.store.Exec("UPDATE graph_edges SET active = 0 WHERE edge_id = ?", p.EdgeID)
 
-			// Log as discovery
 			child, _ := g.store.GetNodeByID(childID)
 			childName := ""
 			if child != nil {
@@ -1241,7 +1290,7 @@ func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
 				DomainKey:   domainKey,
 				Category:    "contains_conflict",
 				Title:       fmt.Sprintf("Multiple CONTAINS parents for %s", childName),
-				Description: fmt.Sprintf("node %q has multiple CONTAINS parents; kept edge %s, deactivated edge %s", childName, best.EdgeKey, p.EdgeKey),
+				Description: fmt.Sprintf("node %q has conflicting parents; kept %s, deactivated %s", childName, best.EdgeKey, p.EdgeKey),
 				Source:      "system",
 				Confidence:  0.9,
 			})

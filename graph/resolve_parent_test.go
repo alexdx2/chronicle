@@ -136,3 +136,51 @@ func TestParentFact_SelfReference(t *testing.T) {
 		t.Error("expected a correction discovery for self-referencing parent, got 0")
 	}
 }
+
+
+// TestParentFact_DedupWithProvides verifies that when both injects (from module)
+// and parent facts create CONTAINS edges to the same parent, they are deduplicated.
+func TestParentFact_DedupWithProvides(t *testing.T) {
+	g, _, revID := setupTestGraph(t)
+
+	// Module declares injects (which inferImportEdgeType turns into CONTAINS)
+	moduleFacts := `[
+		{"kind":"injects","to":"ArenaController"},
+		{"kind":"injects","to":"ArenaService"}
+	]`
+	g.SaveFileExtraction(revID, "testapp", "src/arena/arena.module.ts", "extracted", "module", moduleFacts, "")
+
+	// Controller also declares parent (creates second CONTAINS to same module)
+	controllerFacts := `[
+		{"kind":"endpoint","method":"POST","target":"/arena/attack"},
+		{"kind":"parent","to":"arena.module","reason":"declared in @Module.controllers"}
+	]`
+	g.SaveFileExtraction(revID, "testapp", "src/arena/arena.controller.ts", "extracted", "controller", controllerFacts, "")
+
+	_, err := g.ResolveExtractions("testapp", revID)
+	if err != nil {
+		t.Fatalf("ResolveExtractions: %v", err)
+	}
+
+	// Module→controller CONTAINS should be active (from either injects or parent)
+	edges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
+	activeContains := 0
+	for _, e := range edges {
+		if e.Active {
+			activeContains++
+		}
+	}
+
+	if activeContains < 1 {
+		t.Errorf("expected at least 1 active CONTAINS edge, got %d", activeContains)
+		for _, e := range edges {
+			t.Logf("  CONTAINS: %s active=%v", e.EdgeKey, e.Active)
+		}
+	}
+
+	// No conflict discoveries — same parent should dedup, not conflict
+	discoveries, _ := g.store.ListDiscoveries("testapp", "contains_conflict")
+	if len(discoveries) > 0 {
+		t.Errorf("expected 0 contains_conflict (same parent = dedup), got %d", len(discoveries))
+	}
+}
