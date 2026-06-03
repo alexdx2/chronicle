@@ -46,11 +46,13 @@ CRITICAL: Missing `provides` = missing CONTAINS edges = broken graph structure.
 Files: controllers, resolvers, gateways, RPC handlers
 CHECK: Every route/endpoint/handler method.
 EMIT: `endpoint` for each. `injects` for each DI dependency.
+EMIT: `parent` if the owning module can be determined.
 
 ## Service / provider files
 Files: services, repositories, clients, producers, consumers
 CHECK: DI dependencies, model usage, cross-service calls, event publishing/consuming.
 EMIT: `injects`, `uses_model`, `calls_service`, `calls_endpoint`, `produces`, `consumes` as applicable.
+EMIT: `parent` if the owning module can be determined from imports or file context.
 
 # Fact templates
 
@@ -66,6 +68,22 @@ Set `from_type: "module"` so the resolver creates CONTAINS edges (module→contr
 
 CONTAINS edges link: repository→module, module→controller, module→provider.
 These are the structural backbone of the graph. Missing `provides` facts = missing CONTAINS edges.
+
+## Parent declaration
+
+```json
+{"kind":"parent","to":"arena.module","reason":"declared in @Module.controllers"}
+```
+
+Emit when you can determine which container (module/service) this code belongs to.
+`to` = the name of the MOST SPECIFIC (deepest) parent container.
+`reason` = brief explanation of evidence (optional but recommended).
+
+Rules:
+- Emit ONLY when supported by explicit evidence (decorator, import, module declaration).
+- Declaration ownership wins over usage. A provider declared in Module A but injected in Module B → parent is Module A.
+- Use the DEEPEST container: controller inside arena.module inside arena-api → parent is arena.module.
+- If you cannot determine the parent with confidence, do NOT emit this fact.
 
 ## Dependency injection
 

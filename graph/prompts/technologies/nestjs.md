@@ -45,6 +45,40 @@ Set `from_type: "module"` on the file so the resolver creates CONTAINS edges (mo
 
 Do NOT treat `imports: [OtherModule]` as `calls_service`.
 
+## Hierarchy — Parent Assignment
+
+Emit a `parent` fact ONLY when you have explicit evidence of containment.
+Do NOT guess. If unsure, omit the parent fact entirely.
+
+Rules (use the MOST SPECIFIC match):
+
+1. **Controller/Provider/Guard/Interceptor/Gateway**
+   - Parent = the @Module that DECLARES this class in its controllers/providers array
+   - NOT the module that imports or injects it — only the declaring module
+   - Evidence: `@Module({ controllers: [ThisClass] })` or `@Module({ providers: [ThisClass] })`
+   - Emit: `{"kind": "parent", "to": "arena.module", "reason": "declared in @Module.controllers"}`
+   - If class is in a shared/common directory with no clear owning module, omit parent
+
+2. **@Module class itself**
+   - Parent = the service (directory with its own package.json)
+   - Determine from file path: `arena-api/src/arena/arena.module.ts` → parent is `arena-api`
+   - Emit: `{"kind": "parent", "to": "arena-api", "reason": "module file under arena-api/"}`
+
+3. **Prisma schema / model files**
+   - Parent = the service that owns the prisma directory
+   - `arena-api/prisma/schema.prisma` → parent is `arena-api`
+   - Emit: `{"kind": "parent", "to": "arena-api", "reason": "prisma dir under arena-api/"}`
+
+4. **Shared library files** (in `shared/`, `libs/`, `packages/`)
+   - Parent = the package name from package.json
+   - Emit: `{"kind": "parent", "to": "shared", "reason": "shared package"}`
+
+5. **Ambiguous cases** — do NOT emit parent:
+   - Provider used by multiple modules with no clear declaration
+   - Barrel re-exports
+   - Dynamic modules
+   - Files in root `src/` with no clear module ownership
+
 ## Events
 
 `this.eventEmitter.emit('order.created', payload)` => `{"kind":"produces","to":"order.created","method":"emit"}`

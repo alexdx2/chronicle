@@ -13,7 +13,7 @@ import (
 
 // Fact represents a single extracted observation from a source file.
 type Fact struct {
-	Kind       string   `json:"kind"`                  // import, call, decorator, http_call, dependency, model, enum, model_relation, endpoint, produces, consumes, flow, declares
+	Kind       string   `json:"kind"`                  // import, call, decorator, http_call, dependency, model, enum, model_relation, endpoint, produces, consumes, flow, declares, parent
 	FromFile   string   `json:"from_file,omitempty"`   // source file (usually implicit from extraction context)
 	From       string   `json:"from,omitempty"`        // source entity name/identifier
 	FromType   string   `json:"from_type,omitempty"`   // node type of source: controller, provider, module, repository, service
@@ -26,6 +26,7 @@ type Fact struct {
 	Target     string   `json:"target,omitempty"`      // URL or target identifier
 	Confidence float64  `json:"confidence,omitempty"`  // agent confidence [0,1]
 	Note       string   `json:"note,omitempty"`        // agent uncertainty/note
+	Reason     string   `json:"reason,omitempty"`      // reason for relationship (e.g. parent container justification)
 	// Flow-specific fields
 	FlowName   string   `json:"flow_name,omitempty"`   // use case name (e.g. "Tom attacks Jerry")
 	Trigger    string   `json:"trigger,omitempty"`      // what triggers this flow (endpoint, event, cron)
@@ -210,6 +211,8 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 	// A module = node with ≥2 outbound import edges, 0 endpoints, 0 service actions.
 	// This is generic (not framework-specific) — modules wire things, they don't DO things.
 	g.fixModuleEdges(domainKey)
+	g.detectContainsConflicts(domainKey, revisionID)
+	g.detectContainsCycles(domainKey, revisionID)
 	// Mark all extractions as resolved
 	if err := g.store.MarkExtractionsResolved(revisionID, domainKey); err != nil {
 		return nil, fmt.Errorf("ResolveExtractions mark resolved: %w", err)
@@ -935,6 +938,84 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			Reason:   fmt.Sprintf("delegates to %s via %s — ensure this file is also scanned", delegatedFile, fact.Method),
 		}
 
+	case "parent":
+		// Parent container relationship — creates CONTAINS edge from parent to child
+		if fact.To == "" {
+			return counts, nil
+		}
+
+		// Child = the file being scanned
+		childNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		childID := g.ensureNodeID(domainKey, revisionID, childNodeKey, inferNameFromPath(filePath), filePath)
+
+		// Find parent node by name in the domain
+		parentNode := g.findNodeByNameInDomain(domainKey, fact.To)
+		if parentNode == nil {
+			// Parent not found — store a discovery warning
+			g.store.AddDiscovery(store.Discovery{
+				DomainKey:    domainKey,
+				Category:     "missing_edge",
+				Title:        "Parent node not found: " + fact.To,
+				Description:  fmt.Sprintf("File %s declares parent %q but no node with that name exists in domain %s", filePath, fact.To, domainKey),
+				Source:       "system",
+				Confidence:   0.5,
+				RelatedNodes: fmt.Sprintf("[%q]", childNodeKey),
+			})
+			return counts, &UnresolvedRef{
+				FromFile: filePath,
+				Kind:     "parent",
+				Target:   fact.To,
+				Reason:   fmt.Sprintf("parent node %q not found in domain %s", fact.To, domainKey),
+			}
+		}
+
+		// Self-reference guard
+		if parentNode.NodeKey == childNodeKey {
+			g.store.AddDiscovery(store.Discovery{
+				DomainKey:   domainKey,
+				Category:    "correction",
+				Title:       "Self-referencing parent: " + fact.To,
+				Description: fmt.Sprintf("File %s declares itself as its own parent — skipping", filePath),
+				Source:      "system",
+				Confidence:  0.3,
+			})
+			return counts, nil
+		}
+
+		// Create CONTAINS edge: parent → child
+		edgeKey := parentNode.NodeKey + "->" + childNodeKey + ":CONTAINS"
+		confidence := fact.Confidence
+		if confidence == 0 {
+			confidence = 0.85
+		}
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: parentNode.NodeID, ToNodeID: childID,
+			FromNodeKey: parentNode.NodeKey, ToNodeKey: childNodeKey,
+			EdgeType: "CONTAINS", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
+			Metadata: "{}", ValidFromRevisionID: 0,
+		})
+		if err == nil {
+			counts.edges++
+		}
+
+		// Store evidence with reason
+		reason := fact.Reason
+		if reason == "" {
+			reason = "parent container"
+		}
+		assertion, _ := json.Marshal(map[string]any{
+			"parent":  fact.To,
+			"reason":  reason,
+		})
+		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: confidence, RevisionID: revisionID,
+			AssertionKind: "parent_declaration", Assertion: string(assertion),
+		})
+		counts.evidence++
+
 	case "declares_service":
 		// Create a service-layer node for a deployable service (from package.json, Dockerfile, etc.)
 		if fact.To == "" {
@@ -987,6 +1068,19 @@ func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) s
 	}
 
 	return canonicalKey // No match — create new
+}
+
+// findNodeByNameInDomain searches for an existing node by name within a domain.
+// Returns nil if no match is found.
+func (g *Graph) findNodeByNameInDomain(domainKey, name string) *store.NodeRow {
+	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	lower := strings.ToLower(name)
+	for _, n := range nodes {
+		if strings.ToLower(n.Name) == lower {
+			return &n
+		}
+	}
+	return nil
 }
 
 // ensureNodeID ensures a node exists and returns its ID.
@@ -1096,6 +1190,124 @@ func (g *Graph) fixModuleEdges(domainKey string) {
 		if e.EdgeType == "INJECTS" || e.EdgeType == "DEPENDS_ON" {
 			newKey := e.FromNodeKey + "->" + e.ToNodeKey + ":CONTAINS"
 			g.store.Exec("UPDATE graph_edges SET edge_type='CONTAINS', edge_key=? WHERE edge_id=?", newKey, e.EdgeID)
+		}
+	}
+}
+
+// detectContainsConflicts finds nodes with multiple CONTAINS parents.
+// If a node has CONTAINS edges from both parent and provides facts,
+// keep the highest-confidence edge and deactivate others.
+// Log conflicts as discoveries for diagnostics.
+func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
+	active := true
+	allEdges, _ := g.store.ListEdges(store.EdgeFilter{Active: &active})
+
+	// Group CONTAINS edges by child (to_node_id)
+	childParents := map[int64][]store.EdgeRow{}
+	for _, e := range allEdges {
+		if e.EdgeType != "CONTAINS" {
+			continue
+		}
+		childParents[e.ToNodeID] = append(childParents[e.ToNodeID], e)
+	}
+
+	for childID, parents := range childParents {
+		if len(parents) <= 1 {
+			continue
+		}
+
+		// Multiple parents — keep highest confidence
+		best := parents[0]
+		for _, p := range parents[1:] {
+			if p.Confidence > best.Confidence {
+				best = p
+			}
+		}
+
+		for _, p := range parents {
+			if p.EdgeID == best.EdgeID {
+				continue
+			}
+			// Deactivate the losing edge
+			g.store.Exec("UPDATE graph_edges SET active = 0 WHERE edge_id = ?", p.EdgeID)
+
+			// Log as discovery
+			child, _ := g.store.GetNodeByID(childID)
+			childName := ""
+			if child != nil {
+				childName = child.Name
+			}
+			g.store.AddDiscovery(store.Discovery{
+				DomainKey:   domainKey,
+				Category:    "contains_conflict",
+				Title:       fmt.Sprintf("Multiple CONTAINS parents for %s", childName),
+				Description: fmt.Sprintf("node %q has multiple CONTAINS parents; kept edge %s, deactivated edge %s", childName, best.EdgeKey, p.EdgeKey),
+				Source:      "system",
+				Confidence:  0.9,
+			})
+		}
+	}
+}
+
+// detectContainsCycles finds and breaks cycles in the CONTAINS hierarchy.
+// Uses DFS to detect back-edges; deactivates the cycle-closing edge and
+// logs a discovery for diagnostics.
+func (g *Graph) detectContainsCycles(domainKey string, revisionID int64) {
+	active := true
+	allEdges, _ := g.store.ListEdges(store.EdgeFilter{Active: &active})
+
+	// Build adjacency: parent → children
+	children := map[int64][]int64{}
+	edgeByPair := map[[2]int64]store.EdgeRow{}
+	for _, e := range allEdges {
+		if e.EdgeType != "CONTAINS" {
+			continue
+		}
+		children[e.FromNodeID] = append(children[e.FromNodeID], e.ToNodeID)
+		edgeByPair[[2]int64{e.FromNodeID, e.ToNodeID}] = e
+	}
+
+	// DFS cycle detection
+	visited := map[int64]bool{}
+	inStack := map[int64]bool{}
+
+	var dfs func(node int64)
+	dfs = func(node int64) {
+		visited[node] = true
+		inStack[node] = true
+		for _, child := range children[node] {
+			if !visited[child] {
+				dfs(child)
+			} else if inStack[child] {
+				// Cycle — deactivate this edge
+				edge := edgeByPair[[2]int64{node, child}]
+				g.store.Exec("UPDATE graph_edges SET active = 0 WHERE edge_id = ?", edge.EdgeID)
+
+				n1, _ := g.store.GetNodeByID(node)
+				n2, _ := g.store.GetNodeByID(child)
+				name1, name2 := "", ""
+				if n1 != nil {
+					name1 = n1.Name
+				}
+				if n2 != nil {
+					name2 = n2.Name
+				}
+				g.store.AddDiscovery(store.Discovery{
+					DomainKey:   domainKey,
+					Category:    "contains_cycle",
+					Title:       fmt.Sprintf("CONTAINS cycle: %s -> %s", name1, name2),
+					Description: fmt.Sprintf("CONTAINS cycle detected: %s -> %s; edge deactivated", name1, name2),
+					Source:      "system",
+					Confidence:  0.9,
+				})
+			}
+		}
+		inStack[node] = false
+	}
+
+	for nodeID := range children {
+		if !visited[nodeID] {
+			dfs(nodeID)
 		}
 	}
 }
@@ -1336,7 +1548,7 @@ func isHardFact(fact map[string]any) bool {
 	kind, _ := fact["kind"].(string)
 	switch kind {
 	case "model", "enum", "model_relation", "endpoint", "provides", "injects",
-		"declares_service", "produces", "consumes", "decorator", "import":
+		"declares_service", "produces", "consumes", "decorator", "import", "parent":
 		return true
 	}
 	// Candidate decisions that accepted a hard fact
