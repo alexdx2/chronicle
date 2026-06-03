@@ -239,7 +239,12 @@ var scanStages = []ScanStage{
   3. "declares_service" — For every package.json with a server entrypoint: emit service declaration.
      Example: {"kind":"declares_service","to":"arena-api"}
 
-  RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger agent launches by 2-3s.`,
+  RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger agent launches by 2-3s.
+
+  IMPORTANT: If subagents fail to access MCP tools, YOU (the orchestrator) must process
+  the remaining obligations yourself. Call chronicle_scan_next_file, read the files,
+  extract facts, call chronicle_file_extracted. Do NOT fall back to chronicle_import_all.
+  Do NOT give up. Process files one batch at a time until all obligations are satisfied.`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
   b. Call chronicle_scan_pool_status(domain) to check next phase
   c. If action is "reconcile_endpoints" -> continue to endpoint reconciliation stage
