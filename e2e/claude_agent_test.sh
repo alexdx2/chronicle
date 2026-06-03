@@ -79,7 +79,9 @@ section "Claude Scan"
 info "Running Claude to scan the project..."
 info "This may take 3-10 minutes — using full scan pipeline with file_extracted loop."
 
-CLAUDE_PROMPT="You have Chronicle MCP tools available. Scan this Tom & Jerry project using the scan pipeline.
+PROMPT_FILE="$WORK_DIR/scan_prompt.txt"
+cat > "$PROMPT_FILE" << 'PROMPTEOF'
+You have Chronicle MCP tools available. Scan this Tom & Jerry project using the scan pipeline.
 
 Use chronicle_command(command='scan') to get the step-by-step scan instructions, then follow them exactly.
 
@@ -90,8 +92,8 @@ domains:
     description: Tom and Jerry battle simulation
     owner: cartoon-team
     scan:
-      include: [\"tom-api/**\", \"jerry-api/**\", \"arena-api/**\", \"spectators-api/**\", \"shared/**\"]
-      exclude: [\"**/*.test.ts\", \"**/*.spec.ts\"]
+      include: ["tom-api/**", "jerry-api/**", "arena-api/**", "spectators-api/**", "shared/**"]
+      exclude: ["**/*.test.ts", "**/*.spec.ts"]
 tech: [nestjs, prisma, kafka, redis, websocket]
 infrastructure:
   - name: kafka
@@ -104,7 +106,7 @@ infrastructure:
     description: Battle state cache
 
 CRITICAL RULES:
-- Follow the scan pipeline: chronicle_command → checkpoints → discover_files → scan_next_file → file_extracted → resolve_extractions
+- Follow the scan pipeline: chronicle_command -> checkpoints -> discover_files -> scan_next_file -> file_extracted -> resolve_extractions
 - Do NOT use chronicle_import_all directly — use the scan pipeline (file_extracted for each file batch)
 - When calling chronicle_discover_files, set votes_needed=3 for voting mode (3 extraction passes per file for stability)
 - At each checkpoint, confirm with chronicle_scan_confirm
@@ -112,12 +114,14 @@ CRITICAL RULES:
   1. Define domain language — chronicle_define_term for Cat, Mouse, Battle, Arena, Spectator, Trap, Weapon. Include anti-patterns. Then chronicle_check_language.
   2. Call chronicle_domain_list to verify the domain was registered.
   3. Call chronicle_report_discovery for each observation:
-     - Any code patterns you found unusual → category: unknown_pattern
-     - Any relationships you suspect but couldn't confirm → category: missing_edge
-     - Overall scan quality assessment → category: pattern
+     - Any code patterns you found unusual -> category: unknown_pattern
+     - Any relationships you suspect but couldn't confirm -> category: missing_edge
+     - Overall scan quality assessment -> category: pattern
 
-Do NOT ask questions. Execute immediately."
+Do NOT ask questions. Execute immediately.
+PROMPTEOF
 
+CLAUDE_PROMPT=$(cat "$PROMPT_FILE")
 claude -p \
   --dangerously-skip-permissions \
   "--mcp-config=$MCP_CONFIG" \
