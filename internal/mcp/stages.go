@@ -205,39 +205,32 @@ var scanStages = []ScanStage{
 		Name:       "Phase 1 — extraction",
 		Type:       "agents",
 		AgentModel: "fast",
-		Instruction: `Worker pool pattern — you are the pool manager, NOT a worker.
+		Instruction: `Sequential extraction — process all files yourself, one batch at a time.
 
   LOOP:
     1. Call chronicle_scan_pool_status(domain)
-       -> returns { claimable_now, in_progress, completed, spawn_count, batch_size, ... }
+       -> returns { claimable_now, in_progress, completed, batch_size, ... }
     2. If claimable_now = 0 AND in_progress = 0: EXIT LOOP — all work done
-    3. If claimable_now = 0 AND in_progress > 0: wait 10 seconds, go to 1
-    4. Spawn spawn_count fast-model subagents in parallel
+    3. Call chronicle_scan_next_file(domain)
+       -> returns { action: "extract_files", files_with_ast: [...] }
+       Each file includes: obligation_id, path, domain_key, ast_facts, vote_group, vote_index
+    4. For each file in the batch:
+       - Read the file
+       - Extract facts following the fact_schema
+       - Call chronicle_file_extracted with:
+         obligation_id, file_path, domain, revision_id, status, facts,
+         vote_group, vote_index (pass exactly what scan_next_file returned)
+    5. Go back to step 1
 
-    Each agent (ONE batch, then DONE — agent must NOT loop):
-      a. Call chronicle_scan_next_file(domain)
-         -> returns { action: "extract_files", files_with_ast: [...] }
-         Each file includes: obligation_id, path, domain_key, ast_facts, vote_group, vote_index
-      b. For each file in the batch:
-         - Read the file
-         - Extract facts following the fact_schema
-         - Call chronicle_file_extracted with:
-           obligation_id, file_path, domain, revision_id, status, facts,
-           vote_group, vote_index (pass exactly what scan_next_file returned)
-      c. Agent is DONE — do NOT call scan_next_file again, do NOT loop
-
-    5. Wait for ALL agents to finish
-    6. Go back to step 1
-
-  CRITICAL — CONTAINS edges (structural backbone of the graph):
-  - For every @Module file: emit "provides" facts for EVERY controller AND provider declared in it
-    -> set from_type="module" so the resolver creates CONTAINS edges (module->controller, module->provider)
-  - For every repository root: emit a "provides" fact pointing to its main module
-  - Missing "provides" from module files = missing CONTAINS edges = broken graph structure
-  Example: @Module({ controllers: [OrderController], providers: [OrderService] })
-    -> {"kind":"provides","to":"OrderController"} + {"kind":"provides","to":"OrderService"} with from_type="module"
-
-  RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger agent launches by 2-3s.`,
+  CRITICAL — HIERARCHY facts:
+  1. "provides" — For every @Module file: emit for EVERY controller AND provider in its arrays.
+     Set from_type="module". Missing provides = missing CONTAINS edges.
+     Example: @Module({ controllers: [OrderController] }) -> {"kind":"provides","to":"OrderController"}
+  2. "parent" — For every controller/provider: emit parent fact pointing to the owning module.
+     Only emit when evidence is clear (declared in @Module, not just imported/used).
+     Example: {"kind":"parent","to":"arena.module","reason":"declared in @Module.controllers"}
+  3. "declares_service" — For every package.json with a server entrypoint: emit service declaration.
+     Example: {"kind":"declares_service","to":"arena-api"}`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
   b. Call chronicle_scan_pool_status(domain) to check next phase
   c. If action is "reconcile_endpoints" -> continue to endpoint reconciliation stage

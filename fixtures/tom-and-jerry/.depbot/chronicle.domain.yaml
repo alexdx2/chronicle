@@ -1,6 +1,6 @@
 domains:
   - name: tom-and-jerry
-    description: Tom and Jerry microservices — 4 NestJS services with Prisma, HTTP, and Kafka
+    description: Multi-service chase simulation with arena battles, spectators, and character APIs
     owner: alex
     scan:
       include:
@@ -23,10 +23,6 @@ infrastructure:
   - name: kafka
     type: broker
     address: kafka:9092
-    description: Event bus connecting all services
-  - name: redis
-    type: cache
-    address: redis:6379
-    description: Shared cache for battle state and session data
+    description: Event bus for battle results and cross-service events
 
-instruction_packs: [language/typescript, framework/nestjs, framework/graphql, orm/prisma]
+instruction_packs: [typescript, nestjs, graphql, prisma, custom/kafka]
