@@ -1229,6 +1229,44 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			virtualEdgeID--
 		}
 
+		// --- Module-level rollup edges for C3 ---
+		// Same logic as service rollup but maps code→module instead of code→service.
+		// Creates module→endpoint, module→topic, module→model edges.
+		codeToModule := map[int64]int64{}
+		for _, e := range edges {
+			if e.EdgeType != "CONTAINS" { continue }
+			parentNode := nodeByID[e.FromNodeID]
+			if parentNode.NodeType != "module" { continue }
+			codeToModule[e.ToNodeID] = e.FromNodeID
+		}
+
+		moduleRollupTypes := map[string]bool{
+			"EXPOSES_ENDPOINT": true, "CALLS_ENDPOINT": true,
+			"PUBLISHES_TOPIC": true, "CONSUMES_TOPIC": true,
+			"USES_MODEL": true, "DEFINES_MODEL": true,
+		}
+		for _, e := range edges {
+			if !moduleRollupTypes[e.EdgeType] { continue }
+			fromMod, fromHas := codeToModule[e.FromNodeID]
+			if !fromHas { continue }
+
+			toID := e.ToNodeID
+			if fromMod == toID { continue }
+			key := fmt.Sprintf("%d->%d:%s", fromMod, toID, e.EdgeType)
+			if rollupSeen[key] { continue }
+			rollupSeen[key] = true
+
+			edgeList = append(edgeList, map[string]any{
+				"edge_id": virtualEdgeID,
+				"edge_key": key,
+				"from_node_id": fromMod, "to_node_id": toID,
+				"edge_type": e.EdgeType, "derivation": "rollup",
+				"confidence": e.Confidence, "active": true,
+				"virtual": true, "derived": true,
+			})
+			virtualEdgeID--
+		}
+
 		// Service→infra rollup: if a domain's code uses infra, its services should connect
 		infraNodes := map[int64]bool{}
 		for _, n := range nodes {
