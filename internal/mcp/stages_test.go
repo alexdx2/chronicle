@@ -35,7 +35,7 @@ func TestStageSystem_StageOrder(t *testing.T) {
 	}
 
 	// Verify key ordering
-	expected := []string{"discover", "scope", "packs", "create_packs", "scan_mode", "final_review", "finalize_setup", "phase1", "endpoint_reconcile", "phase2"}
+	expected := []string{"discover", "manifest", "packs", "create_packs", "scan_mode", "finalize_setup", "phase1", "endpoint_reconcile", "phase2"}
 	for i, exp := range expected {
 		if i >= len(ids) || ids[i] != exp {
 			t.Errorf("stage %d: expected %s, got %v", i, exp, ids)
@@ -122,13 +122,13 @@ func TestStageSystem_Extensible(t *testing.T) {
 	copy(original, scanStages)
 	defer func() { scanStages = original }()
 
-	// Add a custom stage after scope
+	// Add a custom stage after manifest
 	AddScanStage(ScanStage{
 		ID:          "custom_check",
 		Name:        "Custom validation",
 		Type:        "checkpoint",
 		Instruction: "Validate custom rules. [yes/no]",
-	}, "scope")
+	}, "manifest")
 
 	stages := GetScanStages()
 	if len(stages) != len(original)+1 {

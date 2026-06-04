@@ -30,38 +30,55 @@ var scanStages = []ScanStage{
 		ID:   "discover",
 		Name: "Discovery",
 		Type: "action",
-		Instruction: `Discover the project thoroughly before showing anything to the user.
+		Instruction: `Discover the workspace STRUCTURE first, then detect technologies.
 
-  1. Call chronicle_file_groups to see directory structure with file counts.
-  2. Read project build/dependency files to identify language, framework, and dependencies.
-  3. Read 2-3 source files from each service/app directory to understand what the code does
-     and what infrastructure it connects to (databases, brokers, caches, external APIs).
-  4. Check for deployment/infrastructure config files (docker-compose, terraform, k8s, etc.)
-     to discover infrastructure services.
-  5. Call chronicle_instruction_packs to get available extraction packs.
+  STEP 1 — Structure (do this FIRST):
+  a. Call chronicle_file_groups to see directory tree with file counts.
+  b. Identify project boundaries — which directories are deployable services,
+     libraries, packages, or infrastructure config? Look for:
+     - Directories with their own build/dependency files
+     - Directories with source roots (src/, app/, lib/)
+     - Directories that are build output, dependencies, generated, or irrelevant
+  c. Read 2-3 source files from EACH detected project to understand what it does.
 
-  Show discovery summary:
-    Project: [name]
-    Language/framework: [what you detected]
-    Services/apps: [list with directory paths]
-    Infrastructure: [databases, brokers, caches — with evidence of where you found them]
-    External systems: [any external API/service calls detected]
-    Files: [total count]`,
+  STEP 2 — Technology detection (after structure is known):
+  a. For each detected project, identify language, framework, and dependencies
+     from build files and source code.
+  b. Check for infrastructure config files (docker-compose, deployment manifests, etc.)
+     to discover databases, brokers, caches, queues.
+  c. Read source files to find infrastructure connections the config files missed
+     (client libraries, connection strings, SDK imports).
+  d. Call chronicle_instruction_packs to see which extraction packs are available.
+
+  STEP 3 — Show discovery to user:
+    Workspace: [single project / monorepo / polyrepo]
+    Projects found:
+      1. [name] — [path] — [language/framework] — [role: backend/frontend/library/etc]
+      2. ...
+    Infrastructure detected:
+      - [name] ([type]) — evidence: [where you found it]
+    External systems: [any external API calls detected]
+    Files: [total] ([excluded] excluded)`,
 	},
 
-	// ─── Checkpoint: Scope ───
+	// ─── Manifest interview + scope ───
 	{
-		ID:   "scope",
-		Name: "Scope",
+		ID:   "manifest",
+		Name: "Manifest confirmation",
 		Type: "checkpoint",
-		Instruction: `Present 2-3 scan scope variants as compact cards.
+		Instruction: `Interview the user about the manifest. Ask about anything you're unsure of:
 
-  Each variant: [Letter]. [Name] — ~X files | Includes: [dirs] | Enables: [questions]
+  1. "Did I find all services/projects correctly?" [show list]
+  2. "Any infrastructure I missed?" [show what you found with evidence]
+  3. "Any external systems this project calls?"
+  4. "Which areas should I scan?" Present 2-3 scope options:
+     Each: [Letter]. [Name] — ~X files | Includes: [dirs] | Enables: [what questions]
+  5. "What domain name should I use?" (default: project name)
 
-  Rules:
-  - Recommend one variant with a concrete reason
-  - Ask only: "Choose A/B/C."
-  - After user chooses, proceed immediately to the next checkpoint. Do NOT ask "Continue?" or "A) Continue B) Change"`,
+  Show the complete manifest draft and ask: "Anything to add or change?"
+
+  Do NOT save the manifest until the user approves.
+  After approval, proceed immediately — no "Continue?" confirmation.`,
 	},
 
 	// ─── Checkpoint: Packs ───
@@ -69,12 +86,14 @@ var scanStages = []ScanStage{
 		ID:   "packs",
 		Name: "Instruction packs",
 		Type: "checkpoint",
-		Instruction: `Show loaded packs (e.g. ✅ typescript, nestjs, prisma).
+		Instruction: `Show which instruction packs matched the detected technologies.
 
-  If all detected techs are covered: say "All techs covered" and ask "Proceed? or change packs?"
-  If gaps exist: recommend adding specific packs and ask "A) Add recommended B) Skip C) Custom"
+  For each detected technology, show: ✅ pack available or ❌ no pack.
 
-  After user chooses, proceed immediately. Do NOT ask "Continue?" again.`,
+  If gaps exist: "I can generate a custom pack for [tech]. Generate it? or skip?"
+  If no gaps: "All technologies covered. Proceed?"
+
+  After user chooses, proceed immediately.`,
 	},
 
 	// ─── Create missing packs ───
@@ -87,7 +106,7 @@ var scanStages = []ScanStage{
   Each agent:
     1. Calls chronicle_get_instruction_pack(id="guide/pack_authoring")
     2. Reads 3-5 representative project files
-    3. Writes a pack mapping patterns → core fact kinds
+    3. Writes a pack mapping patterns to core fact kinds
     4. Calls chronicle_save_custom_pack(id="custom/<tech>", content=<pack>)
     5. Reports the pack ID
   Skip this step if no packs are missing.`,
@@ -99,31 +118,13 @@ var scanStages = []ScanStage{
 		ID:   "scan_mode",
 		Name: "Scan quality",
 		Type: "checkpoint",
-		Instruction: `Show scan profiles as compact A/B/C/D options:
+		Instruction: `Show scan profiles:
 
-  A. Fast — 1 agent, fast model | B. Balanced — 1 agent, strong model ← RECOMMENDED
-  C. Voting — 3 agents, fast model | D. Maximum — 3 agents, strong model
+  A. Fast — 1 pass per file, fast model | B. Balanced — 1 pass, strong model ← RECOMMENDED
+  C. Voting — 3 passes per file, fast model | D. Maximum — 3 passes, strong model
 
-  Show estimated reads for each. Ask: "Choose A/B/C/D."
-  After user chooses, proceed immediately to final review. No "Continue?" confirmation.`,
-	},
-
-	// ─── Checkpoint: Final review ───
-	{
-		ID:   "final_review",
-		Name: "Final review",
-		Type: "checkpoint",
-		Instruction: `Show the complete scan plan in one compact summary:
-
-  Scope: [areas included]
-  Packs: [list]
-  Quality: [chosen profile]
-  Excluded: [what's skipped]
-
-  This scan will enable:
-  - [3-5 concrete questions Chronicle can answer]
-
-  "A) Start scan  B) Change scope  C) Change packs  D) Change quality"`,
+  Show estimated file reads for each. Ask: "Choose A/B/C/D."
+  After user chooses, proceed immediately.`,
 	},
 
 	// ─── Finalize setup ───
@@ -131,28 +132,17 @@ var scanStages = []ScanStage{
 		ID:   "finalize_setup",
 		Name: "Finalize setup",
 		Type: "action",
-		Instruction: `Before saving, interview the user about the manifest. Ask about anything you're unsure of:
+		Instruction: `Save the confirmed manifest and prepare scan:
 
-  - What is the domain name? (default: inferred from project name)
-  - Did I detect all services correctly? [list what you found with paths]
-  - Any infrastructure I missed? [list what you detected, ask if there's more]
-  - Any external systems this project calls?
-
-  Show the complete manifest draft and ask: "Anything to add or change?"
-
-  Only save after user approves. Then save manifest and discover files:
-  a. Call chronicle_save_manifest with the approved manifest. Include:
+  a. Call chronicle_save_manifest with the user-approved manifest. Include:
      - domains with scan include/exclude patterns
      - tech stack
-     - infrastructure (brokers, databases, caches with type and address)
+     - infrastructure (with type and address)
      - instruction_packs list
-
-  b. For each domain in the manifest, call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
-  c. Call chronicle_discover_files(revision_id, votes_needed) — files are auto-assigned domain_key based on scan.include/exclude patterns
-  d. Call chronicle_scan_next_file — it will return a CHECKPOINT with action="confirm"
-     Show the checkpoint to the user and call chronicle_scan_confirm to proceed.
-  e. Show discovery summary:
-     "Discovered X files across N domains (Y git-tracked, Z excluded). Starting scan."`,
+  b. For each domain, call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
+  c. Call chronicle_discover_files(revision_id, votes_needed)
+  d. Call chronicle_scan_next_file — it will return a CHECKPOINT. Call chronicle_scan_confirm.
+  e. Show: "Discovered X files. Starting scan."`,
 	},
 
 	// ─── Phase 1: Extraction ───
@@ -266,13 +256,13 @@ var scanStages = []ScanStage{
 func BuildScanStagesInstruction() string {
 	var parts []string
 
-	parts = append(parts, `WIZARD FORMAT RULES:
-  - Present choices as A/B/C/D cards, not yes/no questions.
-  - Each card: name, includes, enables (what questions can be answered), tradeoff.
-  - ALWAYS recommend one option with a concrete repo-specific reason.
-  - After user makes a choice, proceed immediately. Do NOT ask "Continue?" or "A) Continue B) Change".
-  - The user should be able to answer with a single letter.
-  - Do NOT ask yes/no questions unless user chose Custom.
+	parts = append(parts, `INTERACTION RULES:
+  - Present choices as compact A/B/C/D cards when applicable.
+  - ALWAYS recommend one option with a concrete reason.
+  - After user makes a choice, proceed immediately. NEVER ask "Continue?" or "A) Continue B) Change".
+  - Discovery shows structure first, technologies second.
+  - Manifest must be shown to user and approved before saving.
+  - Do NOT save manifest, start scan, or resolve without user confirmation.
 
 WORKER POOL PATTERN — applies to ALL agent stages:
   1. Call chronicle_scan_pool_status to get claimable count and spawn recommendation

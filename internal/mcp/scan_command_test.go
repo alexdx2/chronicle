@@ -54,16 +54,17 @@ func TestScanCommand_PackCreationUsesStrongModel(t *testing.T) {
 func TestScanCommand_SequenceIsCorrect(t *testing.T) {
 	cmd := CommandInstructions["scan"]
 
-	// Verify order: checkpoints → pack creation → scan mode → finalize → extraction → reconcile → flows
+	// Verify order: discovery → manifest → packs → create → quality → finalize → extraction → reconcile → flows
 	steps := []string{
-		"CHECKPOINT 1",          // scope
-		"CHECKPOINT 2",          // packs
-		"STEP 1",                // create_packs (strong)
-		"CHECKPOINT 3",          // scan mode
-		"Finalize setup",        // save manifest + discover
-		"STEP 2",                // phase1 extraction (fast)
-		"STEP 3",                // phase1.5 reconciliation (strong)
-		"STEP 4",                // phase2 flow tracing (strong)
+		"── Discovery ──",
+		"CHECKPOINT 1: Manifest",
+		"CHECKPOINT 2: Instruction packs",
+		"STEP 1 — Create missing",
+		"CHECKPOINT 3: Scan quality",
+		"── Finalize setup ──",
+		"STEP 2 — Phase 1",
+		"STEP 3 — Phase 1.5",
+		"STEP 4 — Phase 2",
 	}
 
 	lastIdx := -1
@@ -104,7 +105,7 @@ func TestScanCommand_StructuredCheckpoints(t *testing.T) {
 		t.Error("should ask specific questions, not 'does this look right?'")
 	}
 
-	assertContains(t, cmd, "CHECKPOINT 1: Scope", "checkpoint 1 must be about scope")
+	assertContains(t, cmd, "CHECKPOINT 1: Manifest confirmation", "checkpoint 1 must be manifest confirmation")
 	assertContains(t, cmd, "CHECKPOINT 2: Instruction packs", "checkpoint 2 must be about packs")
 	assertContains(t, cmd, "CHECKPOINT 3: Scan quality", "checkpoint 3 must be about scan quality")
 	assertContains(t, cmd, "fast model", "checkpoint 3 must show fast model option")
