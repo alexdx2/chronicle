@@ -33,7 +33,17 @@ var scanStages = []ScanStage{
 		Instruction: `Check chronicle_scan_status — note the build hash.
   Read package.json, go.mod, or similar to identify the project name and tech stack.
   Call chronicle_file_groups to see directory structure with file counts.
-  Call chronicle_instruction_packs to get available instruction packs.`,
+  Call chronicle_instruction_packs to get available instruction packs.
+
+  After discovery, show a summary to the user:
+    Project: [name]
+    Tech: [detected stack]
+    Services/apps: [list detected services with directory paths]
+    Infrastructure: [any brokers, caches, databases detected]
+    Files: [total count]
+
+  This summary becomes the basis for the manifest. The user should confirm
+  the detected structure is correct before proceeding to scope selection.`,
 	},
 
 	// ─── Checkpoint: Scope ───
@@ -41,29 +51,14 @@ var scanStages = []ScanStage{
 		ID:   "scope",
 		Name: "Scope",
 		Type: "checkpoint",
-		Instruction: `Present 3-4 scan scope variants as A/B/C/D cards.
+		Instruction: `Present 2-3 scan scope variants as compact cards.
 
-  Build variants from the discovered project structure. Each variant:
-    [Letter]. [Name] — ~X files
-    Includes: [concrete directories]
-    Enables: [what questions Chronicle can answer after this scan]
-    Skips: [what's excluded] or Tradeoff: [cost of including more]
-
-  Typical variants:
-  A. Core backend — API services, data schema, shared packages
-  B. Backend + primary frontend — A plus the frontend most coupled to the API
-  C. Full product graph — all source across all apps
-  D. Custom — choose areas manually
+  Each variant: [Letter]. [Name] — ~X files | Includes: [dirs] | Enables: [questions]
 
   Rules:
-  - ALWAYS recommend one variant with a concrete repo-specific reason
-  - "Enables" is more important than file counts — show what questions the user can ask after scanning
-  - Keep each card to 3-5 lines
-  - Ask only: "Choose A/B/C/D."
-  - Do NOT ask separate yes/no questions for each area
-
-  After user chooses, show final scope summary and ask:
-  "A) Continue  B) Change scope"`,
+  - Recommend one variant with a concrete reason
+  - Ask only: "Choose A/B/C."
+  - After user chooses, proceed immediately to the next checkpoint. Do NOT ask "Continue?" or "A) Continue B) Change"`,
 	},
 
 	// ─── Checkpoint: Packs ───
@@ -71,27 +66,12 @@ var scanStages = []ScanStage{
 		ID:   "packs",
 		Name: "Instruction packs",
 		Type: "checkpoint",
-		Instruction: `Present instruction pack strategy as A/B/C variants.
+		Instruction: `Show loaded packs (e.g. ✅ typescript, nestjs, prisma).
 
-  Show loaded packs: ✅ typescript, nestjs, graphql, prisma
+  If all detected techs are covered: say "All techs covered" and ask "Proceed? or change packs?"
+  If gaps exist: recommend adding specific packs and ask "A) Add recommended B) Skip C) Custom"
 
-  Then variants:
-  A. Use loaded packs only
-     Faster. Extraction may miss [specific patterns] for [missing techs].
-
-  B. Add recommended packs — [list names]
-     Adds: [what each pack enables for the chosen scope].
-     Recommended — packs only guide extraction, they don't modify code.
-
-  C. Custom — choose packs manually
-
-  Rules:
-  - Recommend B when missing packs match the selected scope
-  - For each recommended pack, say what it enables (e.g. "React: maps component→API calls")
-  - Ask only: "Choose A/B/C."
-
-  After user chooses, confirm:
-  "Packs: [final list]. A) Continue  B) Change packs"`,
+  After user chooses, proceed immediately. Do NOT ask "Continue?" again.`,
 	},
 
 	// ─── Create missing packs ───
@@ -117,26 +97,13 @@ var scanStages = []ScanStage{
 		ID:   "scan_mode",
 		Name: "Scan quality",
 		Type: "checkpoint",
-		Instruction: `Show scan profiles as A/B/C/D cards. Each profile defines agents-per-file and model tier.
+		Instruction: `Show scan profiles as compact A/B/C/D options:
 
-  A. Fast — 1 agent, fast model (haiku/gpt-4o-mini)
-     ~X reads, ~Y min. First scan, exploring. May miss path params.
+  A. Fast — 1 agent, haiku | B. Balanced — 1 agent, sonnet ← RECOMMENDED
+  C. Voting — 3 agents, haiku | D. Maximum — 3 agents, sonnet
 
-  B. Balanced — 1 agent, strong model (sonnet/gpt-4o) ← RECOMMENDED
-     ~X reads, ~Y min. Accurate endpoint linking, cross-service patterns.
-
-  C. Voting — 3 agents, fast model
-     ~3X reads, ~Y min. Agents vote on disagreements. Large codebases.
-
-  D. Maximum — 3 agents, strong model
-     ~3X reads, ~Y min. Highest confidence. Critical systems.
-
-  Replace X/Y with actual file count and time estimate.
-  Recommend B for most projects. Recommend A for speed.
-  Ask: "Choose A/B/C/D."
-
-  After user chooses, confirm:
-  "Profile: [name], [N agents], [model]. A) Continue  B) Change"`,
+  Show estimated reads for each. Ask: "Choose A/B/C/D."
+  After user chooses, proceed immediately to final review. No "Continue?" confirmation.`,
 	},
 
 	// ─── Checkpoint: Final review ───
