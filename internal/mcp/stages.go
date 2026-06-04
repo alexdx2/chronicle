@@ -30,20 +30,23 @@ var scanStages = []ScanStage{
 		ID:   "discover",
 		Name: "Discovery",
 		Type: "action",
-		Instruction: `Check chronicle_scan_status — note the build hash.
-  Read package.json, go.mod, or similar to identify the project name and tech stack.
-  Call chronicle_file_groups to see directory structure with file counts.
-  Call chronicle_instruction_packs to get available instruction packs.
+		Instruction: `Discover the project thoroughly before showing anything to the user.
 
-  After discovery, show a summary to the user:
+  1. Call chronicle_file_groups to see directory structure with file counts.
+  2. Read project build/dependency files to identify language, framework, and dependencies.
+  3. Read 2-3 source files from each service/app directory to understand what the code does
+     and what infrastructure it connects to (databases, brokers, caches, external APIs).
+  4. Check for deployment/infrastructure config files (docker-compose, terraform, k8s, etc.)
+     to discover infrastructure services.
+  5. Call chronicle_instruction_packs to get available extraction packs.
+
+  Show discovery summary:
     Project: [name]
-    Tech: [detected stack]
-    Services/apps: [list detected services with directory paths]
-    Infrastructure: [any brokers, caches, databases detected]
-    Files: [total count]
-
-  This summary becomes the basis for the manifest. The user should confirm
-  the detected structure is correct before proceeding to scope selection.`,
+    Language/framework: [what you detected]
+    Services/apps: [list with directory paths]
+    Infrastructure: [databases, brokers, caches — with evidence of where you found them]
+    External systems: [any external API/service calls detected]
+    Files: [total count]`,
 	},
 
 	// ─── Checkpoint: Scope ───
@@ -131,43 +134,18 @@ var scanStages = []ScanStage{
 		Instruction: `Before saving, interview the user about the manifest. Ask about anything you're unsure of:
 
   - What is the domain name? (default: inferred from project name)
-  - Did I detect all services correctly? [list detected services with paths]
-  - Any infrastructure I missed? (databases, message brokers, caches, queues)
-    Detected: [list what you found, e.g. "Kafka from @nestjs/microservices imports"]
-    Ask: "Any others? (postgres, redis, rabbitmq, etc.)"
-  - Any external systems this project calls? (payment APIs, notification services, etc.)
+  - Did I detect all services correctly? [list what you found with paths]
+  - Any infrastructure I missed? [list what you detected, ask if there's more]
+  - Any external systems this project calls?
 
-  Show the complete manifest draft and ask:
-  "Anything to add or change?"
+  Show the complete manifest draft and ask: "Anything to add or change?"
 
   Only save after user approves. Then save manifest and discover files:
-  a. Call chronicle_save_manifest with the approved manifest. Full manifest format:
-
-     domains:
-       - name: domain-name
-         description: ...
-         owner: ...
-         scan:
-           include: ["src/**"]
-           exclude: ["**/*.test.ts"]
-
-     tech: [nestjs, prisma, kafka]
-
-     infrastructure:
-       - name: kafka
-         type: broker
-         address: kafka:9092
-         description: Event bus
-       - name: redis
-         type: cache
-         address: redis:6379
-
-     instruction_packs: [typescript, nestjs]
-
-     Include all discovered domains with scan patterns, tech stack, and any infrastructure
-     (brokers, caches, databases) the project uses. Infrastructure entries are imported as
-     infra-layer nodes in the graph — agents will receive the infrastructure list in scan
-     actions so they can link topics/queues to specific broker nodes.
+  a. Call chronicle_save_manifest with the approved manifest. Include:
+     - domains with scan include/exclude patterns
+     - tech stack
+     - infrastructure (brokers, databases, caches with type and address)
+     - instruction_packs list
 
   b. For each domain in the manifest, call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
   c. Call chronicle_discover_files(revision_id, votes_needed) — files are auto-assigned domain_key based on scan.include/exclude patterns
@@ -208,14 +186,13 @@ var scanStages = []ScanStage{
     6. Go back to step 1
 
   CRITICAL — HIERARCHY facts (structural backbone of the graph):
-  1. "provides" — For every @Module file: emit for EVERY controller AND provider in its arrays.
+  Follow the fact_schema AND loaded instruction packs for extraction rules.
+  Pay special attention to these fact kinds — they build the graph structure:
+  1. "provides" — module/registration files must emit provides for every component they register.
      Set from_type="module". Missing provides = missing CONTAINS edges.
-     Example: @Module({ controllers: [OrderController] }) -> {"kind":"provides","to":"OrderController"}
-  2. "parent" — For every controller/provider: emit parent fact pointing to the owning module.
-     Only emit when evidence is clear (declared in @Module, not just imported/used).
-     Example: {"kind":"parent","to":"arena.module","reason":"declared in @Module.controllers"}
-  3. "declares_service" — For every package.json with a server entrypoint: emit service declaration.
-     Example: {"kind":"declares_service","to":"arena-api"}
+  2. "parent" — components should emit parent fact pointing to their owning module/container.
+     Only emit when evidence is clear (declared/registered, not just imported/used).
+  3. "declares_service" — service entry points must emit service declaration.
 
   RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger agent launches by 2-3s.
 
@@ -293,7 +270,7 @@ func BuildScanStagesInstruction() string {
   - Present choices as A/B/C/D cards, not yes/no questions.
   - Each card: name, includes, enables (what questions can be answered), tradeoff.
   - ALWAYS recommend one option with a concrete repo-specific reason.
-  - After each choice, confirm with "A) Continue  B) Change [thing]".
+  - After user makes a choice, proceed immediately. Do NOT ask "Continue?" or "A) Continue B) Change".
   - The user should be able to answer with a single letter.
   - Do NOT ask yes/no questions unless user chose Custom.
 
