@@ -47,10 +47,8 @@ func TestScanCommand_DomainPassing(t *testing.T) {
 
 func TestScanCommand_PackCreationUsesStrongModel(t *testing.T) {
 	cmd := CommandInstructions["scan"]
-	assertContains(t, cmd, "STRONG MODEL",
-		"pack creation must specify strong model role")
-	assertContains(t, cmd, "NOT a fast model",
-		"must explicitly exclude fast model for pack creation")
+	assertContains(t, cmd, "strong-model",
+		"pack creation must specify strong model agent type")
 }
 
 func TestScanCommand_SequenceIsCorrect(t *testing.T) {

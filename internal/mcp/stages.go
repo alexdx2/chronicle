@@ -81,7 +81,6 @@ var scanStages = []ScanStage{
 		Type:       "agents",
 		AgentModel: "strong",
 		Instruction: `For each confirmed MISSING pack, spawn ONE strong-model subagent.
-  ⚠️ USE A STRONG MODEL (sonnet/gpt-4o/gemini-pro) — NOT a fast model.
   Each agent:
     1. Calls chronicle_get_instruction_pack(id="guide/pack_authoring")
     2. Reads 3-5 representative project files
@@ -99,8 +98,8 @@ var scanStages = []ScanStage{
 		Type: "checkpoint",
 		Instruction: `Show scan profiles as compact A/B/C/D options:
 
-  A. Fast — 1 agent, haiku | B. Balanced — 1 agent, sonnet ← RECOMMENDED
-  C. Voting — 3 agents, haiku | D. Maximum — 3 agents, sonnet
+  A. Fast — 1 agent, fast model | B. Balanced — 1 agent, strong model ← RECOMMENDED
+  C. Voting — 3 agents, fast model | D. Maximum — 3 agents, strong model
 
   Show estimated reads for each. Ask: "Choose A/B/C/D."
   After user chooses, proceed immediately to final review. No "Continue?" confirmation.`,
@@ -129,7 +128,19 @@ var scanStages = []ScanStage{
 		ID:   "finalize_setup",
 		Name: "Finalize setup",
 		Type: "action",
-		Instruction: `Save manifest and discover files:
+		Instruction: `Before saving, interview the user about the manifest. Ask about anything you're unsure of:
+
+  - What is the domain name? (default: inferred from project name)
+  - Did I detect all services correctly? [list detected services with paths]
+  - Any infrastructure I missed? (databases, message brokers, caches, queues)
+    Detected: [list what you found, e.g. "Kafka from @nestjs/microservices imports"]
+    Ask: "Any others? (postgres, redis, rabbitmq, etc.)"
+  - Any external systems this project calls? (payment APIs, notification services, etc.)
+
+  Show the complete manifest draft and ask:
+  "Anything to add or change?"
+
+  Only save after user approves. Then save manifest and discover files:
   a. Call chronicle_save_manifest with the approved manifest. Full manifest format:
 
      domains:
