@@ -1830,19 +1830,38 @@ func scanPoolStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 			spawnCount = 0
 		}
 
+		// Count extractions and parent facts
+		allObligations, _ := g.Store().ListAllObligations(run.RevisionID)
+		totalObligations := len(allObligations)
+		extractionCount := 0
+		parentFactCount := 0
+		exts, _ := g.Store().ListExtractions(run.RevisionID, domain)
+		for _, ext := range exts {
+			extractionCount++
+			if strings.Contains(ext.FactsJSON, `"parent"`) {
+				parentFactCount++
+			}
+		}
+
+		readyToResolve := status.ClaimableNow == 0 && status.InProgress == 0 && status.Failed == 0
+
 		return jsonResult(map[string]any{
-			"phase":           run.Phase,
-			"remaining_total": status.RemainingTotal,
-			"claimable_now":   status.ClaimableNow,
-			"in_progress":     status.InProgress,
-			"completed":       status.Completed,
-			"failed":          status.Failed,
-			"expired":         status.Expired,
-			"spawn_count":     spawnCount,
-			"batch_size":      batchSize,
-			"votes_needed":    run.VotesNeeded,
-			"scan_run_id":     run.RunID,
-			"revision_id":     run.RevisionID,
+			"phase":              run.Phase,
+			"remaining_total":    status.RemainingTotal,
+			"claimable_now":      status.ClaimableNow,
+			"in_progress":        status.InProgress,
+			"completed":          status.Completed,
+			"failed":             status.Failed,
+			"expired":            status.Expired,
+			"spawn_count":        spawnCount,
+			"batch_size":         batchSize,
+			"votes_needed":       run.VotesNeeded,
+			"scan_run_id":        run.RunID,
+			"revision_id":        run.RevisionID,
+			"total_obligations":  totalObligations,
+			"extractions":        extractionCount,
+			"parent_facts":       parentFactCount,
+			"ready_to_resolve":   readyToResolve,
 		}), nil
 	}
 }

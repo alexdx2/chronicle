@@ -147,6 +147,24 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
 // ResolveExtractions takes all pending extractions and builds the graph.
 // Creates nodes, edges, and evidence from the collected facts.
 func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*ResolveExtractionsResult, error) {
+	// Hard gate: refuse to resolve if scan obligations are incomplete
+	openObligations, _ := g.store.ListOpenObligations(revisionID)
+	if len(openObligations) > 0 {
+		// Count by status
+		total, _ := g.store.ListAllObligations(revisionID)
+		open := 0
+		satisfied := 0
+		for _, o := range total {
+			switch o.Status {
+			case "satisfied":
+				satisfied++
+			case "open":
+				open++
+			}
+		}
+		return nil, fmt.Errorf("scan incomplete: %d/%d obligations completed (%d still open). Complete all obligations before resolving", satisfied, len(total), open)
+	}
+
 	rawExtractions, err := g.store.ListUnresolvedExtractions(revisionID, domainKey)
 	if err != nil {
 		return nil, fmt.Errorf("ResolveExtractions: %w", err)
