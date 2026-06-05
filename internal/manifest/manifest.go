@@ -45,11 +45,87 @@ type ServiceEntry struct {
 }
 
 type Manifest struct {
-	Domains          []DomainEntry  `yaml:"domains"`
+	Domains          []DomainEntry  `yaml:"-"` // custom unmarshal: supports both list and map formats
 	Tech             []string       `yaml:"tech,omitempty"`
 	Infrastructure   []InfraEntry   `yaml:"infrastructure,omitempty"`
 	Services         []ServiceEntry `yaml:"services,omitempty"`
 	InstructionPacks []string       `yaml:"instruction_packs,omitempty"`
+}
+
+// UnmarshalYAML handles two domain formats:
+// List: domains: [{name: x, scan: ...}]
+// Map:  domains: {x: {name: X, scan: ...}}
+func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
+	// Decode into raw struct with domains as raw node
+	var raw struct {
+		Domains          yaml.Node      `yaml:"domains"`
+		Tech             []string       `yaml:"tech,omitempty"`
+		Infrastructure   []InfraEntry   `yaml:"infrastructure,omitempty"`
+		Services         []ServiceEntry `yaml:"services,omitempty"`
+		InstructionPacks []string       `yaml:"instruction_packs,omitempty"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+
+	m.Tech = raw.Tech
+	m.Infrastructure = raw.Infrastructure
+	m.Services = raw.Services
+	m.InstructionPacks = raw.InstructionPacks
+
+	if raw.Domains.Kind == 0 {
+		return nil // no domains field
+	}
+
+	switch raw.Domains.Kind {
+	case yaml.SequenceNode:
+		// List format: [{name: x, ...}]
+		return raw.Domains.Decode(&m.Domains)
+
+	case yaml.MappingNode:
+		// Map format: {key: {name: X, ...}}
+		// Each map entry: key is domain key, value is domain config
+		type domainValue struct {
+			Name             string       `yaml:"name"`
+			Description      string       `yaml:"description,omitempty"`
+			Owner            string       `yaml:"owner,omitempty"`
+			Tech             []string     `yaml:"tech,omitempty"`
+			Scan             ScanConfig   `yaml:"scan,omitempty"`
+			Infrastructure   []InfraEntry `yaml:"infrastructure,omitempty"`
+			InstructionPacks []string     `yaml:"instruction_packs,omitempty"`
+		}
+		domainMap := map[string]domainValue{}
+		if err := raw.Domains.Decode(&domainMap); err != nil {
+			return fmt.Errorf("decoding domains map: %w", err)
+		}
+		for key, dv := range domainMap {
+			name := dv.Name
+			if name == "" {
+				name = key
+			}
+			entry := DomainEntry{
+				Name:        name,
+				Description: dv.Description,
+				Owner:       dv.Owner,
+				Scan:        dv.Scan,
+			}
+			// Promote domain-level tech/infra/packs to manifest level if not set
+			if len(dv.Tech) > 0 && len(m.Tech) == 0 {
+				m.Tech = dv.Tech
+			}
+			if len(dv.Infrastructure) > 0 && len(m.Infrastructure) == 0 {
+				m.Infrastructure = dv.Infrastructure
+			}
+			if len(dv.InstructionPacks) > 0 && len(m.InstructionPacks) == 0 {
+				m.InstructionPacks = dv.InstructionPacks
+			}
+			m.Domains = append(m.Domains, entry)
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("domains must be a list or map, got YAML kind %d", raw.Domains.Kind)
+	}
 }
 
 // InferServices returns explicit services if defined, otherwise derives them

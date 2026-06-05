@@ -1,32 +1,32 @@
+version: "1"
 domains:
-  - name: tom-and-jerry
-    description: Tom and Jerry microservices — 4 NestJS services with Prisma, HTTP, and Kafka
-    owner: alex
+  tom-and-jerry:
+    name: Tom and Jerry
+    description: 4 NestJS microservices — battle arena with Tom, Jerry, and spectator stats
+    tech:
+      - typescript
+      - nestjs
+      - prisma
+    infrastructure:
+      - name: postgres
+        type: database
+      - name: kafka
+        type: broker
     scan:
       include:
         - "arena-api/src/**"
+        - "arena-api/prisma/**"
         - "tom-api/src/**"
+        - "tom-api/prisma/**"
         - "jerry-api/src/**"
+        - "jerry-api/prisma/**"
         - "spectators-api/src/**"
         - "shared/src/**"
-        - "arena-api/prisma/**"
-        - "tom-api/prisma/**"
-        - "jerry-api/prisma/**"
       exclude:
-        - "**/*.test.ts"
         - "**/*.spec.ts"
+        - "**/*.test.ts"
         - "**/node_modules/**"
-
-tech: [nestjs, prisma, kafka, typescript]
-
-infrastructure:
-  - name: kafka
-    type: broker
-    address: kafka:9092
-    description: Event bus connecting all services
-  - name: redis
-    type: cache
-    address: redis:6379
-    description: Shared cache for battle state and session data
-
-instruction_packs: [language/typescript, framework/nestjs, framework/graphql, orm/prisma]
+    instruction_packs:
+      - language/typescript
+      - framework/nestjs
+      - orm/prisma
