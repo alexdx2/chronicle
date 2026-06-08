@@ -405,6 +405,36 @@ func TestClaimObligationsReclaimsExpiredClaim(t *testing.T) {
 	}
 }
 
+func TestMarkObligationFailed(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID, _ := s.CreateRevision("myapp", "sha1", "", "manual", "full", "{}")
+	id, _ := s.CreateObligation(revID, "myapp", "scan_file", "stuck.ts", "test")
+	_, _ = s.ClaimObligations(revID, "scan_file", 1)
+
+	if err := s.MarkObligationFailed(id, "test failure"); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := s.ObligationPoolStatus(revID, "scan_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Failed != 1 {
+		t.Errorf("failed: want 1, got %d", status.Failed)
+	}
+	if status.InProgress != 0 {
+		t.Errorf("in_progress: want 0, got %d", status.InProgress)
+	}
+	if status.ClaimTTLMinutes <= 0 {
+		t.Errorf("claim_ttl_minutes should be set")
+	}
+}
+
 func TestSatisfyObligationByIDIsIdempotent(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

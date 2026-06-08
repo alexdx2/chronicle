@@ -727,8 +727,8 @@ a{color:var(--primary);text-decoration:none}
       <!-- Workspace layout toggle -->
       <template x-if="graphMode==='workspace'">
         <div class="mode-toggle">
-          <button class="mode-btn" :class="{active:wsLayout==='strict'}" @click="wsLayout='strict';_wsPositionCache={};renderWorkspace()" title="Dagre recomputes layout each render">Strict</button>
-          <button class="mode-btn" :class="{active:wsLayout==='free'}" @click="wsLayout='free';renderWorkspace()" title="Positions persist between renders">Free</button>
+          <button class="mode-btn" :class="{active:wsLayout==='strict'}" @click="wsLayout='strict';_wsPositionCache={};if(graphController)graphController.setLayout('dagre');renderWorkspace()" title="Dagre recomputes layout each render">Strict</button>
+          <button class="mode-btn" :class="{active:wsLayout==='free'}" @click="wsLayout='free';if(graphController)graphController.setLayout('free');renderWorkspace()" title="Positions persist between renders">Free</button>
           <template x-if="wsLayout==='free'">
             <button class="mode-btn" @click="_wsPositionCache={};renderWorkspace()" title="Re-run dagre layout" style="font-size:14px;padding:4px 6px">&#x21bb;</button>
           </template>
@@ -4372,6 +4372,9 @@ function dashboard() {
     },
 
     renderWorkspace() {
+      if (this.graphController && this.graphMode === 'workspace' && this.wsDataSource !== 'diagram') {
+        this.graphController.setLayout(this.wsLayout === 'free' ? 'free' : 'dagre');
+      }
       if (this.wsDataSource === 'diagram') {
         this.renderDiagram();
       } else {

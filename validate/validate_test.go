@@ -28,7 +28,7 @@ func TestValidateNodeInput_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.NodeKey != "code:controller:orders:orderscontroller" {
+	if result.NodeKey != "code:controller:orders:orders-controller" {
 		t.Errorf("node_key = %q, want normalized", result.NodeKey)
 	}
 }

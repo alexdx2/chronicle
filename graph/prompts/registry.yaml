@@ -1,5 +1,5 @@
 packs:
-  # Core — always loaded
+  # Core — always loaded for every scan, framework-agnostic
   - id: core/fact_schema
     type: core
     always_load: true
@@ -18,38 +18,7 @@ packs:
     description: Business flow tracing from entry points
     path: flow_tracing.md
 
-  # Languages
-  - id: language/typescript
-    type: language
-    description: TypeScript/JavaScript receiver classification, HTTP clients, type vs runtime usage
-    path: technologies/typescript.md
-    triggers:
-      extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
-
-  # Frameworks
-  - id: framework/nestjs
-    type: framework
-    description: NestJS controllers, providers, modules, DI, event emitters, guards, gateways
-    path: technologies/nestjs.md
-    triggers:
-      imports: ["@nestjs/common", "@nestjs/core", "@nestjs/graphql", "@nestjs/websockets", "@nestjs/microservices"]
-      decorators: ["Controller", "Injectable", "Module", "Get", "Post", "Put", "Delete", "Patch", "Guard", "UseGuards", "WebSocketGateway", "SubscribeMessage"]
-
-  - id: framework/graphql
-    type: framework
-    description: GraphQL resolvers, queries, mutations, subscriptions, schema files
-    path: technologies/graphql.md
-    triggers:
-      extensions: [".graphql", ".gql"]
-      imports: ["@nestjs/graphql", "apollo-server", "@apollo/server", "graphql-tag", "type-graphql"]
-      decorators: ["Query", "Mutation", "Subscription", "Resolver", "ResolveField"]
-
-  # ORMs
-  - id: orm/prisma
-    type: orm
-    description: Prisma schema models, enums, relations, and Prisma client usage
-    path: technologies/prisma.md
-    triggers:
-      extensions: [".prisma"]
-      imports: ["@prisma/client"]
-      tokens: ["prisma."]
+  # Technology packs are NOT registered here.
+  # They are matched by name from the manifest tech field.
+  # Built-in defaults: typescript, nestjs, prisma, graphql, dotnet
+  # Custom packs: saved to .depbot/packs/ by agents during scan

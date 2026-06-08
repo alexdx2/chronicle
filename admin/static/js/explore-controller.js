@@ -204,9 +204,6 @@ export class ExploreController {
       groups: [...new Set(nodes.map(n => n._group).filter(Boolean))],
       summary: `${levelCfg.label}: ${nodes.length} nodes, ${visibleEdges.length} edges, groups=[${[...new Set(nodes.map(n => n._group).filter(Boolean))].join(',')}]`,
     };
-    console.log('[explore]', window.__explore.summary);
-    console.table(window.__explore.nodes);
-    if (visibleEdges.length) console.table(window.__explore.edges);
 
     // Marks: dim ref nodes
     const marks = {

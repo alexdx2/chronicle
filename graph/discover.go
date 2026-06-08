@@ -146,7 +146,11 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 			nodeKey := infra.InfraNodeKey()
 			infraDomain := domainKey
 			if len(m.Domains) > 0 {
-				infraDomain = m.Domains[0].Name
+				if m.Domains[0].Key != "" {
+					infraDomain = m.Domains[0].Key
+				} else {
+					infraDomain = m.Domains[0].Name
+				}
 			}
 			g.store.UpsertNode(store.NodeRow{
 				NodeKey:   nodeKey,

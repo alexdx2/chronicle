@@ -34,13 +34,23 @@ type Fact struct {
 	Requires   []string `json:"requires,omitempty"`     // services/models this flow depends on
 }
 
+// ResolveOptions controls obligation gating before resolve.
+type ResolveOptions struct {
+	AllowDegraded bool `json:"allow_degraded"`
+}
+
 // ResolveExtractionsResult is returned by ResolveExtractions.
 type ResolveExtractionsResult struct {
-	FilesProcessed  int            `json:"files_processed"`
-	NodesCreated    int            `json:"nodes_created"`
-	EdgesCreated    int            `json:"edges_created"`
-	EvidenceCreated int            `json:"evidence_created"`
-	Unresolved      []UnresolvedRef `json:"unresolved,omitempty"`
+	FilesProcessed       int               `json:"files_processed"`
+	ExtractionsResolved  int               `json:"extractions_resolved"`
+	NodesCreated         int               `json:"nodes_created"`
+	EdgesCreated         int               `json:"edges_created"`
+	EvidenceCreated      int               `json:"evidence_created"`
+	Hygiene              GraphHygieneStats `json:"hygiene"`
+	QualityWarnings      []QualityWarning  `json:"quality_warnings,omitempty"`
+	Unresolved           []UnresolvedRef   `json:"unresolved,omitempty"`
+	Degraded             bool              `json:"degraded,omitempty"`
+	DegradedFiles        []string          `json:"degraded_files,omitempty"`
 }
 
 // UnresolvedRef is a reference that couldn't be automatically resolved.
@@ -144,13 +154,19 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
 	return result
 }
 
-// ResolveExtractions takes all pending extractions and builds the graph.
-// Creates nodes, edges, and evidence from the collected facts.
-func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*ResolveExtractionsResult, error) {
-	// Hard gate: refuse to resolve if scan obligations are incomplete
-	openObligations, _ := g.store.ListOpenObligations(revisionID)
-	if len(openObligations) > 0 {
-		// Count by status
+// finalizeObligationsBeforeResolve enforces the obligation gate before graph resolve.
+// When allowDegraded is true, open obligations for files that already have extractions
+// are marked skipped so interactive scans can proceed to resolve.
+func (g *Graph) finalizeObligationsBeforeResolve(domainKey string, revisionID int64, allowDegraded bool) ([]string, error) {
+	openObligations, err := g.store.ListOpenObligations(revisionID)
+	if err != nil {
+		return nil, fmt.Errorf("finalize obligations: %w", err)
+	}
+	if len(openObligations) == 0 {
+		return nil, nil
+	}
+
+	if !allowDegraded {
 		total, _ := g.store.ListAllObligations(revisionID)
 		open := 0
 		satisfied := 0
@@ -165,6 +181,51 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 		return nil, fmt.Errorf("scan incomplete: %d/%d obligations completed (%d still open). Complete all obligations before resolving", satisfied, len(total), open)
 	}
 
+	extractions, err := g.store.ListUnresolvedExtractions(revisionID, domainKey)
+	if err != nil {
+		return nil, fmt.Errorf("finalize obligations: %w", err)
+	}
+	filesWithExtraction := make(map[string]bool)
+	for _, ext := range extractions {
+		filesWithExtraction[ext.FilePath] = true
+	}
+
+	var degradedFiles []string
+	degradedSet := make(map[string]bool)
+	for _, ob := range openObligations {
+		if !filesWithExtraction[ob.TargetKey] {
+			continue
+		}
+		if err := g.store.MarkObligationFailed(ob.ObligationID, "degraded_resolve: extraction present"); err != nil {
+			return nil, err
+		}
+		if !degradedSet[ob.TargetKey] {
+			degradedSet[ob.TargetKey] = true
+			degradedFiles = append(degradedFiles, ob.TargetKey)
+		}
+	}
+
+	remaining, _ := g.store.ListOpenObligations(revisionID)
+	if len(remaining) > 0 {
+		return nil, fmt.Errorf("scan incomplete: %d obligations still open with no extraction", len(remaining))
+	}
+	return degradedFiles, nil
+}
+
+// ResolveExtractions takes all pending extractions and builds the graph.
+// Creates nodes, edges, and evidence from the collected facts.
+func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*ResolveExtractionsResult, error) {
+	return g.ResolveExtractionsWithOptions(domainKey, revisionID, ResolveOptions{})
+}
+
+// ResolveExtractionsWithOptions builds the graph, optionally allowing degraded resolve
+// when each file has at least one extraction (interactive agent mode).
+func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64, opts ResolveOptions) (*ResolveExtractionsResult, error) {
+	degradedFiles, err := g.finalizeObligationsBeforeResolve(domainKey, revisionID, opts.AllowDegraded)
+	if err != nil {
+		return nil, err
+	}
+
 	rawExtractions, err := g.store.ListUnresolvedExtractions(revisionID, domainKey)
 	if err != nil {
 		return nil, fmt.Errorf("ResolveExtractions: %w", err)
@@ -175,6 +236,8 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 
 	result := &ResolveExtractionsResult{
 		FilesProcessed: len(extractions),
+		Degraded:       len(degradedFiles) > 0,
+		DegradedFiles:  degradedFiles,
 	}
 
 	// Collect all facts across all files
@@ -204,6 +267,11 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 		return fileTypeOrderFromFacts(allFiles[i].facts) < fileTypeOrderFromFacts(allFiles[j].facts)
 	})
 
+	// Index all scanned files (including type_only / empty facts) for class-name resolution.
+	allScanned, _ := g.store.ListExtractions(revisionID, domainKey)
+	g.scanFileIndex = buildScanFileIndex(allScanned)
+	defer func() { g.scanFileIndex = scanFileIndex{} }()
+
 	// Phase 2: Create nodes and edges from facts
 	for _, ff := range allFiles {
 		// File-level from_type: API param > first fact > default "provider"
@@ -231,19 +299,28 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 	g.fixModuleEdges(domainKey)
 	g.detectContainsConflicts(domainKey, revisionID)
 	g.detectContainsCycles(domainKey, revisionID)
+	hygiene := g.applyGraphHygiene(domainKey)
+	result.Hygiene = hygiene
 	// Mark all extractions as resolved
 	if err := g.store.MarkExtractionsResolved(revisionID, domainKey); err != nil {
 		return nil, fmt.Errorf("ResolveExtractions mark resolved: %w", err)
 	}
+	if n, err := g.CountResolvedExtractions(revisionID, domainKey); err == nil {
+		result.ExtractionsResolved = n
+	}
+	result.QualityWarnings = g.BuildScanQualityReport(domainKey)
 
 	g.emitter.Emit(ScanEvent{
 		Kind:  EventResolveComplete,
 		Phase: "resolve",
 		Data: map[string]any{
-			"nodes_created":    result.NodesCreated,
-			"edges_created":    result.EdgesCreated,
-			"evidence_created": result.EvidenceCreated,
-			"files_processed":  result.FilesProcessed,
+			"nodes_created":               result.NodesCreated,
+			"edges_created":               result.EdgesCreated,
+			"evidence_created":            result.EvidenceCreated,
+			"files_processed":             result.FilesProcessed,
+			"topic_endpoints_suppressed":  hygiene.TopicEndpointsSuppressed,
+			"controller_contains_removed": hygiene.ControllerContainsRemoved,
+			"service_duplicates_merged":   hygiene.ServiceDuplicatesMerged,
 		},
 	})
 
@@ -628,16 +705,74 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 
+	case "provides":
+		// Module registration — module CONTAINS controller/provider (fact schema contract).
+		if fact.To == "" {
+			return counts, nil
+		}
+		moduleType := fact.FromType
+		if moduleType == "" {
+			moduleType = "module"
+		}
+		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, moduleType)
+		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		if fromID == 0 {
+			return counts, nil
+		}
+		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
+
+		toNodeKey, toID := g.resolveClassNameTarget(domainKey, revisionID, fact.To)
+		if toID == 0 {
+			return counts, &UnresolvedRef{
+				FromFile: filePath,
+				Kind:     "provides",
+				Target:   fact.To,
+				Reason:   fmt.Sprintf("provides target %q not resolved to a code node", fact.To),
+			}
+		}
+
+		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONTAINS"
+		confidence := fact.Confidence
+		if confidence == 0 {
+			confidence = 0.90
+		}
+		_, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
+			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+			EdgeType: "CONTAINS", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
+			Metadata: "{}", ValidFromRevisionID: 0,
+		})
+		if err == nil {
+			counts.edges++
+		}
+		assertion, _ := json.Marshal(map[string]any{
+			"provided": fact.To,
+		})
+		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: confidence, RevisionID: revisionID,
+			AssertionKind: "module_provides", Assertion: string(assertion),
+		})
+		counts.evidence++
+
 	case "injects":
 		// Constructor DI — creates INJECTS edge (stronger than import)
 		if fact.To == "" {
 			return counts, nil
 		}
+		if !isPlausibleClassName(fact.To) {
+			return counts, nil
+		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
-		// Resolve injection target — matches PascalCase class names to existing dot-case provider nodes
-		toNodeKey, toID := g.resolveInjectTarget(domainKey, revisionID, fact.To, "")
+		// Resolve injection target — matches PascalCase class names to existing file nodes
+		toNodeKey, toID := g.resolveClassNameTarget(domainKey, revisionID, fact.To)
+		if toID == 0 {
+			return counts, nil
+		}
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -791,24 +926,6 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		counts.evidence++
 
-		// Controller CONTAINS endpoint for hierarchy
-		containsKey := fromNodeKey + "->" + toNodeKey + ":CONTAINS"
-		g.store.UpsertEdge(store.EdgeRow{
-			EdgeKey:            containsKey,
-			FromNodeKey:        fromNodeKey,
-			ToNodeKey:          toNodeKey,
-			FromNodeID:         fromID,
-			ToNodeID:           toID,
-			EdgeType:           "CONTAINS",
-			DerivationKind:     "hard",
-			Active:             true,
-			LastSeenRevisionID: revisionID,
-			Confidence:         0.95,
-			Freshness:          1.0,
-			TrustScore:         0.95,
-			Metadata:           "{}",
-		})
-
 	case "model":
 		// Data model — node + USES_MODEL edge from source file
 		nodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
@@ -925,8 +1042,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Trigger → TRIGGERS_FLOW edge
 		if fact.Trigger != "" {
-			triggerKey := "contract:endpoint:" + domainKey + ":" + strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(fact.Trigger, " ", "_"), "/", "_"))
-			triggerID := g.ensureNodeID(domainKey, revisionID, triggerKey, fact.Trigger, "")
+			// Parse trigger: "GET /arena/attack" → method="GET", path="/arena/attack"
+			triggerMethod, triggerPath := "GET", fact.Trigger
+			if parts := strings.SplitN(fact.Trigger, " ", 2); len(parts) == 2 {
+				triggerMethod = parts[0]
+				triggerPath = parts[1]
+			}
+			triggerKey, triggerName := normalizeEndpointKey(domainKey, triggerMethod, triggerPath)
+			triggerID := g.ensureNodeID(domainKey, revisionID, triggerKey, triggerName, "")
 			flowID, _ := g.store.GetNodeIDByKey(flowKey)
 			edgeKey := triggerKey + "->" + flowKey + ":TRIGGERS_FLOW"
 			_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -1204,6 +1327,9 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 
 	g.ensureNode(domainKey, revisionID, nodeKey, name, filePath)
 	id, _ = g.store.GetNodeIDByKey(nodeKey)
+	if id > 0 && filePath != "" {
+		g.registerClassNameAliases(id, inferNameFromPath(filePath))
+	}
 	return id
 }
 
@@ -2002,55 +2128,168 @@ func normalizePascalCase(name string) string {
 	return strings.Join(parts, ".")
 }
 
-// resolveInjectTarget finds an existing provider node that matches a PascalCase injection name.
-// Searches existing nodes with various naming conventions before creating a new one.
-func (g *Graph) resolveInjectTarget(domainKey string, revisionID int64, className string, filePath string) (string, int64) {
-	prefix := "code:provider:" + domainKey + ":"
-	dotCase := normalizePascalCase(className) // ArenaService → arena.service
-	flat := strings.ToLower(className)        // arenaservice
+// flattenName strips dots, dashes, underscores, slashes and lowercases for fuzzy comparison.
+func flattenName(name string) string {
+	r := strings.NewReplacer(".", "", "-", "", "_", "", "/", "", "\\", "", " ", "")
+	return strings.ToLower(r.Replace(name))
+}
 
-	// Try each naming convention against existing nodes
+type scanFileIndex struct {
+	byClassName map[string]string // PascalCase class name → file_path
+	byStem      map[string]string // normalized file stem → file_path
+	byPath      map[string]string // file_path → from_type hint
+}
+
+func buildScanFileIndex(extractions []store.ExtractionRow) scanFileIndex {
+	idx := scanFileIndex{
+		byClassName: make(map[string]string),
+		byStem:      make(map[string]string),
+		byPath:      make(map[string]string),
+	}
+	for _, ext := range extractions {
+		if ext.FilePath == "" {
+			continue
+		}
+		idx.byPath[ext.FilePath] = ext.FromType
+		stem := inferNameFromPath(ext.FilePath)
+		idx.byStem[strings.ToLower(stem)] = ext.FilePath
+		idx.byStem[flattenName(stem)] = ext.FilePath
+		if pc := pascalCaseFromFileStem(stem); pc != "" {
+			idx.byClassName[pc] = ext.FilePath
+		}
+	}
+	return idx
+}
+
+func pascalCaseFromFileStem(stem string) string {
+	if stem == "" {
+		return ""
+	}
+	var parts []string
+	for _, seg := range strings.Split(stem, ".") {
+		for _, sub := range strings.Split(seg, "-") {
+			if sub == "" {
+				continue
+			}
+			parts = append(parts, strings.ToUpper(sub[:1])+sub[1:])
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+func isPlausibleClassName(name string) bool {
+	if name == "" {
+		return false
+	}
+	lower := strings.ToLower(name)
+	if strings.Contains(name, "<") || strings.Contains(name, ">") {
+		return false
+	}
+	if strings.HasPrefix(lower, "i.") || strings.HasPrefix(lower, "i_") {
+		return false
+	}
+	if strings.Contains(lower, "service.scope") || strings.Contains(lower, "hub.context") {
+		return false
+	}
+	return true
+}
+
+func inferNodeTypeFromClassName(className string) string {
+	if strings.HasSuffix(className, "Controller") || strings.HasSuffix(className, "Gateway") {
+		return "controller"
+	}
+	return "provider"
+}
+
+func (g *Graph) registerClassNameAliases(nodeID int64, fileStem string) {
+	if pc := pascalCaseFromFileStem(fileStem); pc != "" {
+		g.registerNodeAlias(nodeID, pc, "class_name")
+	}
+}
+
+func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, className string) (string, int64) {
+	if !isPlausibleClassName(className) {
+		return "", 0
+	}
+
+	// Scanned file index — covers zero-fact files referenced by module provides/injects.
+	if fp := g.scanFileIndex.byClassName[className]; fp != "" {
+		nodeType := g.scanFileIndex.byPath[fp]
+		if nodeType == "" {
+			nodeType = inferNodeTypeFromClassName(className)
+		}
+		nodeKey := typedNodeKeyFromFile(domainKey, fp, nodeType)
+		id := g.ensureNodeID(domainKey, revisionID, nodeKey, inferNameFromPath(fp), fp)
+		return nodeKey, id
+	}
+
+	dotCase := normalizePascalCase(className)
+	flat := flattenName(className)
+
+	if aliasNodes, err := g.store.FindCodeNodesByAlias(domainKey, className, ""); err == nil && len(aliasNodes) == 1 {
+		return aliasNodes[0].NodeKey, aliasNodes[0].NodeID
+	}
+	if aliasNodes, err := g.store.FindCodeNodesByAlias(domainKey, dotCase, ""); err == nil && len(aliasNodes) == 1 {
+		return aliasNodes[0].NodeKey, aliasNodes[0].NodeID
+	}
+
+	// Path-keyed nodes (canonical): match by flattened name on existing nodes.
+	for _, nodeType := range []string{"provider", "controller", "module"} {
+		nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: nodeType})
+		for _, n := range nodes {
+			if flattenName(n.Name) == flat {
+				return n.NodeKey, n.NodeID
+			}
+			keyParts := strings.Split(n.NodeKey, ":")
+			if len(keyParts) > 0 {
+				lastPart := keyParts[len(keyParts)-1]
+				if flattenName(filepath.Base(lastPart)) == flat || flattenName(lastPart) == flat {
+					return n.NodeKey, n.NodeID
+				}
+			}
+		}
+	}
+
+	// Legacy stem-keyed nodes (pre-path merge).
+	prefix := "code:provider:" + domainKey + ":"
 	candidates := []string{
-		strings.ToLower(dotCase),                                  // arena.service
-		strings.ReplaceAll(strings.ToLower(dotCase), ".", "-"),    // arena-service
-		flat,                                                      // arenaservice
+		strings.ToLower(dotCase),
+		strings.ReplaceAll(strings.ToLower(dotCase), ".", "-"),
+		strings.ToLower(className),
+		flat,
 	}
 	for _, c := range candidates {
 		key := prefix + c
 		if id, err := g.store.GetNodeIDByKey(key); err == nil {
 			return key, id
 		}
-	}
-	// Also search controller nodes
-	for _, c := range candidates {
-		key := "code:controller:" + domainKey + ":" + c
+		key = "code:controller:" + domainKey + ":" + c
 		if id, err := g.store.GetNodeIDByKey(key); err == nil {
 			return key, id
 		}
 	}
 
-	// Fuzzy: search all providers in domain where flat name matches
-	// e.g. "BattleResultProducer" (flat: "battleresultproducer") matches "battle-result.producer" (flat: "battleresultproducer")
-	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "provider"})
-	for _, n := range nodes {
-		nFlat := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(n.Name, ".", ""), "-", ""))
-		if nFlat == flat {
-			return n.NodeKey, n.NodeID
+	// Stem from scan index without exact PascalCase hit.
+	if fp := g.scanFileIndex.byStem[strings.ToLower(dotCase)]; fp != "" {
+		nodeType := g.scanFileIndex.byPath[fp]
+		if nodeType == "" {
+			nodeType = inferNodeTypeFromClassName(className)
 		}
-	}
-	// Check controllers too
-	controllers, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "controller"})
-	for _, n := range controllers {
-		nFlat := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(n.Name, ".", ""), "-", ""))
-		if nFlat == flat {
-			return n.NodeKey, n.NodeID
-		}
+		nodeKey := typedNodeKeyFromFile(domainKey, fp, nodeType)
+		id := g.ensureNodeID(domainKey, revisionID, nodeKey, inferNameFromPath(fp), fp)
+		return nodeKey, id
 	}
 
-	// Not found — create with dot-case form
-	key := prefix + strings.ToLower(dotCase)
+	// Last resort: create stem-based provider (may merge when file is processed later).
+	nodeType := inferNodeTypeFromClassName(className)
+	key := typedNodeKey(domainKey, strings.ToLower(dotCase), nodeType)
 	id := g.ensureNodeID(domainKey, revisionID, key, dotCase, "")
 	return key, id
+}
+
+// resolveInjectTarget is kept for callers outside resolveOneFact.
+func (g *Graph) resolveInjectTarget(domainKey string, revisionID int64, className string, _ string) (string, int64) {
+	return g.resolveClassNameTarget(domainKey, revisionID, className)
 }
 
 // SaveFileExtraction stores extraction results from a scan agent.

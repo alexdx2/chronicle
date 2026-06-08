@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,13 +56,27 @@ func NewRootCmd() *cobra.Command {
 }
 
 func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	c := &cobra.Command{
 		Use:   "version",
-		Short: "Print version",
+		Short: "Print MCP identity (codename + fingerprint, not just semver)",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("chronicle v" + version.Version)
+			version.StampBuildTime()
+			id := version.Identity()
+			if jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				_ = enc.Encode(version.IdentityMap())
+				return
+			}
+			fmt.Println(id.Banner)
+			fmt.Printf("release_codename: %s\n", id.ReleaseCodename)
+			fmt.Printf("fingerprint: %s\n", id.Fingerprint)
+			fmt.Printf("schema_generation: %d\n", id.SchemaGeneration)
 		},
 	}
+	c.Flags().BoolVar(&jsonOut, "json", false, "Emit full identity JSON (same as chronicle_mcp_identity)")
+	return c
 }
 
 // resolveDefaults sets default paths under .depbot/ if not explicitly provided.
@@ -162,6 +177,7 @@ When the user says any of these, call chronicle_command with the command name an
 | "chronicle topology" or "show domain topology" | chronicle_command(command='topology') | Federation domain map |
 | "chronicle connections" or "show cross-repo edges" | chronicle_command(command='connections') | Cross-repo edge inventory |
 | "chronicle status" or "chronicle dashboard" | chronicle_command(command='status') | Graph state + dashboard URL |
+| "chronicle version" or "which MCP" | chronicle_command(command='version') or chronicle_mcp_identity | MCP codename + fingerprint |
 | "chronicle help" | chronicle_command(command='help') | Show all commands |
 
 ## How it works

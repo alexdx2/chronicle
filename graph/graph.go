@@ -17,6 +17,9 @@ type Graph struct {
 	store   *store.Store
 	reg     *registry.Registry
 	emitter EventEmitter
+
+	// scanFileIndex is populated during ResolveExtractions for class-name → file_path lookup.
+	scanFileIndex scanFileIndex
 }
 
 // defaultEvidenceConfidence returns the confidence for an evidence row.

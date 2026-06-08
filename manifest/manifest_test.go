@@ -122,6 +122,22 @@ func TestDomainForFile(t *testing.T) {
 	}
 }
 
+func TestDomainForFileMapFormat(t *testing.T) {
+	m, err := LoadFile("../testdata/manifest/map_domain.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := m.DomainForFile("arena-api/src/arena/arena.service.ts"); got != "tom-and-jerry" {
+		t.Errorf("DomainForFile = %q, want tom-and-jerry", got)
+	}
+	if m.Domains[0].Key != "tom-and-jerry" {
+		t.Errorf("domain key = %q, want tom-and-jerry", m.Domains[0].Key)
+	}
+	if m.Domains[0].Name != "Tom and Jerry" {
+		t.Errorf("domain name = %q, want Tom and Jerry", m.Domains[0].Name)
+	}
+}
+
 func TestInfrastructure(t *testing.T) {
 	m, err := LoadFile("../testdata/manifest/multi_domain.yaml")
 	if err != nil {

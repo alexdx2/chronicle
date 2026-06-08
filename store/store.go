@@ -2,9 +2,11 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -49,6 +51,11 @@ func Open(dbPath string) (*Store, error) {
 	}
 
 	return s, nil
+}
+
+// Dir returns the .depbot directory containing the database file.
+func (s *Store) Dir() string {
+	return filepath.Dir(s.dbPath)
 }
 
 func (s *Store) Close() error {
@@ -181,8 +188,52 @@ func (s *Store) migrate() error {
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_evidence_uid ON graph_evidence(evidence_uid)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_from_node_key ON graph_edges(from_node_key)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_to_node_key ON graph_edges(to_node_key)`)
+	if err := s.migrateScanRunPhases(); err != nil {
+		return err
+	}
 	s.backfillContexts()
 	return nil
+}
+
+// migrateScanRunPhases recreates scan_runs when the phase CHECK constraint is outdated.
+// SQLite cannot ALTER CHECK constraints; table recreation is required.
+func (s *Store) migrateScanRunPhases() error {
+	var tableSQL string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='scan_runs'`).Scan(&tableSQL); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if strings.Contains(tableSQL, "'confirm_scope'") && strings.Contains(tableSQL, "'phase2_confirm'") && strings.Contains(tableSQL, "'phase1_review'") {
+		return nil
+	}
+	_, err := s.db.Exec(`
+		CREATE TABLE scan_runs_new (
+		    run_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		    revision_id     INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
+		    domain_key      TEXT NOT NULL,
+		    phase           TEXT NOT NULL DEFAULT 'setup'
+		                      CHECK (phase IN ('setup','confirm_scope','phase1_extract','phase1_resolve','phase1_review','endpoint_reconcile','phase2_select','phase2_confirm','phase2_extract','phase2_resolve','finalized')),
+		    status          TEXT NOT NULL DEFAULT 'running'
+		                      CHECK (status IN ('running','paused','blocked','completed','failed')),
+		    total_files     INTEGER NOT NULL DEFAULT 0,
+		    extracted_files INTEGER NOT NULL DEFAULT 0,
+		    resolved        INTEGER NOT NULL DEFAULT 0,
+		    votes_needed    INTEGER NOT NULL DEFAULT 1,
+		    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+		    updated_at      TEXT
+		);
+		INSERT INTO scan_runs_new
+		  SELECT run_id, revision_id, domain_key, phase, status,
+		         total_files, extracted_files, resolved, COALESCE(votes_needed, 1),
+		         created_at, updated_at
+		  FROM scan_runs;
+		DROP TABLE scan_runs;
+		ALTER TABLE scan_runs_new RENAME TO scan_runs;
+		CREATE INDEX IF NOT EXISTS idx_scan_runs_domain_status ON scan_runs(domain_key, status);
+	`)
+	return err
 }
 
 // backfillContexts creates a "main" knowledge context for any domain that has
@@ -595,7 +646,7 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     revision_id     INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
     domain_key      TEXT NOT NULL,
     phase           TEXT NOT NULL DEFAULT 'setup'
-                      CHECK (phase IN ('setup','phase1_extract','phase1_resolve','phase2_select','phase2_extract','phase2_resolve','finalized')),
+                      CHECK (phase IN ('setup','confirm_scope','phase1_extract','phase1_resolve','endpoint_reconcile','phase2_select','phase2_confirm','phase2_extract','phase2_resolve','finalized')),
     status          TEXT NOT NULL DEFAULT 'running'
                       CHECK (status IN ('running','paused','blocked','completed','failed')),
     total_files     INTEGER NOT NULL DEFAULT 0,

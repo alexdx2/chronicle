@@ -107,6 +107,46 @@ func TestScanRunIncrement(t *testing.T) {
 	}
 }
 
+func TestScanRunConfirmScopePhase(t *testing.T) {
+	s, revID := testStoreWithRevision(t)
+	defer s.Close()
+
+	runID, _ := s.CreateScanRun(revID, "test-domain")
+	if err := s.TransitionScanRun(runID, "confirm_scope", 129); err != nil {
+		t.Fatalf("TransitionScanRun confirm_scope: %v", err)
+	}
+	row, _ := s.GetScanRun(runID)
+	if row.Phase != "confirm_scope" {
+		t.Fatalf("expected confirm_scope, got %s", row.Phase)
+	}
+	if row.TotalFiles != 129 {
+		t.Fatalf("expected total_files=129, got %d", row.TotalFiles)
+	}
+	if err := s.TransitionScanRun(runID, "phase1_extract", 0); err != nil {
+		t.Fatalf("TransitionScanRun phase1_extract: %v", err)
+	}
+	row, _ = s.GetScanRun(runID)
+	if row.TotalFiles != 129 {
+		t.Fatalf("expected total_files preserved at 129, got %d", row.TotalFiles)
+	}
+}
+
+func TestScanRunEndpointReconcilePhase(t *testing.T) {
+	s, revID := testStoreWithRevision(t)
+	defer s.Close()
+
+	runID, _ := s.CreateScanRun(revID, "test-domain")
+	for _, phase := range []string{"confirm_scope", "phase1_extract", "phase1_resolve", "endpoint_reconcile", "phase2_select"} {
+		total := 0
+		if phase == "confirm_scope" {
+			total = 10
+		}
+		if err := s.TransitionScanRun(runID, phase, total); err != nil {
+			t.Fatalf("TransitionScanRun %s: %v", phase, err)
+		}
+	}
+}
+
 func TestScanRunGetActive(t *testing.T) {
 	s, revID := testStoreWithRevision(t)
 	defer s.Close()

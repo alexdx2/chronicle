@@ -9,16 +9,16 @@ import (
 
 // --- ID validation ---
 
-func TestValidateID_ValidCustomIDs(t *testing.T) {
+func TestValidateID_ValidIDs(t *testing.T) {
 	valid := []string{
+		"django",
+		"spring-boot",
 		"custom/django",
 		"custom/spring-boot",
-		"custom/otopoint-pricing",
-		"custom/company.framework",
-		"custom/my-org-auth",
+		"my-framework",
 	}
 	for _, id := range valid {
-		if err := ValidateCustomPackID(id); err != "" {
+		if err := ValidatePackID(id); err != "" {
 			t.Errorf("ID %q should be valid, got error: %s", id, err)
 		}
 	}
@@ -26,51 +26,33 @@ func TestValidateID_ValidCustomIDs(t *testing.T) {
 
 func TestValidateID_RejectsPathTraversal(t *testing.T) {
 	bad := []string{
-		"custom/../secret",
-		"custom/../../etc/passwd",
-		"custom/a..b",
+		"../secret",
+		"../../etc/passwd",
+		"a..b",
 	}
 	for _, id := range bad {
-		if err := ValidateCustomPackID(id); err == "" {
+		if err := ValidatePackID(id); err == "" {
 			t.Errorf("ID %q should be rejected (path traversal)", id)
 		}
 	}
 }
 
-func TestValidateID_RejectsNonCustomPrefix(t *testing.T) {
+func TestValidateID_RejectsCoreOverride(t *testing.T) {
 	bad := []string{
-		"framework/nestjs",
 		"core/fact_schema",
-		"guide/pack_authoring",
-		"language/typescript",
-		"orm/prisma",
-		"django",            // no prefix
-		"my-pack",           // no prefix
-		"",                  // empty
+		"core/enrichment",
+		"core/flow_tracing",
 	}
 	for _, id := range bad {
-		if err := ValidateCustomPackID(id); err == "" {
-			t.Errorf("ID %q should be rejected (not custom/ prefix)", id)
+		if err := ValidatePackID(id); err == "" {
+			t.Errorf("ID %q should be rejected (core override)", id)
 		}
 	}
 }
 
-func TestValidateID_RejectsEmptySlug(t *testing.T) {
-	if err := ValidateCustomPackID("custom/"); err == "" {
-		t.Error("ID 'custom/' should be rejected (empty slug)")
-	}
-}
-
-func TestValidateID_RejectsNestedPaths(t *testing.T) {
-	bad := []string{
-		"custom/a/b",
-		"custom/org/pack",
-		`custom/a\b`,
-	}
-	for _, id := range bad {
-		if err := ValidateCustomPackID(id); err == "" {
-			t.Errorf("ID %q should be rejected (nested path)", id)
-		}
+func TestValidateID_RejectsEmpty(t *testing.T) {
+	if err := ValidatePackID(""); err == "" {
+		t.Error("empty ID should be rejected")
 	}
 }
 
@@ -106,7 +88,7 @@ Apply when file imports from django.
 
 	// Step 3: Validate ID
 	id := "custom/django"
-	if err := ValidateCustomPackID(id); err != "" {
+	if err := ValidatePackID(id); err != "" {
 		t.Fatalf("ID validation failed: %s", err)
 	}
 
@@ -144,16 +126,16 @@ func TestLifecycle_InvalidPackRejectedBeforeSave(t *testing.T) {
 	// Save should be blocked (tested at MCP handler level, but validation logic is here)
 }
 
-func TestLifecycle_OverrideBuiltinBlocked(t *testing.T) {
-	// Trying to save a pack that shadows a built-in
+func TestLifecycle_OverrideCoreBlocked(t *testing.T) {
+	// Trying to save a pack that shadows a core pack
 	blocked := []string{
-		"framework/nestjs",
 		"core/fact_schema",
-		"orm/prisma",
+		"core/enrichment",
+		"core/flow_tracing",
 	}
 	for _, id := range blocked {
-		if err := ValidateCustomPackID(id); err == "" {
-			t.Errorf("should block saving over built-in pack %q", id)
+		if err := ValidatePackID(id); err == "" {
+			t.Errorf("should block saving over core pack %q", id)
 		}
 	}
 }
@@ -187,8 +169,8 @@ func TestCheckpoint1_GapInfoLeadsToCreation(t *testing.T) {
 
 	// 3. Each gap should suggest creating a pack
 	for _, g := range gaps {
-		if g.SuggestedAction != "create_custom_pack" {
-			t.Errorf("gap %s should suggest create_custom_pack", g.Tech)
+		if g.SuggestedAction != "create_pack" {
+			t.Errorf("gap %s should suggest create_pack", g.Tech)
 		}
 	}
 
@@ -208,7 +190,7 @@ func TestCheckpoint1_GapInfoLeadsToCreation(t *testing.T) {
 	}
 
 	// 6. ID should be valid
-	if err := ValidateCustomPackID("custom/django"); err != "" {
+	if err := ValidatePackID("custom/django"); err != "" {
 		t.Errorf("custom/django ID rejected: %s", err)
 	}
 }

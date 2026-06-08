@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/extract/ast"
@@ -101,7 +102,16 @@ func (g *Graph) getGuide(key string, tech ...string) string {
 	if !ok {
 		return ""
 	}
-	return prompts.Compose(def, tech)
+	guide := prompts.Compose(def, tech)
+
+	// Also append project-level packs from .depbot/packs/
+	for _, t := range tech {
+		content, err := g.store.LoadPackFile(t)
+		if err == nil && content != "" {
+			guide += "\n\n---\n\n" + content
+		}
+	}
+	return guide
 }
 
 // ScanProgress tracks extraction progress within a scan run.
@@ -169,7 +179,7 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 
 	case "phase1_extract":
 		// Atomically claim up to 10 unclaimed files (reclaims expired leases too)
-		claimed, err := g.store.ClaimObligations(run.RevisionID, "scan_file", 10)
+		claimed, err := g.store.ClaimObligations(run.RevisionID, "scan_file", 8)
 		if err != nil {
 			return nil, err
 		}
@@ -285,8 +295,8 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 				filesWithAST = nil // don't confuse agent with empty AST
 			}
 
-			// Build per-batch pack selection from AST-detected imports/decorators
-			packSel := g.buildPackSelection(batch, filesWithAST, tech)
+			// Core packs — tech packs are agent-selected
+			packSel := g.buildPackSelection()
 
 			g.emitter.Emit(ScanEvent{
 				Kind:  EventBatchExtracted,
@@ -361,11 +371,66 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 			Blocked:   true,
 		}, nil
 
+	case "phase1_review":
+		status, err := g.BuildScanRunStatus(run, "scan_file")
+		if err != nil {
+			return nil, err
+		}
+		summary := g.buildScanSummary(run.DomainKey)
+		summary["quality_warnings"] = status.QualityWarnings
+		summary["review_candidates"] = status.ReviewCandidates
+		summary["extractions"] = status.Extractions
+		reviewCount := len(status.ReviewCandidates)
+		criticalWarnings := 0
+		for _, w := range status.QualityWarnings {
+			if w.Severity == "critical" {
+				criticalWarnings++
+			}
+		}
+		question := "Phase 1 resolved. Review graph quality before endpoint reconciliation."
+		options := []string{"proceed", "re-review files"}
+		if reviewCount == 0 && criticalWarnings == 0 {
+			// Auto-skip review gate when graph is clean
+			if err := g.store.TransitionScanRun(run.RunID, "endpoint_reconcile", 0); err != nil {
+				return nil, err
+			}
+			return g.endpointReconcileAction(run)
+		}
+		return &ScanAction{
+			ScanRunID: run.RunID,
+			Phase:     "phase1_review",
+			Action:    "confirm",
+			Blocked:   true,
+			Checkpoint: &ScanCheckpoint{
+				ID:       "phase1_review",
+				Question: question,
+				Context:  summary,
+				Options:  options,
+			},
+			Reason: "STOP: Show quality_warnings and review_candidates. Call chronicle_scan_confirm(checkpoint_id='phase1_review', answer='proceed' or 're-review files').",
+		}, nil
+
 	case "endpoint_reconcile":
 		return g.endpointReconcileAction(run)
 
 	case "phase2_select":
 		return g.phase2SelectAction(run)
+
+	case "phase2_confirm":
+		summary := g.buildScanSummary(run.DomainKey)
+		return &ScanAction{
+			ScanRunID: run.RunID,
+			Phase:     "phase2_confirm",
+			Action:    "confirm",
+			Blocked:   true,
+			Checkpoint: &ScanCheckpoint{
+				ID:       "phase1_summary",
+				Question: "Phase 1 complete. Here's what Chronicle found. Continue with flow tracing?",
+				Context:  summary,
+				Options:  []string{"yes", "skip flows"},
+			},
+			Reason: "STOP: Show the checkpoint to the user. Call chronicle_scan_confirm(scan_run_id, checkpoint_id='phase1_summary', answer='yes') to proceed.",
+		}, nil
 
 	case "phase2_extract":
 		return g.phase2ExtractAction(run)
@@ -447,6 +512,9 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 			if err != nil || node == nil {
 				continue
 			}
+			if node.DomainKey != "" && node.DomainKey != run.DomainKey {
+				continue
+			}
 			if node.FilePath == "" {
 				skippedNoFilePath++
 				continue
@@ -515,25 +583,29 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 	// Build graph context from phase 1 results
 	ctx := g.buildGraphContext(run.DomainKey)
 
-	g.store.TransitionScanRun(run.RunID, "phase2_extract", len(triggerFiles))
+	if err := g.store.TransitionScanRun(run.RunID, "phase2_confirm", len(triggerFiles)); err != nil {
+		return nil, err
+	}
 	g.emitter.Emit(ScanEvent{
 		Kind:  EventPhaseChanged,
-		Phase: "phase2_extract",
+		Phase: "phase2_confirm",
 		Data: map[string]any{
 			"trigger_files": len(triggerFiles),
-			"message":       fmt.Sprintf("Found %d trigger files for flow tracing.", len(triggerFiles)),
+			"message":       fmt.Sprintf("Found %d trigger files for flow tracing. Awaiting user confirmation.",
+				len(triggerFiles)),
 		},
 	})
 	summary := g.buildScanSummary(run.DomainKey)
 	return &ScanAction{
 		ScanRunID:    run.RunID,
-		Phase:        "phase2_extract",
-		Action:       "trace_flow",
+		Phase:        "phase2_confirm",
+		Action:       "confirm",
 		Files:        mapKeys(triggerFiles),
 		FactSchema:   g.getGuide("guide_flow"),
 		GraphContext: ctx,
-		Reason:       "Phase 2: trace business flows. Use graph_context to understand the full call chain. Emit ONLY flow facts.",
+		Reason:       "STOP: Show phase 1 summary to the user. Call chronicle_scan_confirm before flow tracing.",
 		Progress:     &ScanProgress{Total: len(triggerFiles), Extracted: 0, Remaining: len(triggerFiles)},
+		Blocked:      true,
 		Checkpoint: &ScanCheckpoint{
 			ID:       "phase1_summary",
 			Question: "Phase 1 complete. Here's what Chronicle found. Continue with flow tracing?",
@@ -598,51 +670,15 @@ func (g *Graph) phase2ExtractAction(run *store.ScanRunRow) (*ScanAction, error) 
 	}, nil
 }
 
-// buildPackSelection creates a PackSelection from the batch's AST-detected signals.
-func (g *Graph) buildPackSelection(files []string, filesWithAST []FileWithAST, tech []string) *prompts.PackSelection {
-	// Collect imports and decorators from AST facts across the batch
-	var allImports, allDecorators []string
-	importSet := map[string]bool{}
-	decSet := map[string]bool{}
-
-	for _, fwa := range filesWithAST {
-		if fwa.ASTFacts == "[]" {
-			continue
-		}
-		var facts []map[string]any
-		if err := json.Unmarshal([]byte(fwa.ASTFacts), &facts); err != nil {
-			continue
-		}
-		for _, f := range facts {
-			kind, _ := f["kind"].(string)
-			switch kind {
-			case "import":
-				if to, ok := f["to"].(string); ok && !importSet[to] {
-					allImports = append(allImports, to)
-					importSet[to] = true
-				}
-			case "decorator":
-				if name, ok := f["name"].(string); ok && !decSet[name] {
-					allDecorators = append(allDecorators, name)
-					decSet[name] = true
-				}
-			}
-		}
+// buildPackSelection returns core packs that are always loaded.
+// Technology packs are selected by the agent based on match sections.
+func (g *Graph) buildPackSelection() *prompts.PackSelection {
+	sel := prompts.PackSelection{}
+	for _, p := range prompts.CorePacks() {
+		sel.Loaded = append(sel.Loaded, prompts.PackMeta{
+			ID: p.ID, Type: p.Type, Description: p.Description,
+		})
 	}
-
-	// Use first file for extension-based matching
-	filePath := ""
-	if len(files) > 0 {
-		filePath = files[0]
-	}
-
-	ctx := prompts.FileContext{
-		FilePath:   filePath,
-		Imports:    allImports,
-		Decorators: allDecorators,
-	}
-
-	sel := prompts.MatchPacks(ctx, tech)
 	return &sel
 }
 
@@ -771,30 +807,22 @@ func (g *Graph) buildGraphContext(domainKey string) *GraphContext {
 func (g *Graph) buildScanSummary(domainKey string) map[string]any {
 	summary := map[string]any{}
 
-	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
-	byLayer := map[string]int{}
-	byType := map[string]int{}
-	for _, n := range nodes {
-		byLayer[n.Layer]++
-		byType[n.NodeType]++
-	}
-	summary["nodes_total"] = len(nodes)
-	summary["nodes_by_layer"] = byLayer
-	summary["nodes_by_type"] = byType
+	gstats := g.BuildGraphStats(domainKey)
+	summary["nodes_total"] = gstats.NodesTotal
+	summary["nodes_by_layer"] = gstats.NodesByLayer
+	summary["nodes_by_type"] = gstats.NodesByType
+	summary["edges_total"] = gstats.EdgesTotal
+	summary["edges_by_derivation"] = gstats.EdgesByDeriv
+	summary["quality_warnings"] = g.BuildScanQualityReport(domainKey)
 
-	edges, _ := g.store.ListEdges(store.EdgeFilter{})
-	byDeriv := map[string]int{}
-	for _, e := range edges {
-		if e.Active {
-			byDeriv[e.DerivationKind]++
+	if run, _ := g.store.GetActiveScanRun(domainKey); run != nil {
+		if status, err := g.BuildScanRunStatus(run, "scan_file"); err == nil {
+			summary["extractions"] = status.Extractions
+			if len(status.ReviewCandidates) > 0 {
+				summary["review_candidates"] = status.ReviewCandidates
+			}
 		}
 	}
-	activeEdges := 0
-	for _, c := range byDeriv {
-		activeEdges += c
-	}
-	summary["edges_total"] = activeEdges
-	summary["edges_by_derivation"] = byDeriv
 
 	return summary
 }
@@ -835,29 +863,46 @@ func formatScanSummary(summary map[string]any) string {
 	return strings.Join(parts, "\n")
 }
 
-// readFileContent tries to read a file, checking the path as-is first,
-// then trying subdirectories that contain a .depbot/ folder (the project root).
+// readFileContent tries to read a file relative to cwd, parent dirs, or monorepo subprojects.
 func readFileContent(filePath string) []byte {
-	// Try as-is (works when cwd = project root)
-	if content, err := os.ReadFile(filePath); err == nil {
-		return content
-	}
-	// Find the subdirectory that has .depbot/ — that's the project root
-	cwd, _ := os.Getwd()
-	entries, _ := os.ReadDir(cwd)
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "." || e.Name() == ".." {
-			continue
+	tryRead := func(base string) []byte {
+		candidate := filePath
+		if base != "" {
+			candidate = filepath.Join(base, filePath)
 		}
-		// Only try subdirectories that have .depbot/ (project root indicator)
-		depbotPath := cwd + "/" + e.Name() + "/.depbot"
-		if _, err := os.Stat(depbotPath); err != nil {
-			continue
-		}
-		candidate := cwd + "/" + e.Name() + "/" + filePath
 		if content, err := os.ReadFile(candidate); err == nil {
 			return content
 		}
+		return nil
+	}
+
+	if content := tryRead(""); content != nil {
+		return content
+	}
+
+	dir, _ := os.Getwd()
+	for depth := 0; depth < 6; depth++ {
+		if content := tryRead(dir); content != nil {
+			return content
+		}
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			sub := filepath.Join(dir, e.Name())
+			if _, err := os.Stat(filepath.Join(sub, ".depbot")); err != nil {
+				continue
+			}
+			if content := tryRead(sub); content != nil {
+				return content
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
 	return nil
 }
@@ -878,12 +923,12 @@ func mapKeys(m map[string]bool) []string {
 func countASTFacts(files []FileWithAST) int {
 	count := 0
 	for _, f := range files {
-		if f.ASTFacts != "[]" && len(f.ASTFacts) > 2 {
-			for _, c := range f.ASTFacts {
-				if c == '}' {
-					count++
-				}
-			}
+		if f.ASTFacts == "" || f.ASTFacts == "[]" {
+			continue
+		}
+		var facts []json.RawMessage
+		if err := json.Unmarshal([]byte(f.ASTFacts), &facts); err == nil {
+			count += len(facts)
 		}
 	}
 	return count

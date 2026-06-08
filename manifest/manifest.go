@@ -15,6 +15,7 @@ type ScanConfig struct {
 }
 
 type DomainEntry struct {
+	Key         string     `yaml:"-"` // YAML map key or name (list format); used as graph domain_key
 	Name        string     `yaml:"name"`
 	Description string     `yaml:"description,omitempty"`
 	Owner       string     `yaml:"owner,omitempty"`
@@ -80,7 +81,15 @@ func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
 	switch raw.Domains.Kind {
 	case yaml.SequenceNode:
 		// List format: [{name: x, ...}]
-		return raw.Domains.Decode(&m.Domains)
+		if err := raw.Domains.Decode(&m.Domains); err != nil {
+			return err
+		}
+		for i := range m.Domains {
+			if m.Domains[i].Key == "" {
+				m.Domains[i].Key = m.Domains[i].Name
+			}
+		}
+		return nil
 
 	case yaml.MappingNode:
 		// Map format: {key: {name: X, ...}}
@@ -104,6 +113,7 @@ func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
 				name = key
 			}
 			entry := DomainEntry{
+				Key:         key,
 				Name:        name,
 				Description: dv.Description,
 				Owner:       dv.Owner,
@@ -180,6 +190,9 @@ func Load(data []byte) (*Manifest, error) {
 func (m *Manifest) DomainForFile(filePath string) string {
 	for _, d := range m.Domains {
 		if domainMatchesFile(d, filePath) {
+			if d.Key != "" {
+				return d.Key
+			}
 			return d.Name
 		}
 	}

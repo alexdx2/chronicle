@@ -62,12 +62,17 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(schemaTool(), schemaHandler(g))
 	s.AddTool(extractionGuideTool(), extractionGuideHandler())
 	s.AddTool(extractionHintsTool(), extractionHintsHandler())
-	s.AddTool(instructionPacksTool(), instructionPacksHandler())
+	s.AddTool(instructionPacksTool(), instructionPacksHandler(g))
 	s.AddTool(getInstructionPackTool(), getInstructionPackHandler(g))
 	s.AddTool(saveCustomPackTool(), saveCustomPackHandler(g))
 	s.AddTool(scanConfirmTool(), scanConfirmHandler(g))
 	s.AddTool(scanStatusTool(), scanStatusHandler(g))
 	s.AddTool(scanPoolStatusTool(), scanPoolStatusHandler(g))
+	s.AddTool(scanCheckoutBatchTool(), scanCheckoutBatchHandler(g))
+	s.AddTool(commitScanOutboxTool(), commitScanOutboxHandler(g))
+	s.AddTool(fileExtractedBatchTool(), fileExtractedBatchHandler(g))
+	s.AddTool(scanMarkFailedTool(), scanMarkFailedHandler(g))
+	s.AddTool(scanReviewCandidatesTool(), scanReviewCandidatesHandler(g))
 	s.AddTool(saveManifestTool(), saveManifestHandler(g))
 	s.AddTool(resetDBTool(), resetDBHandler(g))
 	s.AddTool(reportDiscoveryTool(), reportDiscoveryHandler(g))
@@ -76,6 +81,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(defineTermTool(), defineTermHandler(g))
 	s.AddTool(getGlossaryTool(), getGlossaryHandler(g))
 	s.AddTool(checkLanguageTool(), checkLanguageHandler(g))
+	s.AddTool(mcpIdentityTool(), mcpIdentityHandler())
 	s.AddTool(commandTool(), commandHandler(g))
 	s.AddTool(diagramBuildTool(), diagramBuildHandler())
 	s.AddTool(domainListTool(), domainListHandler(g))
@@ -573,19 +579,19 @@ func resolveReviewHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func fileGroupsTool() mcp.Tool {
 	return mcp.NewTool("chronicle_file_groups",
-		mcp.WithDescription("List git-tracked files grouped by directory with counts. Use during setup to show the user which directories to include or exclude from scanning."),
+		mcp.WithDescription("Full project file tree — every directory with its files. Small dirs show filenames, large dirs show extension counts. Build files (package.json, .csproj, go.mod, etc.) are always listed by name. Use this to understand project structure, identify technologies, and find build boundaries."),
 	)
 }
 
 func fileGroupsHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		rootDir, _ := os.Getwd()
-		groups, total, err := graph.GroupFilesByDirectory(rootDir)
+		tree, total, err := graph.BuildFileTree(rootDir)
 		if err != nil {
 			return errorResult(err), nil
 		}
 		return jsonResult(map[string]any{
-			"groups":      groups,
+			"tree":        tree,
 			"total_files": total,
 		}), nil
 	}
@@ -600,7 +606,7 @@ func discoverFilesTool() mcp.Tool {
 		mcp.WithDescription("Discover all architecture-relevant files in the project. Returns categorized file list (manifests, schemas, services, controllers, resolvers, gateways, modules, configs, clients, async handlers). Creates scan obligations for each file — finalize will warn about any unprocessed files. Call this BEFORE scanning to get the complete file list."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
-		mcp.WithNumber("votes_needed", mcp.Description("How many LLM extraction runs per file (default 1, use 3 for voting mode)")),
+		mcp.WithNumber("votes_needed", mcp.Description("How many independent extraction passes per file (default 1; user may choose any N, e.g. 3 or 5)")),
 	)
 }
 
@@ -662,10 +668,17 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 		// Create or update scan run — transition to confirm_scope (checkpoint)
 		run, _ := g.Store().GetActiveScanRun(domain)
 		if run == nil {
-			runID, _ := g.Store().CreateScanRun(revisionID, domain, votesNeeded)
-			g.Store().TransitionScanRun(runID, "confirm_scope", totalObligations)
+			runID, err := g.Store().CreateScanRun(revisionID, domain, votesNeeded)
+			if err != nil {
+				return errorResult(fmt.Errorf("create scan run: %w", err)), nil
+			}
+			if err := g.Store().TransitionScanRun(runID, "confirm_scope", totalObligations); err != nil {
+				return errorResult(fmt.Errorf("transition to confirm_scope: %w", err)), nil
+			}
 		} else {
-			g.Store().TransitionScanRun(run.RunID, "confirm_scope", totalObligations)
+			if err := g.Store().TransitionScanRun(run.RunID, "confirm_scope", totalObligations); err != nil {
+				return errorResult(fmt.Errorf("transition to confirm_scope: %w", err)), nil
+			}
 		}
 
 		// Return summary (not full file list — can be huge)
@@ -719,17 +732,96 @@ func scanConfirmHandler(g *graph.Graph) server.ToolHandlerFunc {
 		switch checkpointID {
 		case "scope":
 			if strings.Contains(strings.ToLower(answer), "yes") || strings.Contains(strings.ToLower(answer), "ok") || strings.Contains(strings.ToLower(answer), "confirm") || answer == "1" {
-				// User confirmed — transition to extraction
-				g.Store().TransitionScanRun(runID, "phase1_extract", 0)
+				run, err := g.Store().GetScanRun(runID)
+				if err != nil {
+					return errorResult(fmt.Errorf("get scan run: %w", err)), nil
+				}
+				if run.Phase != "confirm_scope" {
+					return errorResult(fmt.Errorf("scan run %d is in phase %q, expected confirm_scope — re-run chronicle_discover_files", runID, run.Phase)), nil
+				}
+				// User confirmed — transition to extraction (preserve total_files from confirm_scope)
+				if err := g.Store().TransitionScanRun(runID, "phase1_extract", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to phase1_extract: %w", err)), nil
+				}
 				return jsonResult(map[string]any{
-					"status":  "confirmed",
-					"message": "Scope confirmed. Call chronicle_scan_next_file to start extraction.",
+					"status":            "confirmed",
+					"message":           "Scope confirmed. Call chronicle_scan_next_file to start extraction.",
+					"total_obligations": run.TotalFiles,
 				}), nil
 			}
 			// User wants changes — keep in confirm_scope, they'll re-discover
 			return jsonResult(map[string]any{
 				"status":  "needs_change",
 				"message": "Update the manifest with chronicle_save_manifest, then re-run chronicle_discover_files.",
+			}), nil
+
+		case "phase1_review":
+			run, err := g.Store().GetScanRun(runID)
+			if err != nil {
+				return errorResult(fmt.Errorf("get scan run: %w", err)), nil
+			}
+			if run.Phase != "phase1_review" {
+				return errorResult(fmt.Errorf("scan run %d is in phase %q, expected phase1_review", runID, run.Phase)), nil
+			}
+			answerLower := strings.ToLower(answer)
+			if strings.Contains(answerLower, "re-review") || strings.Contains(answerLower, "retry") || strings.Contains(answerLower, "again") {
+				candidates, _ := g.ScanReviewCandidates(run.DomainKey, run.RevisionID)
+				for _, c := range candidates {
+					_, _ = g.Store().CreateObligation(run.RevisionID, run.DomainKey, "scan_file", c.FilePath, "phase1_review: "+c.Reason)
+				}
+				if err := g.Store().TransitionScanRun(runID, "phase1_extract", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to phase1_extract: %w", err)), nil
+				}
+				return jsonResult(map[string]any{
+					"status":             "re_review",
+					"message":            "Re-extract review candidates, then resolve again.",
+					"review_candidates":  len(candidates),
+				}), nil
+			}
+			if strings.Contains(answerLower, "proceed") || strings.Contains(answerLower, "yes") || strings.Contains(answerLower, "ok") || strings.Contains(answerLower, "confirm") || answer == "1" {
+				if err := g.Store().TransitionScanRun(runID, "endpoint_reconcile", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to endpoint_reconcile: %w", err)), nil
+				}
+				return jsonResult(map[string]any{
+					"status":  "confirmed",
+					"message": "Review gate passed. Call chronicle_scan_next_file for endpoint reconciliation.",
+				}), nil
+			}
+			return jsonResult(map[string]any{
+				"status":  "needs_answer",
+				"message": "Answer 'proceed' to continue or 're-review files' to re-extract flagged files.",
+			}), nil
+
+		case "phase1_summary":
+			run, err := g.Store().GetScanRun(runID)
+			if err != nil {
+				return errorResult(fmt.Errorf("get scan run: %w", err)), nil
+			}
+			answerLower := strings.ToLower(answer)
+			if strings.Contains(answerLower, "skip") {
+				if err := g.Store().CompleteScanRun(runID); err != nil {
+					return errorResult(fmt.Errorf("complete scan run: %w", err)), nil
+				}
+				return jsonResult(map[string]any{
+					"status":  "skipped",
+					"message": "Flow tracing skipped. Scan complete.",
+				}), nil
+			}
+			if strings.Contains(answerLower, "yes") || strings.Contains(answerLower, "ok") || strings.Contains(answerLower, "confirm") || answer == "1" {
+				if run.Phase != "phase2_confirm" {
+					return errorResult(fmt.Errorf("scan run %d is in phase %q, expected phase2_confirm", runID, run.Phase)), nil
+				}
+				if err := g.Store().TransitionScanRun(runID, "phase2_extract", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to phase2_extract: %w", err)), nil
+				}
+				return jsonResult(map[string]any{
+					"status":  "confirmed",
+					"message": "Flow tracing confirmed. Call chronicle_scan_next_file to trace flows.",
+				}), nil
+			}
+			return jsonResult(map[string]any{
+				"status":  "needs_answer",
+				"message": "Answer 'yes' to trace flows or 'skip flows' to finish without phase 2.",
 			}), nil
 
 		default:
@@ -828,56 +920,32 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("file_path, status, revision_id, and domain are required")), nil
 		}
 
-		// Voting mode (vote_group set): write JSON file, no DB write
-		// Normal mode: write directly to DB
+		// Both voting and normal mode: write to DB.
+		// In voting mode, vote_group + vote_index are stored so mergeVotedExtractions
+		// can combine them during resolve.
+		var id int64
+		var err error
 		if voteGroup != "" {
-			rootDir, _ := os.Getwd()
-			tmpDir := filepath.Join(rootDir, ".depbot", "tmp")
-			os.MkdirAll(tmpDir, 0755)
-
-			extraction := map[string]any{
-				"file_path":   filePath,
-				"status":      status,
-				"from_type":   fromType,
-				"facts":       factsJSON,
-				"error":       errorMsg,
-				"revision_id": revisionID,
-				"domain":      domain,
-				"vote_group":  voteGroup,
-				"vote_index":  voteIndex,
-			}
-			jsonBytes, _ := json.Marshal(extraction)
-
-			safeName := strings.ReplaceAll(strings.ReplaceAll(filePath, "/", "_"), "\\", "_")
-			safeName = fmt.Sprintf("%s.vote%d", safeName, voteIndex)
-			outPath := filepath.Join(tmpDir, safeName+".json")
-			if err := os.WriteFile(outPath, jsonBytes, 0644); err != nil {
-				return errorResult(fmt.Errorf("write extraction file: %w", err)), nil
-			}
-
-			if obligationID > 0 {
-				_ = g.Store().SatisfyObligationByID(obligationID)
-			}
-
-			return jsonResult(map[string]any{
-				"file":      outPath,
-				"file_path": filePath,
-				"status":    status,
-			}), nil
+			id, err = g.SaveFileExtractionWithVote(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg, "llm_vote", voteGroup, voteIndex)
+		} else {
+			id, err = g.SaveFileExtraction(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg)
 		}
-
-		// Normal mode: write to DB directly
-		id, err := g.SaveFileExtraction(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg)
 		if err != nil {
 			return errorResult(err), nil
 		}
 
 		// Satisfy obligations + update progress
 		_ = g.SatisfyFileObligation(revisionID, filePath)
-		_ = g.Store().SatisfyObligation(revisionID, "scan_file", filePath)
-		_ = g.Store().SatisfyObligation(revisionID, "trace_flow", filePath)
-		if obligationID > 0 {
-			_ = g.Store().SatisfyObligationByID(obligationID)
+		if voteGroup != "" {
+			if obligationID > 0 {
+				_ = g.Store().SatisfyObligationByID(obligationID)
+			}
+		} else {
+			_ = g.Store().SatisfyObligation(revisionID, "scan_file", filePath)
+			_ = g.Store().SatisfyObligation(revisionID, "trace_flow", filePath)
+			if obligationID > 0 {
+				_ = g.Store().SatisfyObligationByID(obligationID)
+			}
 		}
 		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
 			g.Store().IncrementScanRunExtracted(run.RunID)
@@ -900,6 +968,7 @@ func resolveExtractionsTool() mcp.Tool {
 		mcp.WithDescription("Resolve all pending file extractions into graph nodes, edges, and evidence. Call after all scan agents have reported their findings. MCP builds the graph from collected facts — deduplicates entities, resolves cross-file references, creates evidence with assertions. Returns what was created and what needs review."),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithBoolean("allow_degraded", mcp.Description("If true, resolve when each open file has at least one extraction (marks remaining obligations skipped). Interactive scans only.")),
 	)
 }
 
@@ -1021,7 +1090,8 @@ func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
 		}
 
-		result, err := g.ResolveExtractions(domain, revisionID)
+		allowDegraded := boolParam(args, "allow_degraded")
+		result, err := g.ResolveExtractionsWithOptions(domain, revisionID, graph.ResolveOptions{AllowDegraded: allowDegraded})
 		if err != nil {
 			return errorResult(err), nil
 		}
@@ -1030,13 +1100,24 @@ func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
 			switch run.Phase {
 			case "phase1_resolve":
-				g.Store().SetScanRunResolved(run.RunID, result.NodesCreated+result.EdgesCreated)
-				g.Store().TransitionScanRun(run.RunID, "endpoint_reconcile", 0)
+				resolvedCount := result.ExtractionsResolved
+				if resolvedCount == 0 {
+					if n, err := g.CountResolvedExtractions(revisionID, domain); err == nil {
+						resolvedCount = n
+					}
+				}
+				_ = g.Store().SetScanRunResolved(run.RunID, resolvedCount)
+				if err := g.Store().TransitionScanRun(run.RunID, "phase1_review", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to phase1_review: %w", err)), nil
+				}
 			case "endpoint_reconcile":
-				// After reconciliation, proceed to phase 2
-				g.Store().TransitionScanRun(run.RunID, "phase2_select", 0)
+				if err := g.Store().TransitionScanRun(run.RunID, "phase2_select", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to phase2_select: %w", err)), nil
+				}
 			case "phase2_resolve":
-				g.Store().CompleteScanRun(run.RunID)
+				if err := g.Store().CompleteScanRun(run.RunID); err != nil {
+					return errorResult(fmt.Errorf("complete scan run: %w", err)), nil
+				}
 			}
 		}
 
@@ -1585,22 +1666,52 @@ func instructionPacksTool() mcp.Tool {
 	)
 }
 
-func instructionPacksHandler() server.ToolHandlerFunc {
+func instructionPacksHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		packs := prompts.AllPacks()
 		var result []map[string]any
-		for _, p := range packs {
-			entry := map[string]any{
+
+		// Core packs (always loaded — no match section needed)
+		for _, p := range prompts.AllPacks() {
+			result = append(result, map[string]any{
 				"id":          p.ID,
-				"type":        p.Type,
+				"type":        "core",
 				"description": p.Description,
-				"always_load": p.AlwaysLoad,
+				"always_load": true,
+			})
+		}
+
+		// Built-in technology packs — include match sections for agent decision
+		for _, tp := range prompts.ListBuiltinTechPacks() {
+			entry := map[string]any{
+				"id":     tp.ID,
+				"type":   "builtin",
+				"source": "builtin",
 			}
-			if len(p.Triggers.Extensions) > 0 || len(p.Triggers.Imports) > 0 || len(p.Triggers.Decorators) > 0 {
-				entry["triggers"] = p.Triggers
+			if tp.Match != "" {
+				entry["match"] = tp.Match
 			}
 			result = append(result, entry)
 		}
+
+		// Project-level packs from .depbot/packs/
+		if g != nil {
+			packIDs, _ := g.Store().ListPackFiles()
+			for _, slug := range packIDs {
+				entry := map[string]any{
+					"id":     slug,
+					"type":   "project",
+					"source": ".depbot/packs/",
+				}
+				// Try to extract match section from project pack
+				if content, err := g.Store().LoadPackFile(slug); err == nil {
+					if match := prompts.ExtractMatchSection(content); match != "" {
+						entry["match"] = match
+					}
+				}
+				result = append(result, entry)
+			}
+		}
+
 		return jsonResult(result), nil
 	}
 }
@@ -1629,7 +1740,7 @@ func getInstructionPackHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}), nil
 		}
 
-		// Check built-in packs
+		// Check core packs
 		pack, ok := prompts.GetPack(id)
 		if ok {
 			return jsonResult(map[string]any{
@@ -1639,14 +1750,39 @@ func getInstructionPackHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}), nil
 		}
 
-		// Check custom packs stored in settings
-		custom, err := g.Store().GetSetting("custom_pack_" + id)
-		if err == nil && custom != "" {
+		// 1. Project-level packs (.depbot/packs/) — highest priority
+		if g != nil {
+			content, err := g.Store().LoadPackFile(id)
+			if err == nil && content != "" {
+				return jsonResult(map[string]any{
+					"id":      id,
+					"type":    "project",
+					"source":  "project (.depbot/packs/)",
+					"content": content,
+				}), nil
+			}
+		}
+
+		// 2. Built-in technology packs — fallback defaults
+		if content, ok := prompts.GetTechPackContent(id); ok {
 			return jsonResult(map[string]any{
 				"id":      id,
-				"type":    "custom",
-				"content": custom,
+				"type":    "builtin",
+				"content": content,
 			}), nil
+		}
+
+		// 3. Legacy: check custom packs in settings table (migration compat)
+		if g != nil {
+			custom, err := g.Store().GetSetting("custom_pack_" + id)
+			if err == nil && custom != "" {
+				return jsonResult(map[string]any{
+					"id":      id,
+					"type":    "custom",
+					"content": custom,
+					"hint":    "This pack is stored in the database. Re-save it to migrate to .depbot/packs/",
+				}), nil
+			}
 		}
 
 		return mcp.NewToolResultText(`{"error":"unknown instruction pack: ` + id + `"}`), nil
@@ -1675,30 +1811,31 @@ func saveCustomPackHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Validate ID
-		if idErr := prompts.ValidateCustomPackID(id); idErr != "" {
+		if idErr := prompts.ValidatePackID(id); idErr != "" {
 			return jsonResult(map[string]any{"error": idErr}), nil
 		}
 
-		// Validate: custom packs must not introduce unknown fact kinds
+		// Validate: packs must not introduce unknown fact kinds
 		invalidKinds := prompts.ValidateCustomPack(content)
 		if len(invalidKinds) > 0 {
 			return jsonResult(map[string]any{
-				"error":         "custom pack introduces unknown fact kinds",
+				"error":         "pack introduces unknown fact kinds",
 				"invalid_kinds": invalidKinds,
 				"hint":          "Only use allowed kinds: endpoint, injects, provides, calls_service, calls_endpoint, uses_model, http_call, model, enum, model_relation, produces, consumes, import",
 			}), nil
 		}
 
-		// Save to settings
-		err := g.Store().SetSetting("custom_pack_"+id, content)
+		// Save to .depbot/packs/{slug}.md
+		err := g.Store().SavePackFile(id, content)
 		if err != nil {
 			return mcp.NewToolResultText(`{"error":"failed to save: ` + err.Error() + `"}`), nil
 		}
 
 		return jsonResult(map[string]any{
-			"status": "saved",
-			"id":     id,
-			"hint":   "Add '" + id + "' to instruction_packs in the manifest to load it during scans",
+			"status":  "saved",
+			"id":      id,
+			"path":    g.Store().PacksDir(),
+			"hint":    "Pack saved to .depbot/packs/. Add '" + id + "' to manifest tech list to load it during scans.",
 		}), nil
 	}
 }
@@ -1815,13 +1952,14 @@ func scanPoolStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("no active scan run for domain %s", domain)), nil
 		}
 
-		status, err := g.Store().ObligationPoolStatus(run.RevisionID, "scan_file")
+		scanStatus, err := g.BuildScanRunStatus(run, "scan_file")
 		if err != nil {
 			return errorResult(err), nil
 		}
+		status := scanStatus.Obligations
 
-		batchSize := 8
-		maxWorkers := 5
+		batchSize := graph.DefaultBatchSize
+		maxWorkers := graph.MaxSpawnWorkers
 		spawnCount := (status.ClaimableNow + batchSize - 1) / batchSize
 		if spawnCount > maxWorkers {
 			spawnCount = maxWorkers
@@ -1830,38 +1968,41 @@ func scanPoolStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 			spawnCount = 0
 		}
 
-		// Count extractions and parent facts
 		allObligations, _ := g.Store().ListAllObligations(run.RevisionID)
-		totalObligations := len(allObligations)
-		extractionCount := 0
 		parentFactCount := 0
 		exts, _ := g.Store().ListExtractions(run.RevisionID, domain)
 		for _, ext := range exts {
-			extractionCount++
 			if strings.Contains(ext.FactsJSON, `"parent"`) {
 				parentFactCount++
 			}
 		}
 
-		readyToResolve := status.ClaimableNow == 0 && status.InProgress == 0 && status.Failed == 0
-
 		return jsonResult(map[string]any{
-			"phase":              run.Phase,
-			"remaining_total":    status.RemainingTotal,
-			"claimable_now":      status.ClaimableNow,
-			"in_progress":        status.InProgress,
-			"completed":          status.Completed,
-			"failed":             status.Failed,
-			"expired":            status.Expired,
-			"spawn_count":        spawnCount,
-			"batch_size":         batchSize,
-			"votes_needed":       run.VotesNeeded,
-			"scan_run_id":        run.RunID,
-			"revision_id":        run.RevisionID,
-			"total_obligations":  totalObligations,
-			"extractions":        extractionCount,
-			"parent_facts":       parentFactCount,
-			"ready_to_resolve":   readyToResolve,
+			"phase":                  run.Phase,
+			"scan_mode":              scanStatus.ScanMode,
+			"remaining_total":        status.RemainingTotal,
+			"claimable_now":          status.ClaimableNow,
+			"in_progress":            status.InProgress,
+			"completed":              status.Completed,
+			"failed":                 status.Failed,
+			"expired":                status.Expired,
+			"oldest_in_progress_sec": status.OldestInProgressSec,
+			"claim_ttl_minutes":      status.ClaimTTLMinutes,
+			"spawn_count":            spawnCount,
+			"batch_size":             batchSize,
+			"max_wave_limit":         graph.ServerMaxWave,
+			"votes_needed":           run.VotesNeeded,
+			"scan_run_id":            run.RunID,
+			"revision_id":            run.RevisionID,
+			"total_obligations":      len(allObligations),
+			"extractions":            scanStatus.Extractions,
+			"graph":                  scanStatus.Graph,
+			"quality_warnings":       scanStatus.QualityWarnings,
+			"review_candidates":      scanStatus.ReviewCandidates,
+			"parent_facts":           parentFactCount,
+			"resolved_extractions":   run.Resolved,
+			"ready_to_resolve":       scanStatus.ReadyToResolve,
+			"wave_complete":          scanStatus.WaveComplete,
 		}), nil
 	}
 }
@@ -2177,19 +2318,44 @@ func checkLanguageHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
+// chronicle_mcp_identity — distinctive MCP build fingerprint
+// ---------------------------------------------------------------------------
+
+func mcpIdentityTool() mcp.Tool {
+	return mcp.NewTool("chronicle_mcp_identity",
+		mcp.WithDescription("Return the running Chronicle MCP server identity: release codename, capability fingerprint, and scan-contract flags. Call before every scan to verify the MCP binary is current — not just semver."),
+	)
+}
+
+func mcpIdentityHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		version.StampBuildTime()
+		return jsonResult(version.IdentityMap()), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
 // chronicle_command — unified command executor
 // ---------------------------------------------------------------------------
 
 func commandTool() mcp.Tool {
 	return mcp.NewTool("chronicle_command",
-		mcp.WithDescription("Execute a Chronicle command. Available commands: scan, data, language, impact, deps, path, services, status, help. The user may type '/chronicle-scan' or 'chronicle scan' — call this tool with the command name."),
-		mcp.WithString("command", mcp.Required(), mcp.Description("Command name: scan, data, language, impact, deps, path, services, status, help")),
+		mcp.WithDescription("Execute a Chronicle command. Available commands: scan, data, language, impact, deps, path, services, status, version, help. The user may type '/chronicle-scan' or 'chronicle scan' — call this tool with the command name."),
+		mcp.WithString("command", mcp.Required(), mcp.Description("Command name: scan, data, language, impact, deps, path, services, status, version, help")),
 	)
 }
 
 func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		cmd := strParam(req.GetArguments(), "command")
+
+		if cmd == "version" || cmd == "mcp" || cmd == "mcp-version" || cmd == "mcp_version" {
+			version.StampBuildTime()
+			payload := version.IdentityMap()
+			payload["command"] = "version"
+			payload["message"] = "Show the banner to the user. Compare release_codename and fingerprint before scanning."
+			return jsonResult(payload), nil
+		}
 
 		// Check for custom override in project settings
 		instructions := ""

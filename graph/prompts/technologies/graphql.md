@@ -1,5 +1,11 @@
 # GRAPHQL EXTRACTION RULES
 
+## Match
+Load this pack when:
+- .graphql or .gql schema files exist in the project
+- Files import from @nestjs/graphql, apollo-server, @apollo/server, type-graphql
+- Files use decorators: @Query, @Mutation, @Subscription, @Resolver, @ResolveField
+
 Apply when the file uses GraphQL resolver decorators or schema definitions.
 
 ## Resolver methods

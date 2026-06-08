@@ -2,8 +2,9 @@
 // Used by: CLI, MCP server, npm package (synced by CI), debug logger, git tags.
 package version
 
-const Version = "0.9.3"
+const Version = "0.10.0"
 
 // BuildHash is set at compile time via -ldflags.
-// go build -ldflags "-X github.com/alexdx2/chronicle-core/version.BuildHash=$(git rev-parse --short HEAD)"
+// Install with: go install -ldflags "-X github.com/alexdx2/chronicle-core/version.BuildHash=$(git rev-parse --short HEAD)" ./cmd/chronicle/
+// Or simply: make install
 var BuildHash = "dev"

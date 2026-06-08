@@ -10,6 +10,7 @@
 *.exe
 tmp/
 dist/
+npm/bin/chronicle
 
 # Config directories
 .chronicle/
@@ -32,3 +33,5 @@ fixtures/**/CLAUDE.md
 e2e/results/
 docs/superpowers/
 .depbot/tmp/
+.depbot/scan-work/
+.depbot/scan-outbox/

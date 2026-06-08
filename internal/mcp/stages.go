@@ -3,6 +3,8 @@ package mcp
 import (
 	"fmt"
 	"strings"
+
+	"github.com/alexdx2/chronicle-core/version"
 )
 
 // ScanStage represents one step in the scan pipeline.
@@ -30,34 +32,40 @@ var scanStages = []ScanStage{
 		ID:   "discover",
 		Name: "Discovery",
 		Type: "action",
-		Instruction: `Discover the workspace STRUCTURE first, then detect technologies.
+		Instruction: `Discover the workspace by reading the full file tree.
 
-  STEP 1 — Structure (do this FIRST):
-  a. Call chronicle_file_groups to see directory tree with file counts.
-  b. Identify project boundaries — which directories are deployable services,
-     libraries, packages, or infrastructure config? Look for:
-     - Directories with their own build/dependency files
-     - Directories with source roots (src/, app/, lib/)
-     - Directories that are build output, dependencies, generated, or irrelevant
-  c. Read 2-3 source files from EACH detected project to understand what it does.
+  STEP 1 — Read the tree:
+  a. Call chronicle_file_groups — returns EVERY directory with ALL filenames.
+  b. Study the tree. From filenames, extensions, and directory structure alone you can identify:
+     - Project boundaries (directories with build/dependency files)
+     - Languages and frameworks (file extensions, config files, directory conventions)
+     - Infrastructure (docker-compose, deployment manifests, connection configs)
+     - What to exclude (node_modules, build output, generated code, .depbot/)
+  c. Read a few key files to confirm what you inferred — build files, entry points,
+     config files. Focus on files that reveal dependencies and architecture.
 
-  STEP 2 — Technology detection (after structure is known):
-  a. For each detected project, identify language, framework, and dependencies
-     from build files and source code.
-  b. Check for infrastructure config files (docker-compose, deployment manifests, etc.)
-     to discover databases, brokers, caches, queues.
-  c. Read source files to find infrastructure connections the config files missed
-     (client libraries, connection strings, SDK imports).
-  d. Call chronicle_instruction_packs to see which extraction packs are available.
+  STEP 2 — Build tech list:
+  Read each project's dependency file (package.json dependencies, .csproj PackageReference,
+  go.mod require, requirements.txt, etc.)
+  From these, build a flat list of architectural technologies — things that define how
+  code is structured, how services communicate, how data is stored.
+  Each technology is a SEPARATE entry. Do not group them.
+  Wrong: "ASP.NET Core / EF Core / SignalR / Kafka → dotnet"
+  Right: "aspnet", "efcore", "signalr", "kafka" — each checked independently.
 
-  STEP 3 — Show discovery to user:
+  STEP 3 — Match instruction packs:
+  a. Call chronicle_instruction_packs — returns ALL packs with "match" sections.
+  b. For EACH technology in your tech list, check if any pack's match criteria fits.
+
+  STEP 4 — Show discovery to user:
     Workspace: [single project / monorepo / polyrepo]
     Projects found:
-      1. [name] — [path] — [language/framework] — [role: backend/frontend/library/etc]
+      1. [name] — [path] — [language/framework] — [role]
       2. ...
-    Infrastructure detected:
-      - [name] ([type]) — evidence: [where you found it]
-    External systems: [any external API calls detected]
+    Tech list: [every technology from step 2]
+    Pack coverage:
+      ✅ [tech] → [pack_id]
+      ❌ [tech] → no pack
     Files: [total] ([excluded] excluded)`,
 	},
 
@@ -66,19 +74,16 @@ var scanStages = []ScanStage{
 		ID:   "manifest",
 		Name: "Manifest confirmation",
 		Type: "checkpoint",
-		Instruction: `Interview the user about the manifest. Ask about anything you're unsure of:
+		Instruction: `Show the manifest draft and ask ONE question.
 
-  1. "Did I find all services/projects correctly?" [show list]
-  2. "Any infrastructure I missed?" [show what you found with evidence]
-  3. "Any external systems this project calls?"
-  4. "Which areas should I scan?" Present 2-3 scope options:
-     Each: [Letter]. [Name] — ~X files | Includes: [dirs] | Enables: [what questions]
-  5. "What domain name should I use?" (default: project name)
+  Present your discovery as a compact summary — projects, infra, scope, domain name.
+  Pick the best scope yourself (recommend it, don't list options).
 
-  Show the complete manifest draft and ask: "Anything to add or change?"
+  Then ask exactly ONE thing: "Anything to add or change?"
 
+  The user will either approve or tell you what's wrong.
   Do NOT save the manifest until the user approves.
-  After approval, proceed immediately — no "Continue?" confirmation.`,
+  After approval, proceed immediately.`,
 	},
 
 	// ─── Checkpoint: Packs ───
@@ -86,14 +91,18 @@ var scanStages = []ScanStage{
 		ID:   "packs",
 		Name: "Instruction packs",
 		Type: "checkpoint",
-		Instruction: `Show which instruction packs matched the detected technologies.
+		Instruction: `Show the pack coverage table from discovery (the ✅/❌ list).
 
-  For each detected technology, show: ✅ pack available or ❌ no pack.
+  If ANY ❌ gaps exist:
+    "These technologies have no pack: [list].
+    Without packs, agents won't recognize [tech]-specific patterns — edges WILL be missed.
+    Create packs for: [list]? (or skip — lower quality)"
 
-  If gaps exist: "I can generate a custom pack for [tech]. Generate it? or skip?"
-  If no gaps: "All technologies covered. Proceed?"
+    Do NOT proceed until the user says "create" or "skip."
 
-  After user chooses, proceed immediately.`,
+  If all ✅: "All technologies covered."
+
+  STOP HERE. Do not show scan quality options in this message.`,
 	},
 
 	// ─── Create missing packs ───
@@ -106,11 +115,12 @@ var scanStages = []ScanStage{
   Each agent:
     1. Calls chronicle_get_instruction_pack(id="guide/pack_authoring")
     2. Reads 3-5 representative project files
-    3. Writes a pack mapping patterns to core fact kinds
-    4. Calls chronicle_save_custom_pack(id="custom/<tech>", content=<pack>)
+    3. Writes a pack with a "## Match" section + pattern→fact mappings
+    4. Calls chronicle_save_custom_pack(id="<tech-name>", content=<pack>)
+       The pack is saved to .depbot/packs/<tech-name>.md
     5. Reports the pack ID
   Skip this step if no packs are missing.`,
-		AfterAgents: `Add created pack IDs to instruction_packs in the manifest.`,
+		AfterAgents: `Add created pack IDs to tech list in the manifest.`,
 	},
 
 	// ─── Checkpoint: Scan quality ───
@@ -118,13 +128,18 @@ var scanStages = []ScanStage{
 		ID:   "scan_mode",
 		Name: "Scan quality",
 		Type: "checkpoint",
-		Instruction: `Show scan profiles:
+		Instruction: `Present scan profiles — you choose layout (table, cards, etc.). Artifact-pool only.
 
-  A. Fast — 1 pass per file, fast model | B. Balanced — 1 pass, strong model ← RECOMMENDED
-  C. Voting — 3 passes per file, fast model | D. Maximum — 3 passes, strong model
+  Profiles (passes × model cost):
+  A. Fast — 1 touch, cheap/fast model ← RECOMMENDED
+  B. Balanced — 1 touch, expensive/strong model
+  C. Voting — 3 touches, cheap/fast model
+  D. Maximum — 3 touches, expensive/strong model
 
-  Show estimated file reads for each. Ask: "Choose A/B/C/D."
-  After user chooses, proceed immediately.`,
+  Each touch = one independent read of the same file; multiple touches merge at resolve.
+  Show estimated file reads (files × touches). Recommend one option with a short reason.
+  If the user names a custom count (e.g. "5 touches cheap"), honor it.
+  Ask ONE question, then stop.`,
 	},
 
 	// ─── Finalize setup ───
@@ -140,66 +155,60 @@ var scanStages = []ScanStage{
      - infrastructure (with type and address)
      - instruction_packs list
   b. For each domain, call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
-  c. Call chronicle_discover_files(revision_id, votes_needed)
+  c. Call chronicle_discover_files(revision_id, votes_needed=<touches from scan_mode>)
+     A/B = 1, C/D = 3, or custom if user named a number
   d. Call chronicle_scan_next_file — it will return a CHECKPOINT. Call chronicle_scan_confirm.
-  e. Show: "Discovered X files. Starting scan."`,
+  e. Show: "Discovered X files, Y obligations (files × passes). Starting scan."`,
 	},
 
-	// ─── Phase 1: Extraction ───
+	// ─── Phase 1: Extraction (artifact-pool) ───
 	{
 		ID:         "phase1",
 		Name:       "Phase 1 — extraction",
 		Type:       "agents",
 		AgentModel: "fast",
-		Instruction: `Worker pool pattern — you are the pool manager, NOT a worker.
+		Instruction: `ARTIFACT POOL — you are the orchestrator. Subagents NEVER call Chronicle MCP.
 
-  LOOP:
+  ATOMIC WAVE CONTRACT (no new claims until wave is committed):
     1. Call chronicle_scan_pool_status(domain)
-       -> returns { claimable_now, in_progress, completed, spawn_count, batch_size, ... }
-    2. If claimable_now = 0 AND in_progress = 0: EXIT LOOP — all work done
-    3. If claimable_now = 0 AND in_progress > 0: wait 10 seconds, go to 1
-    4. Spawn spawn_count fast-model subagents in parallel
+    2. If wave_complete=true AND claimable_now=0 AND in_progress=0: EXIT LOOP
+    3. If in_progress>0 and oldest_in_progress_sec > claim_ttl_minutes*60: call chronicle_scan_mark_failed on stuck IDs OR wait 10s
+    4. Call chronicle_scan_checkout_batch(domain, limit=spawn_count*batch_size) ONCE for this wave
+       Response is file-backed: read items_path (not inline items). max_wave_limit caps oversized batches.
+    5. Spawn spawn_count subagents using the model from scan_mode (fast or strong) — disjoint batches
 
-    Each agent (ONE batch, then DONE — agent must NOT loop):
-      a. Call chronicle_scan_next_file(domain)
-         -> returns { action: "extract_files", files_with_ast: [...] }
-         Each file includes: obligation_id, path, domain_key, ast_facts, vote_group, vote_index
-      b. For each file in the batch:
-         - Read the file
-         - Extract facts following the fact_schema
-         - Call chronicle_file_extracted with:
-           obligation_id, file_path, domain, revision_id, status, facts,
-           vote_group, vote_index (pass exactly what scan_next_file returned)
-      c. Agent is DONE — do NOT call scan_next_file again, do NOT loop
+    SUBAGENT PROMPT (NO MCP — write JSON only):
+      - Read fact_schema from fact_schema_path in checkout response (do NOT require inline fact_schema)
+      - Read items from items_path in checkout response
+      - Each item lists file_path, obligation_id, vote_group, vote_index
+      - If deterministic_candidates_path is set, read candidates and merge into facts (accept high-confidence hints)
+      - outbox_dir from checkout response
+      - For EACH item, write ONE JSON artifact:
+          { file_path, status, from_type, facts: [...], obligation_id, revision_id, domain,
+            vote_group, vote_index }
+        facts MUST be a JSON array (per fact_schema.md), NOT a quoted string.
+        Filename: path/with/slashes → path__with__slashes.json (append .vN before .json when vote_index>1)
+      - Subagent is DONE after writing artifacts — must NOT loop, must NOT call MCP
 
-    5. Wait for ALL agents to finish
-    6. Go back to step 1
+    6. Wait for ALL subagents to finish
+    7. Call chronicle_commit_scan_outbox(domain, revision_id) — orchestrator single-writer commit
+    8. Verify wave_complete=true in chronicle_scan_pool_status before starting next wave
+    9. Go to step 1
 
-  CRITICAL — HIERARCHY facts (structural backbone of the graph):
-  Follow the fact_schema AND loaded instruction packs for extraction rules.
-  Pay special attention to these fact kinds — they build the graph structure:
-  1. "provides" — module/registration files must emit provides for every component they register.
-     Set from_type="module". Missing provides = missing CONTAINS edges.
-  2. "parent" — components should emit parent fact pointing to their owning module/container.
-     Only emit when evidence is clear (declared/registered, not just imported/used).
-  3. "declares_service" — service entry points must emit service declaration.
+  Fact kinds that build the graph backbone:
+  - "provides" from @Module files (from_type="module")
+  - "parent" when ownership is clear
+  - "declares_service" for service entry points
 
-  RATE LIMITS: If 429/overloaded, wait 10s and retry. Stagger agent launches by 2-3s.
-
-  IMPORTANT:
-  - chronicle_resolve_extractions WILL REFUSE to run if obligations are incomplete.
-  - After each wave, check chronicle_scan_pool_status — it shows ready_to_resolve flag.
-  - If subagents fail, process remaining obligations yourself (you have MCP tools).
-  - Do NOT use chronicle_import_all as a fallback — it is for dev/debug only.
-  - The scan is complete ONLY when ready_to_resolve = true.`,
-		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
-  b. Call chronicle_scan_pool_status(domain) to check next phase
-  c. If action is "reconcile_endpoints" -> continue to endpoint reconciliation stage
-  d. If action is "trace_flow" -> skip reconciliation, continue to flow tracing
-  e. If action is "done" -> skip all remaining phases, finalize:
-     1. chronicle_snapshot_create(domain, revision_id)
-     2. chronicle_stale_mark(domain, revision_id)
-     CRITICAL: Use the SAME revision_id for snapshot and stale_mark.`,
+  If subagents fail: read files yourself, write outbox JSON, then commit_scan_outbox.
+  If MCP stops responding: STOP and tell the user to restart.
+  Do NOT use chronicle_import_all during scans.`,
+		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id, allow_degraded=true) if pool shows failed>0
+     else chronicle_resolve_extractions(domain, revision_id)
+  b. Call chronicle_scan_next_file — if checkpoint phase1_review, show quality_warnings + review_candidates
+     and call chronicle_scan_confirm(checkpoint_id='phase1_review', answer='proceed' or 're-review files')
+  c. If checkpoint phase1_summary (phase 2), show user and call chronicle_scan_confirm
+  d. Continue per scan_next_file action (endpoint_reconcile / trace_flow / done)`,
 	},
 
 	// ─── Phase 1.5: Endpoint reconciliation ───
@@ -213,7 +222,7 @@ var scanStages = []ScanStage{
   (e.g. client calls /users/usr-abc-123 but the endpoint is GET /users/:id).
 
   For each unmatched call, review the known_endpoints list and emit calls_endpoint facts
-  for matches you can identify. Then call chronicle_file_extracted with the facts.
+  for matches you can identify. Write outbox JSON artifacts, then commit_scan_outbox.
 
   Example — unmatched call:
     from: "UsersClient", path: "/v1/users/usr-abc-123", method: "GET"
@@ -238,10 +247,11 @@ var scanStages = []ScanStage{
 		Type:       "agents",
 		AgentModel: "strong",
 		Instruction: `scan_next_file returned "trace_flow" with flow_context.
-  Spawn strong-model subagents (2-3). Each agent loops:
-    1. Call chronicle_scan_next_file — each file includes a domain_key
-    2. If action is "trace_flow": read trigger file + files_to_read, use the file's domain_key, emit flow facts, go to 1
-    3. If action is NOT "trace_flow": STOP`,
+  Artifact-pool for flow tracing — orchestrator checks out, subagents write outbox JSON (no MCP):
+    1. chronicle_scan_checkout_batch(domain, obligation_type="trace_flow")
+    2. Spawn strong-model subagents with flow fact_schema + files_to_read
+    3. commit_scan_outbox after each wave
+    4. Repeat until no trace_flow obligations remain`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
   b. Call chronicle_scan_next_file(domain) — should return done=true
   c. Finalize the graph:
@@ -257,20 +267,25 @@ func BuildScanStagesInstruction() string {
 	var parts []string
 
 	parts = append(parts, `INTERACTION RULES:
-  - Present choices as compact A/B/C/D cards when applicable.
+  - Present choices as compact A/B/C/D cards when applicable; layout is up to you.
   - ALWAYS recommend one option with a concrete reason.
   - After user makes a choice, proceed immediately. NEVER ask "Continue?" or "A) Continue B) Change".
   - Discovery shows structure first, technologies second.
   - Manifest must be shown to user and approved before saving.
   - Do NOT save manifest, start scan, or resolve without user confirmation.
 
-WORKER POOL PATTERN — applies to ALL agent stages:
-  1. Call chronicle_scan_pool_status to get claimable count and spawn recommendation
-  2. Spawn recommended number of agents — each agent processes ONE batch, then dies
-  3. Wait for ALL agents to finish
-  4. Check pool status again — if claimable > 0, spawn more agents
-  5. When claimable = 0 and in_progress = 0: run the "AFTER AGENTS" steps
-  6. Then proceed to the next stage`)
+CRITICAL — ONE CHECKPOINT PER MESSAGE:
+  - Show ONE checkpoint, ask ONE question, then STOP. Say nothing else.
+  - Do NOT mention, preview, or show any later checkpoints.
+  - Do NOT combine checkpoint 1 + 2, or 2 + 3, etc.
+  - Wait for the user to respond before moving to the next stage.
+  - The user must never see two "CHECKPOINT" headers in a single message.
+
+ARTIFACT POOL PATTERN — default for ALL agent stages:
+  1. Orchestrator ONLY calls Chronicle MCP (checkout_batch, commit_scan_outbox, pool_status)
+  2. Subagents read source files and write JSON to .depbot/scan-outbox/{revision_id}/
+  3. One atomic wave: checkout → extract → commit → verify wave_complete before next wave
+  4. When ready_to_resolve=true: run the "AFTER AGENTS" steps`)
 
 	stepNum := 0
 	checkpointNum := 0
@@ -281,7 +296,7 @@ WORKER POOL PATTERN — applies to ALL agent stages:
 		switch stage.Type {
 		case "checkpoint":
 			checkpointNum++
-			section = fmt.Sprintf("── CHECKPOINT %d: %s ──\n  %s\n  ⛔ STOP. WAIT for user response.",
+			section = fmt.Sprintf("── CHECKPOINT %d: %s ──\n  %s\n  ⛔ STOP HERE. Show ONLY this checkpoint. Ask ONE question. Do NOT show anything below this line until the user responds.",
 				checkpointNum, stage.Name, stage.Instruction)
 
 		case "action":
@@ -346,7 +361,10 @@ type Checkpoint struct {
 func BuildScanCheckpointsInstruction() string { return BuildScanStagesInstruction() }
 
 func buildScanCommand() string {
-	return strings.Replace(CommandInstructions["scan"], "__STAGES__", BuildScanStagesInstruction(), 1)
+	s := CommandInstructions["scan"]
+	s = strings.Replace(s, "__MCP_PREFLIGHT__", version.ScanPreflightBlock(), 1)
+	s = strings.Replace(s, "__STAGES__", BuildScanStagesInstruction(), 1)
+	return s
 }
 
 func GetScanCheckpoints() []Checkpoint {

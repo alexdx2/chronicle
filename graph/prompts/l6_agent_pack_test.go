@@ -86,7 +86,7 @@ func TestL6_HaikuCreatedDjangoPack_HasRequiredSections(t *testing.T) {
 }
 
 func TestL6_HaikuCreatedDjangoPack_IDIsValid(t *testing.T) {
-	if err := ValidateCustomPackID("custom/django"); err != "" {
+	if err := ValidatePackID("custom/django"); err != "" {
 		t.Errorf("custom/django ID rejected: %s", err)
 	}
 }

@@ -4,7 +4,7 @@ package mcp
 // These are returned by chronicle_extraction_guide and documented in CLAUDE.md.
 
 func init() {
-	// Inject dynamically-built checkpoint flow into scan command
+	// Inject dynamically-built checkpoint flow + MCP preflight into scan command
 	CommandInstructions["scan"] = buildScanCommand()
 }
 
@@ -18,6 +18,7 @@ var UserCommands = map[string]string{
 	"flows":    "Analyze business use cases — what the system does, end-to-end processes",
 	"services": "Analyze service architecture — cross-service deps, API surface",
 	"status":   "Show current graph state — nodes, edges, layers, last scan",
+	"version":  "Show MCP server identity — codename, fingerprint, capabilities (call before scan)",
 	"update":  "Incremental update — rescan only changed files since last scan via git diff",
 	"verify":  "Verify low-confidence edges — find code evidence to confirm or reject inferred relationships",
 	"help":    "Show available Chronicle commands",
@@ -30,16 +31,21 @@ var UserCommands = map[string]string{
 var CommandInstructions = map[string]string{
 	"scan": `Scan this project using the chronicle_scan_next_file workflow.
 
-CRITICAL RULES:
-  ❌ NEVER call chronicle_import_all during a scan — use chronicle_file_extracted
-  ❌ NEVER read files and extract facts yourself — subagents do extraction
+__MCP_PREFLIGHT__
+
+CRITICAL RULES (artifact-pool — default):
+  ❌ NEVER call chronicle_import_all during a scan
+  ❌ NEVER let subagents call Chronicle MCP (no file_extracted from subagents)
+  ❌ NEVER start a new wave before commit_scan_outbox completes the current wave
   ❌ NEVER skip checkpoints — STOP and wait at each one
   ❌ NEVER save the manifest without user approval
-  ❌ NEVER guess the domain — the manifest defines multiple domains with scan.include/exclude patterns
-  ✅ The ONLY extraction workflow is: scan_next_file → read file → file_extracted → repeat
-  ✅ YOU are the orchestrator. Subagents do the extraction work.
-  ✅ Each file in the scan batch includes a domain_key field — use it when extracting facts
-  ✅ Pass the domain_key from each file's batch entry to tool calls — do NOT hardcode a single domain
+  ❌ NEVER guess the domain — use domain_key from checkout batches
+  ✅ Orchestrator workflow: scan_pool_status → scan_checkout_batch → spawn extractors → commit_scan_outbox → repeat
+  ✅ Subagents write JSON artifacts to .depbot/scan-outbox/{revision_id}/ only
+  ✅ YOU are the orchestrator. Subagents read files and write artifacts — you commit to MCP.
+  ✅ Use chronicle_resolve_extractions(allow_degraded=true) only when pool shows stuck/failed obligations with extractions present
+  ✅ Scan profiles: 1 or 3 touches × cheap (fast) or expensive (strong) model; custom N if user asks
+  ✅ When votes_needed>1, outbox artifacts must include vote_group and vote_index from checkout_batch
 
 CRITICAL — CONTAINS edges (structural backbone):
   ✅ Every module MUST have CONTAINS edges to its controllers and providers
@@ -117,6 +123,13 @@ __STAGES__`,
 3. Call chronicle_edge_list with type='CALLS_SERVICE' for cross-service deps
 4. Call chronicle_edge_list with type='CALLS_ENDPOINT' for specific endpoint deps
 5. Summarize the service dependency map`,
+
+	"version": `MCP server identity (call before every scan):
+1. Call chronicle_mcp_identity (preferred) or chronicle_command(command=version)
+2. Show the user the "banner" line verbatim
+3. Verify release_codename and fingerprint match the expected release in how_to_verify
+4. Verify all scan_contract values are true
+5. If stale → STOP. Tell user to rebuild chronicle MCP and restart Cursor`,
 
 	"status": `Graph status:
 1. Call chronicle_scan_status
@@ -379,6 +392,7 @@ User makes DIRECTORY-level decisions, not file-level.`,
 - /chronicle-topology — Federation domain topology map
 - /chronicle-connections — Cross-repo edge inventory
 - /chronicle-status — Current graph state
+- /chronicle-version — MCP identity (codename + fingerprint — call before scan)
 - /chronicle-help — This help
 
 Context management tools (called directly, not via commands):

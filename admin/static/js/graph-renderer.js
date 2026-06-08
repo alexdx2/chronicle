@@ -151,12 +151,11 @@ export class GraphRenderer {
         simNodeMap[sn.id] = sn;
       });
 
-      if (isStrict) {
-        gDag.edges().forEach(e => {
-          const ed = gDag.edge(e);
-          if (ed && ed.points) dagreEdgePoints[e.v + '->' + e.w] = ed.points;
-        });
-      }
+      // Always capture dagre edge routes (strict uses fresh layout; free/cached reuse positions).
+      gDag.edges().forEach(e => {
+        const ed = gDag.edge(e);
+        if (ed && ed.points) dagreEdgePoints[e.v + '->' + e.w] = ed.points;
+      });
     }
 
     simEdges = edges

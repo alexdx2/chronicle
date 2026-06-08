@@ -154,12 +154,12 @@ Do NOT use for TypeScript type annotations or DTO usage.
 {"kind":"declares_service","to":"order-api"}
 ```
 
-Use when you identify a deployable service/application boundary — from package.json `name`, build config, or entry point.
+ONLY emit from package/build manifest files (package.json, .csproj, go.mod, pom.xml, pyproject.toml).
+The `to` value = the package/application name from the manifest (e.g. "arena-api" from package.json name field).
 Each independently deployable unit should have exactly one `declares_service` fact.
-The resolver creates `service:service:{domain}:{name}` nodes in the service layer.
 
-DO NOT declare shared libraries, workspace roots, or packages without server entrypoints as services.
-A package name alone is NOT sufficient — require entrypoint/deployment evidence.
+DO NOT emit declares_service from controllers, services, modules, or any source code file.
+DO NOT emit declares_service for shared libraries or packages without server entrypoints.
 
 ## Events / messaging
 

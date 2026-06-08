@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -43,10 +44,26 @@ func openBrowser(url string) {
 func newMCPCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "mcp", Short: "MCP server"}
 
+	identityCmd := &cobra.Command{
+		Use:   "identity",
+		Short: "Print MCP server identity (codename + fingerprint)",
+		Run: func(cmd *cobra.Command, args []string) {
+			version.StampBuildTime()
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(version.IdentityMap())
+		},
+	}
+	cmd.AddCommand(identityCmd)
+
 	serveCmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start MCP server (stdio transport) with admin dashboard",
 		Run: func(cmd *cobra.Command, args []string) {
+			version.StampBuildTime()
+			id := version.Identity()
+			fmt.Fprintf(os.Stderr, "%s\n", id.Banner)
+
 			g := openGraph()
 			mcpserver.SetManifestPath(manifestPath)
 			mcpserver.SetGuideStore(g.Store())

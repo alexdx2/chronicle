@@ -1,5 +1,11 @@
 # NESTJS EXTRACTION RULES
 
+## Match
+Load this pack when:
+- package.json has @nestjs/* dependencies (@nestjs/common, @nestjs/core, etc.)
+- Files import from @nestjs/common, @nestjs/core, @nestjs/graphql, @nestjs/websockets
+- Files use decorators: @Controller, @Injectable, @Module, @Get, @Post, @Guard
+
 Apply when the project uses NestJS or the file uses NestJS decorators/imports.
 
 ## Service declaration (package.json)

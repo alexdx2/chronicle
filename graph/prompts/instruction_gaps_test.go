@@ -32,8 +32,8 @@ func TestDetectGaps_AllMissing(t *testing.T) {
 		t.Errorf("expected 4 gaps, got %d", len(gaps))
 	}
 	for _, g := range gaps {
-		if g.SuggestedAction != "create_custom_pack" {
-			t.Errorf("gap %s should suggest create_custom_pack, got %s", g.Tech, g.SuggestedAction)
+		if g.SuggestedAction != "create_pack" {
+			t.Errorf("gap %s should suggest create_pack, got %s", g.Tech, g.SuggestedAction)
 		}
 		if g.Reason == "" {
 			t.Errorf("gap %s should have a reason", g.Tech)
@@ -55,20 +55,15 @@ func TestDetectGaps_CaseInsensitive(t *testing.T) {
 	assertGapExists(t, gaps, "Django")
 }
 
-func TestDetectGaps_AliasesWork(t *testing.T) {
-	// "nest" should match "framework/nestjs" via matchByTech
+func TestDetectGaps_AliasesAreGaps(t *testing.T) {
+	// "nest" is NOT a canonical pack ID — agent uses match sections to find nestjs
 	gaps := DetectInstructionGaps([]string{"nest"})
-	// "nest" matches "framework/nestjs" because matchByTech splits "framework/nestjs" -> "nestjs"
-	// but "nest" != "nestjs", so this should be a gap
-	// This is by design — only exact tech name matches
 	assertGapExists(t, gaps, "nest")
 }
 
-func TestDetectGaps_JavascriptMatchesTypescript(t *testing.T) {
-	// "javascript" should match "language/typescript" pack because matchByTech("language/typescript", {"javascript": true})
-	// returns false — "typescript" != "javascript"
+func TestDetectGaps_JavascriptIsGap(t *testing.T) {
+	// "javascript" is NOT a canonical pack ID — agent uses match sections to find typescript
 	gaps := DetectInstructionGaps([]string{"javascript"})
-	// This should be a gap since pack ID is "language/typescript" not "language/javascript"
 	assertGapExists(t, gaps, "javascript")
 }
 
@@ -180,8 +175,8 @@ func TestCheckpointGapInfo_FormatsForAgent(t *testing.T) {
 	if !strings.Contains(gapText, "celery") {
 		t.Error("gap text should mention celery")
 	}
-	if !strings.Contains(gapText, "create_custom_pack") {
-		t.Error("gap text should suggest create_custom_pack")
+	if !strings.Contains(gapText, "create_pack") {
+		t.Error("gap text should suggest create_pack")
 	}
 	if strings.Contains(gapText, "nestjs") {
 		t.Error("gap text should NOT mention nestjs (it has a pack)")

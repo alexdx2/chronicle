@@ -88,9 +88,14 @@ function fallbackToBuild() {
       execSync(`git clone --depth 1 --branch v${VERSION} https://github.com/alexdx2/chronicle.git ${goSrcDir}`, { stdio: 'inherit' });
     }
 
-    // Build
+    // Build (embed git hash when building from a git checkout)
     console.log('Compiling...');
-    execSync(`go build -ldflags "-s -w" -o ${binaryPath} ./cmd/chronicle`, { cwd: goSrcDir, stdio: 'inherit' });
+    let buildHash = 'unknown';
+    try {
+      buildHash = execSync('git rev-parse --short HEAD', { cwd: goSrcDir, encoding: 'utf8' }).trim();
+    } catch (_) { /* shallow clone or export */ }
+    const ldflags = `-s -w -X github.com/alexdx2/chronicle-core/version.BuildHash=${buildHash}`;
+    execSync(`go build -ldflags "${ldflags}" -o ${binaryPath} ./cmd/chronicle`, { cwd: goSrcDir, stdio: 'inherit' });
 
     if (process.platform !== 'win32') {
       fs.chmodSync(binaryPath, 0o755);

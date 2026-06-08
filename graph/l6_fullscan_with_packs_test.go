@@ -112,7 +112,7 @@ func TestL6_FullScanWithCustomPacks(t *testing.T) {
 
 	for id, content := range customPacks {
 		// Validate ID
-		if idErr := prompts.ValidateCustomPackID(id); idErr != "" {
+		if idErr := prompts.ValidatePackID(id); idErr != "" {
 			t.Fatalf("bad pack ID %s: %s", id, idErr)
 		}
 

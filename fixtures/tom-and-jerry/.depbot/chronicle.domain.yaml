@@ -1,32 +1,54 @@
-version: "1"
 domains:
   tom-and-jerry:
-    name: Tom and Jerry
-    description: 4 NestJS microservices — battle arena with Tom, Jerry, and spectator stats
-    tech:
-      - typescript
-      - nestjs
-      - prisma
-    infrastructure:
-      - name: postgres
-        type: database
-      - name: kafka
-        type: broker
+    name: tom-and-jerry
+    description: Tom-and-Jerry battle system — 5 services + shared library, Kafka + HTTP + WebSocket.
     scan:
       include:
-        - "arena-api/src/**"
-        - "arena-api/prisma/**"
-        - "tom-api/src/**"
-        - "tom-api/prisma/**"
-        - "jerry-api/src/**"
-        - "jerry-api/prisma/**"
-        - "spectators-api/src/**"
-        - "shared/src/**"
+        - "arena-api/**"
+        - "tom-api/**"
+        - "jerry-api/**"
+        - "spectators-api/**"
+        - "scoreboard-api/**"
+        - "shared/**"
       exclude:
-        - "**/*.spec.ts"
-        - "**/*.test.ts"
+        - "**/*.json"
         - "**/node_modules/**"
-    instruction_packs:
-      - language/typescript
-      - framework/nestjs
-      - orm/prisma
+
+tech:
+  - nestjs
+  - typescript
+  - prisma
+  - kafka
+  - dotnet
+
+infrastructure:
+  - name: battle-bus
+    type: broker
+    address: "battle-result"
+
+services:
+  - key: arena-api
+    path: arena-api
+    role: Battle orchestrator — calls Tom & Jerry, produces battle-result, WS gateway
+  - key: tom-api
+    path: tom-api
+    role: Tom service
+  - key: jerry-api
+    path: jerry-api
+    role: Jerry service
+  - key: spectators-api
+    path: spectators-api
+    role: Spectator notifications — consumes battle-result
+  - key: scoreboard-api
+    path: scoreboard-api
+    role: Live scoreboard — consumes battle-result, SignalR hub
+  - key: shared
+    path: shared
+    role: Shared config / constants / interfaces
+
+instruction_packs:
+  - nestjs
+  - typescript
+  - prisma
+  - kafka
+  - dotnet

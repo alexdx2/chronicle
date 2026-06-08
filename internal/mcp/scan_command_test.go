@@ -30,11 +30,11 @@ func TestScanCommand_OrchestratorAfterAgents(t *testing.T) {
 		t.Errorf("expected at least 3 'AFTER ALL AGENTS FINISH' markers (phase1 + reconcile + phase2), got %d", afterCount)
 	}
 
-	// Must include resolve + check pattern in after-agents
+	// Must include resolve + scan_next_file handoff in after-agents
 	assertContains(t, cmd, "chronicle_resolve_extractions",
 		"after-agents must call resolve")
-	assertContains(t, cmd, "check next phase",
-		"after phase 1 must check next phase")
+	assertContains(t, cmd, "chronicle_scan_next_file",
+		"after phase 1 must call scan_next_file for next phase")
 }
 
 func TestScanCommand_DomainPassing(t *testing.T) {
@@ -111,12 +111,27 @@ func TestScanCommand_StructuredCheckpoints(t *testing.T) {
 	assertContains(t, cmd, "fast model", "checkpoint 3 must show fast model option")
 	assertContains(t, cmd, "strong model", "checkpoint 3 must show strong model option")
 	assertContains(t, cmd, "RECOMMENDED", "checkpoint 3 must recommend a profile")
+	assertContains(t, cmd, "3 touches", "checkpoint 3 must offer 3-touch preset")
+	assertContains(t, cmd, "Balanced", "checkpoint 3 must offer balanced 1-touch strong preset")
+	assertContains(t, cmd, "votes_needed", "finalize must pass votes_needed from user choice")
 }
 
 func TestScanCommand_OrchestratorPattern(t *testing.T) {
 	cmd := CommandInstructions["scan"]
-	assertContains(t, cmd, "WORKER POOL PATTERN",
-		"must explain the common pattern for all agent stages")
+	assertContains(t, cmd, "ARTIFACT POOL PATTERN",
+		"must explain the artifact-pool pattern for agent stages")
+	assertContains(t, cmd, "commit_scan_outbox",
+		"must document orchestrator commit step")
+}
+
+func TestScanCommand_HasMCPPreflight(t *testing.T) {
+	cmd := CommandInstructions["scan"]
+	assertContains(t, cmd, "chronicle_mcp_identity",
+		"scan must require MCP identity check before discovery")
+	assertContains(t, cmd, "release_codename",
+		"preflight must mention release_codename")
+	assertContains(t, cmd, "fingerprint",
+		"preflight must mention fingerprint")
 }
 
 // --- Helpers ---

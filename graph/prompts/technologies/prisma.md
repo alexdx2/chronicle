@@ -1,5 +1,11 @@
 # PRISMA EXTRACTION RULES
 
+## Match
+Load this pack when:
+- .prisma files exist in the project (prisma/schema.prisma)
+- package.json has @prisma/client dependency
+- Code references prisma client (this.prisma.*, prisma.*)
+
 Apply to `.prisma` files or files explicitly marked as Prisma schema.
 
 Extract every model and enum. This is critical — missing models = missing data layer.

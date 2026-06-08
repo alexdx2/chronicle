@@ -1,0 +1,11 @@
+domains:
+  tom-and-jerry:
+    name: Tom and Jerry
+    description: Cartoon battle microservices
+    scan:
+      include:
+        - "arena-api/**"
+        - "tom-api/**"
+        - "jerry-api/**"
+
+tech: [nestjs, kafka]

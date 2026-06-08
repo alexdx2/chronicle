@@ -1,6 +1,9 @@
 package store
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // ClaimedObligation is returned by ClaimObligations with both target and domain.
 type ClaimedObligation struct {
@@ -89,11 +92,13 @@ func (s *Store) ClaimObligations(revisionID int64, obligationType string, limit 
 		WHERE revision_id = ? AND obligation_type = ? AND status = 'open' AND attempt_count >= 5
 	`, revisionID, obligationType)
 
-	rows, err := s.db.Query(`
+	ttl := ClaimTTLMinutes()
+	rows, err := s.db.Query(fmt.Sprintf(`
 		UPDATE scan_obligations
-		SET claimed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-		    claim_expires_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+15 minutes'),
+		SET claimed_at = strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ','now'),
+		    claim_expires_at = strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ','now','+%d minutes'),
 		    attempt_count = attempt_count + 1
+`, ttl)+`
 		WHERE obligation_id IN (
 			WITH candidates AS (
 				SELECT obligation_id, vote_group,
@@ -187,12 +192,45 @@ func (s *Store) ListOpenObligations(revisionID int64) ([]ObligationRow, error) {
 
 // PoolStatus holds aggregated counts for scan obligation pool monitoring.
 type PoolStatus struct {
-	RemainingTotal int `json:"remaining_total"`
-	ClaimableNow   int `json:"claimable_now"`
-	InProgress     int `json:"in_progress"`
-	Completed      int `json:"completed"`
-	Failed         int `json:"failed"`
-	Expired        int `json:"expired"`
+	RemainingTotal       int `json:"remaining_total"`
+	ClaimableNow         int `json:"claimable_now"`
+	InProgress           int `json:"in_progress"`
+	Completed            int `json:"completed"`
+	Failed               int `json:"failed"`
+	Expired              int `json:"expired"`
+	OldestInProgressSec  int `json:"oldest_in_progress_sec"`
+	ClaimTTLMinutes      int `json:"claim_ttl_minutes"`
+}
+
+// MarkObligationFailed marks an open obligation as skipped and clears its claim.
+func (s *Store) MarkObligationFailed(obligationID int64, reason string) error {
+	_, err := s.db.Exec(`
+		UPDATE scan_obligations
+		SET status = 'skipped',
+		    defer_reason = ?,
+		    claimed_at = NULL,
+		    claim_expires_at = NULL,
+		    resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		WHERE obligation_id = ? AND status = 'open'
+	`, reason, obligationID)
+	if err != nil {
+		return fmt.Errorf("MarkObligationFailed: %w", err)
+	}
+	return nil
+}
+
+// RequeueObligation clears an active claim so the obligation becomes claimable again.
+func (s *Store) RequeueObligation(obligationID int64) error {
+	_, err := s.db.Exec(`
+		UPDATE scan_obligations
+		SET claimed_at = NULL,
+		    claim_expires_at = NULL
+		WHERE obligation_id = ? AND status = 'open'
+	`, obligationID)
+	if err != nil {
+		return fmt.Errorf("RequeueObligation: %w", err)
+	}
+	return nil
 }
 
 // ObligationPoolStatus returns aggregated counts of obligations by state.
@@ -234,7 +272,32 @@ func (s *Store) ObligationPoolStatus(revisionID int64, obligationType string) (*
 	if ex != nil {
 		ps.Expired = *ex
 	}
+	ps.ClaimTTLMinutes = ClaimTTLMinutes()
+	ps.OldestInProgressSec = s.oldestInProgressSeconds(revisionID, obligationType)
 	return &ps, nil
+}
+
+func (s *Store) oldestInProgressSeconds(revisionID int64, obligationType string) int {
+	var claimedAt string
+	err := s.db.QueryRow(`
+		SELECT MIN(claimed_at)
+		FROM scan_obligations
+		WHERE revision_id = ? AND obligation_type = ? AND status = 'open'
+		  AND claimed_at IS NOT NULL
+		  AND claim_expires_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now')
+	`, revisionID, obligationType).Scan(&claimedAt)
+	if err != nil || claimedAt == "" {
+		return 0
+	}
+	t, err := time.Parse("2006-01-02T15:04:05Z", claimedAt)
+	if err != nil {
+		return 0
+	}
+	sec := int(time.Since(t).Seconds())
+	if sec < 0 {
+		return 0
+	}
+	return sec
 }
 
 // ListAllObligations returns all obligations for a revision (any status).

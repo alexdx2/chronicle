@@ -1,5 +1,11 @@
 # TYPESCRIPT / JAVASCRIPT EXTRACTION HINTS
 
+## Match
+Load this pack when:
+- Files have extensions: .ts, .tsx, .js, .jsx, .mjs, .cjs
+- package.json exists in the project
+- tsconfig.json or jsconfig.json exists
+
 ## Receiver classification
 
 A method call is architectural ONLY if the receiver is:

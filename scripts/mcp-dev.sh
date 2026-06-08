@@ -11,7 +11,11 @@ DEPBOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$DEPBOT_DIR"
 BUILD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-go build -ldflags "-X github.com/alexdx2/chronicle-core/version.BuildHash=$BUILD_HASH" -o ./tmp/chronicle ./cmd/chronicle >/dev/null 2>&1
+if ! go build -ldflags "-X github.com/alexdx2/chronicle-core/version.BuildHash=$BUILD_HASH" -o ./tmp/chronicle ./cmd/chronicle; then
+  echo "chronicle MCP build failed" >&2
+  exit 1
+fi
+# mcp serve prints identity banner to stderr on startup (visible in Cursor MCP logs)
 
 # Resolve project directory
 PROJECT_DIR="${CHRONICLE_PROJECT_DIR:-$(pwd)}"
