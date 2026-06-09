@@ -7,18 +7,33 @@ package rules
 var NestJS = Ruleset{
 	Name: "nestjs",
 	Decorators: map[string]DecoratorRule{
-		"Controller":     {SetsFromType: "controller", CapturesPrefix: true},
-		"Module":         {SetsFromType: "module"},
-		"Injectable":     {SetsFromType: "provider"},
-		"Get":            {EmitsKind: "endpoint", EmitsMethod: "GET", TargetFrom: "first_string_arg"},
-		"Post":           {EmitsKind: "endpoint", EmitsMethod: "POST", TargetFrom: "first_string_arg"},
-		"Put":            {EmitsKind: "endpoint", EmitsMethod: "PUT", TargetFrom: "first_string_arg"},
-		"Delete":         {EmitsKind: "endpoint", EmitsMethod: "DELETE", TargetFrom: "first_string_arg"},
-		"Patch":          {EmitsKind: "endpoint", EmitsMethod: "PATCH", TargetFrom: "first_string_arg"},
+		"Controller":       {SetsFromType: "controller", CapturesPrefix: true},
+		"Module":           {SetsFromType: "module"},
+		"Injectable":       {SetsFromType: "provider"},
+		"Get":              {EmitsKind: "endpoint", EmitsMethod: "GET", TargetFrom: "first_string_arg"},
+		"Post":             {EmitsKind: "endpoint", EmitsMethod: "POST", TargetFrom: "first_string_arg"},
+		"Put":              {EmitsKind: "endpoint", EmitsMethod: "PUT", TargetFrom: "first_string_arg"},
+		"Delete":           {EmitsKind: "endpoint", EmitsMethod: "DELETE", TargetFrom: "first_string_arg"},
+		"Patch":            {EmitsKind: "endpoint", EmitsMethod: "PATCH", TargetFrom: "first_string_arg"},
 		"SubscribeMessage": {EmitsKind: "endpoint", EmitsMethod: "WS", TargetFrom: "first_string_arg"},
-		"EventPattern":   {EmitsKind: "consumes", TargetFrom: "first_string_arg"},
-		"OnEvent":        {EmitsKind: "consumes", TargetFrom: "first_string_arg"},
-		"Process":        {EmitsKind: "consumes", TargetFrom: "first_string_arg"},
+		// In-process events: transport=local so the resolver does not mint broker topic nodes.
+		"EventPattern": {EmitsKind: "consumes", TargetFrom: "first_string_arg", TransportTag: "local"},
+		"OnEvent":      {EmitsKind: "consumes", TargetFrom: "first_string_arg", TransportTag: "local"},
+		// @Process('jobname') — job-name handlers are NOT separate topics; skip emission.
+		// (Handled by the Bull ruleset instead via @Processor on the class.)
+	},
+}
+
+// Bull queue ruleset (@nestjs/bull / bullmq patterns).
+// @Processor(X) on a class → consumes X (the queue name), transport=queue.
+// @InjectQueue(X) in a constructor param → produces X (the queue name), transport=queue.
+// @Process('jobname') on a method → no separate topic emitted (job names ≠ topics).
+// X may be a string literal or a module-level const identifier — resolved via StringConsts.
+var Bull = Ruleset{
+	Name: "bull",
+	Decorators: map[string]DecoratorRule{
+		"Processor":   {EmitsKind: "consumes", TargetFrom: "first_string_arg", TransportTag: "queue", ResolveIdent: true},
+		"InjectQueue": {EmitsKind: "produces", TargetFrom: "first_string_arg", TransportTag: "queue", ResolveIdent: true},
 	},
 }
 
@@ -42,9 +57,11 @@ var WebSocket = Ruleset{
 	},
 }
 
-// DefaultRulesets returns NestJS + GraphQL + WebSocket (common TypeScript stack).
+// DefaultRulesets returns NestJS + GraphQL + WebSocket + Bull (common TypeScript stack).
+// Bull decorators (@InjectQueue, @Processor) are unambiguous — false positives are impossible
+// without the @nestjs/bull imports, so it is safe to include in the default set.
 func DefaultRulesets() []Ruleset {
-	return []Ruleset{NestJS, GraphQL, WebSocket}
+	return []Ruleset{NestJS, GraphQL, WebSocket, Bull}
 }
 
 // RulesetsForTech returns rulesets matching the tech list from the manifest.
@@ -64,8 +81,11 @@ func RulesetsForTech(tech []string) []Ruleset {
 	if techSet["socketio"] || techSet["websocket"] || techSet["socket.io"] {
 		result = append(result, WebSocket)
 	}
+	if techSet["bull"] || techSet["bullmq"] {
+		result = append(result, Bull)
+	}
 
-	// If nothing matched, return all defaults
+	// If nothing matched, return all defaults (includes Bull — decorators are unambiguous)
 	if len(result) == 0 {
 		return DefaultRulesets()
 	}

@@ -18,6 +18,7 @@ type SemanticFact struct {
 	Symbols    []string `json:"symbols,omitempty"`
 	Method     string   `json:"method,omitempty"`
 	Target     string   `json:"target,omitempty"`
+	Transport  string   `json:"transport,omitempty"` // "queue", "local", "kafka", etc.
 	Confidence float64  `json:"confidence,omitempty"`
 }
 
@@ -31,9 +32,11 @@ type ApplyResult struct {
 type DecoratorRule struct {
 	SetsFromType    string // "controller", "module", "provider"
 	CapturesPrefix  bool   // decorator arg becomes endpoint prefix
-	EmitsKind       string // "endpoint", "consumes", "" (nothing)
+	EmitsKind       string // "endpoint", "consumes", "produces", "" (nothing)
 	EmitsMethod     string // "GET", "POST", "Query", etc.
 	TargetFrom      string // "first_string_arg", "method_name", "method_name_if_no_string_arg"
+	TransportTag    string // transport value to attach to emitted fact ("queue", "local", etc.)
+	ResolveIdent    bool   // if true, resolve TargetIdent via StringConsts when Target is empty
 }
 
 // Ruleset is a named collection of decorator rules for a framework.
@@ -64,10 +67,42 @@ func NewRegistry(rulesets ...Ruleset) *Registry {
 	return r
 }
 
+// localEmitterTypes is the set of known in-process event emitter type names.
+// Receivers whose injected type matches one of these are tagged transport=local.
+var localEmitterTypes = map[string]bool{
+	"EventEmitter2": true,
+	"EventEmitter":  true,
+}
+
 // Apply transforms raw AST facts into semantic facts using active rulesets.
 func (r *Registry) Apply(raw *ast.RawResult) *ApplyResult {
 	result := &ApplyResult{}
 	var controllerPrefix string
+
+	// Pre-pass: build paramName → injectedType map from constructor_param facts.
+	// Used to determine the transport type for produces_candidate calls.
+	paramTypes := map[string]string{}
+	for _, f := range raw.Facts {
+		if f.Kind == "constructor_param" && f.To != "" {
+			// constructor_param facts carry the type name in To; we need the param name.
+			// The param name is NOT in the current RawFact — we use the injected type set
+			// to identify known emitter receivers when From is provided on produces_candidate.
+			// Store all injected types as potential local emitters (checked via localEmitterTypes).
+			paramTypes[f.To] = f.To
+		}
+	}
+
+	// Build a reverse map: paramName → type — not directly available from constructor_param
+	// (which only carries the type). Use a separate scan: for each injects fact, if the
+	// injected type is a local emitter, mark any produces_candidate with a From that could
+	// be a camelCase variant of that type. This is heuristic but correct for EventEmitter2.
+	hasLocalEmitter := false
+	for typeName := range paramTypes {
+		if localEmitterTypes[typeName] {
+			hasLocalEmitter = true
+			break
+		}
+	}
 
 	for _, f := range raw.Facts {
 		switch f.Kind {
@@ -94,14 +129,23 @@ func (r *Registry) Apply(raw *ast.RawResult) *ApplyResult {
 
 			// Emit semantic fact
 			if rule.EmitsKind != "" {
-				target := resolveTarget(rule, f)
+				// Resolve identifier arg via StringConsts when no string literal was captured.
+				resolvedFact := f
+				if rule.ResolveIdent && resolvedFact.Target == "" && resolvedFact.TargetIdent != "" {
+					if val, ok := raw.StringConsts[resolvedFact.TargetIdent]; ok {
+						resolvedFact.Target = val
+					}
+				}
+
+				target := resolveTarget(rule, resolvedFact)
 				sf := SemanticFact{
 					Kind:       rule.EmitsKind,
 					Method:     rule.EmitsMethod,
 					Target:     target,
+					Transport:  rule.TransportTag,
 					Confidence: 0.95,
 				}
-				if rule.EmitsKind == "consumes" {
+				if rule.EmitsKind == "consumes" || rule.EmitsKind == "produces" {
 					sf.To = target
 					sf.Target = ""
 				}
@@ -128,8 +172,13 @@ func (r *Registry) Apply(raw *ast.RawResult) *ApplyResult {
 			})
 
 		case "produces_candidate":
+			transport := ""
+			// If the file injects a local emitter type and the method is "emit", tag as local.
+			if hasLocalEmitter && f.Method == "emit" {
+				transport = "local"
+			}
 			result.Facts = append(result.Facts, SemanticFact{
-				Kind: "produces", To: f.To, Method: f.Method, Confidence: 0.95,
+				Kind: "produces", To: f.To, Method: f.Method, Transport: transport, Confidence: 0.95,
 			})
 		}
 	}

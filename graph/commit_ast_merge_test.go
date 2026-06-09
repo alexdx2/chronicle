@@ -142,6 +142,51 @@ func TestMergeASTFactsJSON_NonTSFile(t *testing.T) {
 	}
 }
 
+// TestMergeASTFacts_BullTransportField verifies that the Bull ruleset's transport field
+// passes through the full MergeASTFacts pipeline (AST → rules → JSON → map[string]any).
+func TestMergeASTFacts_BullTransportField(t *testing.T) {
+	root := repoRootFromCWD(t)
+	if root == "" {
+		t.Skip("could not locate repo root (.git)")
+	}
+
+	relPath := "fixtures/tom-and-jerry/arena-api/src/arena/battle.queue.ts"
+	fullPath := filepath.Join(root, relPath)
+	if _, err := os.Stat(fullPath); err != nil {
+		t.Skipf("fixture file absent: %s", fullPath)
+	}
+
+	orig, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir to repo root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	merged, _ := MergeASTFacts(relPath, nil, "", nil)
+
+	var foundProduces, foundConsumes bool
+	for _, f := range merged {
+		kind, _ := f["kind"].(string)
+		to, _ := f["to"].(string)
+		transport, _ := f["transport"].(string)
+		if kind == "produces" && to == "battle-queue" && transport == "queue" {
+			foundProduces = true
+		}
+		if kind == "consumes" && to == "battle-queue" && transport == "queue" {
+			foundConsumes = true
+		}
+	}
+
+	if !foundProduces {
+		b, _ := json.MarshalIndent(merged, "", "  ")
+		t.Errorf("no produces[queue] fact for battle-queue in merged facts:\n%s", string(b))
+	}
+	if !foundConsumes {
+		b, _ := json.MarshalIndent(merged, "", "  ")
+		t.Errorf("no consumes[queue] fact for battle-queue in merged facts:\n%s", string(b))
+	}
+}
+
 // TestFactKey_Dedup verifies the dedup key logic used in unionFacts.
 func TestFactKey_Dedup(t *testing.T) {
 	f1 := map[string]any{"kind": "import", "to": "./Arena.Controller"}

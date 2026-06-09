@@ -49,9 +49,9 @@ func TestNestJSRules(t *testing.T) {
 			"../../fixtures/tom-and-jerry/tom-api/src/tom/tom.events.ts",
 			"",
 			[]semCheck{
-				{kind: "produces", to: "tom.weapon.equipped"},
-				{kind: "consumes", to: "tom.weapon.equipped"},
-				{kind: "consumes", to: "battle.result"},
+				{kind: "produces", to: "tom.weapon.equipped", transport: "local"},
+				{kind: "consumes", to: "tom.weapon.equipped", transport: "local"},
+				{kind: "consumes", to: "battle.result", transport: "local"},
 				{kind: "injects", to: "EventEmitter2"},
 			},
 		},
@@ -141,17 +141,135 @@ func TestOtopointVoucherResolver(t *testing.T) {
 }
 
 type semCheck struct {
-	kind, to, from, method, target string
+	kind, to, from, method, target, transport string
 }
 
 func (c semCheck) String() string {
 	s := c.kind
-	for _, pair := range [][2]string{{"to", c.to}, {"from", c.from}, {"method", c.method}, {"target", c.target}} {
+	for _, pair := range [][2]string{{"to", c.to}, {"from", c.from}, {"method", c.method}, {"target", c.target}, {"transport", c.transport}} {
 		if pair[1] != "" {
 			s += " " + pair[0] + "=" + pair[1]
 		}
 	}
 	return s
+}
+
+// TestBullQueueRuleset verifies that Bull queue decorator patterns produce the correct
+// semantic facts with transport=queue and that job-name decorators don't produce topics.
+func TestBullQueueRuleset(t *testing.T) {
+	t.Run("const_queue_name", func(t *testing.T) {
+		// Real fixture: battle.queue.ts uses const QUEUE_NAME = 'battle-queue'
+		src, err := os.ReadFile("../../fixtures/tom-and-jerry/arena-api/src/arena/battle.queue.ts")
+		if err != nil {
+			t.Skipf("fixture not available: %v", err)
+		}
+
+		raw := ast.ExtractTypeScript(src)
+		reg := NewRegistry(DefaultRulesets()...)
+		result := reg.Apply(raw)
+
+		fmt.Printf("\nbattle.queue.ts (const): %d semantic facts\n", len(result.Facts))
+		for _, f := range result.Facts {
+			b, _ := json.Marshal(f)
+			fmt.Printf("  %s\n", b)
+		}
+
+		// Must have exactly one produces=battle-queue with transport=queue.
+		var produces []SemanticFact
+		for _, f := range result.Facts {
+			if f.Kind == "produces" && f.Transport == "queue" {
+				produces = append(produces, f)
+			}
+		}
+		if len(produces) != 1 {
+			t.Errorf("expected 1 produces[queue], got %d: %v", len(produces), produces)
+		} else if produces[0].To != "battle-queue" {
+			t.Errorf("produces.To = %q, want \"battle-queue\"", produces[0].To)
+		}
+
+		// Must have exactly one consumes=battle-queue with transport=queue.
+		var consumes []SemanticFact
+		for _, f := range result.Facts {
+			if f.Kind == "consumes" && f.Transport == "queue" {
+				consumes = append(consumes, f)
+			}
+		}
+		if len(consumes) != 1 {
+			t.Errorf("expected 1 consumes[queue], got %d: %v", len(consumes), consumes)
+		} else if consumes[0].To != "battle-queue" {
+			t.Errorf("consumes.To = %q, want \"battle-queue\"", consumes[0].To)
+		}
+
+		// Job names must NOT appear as topics.
+		for _, f := range result.Facts {
+			if (f.Kind == "produces" || f.Kind == "consumes") && (f.To == "attack" || f.To == "combo") {
+				t.Errorf("job name %q leaked as a topic in fact: %+v", f.To, f)
+			}
+		}
+	})
+
+	t.Run("string_literal_queue_name", func(t *testing.T) {
+		// Synthetic variant: @Processor and @InjectQueue with string literals instead of const.
+		src := []byte(`
+import { Injectable } from '@nestjs/common';
+import { InjectQueue, Processor } from '@nestjs/bull';
+import { Queue } from 'bull';
+
+@Injectable()
+export class MyProducer {
+  constructor(@InjectQueue('my-queue') private readonly q: Queue) {}
+}
+
+@Processor('my-queue')
+export class MyConsumer {}
+`)
+		raw := ast.ExtractTypeScript(src)
+		reg := NewRegistry(DefaultRulesets()...)
+		result := reg.Apply(raw)
+
+		fmt.Printf("\nstring-literal variant: %d semantic facts\n", len(result.Facts))
+		for _, f := range result.Facts {
+			b, _ := json.Marshal(f)
+			fmt.Printf("  %s\n", b)
+		}
+
+		if !hasSemFact(result.Facts, semCheck{kind: "produces", to: "my-queue", transport: "queue"}) {
+			t.Error("missing produces[queue] fact for my-queue")
+		}
+		if !hasSemFact(result.Facts, semCheck{kind: "consumes", to: "my-queue", transport: "queue"}) {
+			t.Error("missing consumes[queue] fact for my-queue")
+		}
+	})
+}
+
+// TestEventEmitter2TransportLocal verifies that EventEmitter2 emit() calls and
+// @OnEvent decorators are tagged with transport=local.
+func TestEventEmitter2TransportLocal(t *testing.T) {
+	src, err := os.ReadFile("../../fixtures/tom-and-jerry/tom-api/src/tom/tom.events.ts")
+	if err != nil {
+		t.Skipf("fixture not available: %v", err)
+	}
+
+	raw := ast.ExtractTypeScript(src)
+	reg := NewRegistry(DefaultRulesets()...)
+	result := reg.Apply(raw)
+
+	fmt.Printf("\ntom.events.ts (transport): %d semantic facts\n", len(result.Facts))
+	for _, f := range result.Facts {
+		b, _ := json.Marshal(f)
+		fmt.Printf("  %s\n", b)
+	}
+
+	checks := []semCheck{
+		{kind: "produces", to: "tom.weapon.equipped", transport: "local"},
+		{kind: "consumes", to: "tom.weapon.equipped", transport: "local"},
+		{kind: "consumes", to: "battle.result", transport: "local"},
+	}
+	for _, c := range checks {
+		if !hasSemFact(result.Facts, c) {
+			t.Errorf("missing fact: %s", c.String())
+		}
+	}
 }
 
 func hasSemFact(facts []SemanticFact, check semCheck) bool {
@@ -169,6 +287,9 @@ func hasSemFact(facts []SemanticFact, check semCheck) bool {
 			continue
 		}
 		if check.target != "" && !strings.Contains(f.Target, check.target) {
+			continue
+		}
+		if check.transport != "" && f.Transport != check.transport {
 			continue
 		}
 		return true

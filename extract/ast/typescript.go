@@ -15,15 +15,16 @@ import (
 
 // RawFact is a syntax-level fact from AST analysis. No framework interpretation.
 type RawFact struct {
-	Kind       string   `json:"kind"`                  // import, decorator, constructor_param, call, member_call, produces_candidate
-	Name       string   `json:"name,omitempty"`        // decorator name, class name
-	To         string   `json:"to,omitempty"`          // import path, type name
-	From       string   `json:"from,omitempty"`        // object in member_call chain
-	Symbols    []string `json:"symbols,omitempty"`     // imported symbols
-	Method     string   `json:"method,omitempty"`      // called method, decorated method
-	Args       string   `json:"args,omitempty"`        // raw decorator arguments text
-	Target     string   `json:"target,omitempty"`      // first string arg from decorator
-	TargetKind string   `json:"target_kind,omitempty"` // what the decorator is on: class, method
+	Kind        string   `json:"kind"`                   // import, decorator, constructor_param, call, member_call, produces_candidate
+	Name        string   `json:"name,omitempty"`         // decorator name, class name
+	To          string   `json:"to,omitempty"`           // import path, type name
+	From        string   `json:"from,omitempty"`         // object in member_call chain
+	Symbols     []string `json:"symbols,omitempty"`      // imported symbols
+	Method      string   `json:"method,omitempty"`       // called method, decorated method
+	Args        string   `json:"args,omitempty"`         // raw decorator arguments text
+	Target      string   `json:"target,omitempty"`       // first string arg from decorator
+	TargetIdent string   `json:"target_ident,omitempty"` // first identifier arg (when Target is empty — resolves via StringConsts)
+	TargetKind  string   `json:"target_kind,omitempty"`  // what the decorator is on: class, method
 }
 
 // Candidate is an ambiguous code anchor that needs LLM classification.
@@ -44,8 +45,9 @@ type Candidate struct {
 
 // RawResult holds raw extraction results for one file.
 type RawResult struct {
-	Facts      []RawFact   `json:"facts"`
-	Candidates []Candidate `json:"candidates,omitempty"`
+	Facts       []RawFact         `json:"facts"`
+	Candidates  []Candidate       `json:"candidates,omitempty"`
+	StringConsts map[string]string `json:"string_consts,omitempty"` // module-level const NAME = 'value' bindings
 }
 
 // noise: method calls to skip
@@ -75,6 +77,9 @@ func ExtractTypeScript(fileContent []byte) *RawResult {
 	root := tree.RootNode()
 
 	result := &RawResult{}
+
+	// 0. Module-level const string bindings (needed for identifier-arg resolution in decorators)
+	result.StringConsts = extractConstStringBindings(root, fileContent, lang)
 
 	// 1. Imports (local only)
 	result.Facts = append(result.Facts, extractImportFacts(root, fileContent, lang)...)
@@ -107,6 +112,47 @@ func (r *RawResult) FactsJSON() string {
 	}
 	b, _ := json.Marshal(r.Facts)
 	return string(b)
+}
+
+// --- Module-level const string bindings ---
+
+// extractConstStringBindings finds top-level `const NAME = 'value'` declarations
+// and returns them as a map of identifier → string value. Only plain string literals
+// (single-quoted, double-quoted, or backtick without interpolation) are captured.
+func extractConstStringBindings(root *sitter.Node, src []byte, lang *sitter.Language) map[string]string {
+	result := map[string]string{}
+	// Match: (lexical_declaration (variable_declarator name: (identifier) @name value: (string) @val))
+	q, err := sitter.NewQuery(lang, `
+		(lexical_declaration
+			(variable_declarator
+				name: (identifier) @name
+				value: (string (string_fragment) @val)
+			)
+		)
+	`)
+	if err != nil {
+		return result
+	}
+	defer q.Close()
+	cursor := sitter.NewQueryCursor()
+	defer cursor.Close()
+
+	matches := cursor.Matches(q, root, src)
+	for m := matches.Next(); m != nil; m = matches.Next() {
+		var name, val string
+		for _, c := range m.Captures {
+			switch q.CaptureNames()[c.Index] {
+			case "name":
+				name = c.Node.Utf8Text(src)
+			case "val":
+				val = c.Node.Utf8Text(src)
+			}
+		}
+		if name != "" && val != "" {
+			result[name] = val
+		}
+	}
+	return result
 }
 
 // --- Imports ---
@@ -178,13 +224,20 @@ func extractRawDecorators(root *sitter.Node, src []byte, lang *sitter.Language) 
 		// Determine what the decorator is on (class or method)
 		targetKind, targetName := findDecoratorTarget(decoratorNode, src)
 
+		target := extractStringArg(args)
+		targetIdent := ""
+		if target == "" {
+			targetIdent = extractIdentArg(args)
+		}
+
 		facts = append(facts, RawFact{
-			Kind:       "decorator",
-			Name:       name,
-			Args:       args,
-			Target:     extractStringArg(args),
-			TargetKind: targetKind,
-			Method:     targetName,
+			Kind:        "decorator",
+			Name:        name,
+			Args:        args,
+			Target:      target,
+			TargetIdent: targetIdent,
+			TargetKind:  targetKind,
+			Method:      targetName,
 		})
 	}
 	return facts
@@ -370,9 +423,14 @@ func extractMemberChainFacts(root *sitter.Node, src []byte, lang *sitter.Languag
 // --- Producer candidates (.emit/.publish/.send with string arg) ---
 
 func extractProducerCandidates(root *sitter.Node, src []byte, lang *sitter.Language) []RawFact {
-	q, err := sitter.NewQuery(lang, `
+	// First: this.receiver.method('topic') — captures receiver for type resolution.
+	q1, err := sitter.NewQuery(lang, `
 		(call_expression
 			function: (member_expression
+				object: (member_expression
+					object: (this)
+					property: (property_identifier) @receiver
+				)
 				property: (property_identifier) @method
 			)
 			arguments: (arguments (string (string_fragment) @topic))
@@ -381,16 +439,19 @@ func extractProducerCandidates(root *sitter.Node, src []byte, lang *sitter.Langu
 	if err != nil {
 		return nil
 	}
-	defer q.Close()
-	cursor := sitter.NewQueryCursor()
-	defer cursor.Close()
+	defer q1.Close()
+	cursor1 := sitter.NewQueryCursor()
+	defer cursor1.Close()
 
 	var facts []RawFact
-	matches := cursor.Matches(q, root, src)
+	seen := map[string]bool{}
+	matches := cursor1.Matches(q1, root, src)
 	for m := matches.Next(); m != nil; m = matches.Next() {
-		var method, topic string
+		var receiver, method, topic string
 		for _, c := range m.Captures {
-			switch q.CaptureNames()[c.Index] {
+			switch q1.CaptureNames()[c.Index] {
+			case "receiver":
+				receiver = c.Node.Utf8Text(src)
 			case "method":
 				method = c.Node.Utf8Text(src)
 			case "topic":
@@ -398,10 +459,63 @@ func extractProducerCandidates(root *sitter.Node, src []byte, lang *sitter.Langu
 			}
 		}
 		if (method == "emit" || method == "publish" || method == "send") && topic != "" {
-			facts = append(facts, RawFact{Kind: "produces_candidate", To: topic, Method: method})
+			key := receiver + "." + method + "." + topic
+			if !seen[key] {
+				seen[key] = true
+				facts = append(facts, RawFact{Kind: "produces_candidate", To: topic, From: receiver, Method: method})
+			}
+		}
+	}
+
+	// Second: any other X.method('topic') patterns not captured above.
+	q2, err := sitter.NewQuery(lang, `
+		(call_expression
+			function: (member_expression
+				property: (property_identifier) @method
+			)
+			arguments: (arguments (string (string_fragment) @topic))
+		)
+	`)
+	if err != nil {
+		return facts
+	}
+	defer q2.Close()
+	cursor2 := sitter.NewQueryCursor()
+	defer cursor2.Close()
+
+	matches2 := cursor2.Matches(q2, root, src)
+	for m := matches2.Next(); m != nil; m = matches2.Next() {
+		var method, topic string
+		for _, c := range m.Captures {
+			switch q2.CaptureNames()[c.Index] {
+			case "method":
+				method = c.Node.Utf8Text(src)
+			case "topic":
+				topic = c.Node.Utf8Text(src)
+			}
+		}
+		if (method == "emit" || method == "publish" || method == "send") && topic != "" {
+			// Only emit if not already captured with a receiver.
+			key := "." + method + "." + topic
+			if !seen[key] && !seenWithAnyReceiver(seen, method, topic) {
+				seen[key] = true
+				facts = append(facts, RawFact{Kind: "produces_candidate", To: topic, Method: method})
+			}
 		}
 	}
 	return facts
+}
+
+// seenWithAnyReceiver checks if a produces_candidate for this method+topic was already
+// captured (with any receiver) by the first query in extractProducerCandidates.
+func seenWithAnyReceiver(seen map[string]bool, method, topic string) bool {
+	suffix := "." + method + "." + topic
+	for k := range seen {
+		if strings.HasSuffix(k, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Enrichment candidates ---
@@ -694,6 +808,31 @@ func extractStringArg(argsText string) string {
 				return argsText[start+1 : start+1+end]
 			}
 		}
+	}
+	return ""
+}
+
+// extractIdentArg returns the first bare identifier in the arguments text (e.g. QUEUE_NAME
+// from "(QUEUE_NAME)"). Used when no string literal is present.
+func extractIdentArg(argsText string) string {
+	// Strip surrounding parens and whitespace.
+	s := strings.TrimSpace(argsText)
+	s = strings.TrimPrefix(s, "(")
+	s = strings.TrimSuffix(s, ")")
+	s = strings.TrimSpace(s)
+	// Take the first token up to a comma, space, or end.
+	end := strings.IndexAny(s, ", \t\n)")
+	if end < 0 {
+		end = len(s)
+	}
+	token := s[:end]
+	// Must look like an identifier (starts with letter or underscore, no quotes).
+	if len(token) == 0 {
+		return ""
+	}
+	c := token[0]
+	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' {
+		return token
 	}
 	return ""
 }
