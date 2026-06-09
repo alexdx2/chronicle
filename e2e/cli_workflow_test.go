@@ -49,8 +49,11 @@ func TestCLIWorkflow(t *testing.T) {
 
 	// 1. Version
 	versionOut := run("version")
-	if !strings.Contains(versionOut, "chronicle v") {
-		t.Errorf("version = %q, want contains 'chronicle v'", versionOut)
+	if !strings.Contains(versionOut, "chronicle-mcp |") {
+		t.Errorf("version = %q, want contains 'chronicle-mcp |'", versionOut)
+	}
+	if !strings.Contains(versionOut, "release_codename:") {
+		t.Errorf("version = %q, want contains 'release_codename:'", versionOut)
 	}
 
 	// 2. Init (creates DB via --db flag, which auto-migrates)
