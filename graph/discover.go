@@ -46,11 +46,21 @@ type DiscoverResult struct {
 	ScanConfig   map[string]any    `json:"scan_config"`
 }
 
-// DiscoverFiles finds all scannable files using git ls-files + manifest include/exclude rules.
-// Only git-tracked files are considered — no temp files, no untracked junk.
+// DiscoverOpts controls optional parameters for DiscoverFilesOpts.
+type DiscoverOpts struct {
+	// VotesNeeded is the number of independent extraction passes per file (default 1).
+	VotesNeeded int
+	// Scope is an optional list of glob patterns that further narrow discovered files.
+	// Only files matching at least one Scope pattern (after manifest include/exclude) are returned.
+	// Empty Scope means no additional filtering.
+	Scope []string
+}
+
+// DiscoverFilesOpts finds all scannable files using git ls-files + manifest include/exclude rules,
+// with optional scope filtering. Only git-tracked files are considered.
 // If manifest is provided, uses MergedScanConfig for filtering and DomainForFile for per-file domain.
 // Falls back to domainKey for all files when manifest is nil.
-func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *manifest.Manifest, votesNeeded ...int) (*DiscoverResult, error) {
+func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m *manifest.Manifest, opts DiscoverOpts) (*DiscoverResult, error) {
 	// Get git-tracked files
 	gitFiles, err := gitTrackedFiles(rootDir)
 	if err != nil {
@@ -70,6 +80,20 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 		if shouldInclude(f, scanCfg) {
 			filtered = append(filtered, f)
 		}
+	}
+
+	// Apply optional scope filter: intersect with scope globs
+	if len(opts.Scope) > 0 {
+		var scoped []string
+		for _, f := range filtered {
+			for _, pattern := range opts.Scope {
+				if matchGlob(f, pattern) {
+					scoped = append(scoped, f)
+					break
+				}
+			}
+		}
+		filtered = scoped
 	}
 
 	// Boundary-first ordering: package/build/deployment/schema files before source
@@ -111,10 +135,10 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 		}
 	}
 
-	// Resolve votes_needed from variadic param (default 1)
-	vn := 1
-	if len(votesNeeded) > 0 && votesNeeded[0] > 1 {
-		vn = votesNeeded[0]
+	// Resolve votes_needed (default 1)
+	vn := opts.VotesNeeded
+	if vn < 1 {
+		vn = 1
 	}
 
 	// Create scan_file obligations for each discovered file — per-file domain from manifest
@@ -189,6 +213,19 @@ func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *ma
 	}
 
 	return result, nil
+}
+
+// DiscoverFiles finds all scannable files using git ls-files + manifest include/exclude rules.
+// Only git-tracked files are considered — no temp files, no untracked junk.
+// If manifest is provided, uses MergedScanConfig for filtering and DomainForFile for per-file domain.
+// Falls back to domainKey for all files when manifest is nil.
+// Deprecated: prefer DiscoverFilesOpts for explicit options.
+func (g *Graph) DiscoverFiles(rootDir, domainKey string, revisionID int64, m *manifest.Manifest, votesNeeded ...int) (*DiscoverResult, error) {
+	vn := 1
+	if len(votesNeeded) > 0 && votesNeeded[0] > 1 {
+		vn = votesNeeded[0]
+	}
+	return g.DiscoverFilesOpts(rootDir, domainKey, revisionID, m, DiscoverOpts{VotesNeeded: vn})
 }
 
 // gitTrackedFiles returns all files tracked by git in the given directory.

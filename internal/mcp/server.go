@@ -626,6 +626,7 @@ func discoverFilesTool() mcp.Tool {
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("votes_needed", mcp.Description("How many independent extraction passes per file (default 1; user may choose any N, e.g. 3 or 5)")),
+		mcp.WithString("scope", mcp.Description("Lab: JSON array of globs; obligations limited to files matching scope AND manifest include")),
 	)
 }
 
@@ -651,7 +652,23 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			m = loaded
 		}
 
-		result, err := g.DiscoverFiles(rootDir, domain, revisionID, m, votesNeeded)
+		// Lab: apply base_domain manifest inheritance for synthetic domains
+		labCfg, _ := g.Store().LabConfigForRevision(revisionID)
+		if labCfg.BaseDomain != "" && m != nil {
+			if !m.ReplaceDomainsWithClone(labCfg.BaseDomain, domain) {
+				return errorResult(fmt.Errorf("base_domain %q not found in manifest", labCfg.BaseDomain)), nil
+			}
+		}
+
+		// Parse optional scope filter (JSON array of glob strings)
+		var scope []string
+		if s := strParam(args, "scope"); s != "" {
+			if err := json.Unmarshal([]byte(s), &scope); err != nil {
+				return errorResult(fmt.Errorf("scope must be a JSON array of globs: %w", err)), nil
+			}
+		}
+
+		result, err := g.DiscoverFilesOpts(rootDir, domain, revisionID, m, graph.DiscoverOpts{VotesNeeded: votesNeeded, Scope: scope})
 		if err != nil {
 			return errorResult(err), nil
 		}
@@ -685,6 +702,7 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Create or update scan run — transition to confirm_scope (checkpoint)
+		var activeRunID int64
 		run, _ := g.Store().GetActiveScanRun(domain)
 		if run == nil {
 			runID, err := g.Store().CreateScanRun(revisionID, domain, votesNeeded)
@@ -694,24 +712,32 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			if err := g.Store().TransitionScanRun(runID, "confirm_scope", totalObligations); err != nil {
 				return errorResult(fmt.Errorf("transition to confirm_scope: %w", err)), nil
 			}
+			activeRunID = runID
 		} else {
 			if err := g.Store().TransitionScanRun(run.RunID, "confirm_scope", totalObligations); err != nil {
 				return errorResult(fmt.Errorf("transition to confirm_scope: %w", err)), nil
 			}
+			activeRunID = run.RunID
+		}
+
+		// Lab autopilot: mark scan run so it bypasses interactive checkpoints
+		if labCfg.Autopilot && activeRunID > 0 {
+			_ = g.Store().SetScanRunAutopilot(activeRunID)
 		}
 
 		// Return summary (not full file list — can be huge)
 		response := map[string]any{
-			"domain":          domain,
-			"total_files":     result.TotalFiles,
+			"domain":            domain,
+			"total_files":       result.TotalFiles,
 			"total_obligations": totalObligations,
-			"total_git_files": result.TotalGit,
-			"excluded":        result.Excluded,
-			"by_directory":    result.ByDirectory,
-			"by_extension":    result.ByExtension,
-			"votes_needed":    votesNeeded,
-			"estimated_reads": totalObligations,
-			"scan_config":     result.ScanConfig,
+			"total_git_files":   result.TotalGit,
+			"excluded":          result.Excluded,
+			"by_directory":      result.ByDirectory,
+			"by_extension":      result.ByExtension,
+			"votes_needed":      votesNeeded,
+			"scope":             scope,
+			"estimated_reads":   totalObligations,
+			"scan_config":       result.ScanConfig,
 		}
 		// Only include file list if small enough
 		if result.TotalFiles <= 50 {

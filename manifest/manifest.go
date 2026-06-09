@@ -220,6 +220,21 @@ func domainMatchesFile(d DomainEntry, filePath string) bool {
 	return false
 }
 
+// ReplaceDomainsWithClone replaces all domain entries with a single clone of
+// baseKey re-keyed as newKey. Used by scan-lab synthetic domains so that file
+// discovery assigns every file to the lab domain. Returns false if baseKey is absent.
+func (m *Manifest) ReplaceDomainsWithClone(baseKey, newKey string) bool {
+	for _, d := range m.Domains {
+		if d.Key == baseKey {
+			clone := d
+			clone.Key = newKey
+			m.Domains = []DomainEntry{clone}
+			return true
+		}
+	}
+	return false
+}
+
 // MergedScanConfig builds a single ScanConfig from all domains' scan patterns.
 // Useful for callers that need a flat include/exclude list.
 func (m *Manifest) MergedScanConfig() ScanConfig {
