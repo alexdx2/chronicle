@@ -16,6 +16,8 @@ type ScanRunRow struct {
 	ExtractedFiles int    `json:"extracted_files"`
 	Resolved       int    `json:"resolved"`
 	VotesNeeded    int    `json:"votes_needed"`
+	Autopilot      bool   `json:"autopilot,omitempty"`
+	AutoConfirms   string `json:"auto_confirms,omitempty"`
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at,omitempty"`
 }
@@ -40,15 +42,19 @@ func (s *Store) CreateScanRun(revisionID int64, domainKey string, votesNeeded ..
 func (s *Store) GetScanRun(runID int64) (*ScanRunRow, error) {
 	var r ScanRunRow
 	var updatedAt sql.NullString
+	var autopilot int
 	err := s.db.QueryRow(`
 		SELECT run_id, revision_id, domain_key, phase, status,
-		       total_files, extracted_files, resolved, COALESCE(votes_needed,1), created_at, updated_at
+		       total_files, extracted_files, resolved, COALESCE(votes_needed,1),
+		       autopilot, auto_confirms, created_at, updated_at
 		FROM scan_runs WHERE run_id = ?
 	`, runID).Scan(&r.RunID, &r.RevisionID, &r.DomainKey, &r.Phase, &r.Status,
-		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded, &r.CreatedAt, &updatedAt)
+		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded,
+		&autopilot, &r.AutoConfirms, &r.CreatedAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("GetScanRun: %w", err)
 	}
+	r.Autopilot = autopilot != 0
 	if updatedAt.Valid {
 		r.UpdatedAt = updatedAt.String
 	}
@@ -60,20 +66,24 @@ func (s *Store) GetScanRun(runID int64) (*ScanRunRow, error) {
 func (s *Store) GetActiveScanRun(domainKey string) (*ScanRunRow, error) {
 	var r ScanRunRow
 	var updatedAt sql.NullString
+	var autopilot int
 	err := s.db.QueryRow(`
 		SELECT run_id, revision_id, domain_key, phase, status,
-		       total_files, extracted_files, resolved, COALESCE(votes_needed,1), created_at, updated_at
+		       total_files, extracted_files, resolved, COALESCE(votes_needed,1),
+		       autopilot, auto_confirms, created_at, updated_at
 		FROM scan_runs
 		WHERE domain_key = ? AND phase != 'finalized' AND status NOT IN ('completed','failed')
 		ORDER BY run_id DESC LIMIT 1
 	`, domainKey).Scan(&r.RunID, &r.RevisionID, &r.DomainKey, &r.Phase, &r.Status,
-		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded, &r.CreatedAt, &updatedAt)
+		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded,
+		&autopilot, &r.AutoConfirms, &r.CreatedAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetActiveScanRun: %w", err)
 	}
+	r.Autopilot = autopilot != 0
 	if updatedAt.Valid {
 		r.UpdatedAt = updatedAt.String
 	}

@@ -168,6 +168,9 @@ func (s *Store) migrate() error {
 		// Symbol-level metadata on nodes
 		`ALTER TABLE graph_nodes ADD COLUMN symbol_name TEXT`,
 		`ALTER TABLE graph_nodes ADD COLUMN support_kind TEXT`,
+		// Scan-lab autopilot support
+		`ALTER TABLE scan_runs ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scan_runs ADD COLUMN auto_confirms TEXT NOT NULL DEFAULT '[]'`,
 	}
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
@@ -221,12 +224,15 @@ func (s *Store) migrateScanRunPhases() error {
 		    extracted_files INTEGER NOT NULL DEFAULT 0,
 		    resolved        INTEGER NOT NULL DEFAULT 0,
 		    votes_needed    INTEGER NOT NULL DEFAULT 1,
+		    autopilot       INTEGER NOT NULL DEFAULT 0,
+		    auto_confirms   TEXT NOT NULL DEFAULT '[]',
 		    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
 		    updated_at      TEXT
 		);
 		INSERT INTO scan_runs_new
 		  SELECT run_id, revision_id, domain_key, phase, status,
 		         total_files, extracted_files, resolved, COALESCE(votes_needed, 1),
+		         COALESCE(autopilot, 0), COALESCE(auto_confirms, '[]'),
 		         created_at, updated_at
 		  FROM scan_runs;
 		DROP TABLE scan_runs;
@@ -653,6 +659,8 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     extracted_files INTEGER NOT NULL DEFAULT 0,
     resolved        INTEGER NOT NULL DEFAULT 0,
     votes_needed    INTEGER NOT NULL DEFAULT 1,
+    autopilot       INTEGER NOT NULL DEFAULT 0,
+    auto_confirms   TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at      TEXT
 );
