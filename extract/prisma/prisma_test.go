@@ -65,8 +65,10 @@ enum WeaponType {
 	if !foundCatWeaponToCat {
 		t.Error("missing CatWeapon -> Cat relation")
 	}
-	if !foundCatToWeapon {
-		t.Error("missing Cat -> CatWeapon array relation")
+	// FK-side-only convention: the array (inverse) side must NOT emit a relation,
+	// otherwise every relation is doubled.
+	if foundCatToWeapon {
+		t.Error("unexpected Cat -> CatWeapon relation from array side (inverse must be skipped)")
 	}
 }
 

@@ -1,0 +1,1 @@
+{"candidates":[{"kind":"declares_service","to":"ScoreboardApi","reason":"AssemblyName in csproj"}],"file_path":"scoreboard-api/ScoreboardApi.csproj"}

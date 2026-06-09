@@ -1,0 +1,44 @@
+[
+  {
+    "file_path": "spectators-api/src/spectators/battle-result.consumer.ts",
+    "obligation_id": 131,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780957266458236290/candidates/spectators-api__src__spectators__battle-result.consumer.ts.json",
+    "deterministic_candidate_count": 1
+  },
+  {
+    "file_path": "tom-api/src/tom/tom.events.ts",
+    "obligation_id": 132
+  },
+  {
+    "file_path": "arena-api/src/arena/arena.controller.ts",
+    "obligation_id": 133
+  },
+  {
+    "file_path": "arena-api/src/arena/battle.gateway.ts",
+    "obligation_id": 134
+  },
+  {
+    "file_path": "jerry-api/src/jerry/jerry.controller.ts",
+    "obligation_id": 135
+  },
+  {
+    "file_path": "scoreboard-api/Controllers/ScoreController.cs",
+    "obligation_id": 136,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780957266458236290/candidates/scoreboard-api__Controllers__ScoreController.cs.json",
+    "deterministic_candidate_count": 3
+  },
+  {
+    "file_path": "spectators-api/src/spectators/stats.controller.ts",
+    "obligation_id": 137
+  },
+  {
+    "file_path": "tom-api/src/tom/tom.controller.ts",
+    "obligation_id": 138
+  },
+  {
+    "file_path": "scoreboard-api/Services/BattleResultConsumer.cs",
+    "obligation_id": 139,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780957266458236290/candidates/scoreboard-api__Services__BattleResultConsumer.cs.json",
+    "deterministic_candidate_count": 1
+  }
+]

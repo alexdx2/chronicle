@@ -109,12 +109,25 @@ func parseFacts(factsJSON string) []map[string]any {
 // factKey returns a dedup key for a fact: "kind|to|method" (all lowercased).
 func factKey(f map[string]any) string {
 	kind, _ := f["kind"].(string)
-	to, _ := f["to"].(string)
-	if to == "" {
-		to, _ = f["target"].(string)
+	val, _ := f["to"].(string)
+	if val == "" {
+		val, _ = f["target"].(string)
+	}
+	if val == "" {
+		val, _ = f["name"].(string)
 	}
 	method, _ := f["method"].(string)
-	return strings.ToLower(kind) + "|" + strings.ToLower(to) + "|" + strings.ToLower(method)
+	k := strings.ToLower(kind)
+	v := strings.ToLower(val)
+	if k == "endpoint" {
+		// AST emits route fragments ("status"), LLMs emit full paths
+		// ("/jerry/status") — dedupe on the trailing segment within a file.
+		v = strings.Trim(v, "/")
+		if i := strings.LastIndex(v, "/"); i >= 0 {
+			v = v[i+1:]
+		}
+	}
+	return k + "|" + v + "|" + strings.ToLower(method)
 }
 
 // unionFacts merges AST facts with LLM facts, keeping LLM facts on duplicate.

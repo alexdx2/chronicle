@@ -266,6 +266,11 @@ a{color:var(--primary);text-decoration:none}
 .screenshot-mode .bottom-panel{transition:none!important}
 /* Demo mode: disable graph animations */
 .demo-mode .graph-svg *{transition:none!important}
+/* Embed demo: chromeless self-driving tour */
+.demo-mode.embed-mode .tab-bar{display:none!important}
+.demo-mode.embed-mode .graph-toolbar{display:none!important}
+.demo-mode.embed-mode .container{padding:0!important;max-width:none!important}
+.demo-mode.embed-mode .graph-container{border-radius:0!important}
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
@@ -1873,7 +1878,12 @@ function dashboard() {
           // Initialize graph controllers (shared method — also called from Graph tab click)
           await this.initGraphControllers();
 
-          setTimeout(() => this.renderGraph(), 100);
+          setTimeout(() => {
+            this.renderGraph();
+            if (this.isDemoMode && document.documentElement.classList.contains('embed-mode')) {
+              this.startEmbedDemoTour();
+            }
+          }, 100);
         });
       }
 
@@ -2317,6 +2327,38 @@ function dashboard() {
     },
 
     // SLOT:EXTRA_METHODS
+
+    startEmbedDemoTour() {
+      if (this._embedDemoTimer) return;
+      const steps = [
+        { preset: 'c1', dwell: 6000 },
+        { preset: 'c2', dwell: 7000, focusDomain: 'tom-and-jerry' },
+        { preset: 'c3', dwell: 7000, focusService: 'arena-api' },
+        { preset: 'data', dwell: 5000 },
+      ];
+      let idx = 0;
+      const runStep = () => {
+        const step = steps[idx % steps.length];
+        idx++;
+        if (this.graphController && this.graphMode === 'workspace') {
+          this.graphController.setPreset(step.preset);
+          if (step.focusDomain) {
+            this.graphController.focusOnDomain(step.focusDomain);
+          } else if (step.focusService) {
+            const svc = (this.graphData.nodes || []).find(
+              n => n.node_type === 'service' && n.name === step.focusService
+            );
+            if (svc) this.graphController.focusOn(svc.node_id);
+            else this.graphController.clearFocus();
+          } else {
+            this.graphController.clearFocus();
+          }
+          this.graphPreset = step.preset;
+        }
+        this._embedDemoTimer = setTimeout(runStep, step.dwell);
+      };
+      this._embedDemoTimer = setTimeout(runStep, 1200);
+    },
 
     async fetchScanProgress() {
       try {

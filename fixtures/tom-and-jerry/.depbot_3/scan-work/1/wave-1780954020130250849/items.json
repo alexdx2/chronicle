@@ -1,0 +1,14 @@
+[
+  {
+    "file_path": "tom-api/src/tom/tom.events.ts",
+    "obligation_id": 121,
+    "vote_group": "1:tom-and-jerry:b659f9d404fa",
+    "vote_index": 1
+  },
+  {
+    "file_path": "tom-api/src/tom/tom.service.ts",
+    "obligation_id": 124,
+    "vote_group": "1:tom-and-jerry:b2678ff40c5d",
+    "vote_index": 1
+  }
+]

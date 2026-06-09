@@ -107,7 +107,9 @@ func Extract(content []byte) Result {
 	// Detect relations: fields whose type matches a known model or enum name
 	for _, model := range result.Models {
 		for _, field := range model.Fields {
-			if modelNames[field.Type] {
+			// Only the FK-holding side (singular field) defines the relation —
+			// the array side is the inverse and would double every relation.
+			if modelNames[field.Type] && !field.IsArray {
 				result.Relations = append(result.Relations, Relation{
 					From:      model.Name,
 					To:        field.Type,

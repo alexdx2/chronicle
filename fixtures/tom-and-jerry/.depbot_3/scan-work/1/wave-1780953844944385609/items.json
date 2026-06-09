@@ -1,0 +1,256 @@
+[
+  {
+    "file_path": "arena-api/prisma/schema.prisma",
+    "obligation_id": 1,
+    "vote_group": "1:tom-and-jerry:d8797b4fd16c",
+    "vote_index": 1
+  },
+  {
+    "file_path": "jerry-api/prisma/schema.prisma",
+    "obligation_id": 4,
+    "vote_group": "1:tom-and-jerry:f98521f1dc04",
+    "vote_index": 1
+  },
+  {
+    "file_path": "tom-api/prisma/schema.prisma",
+    "obligation_id": 7,
+    "vote_group": "1:tom-and-jerry:eef69cc123f2",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/arena.module.ts",
+    "obligation_id": 10,
+    "vote_group": "1:tom-and-jerry:968a5ff74819",
+    "vote_index": 1,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780953844944385609/candidates/arena-api__src__arena__arena.module.ts.json",
+    "deterministic_candidate_count": 1
+  },
+  {
+    "file_path": "jerry-api/src/jerry/jerry.module.ts",
+    "obligation_id": 13,
+    "vote_group": "1:tom-and-jerry:ec30c6ff8a04",
+    "vote_index": 1,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780953844944385609/candidates/jerry-api__src__jerry__jerry.module.ts.json",
+    "deterministic_candidate_count": 1
+  },
+  {
+    "file_path": "spectators-api/src/spectators/spectators.module.ts",
+    "obligation_id": 16,
+    "vote_group": "1:tom-and-jerry:fc5cd8c5ebc2",
+    "vote_index": 1,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780953844944385609/candidates/spectators-api__src__spectators__spectators.module.ts.json",
+    "deterministic_candidate_count": 1
+  },
+  {
+    "file_path": "tom-api/src/tom/tom.module.ts",
+    "obligation_id": 19,
+    "vote_group": "1:tom-and-jerry:29daff6af0b1",
+    "vote_index": 1,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780953844944385609/candidates/tom-api__src__tom__tom.module.ts.json",
+    "deterministic_candidate_count": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/arena.controller.ts",
+    "obligation_id": 22,
+    "vote_group": "1:tom-and-jerry:672a04938e6c",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/arena.service.ts",
+    "obligation_id": 25,
+    "vote_group": "1:tom-and-jerry:5cf7ab050e9d",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/battle-result.producer.ts",
+    "obligation_id": 28,
+    "vote_group": "1:tom-and-jerry:5b80ff282389",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/battle.gateway.ts",
+    "obligation_id": 31,
+    "vote_group": "1:tom-and-jerry:b9ff6faa28af",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/battle.guard.ts",
+    "obligation_id": 34,
+    "vote_group": "1:tom-and-jerry:01f866ec58b2",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/battle.queue.ts",
+    "obligation_id": 37,
+    "vote_group": "1:tom-and-jerry:3531111e3fb9",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/cache.service.ts",
+    "obligation_id": 40,
+    "vote_group": "1:tom-and-jerry:7e00b1a36e7f",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/jerry.client.ts",
+    "obligation_id": 43,
+    "vote_group": "1:tom-and-jerry:0545eb0f88d2",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/arena/tom.client.ts",
+    "obligation_id": 46,
+    "vote_group": "1:tom-and-jerry:d43cc833d14b",
+    "vote_index": 1
+  },
+  {
+    "file_path": "arena-api/src/prisma/prisma.service.ts",
+    "obligation_id": 49,
+    "vote_group": "1:tom-and-jerry:c864eae66e19",
+    "vote_index": 1
+  },
+  {
+    "file_path": "jerry-api/src/jerry/clever.decorator.ts",
+    "obligation_id": 52,
+    "vote_group": "1:tom-and-jerry:c58a68dc6dc4",
+    "vote_index": 1
+  },
+  {
+    "file_path": "jerry-api/src/jerry/jerry.controller.ts",
+    "obligation_id": 55,
+    "vote_group": "1:tom-and-jerry:a493c918801d",
+    "vote_index": 1
+  },
+  {
+    "file_path": "jerry-api/src/jerry/jerry.service.ts",
+    "obligation_id": 58,
+    "vote_group": "1:tom-and-jerry:775541bb5f81",
+    "vote_index": 1
+  },
+  {
+    "file_path": "jerry-api/src/jerry/trap.interceptor.ts",
+    "obligation_id": 61,
+    "vote_group": "1:tom-and-jerry:faaa72f6c246",
+    "vote_index": 1
+  },
+  {
+    "file_path": "jerry-api/src/prisma/prisma.service.ts",
+    "obligation_id": 64,
+    "vote_group": "1:tom-and-jerry:abb3f458831d",
+    "vote_index": 1
+  },
+  {
+    "file_path": "scoreboard-api/Controllers/ScoreController.cs",
+    "obligation_id": 67,
+    "vote_group": "1:tom-and-jerry:8fb4057c8ef2",
+    "vote_index": 1,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780953844944385609/candidates/scoreboard-api__Controllers__ScoreController.cs.json",
+    "deterministic_candidate_count": 3
+  },
+  {
+    "file_path": "scoreboard-api/Data/ScoreboardDbContext.cs",
+    "obligation_id": 70,
+    "vote_group": "1:tom-and-jerry:d9f5cd3c848a",
+    "vote_index": 1
+  },
+  {
+    "file_path": "scoreboard-api/Hubs/ScoreHub.cs",
+    "obligation_id": 73,
+    "vote_group": "1:tom-and-jerry:d6f883d97b7e",
+    "vote_index": 1
+  },
+  {
+    "file_path": "scoreboard-api/Models/Score.cs",
+    "obligation_id": 76,
+    "vote_group": "1:tom-and-jerry:8d5f8230a514",
+    "vote_index": 1
+  },
+  {
+    "file_path": "scoreboard-api/Services/BattleResultConsumer.cs",
+    "obligation_id": 79,
+    "vote_group": "1:tom-and-jerry:7e9c84db466a",
+    "vote_index": 1,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780953844944385609/candidates/scoreboard-api__Services__BattleResultConsumer.cs.json",
+    "deterministic_candidate_count": 1
+  },
+  {
+    "file_path": "scoreboard-api/Services/ScoreService.cs",
+    "obligation_id": 82,
+    "vote_group": "1:tom-and-jerry:e99d2f32baac",
+    "vote_index": 1
+  },
+  {
+    "file_path": "shared/src/config.ts",
+    "obligation_id": 85,
+    "vote_group": "1:tom-and-jerry:623bc64f944c",
+    "vote_index": 1
+  },
+  {
+    "file_path": "shared/src/constants.ts",
+    "obligation_id": 88,
+    "vote_group": "1:tom-and-jerry:15e55123d7ed",
+    "vote_index": 1
+  },
+  {
+    "file_path": "shared/src/interfaces.ts",
+    "obligation_id": 91,
+    "vote_group": "1:tom-and-jerry:48dc6cfbbbda",
+    "vote_index": 1
+  },
+  {
+    "file_path": "spectators-api/src/spectators/battle-result.consumer.ts",
+    "obligation_id": 94,
+    "vote_group": "1:tom-and-jerry:076ae68ae767",
+    "vote_index": 1,
+    "deterministic_candidates_path": "/home/alex/personal/chronicle/depbot/fixtures/tom-and-jerry/.depbot/scan-work/1/wave-1780953844944385609/candidates/spectators-api__src__spectators__battle-result.consumer.ts.json",
+    "deterministic_candidate_count": 1
+  },
+  {
+    "file_path": "spectators-api/src/spectators/cleanup.task.ts",
+    "obligation_id": 97,
+    "vote_group": "1:tom-and-jerry:838b184f8e05",
+    "vote_index": 1
+  },
+  {
+    "file_path": "spectators-api/src/spectators/notification.service.ts",
+    "obligation_id": 100,
+    "vote_group": "1:tom-and-jerry:8fa7a4d0e503",
+    "vote_index": 1
+  },
+  {
+    "file_path": "spectators-api/src/spectators/spectator.service.ts",
+    "obligation_id": 103,
+    "vote_group": "1:tom-and-jerry:0e6135601af0",
+    "vote_index": 1
+  },
+  {
+    "file_path": "spectators-api/src/spectators/stats.controller.ts",
+    "obligation_id": 106,
+    "vote_group": "1:tom-and-jerry:7a53b4de16b5",
+    "vote_index": 1
+  },
+  {
+    "file_path": "tom-api/src/prisma/prisma.service.ts",
+    "obligation_id": 109,
+    "vote_group": "1:tom-and-jerry:94d6e3aee870",
+    "vote_index": 1
+  },
+  {
+    "file_path": "tom-api/src/tom/health.pipe.ts",
+    "obligation_id": 112,
+    "vote_group": "1:tom-and-jerry:77179ff09fc5",
+    "vote_index": 1
+  },
+  {
+    "file_path": "tom-api/src/tom/logging.middleware.ts",
+    "obligation_id": 115,
+    "vote_group": "1:tom-and-jerry:5efcd57fede3",
+    "vote_index": 1
+  },
+  {
+    "file_path": "tom-api/src/tom/tom.controller.ts",
+    "obligation_id": 118,
+    "vote_group": "1:tom-and-jerry:767bbb8c2b46",
+    "vote_index": 1
+  }
+]
