@@ -773,105 +773,11 @@ func scanConfirmHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("scan_run_id, checkpoint_id, and answer are required")), nil
 		}
 
-		// Transition based on checkpoint
-		switch checkpointID {
-		case "scope":
-			if strings.Contains(strings.ToLower(answer), "yes") || strings.Contains(strings.ToLower(answer), "ok") || strings.Contains(strings.ToLower(answer), "confirm") || answer == "1" {
-				run, err := g.Store().GetScanRun(runID)
-				if err != nil {
-					return errorResult(fmt.Errorf("get scan run: %w", err)), nil
-				}
-				if run.Phase != "confirm_scope" {
-					return errorResult(fmt.Errorf("scan run %d is in phase %q, expected confirm_scope — re-run chronicle_discover_files", runID, run.Phase)), nil
-				}
-				// User confirmed — transition to extraction (preserve total_files from confirm_scope)
-				if err := g.Store().TransitionScanRun(runID, "phase1_extract", 0); err != nil {
-					return errorResult(fmt.Errorf("transition to phase1_extract: %w", err)), nil
-				}
-				return jsonResult(map[string]any{
-					"status":            "confirmed",
-					"message":           "Scope confirmed. Call chronicle_scan_next_file to start extraction.",
-					"total_obligations": run.TotalFiles,
-				}), nil
-			}
-			// User wants changes — keep in confirm_scope, they'll re-discover
-			return jsonResult(map[string]any{
-				"status":  "needs_change",
-				"message": "Update the manifest with chronicle_save_manifest, then re-run chronicle_discover_files.",
-			}), nil
-
-		case "phase1_review":
-			run, err := g.Store().GetScanRun(runID)
-			if err != nil {
-				return errorResult(fmt.Errorf("get scan run: %w", err)), nil
-			}
-			if run.Phase != "phase1_review" {
-				return errorResult(fmt.Errorf("scan run %d is in phase %q, expected phase1_review", runID, run.Phase)), nil
-			}
-			answerLower := strings.ToLower(answer)
-			if strings.Contains(answerLower, "re-review") || strings.Contains(answerLower, "retry") || strings.Contains(answerLower, "again") {
-				candidates, _ := g.ScanReviewCandidates(run.DomainKey, run.RevisionID)
-				for _, c := range candidates {
-					_, _ = g.Store().CreateObligation(run.RevisionID, run.DomainKey, "scan_file", c.FilePath, "phase1_review: "+c.Reason)
-				}
-				if err := g.Store().TransitionScanRun(runID, "phase1_extract", 0); err != nil {
-					return errorResult(fmt.Errorf("transition to phase1_extract: %w", err)), nil
-				}
-				return jsonResult(map[string]any{
-					"status":             "re_review",
-					"message":            "Re-extract review candidates, then resolve again.",
-					"review_candidates":  len(candidates),
-				}), nil
-			}
-			if strings.Contains(answerLower, "proceed") || strings.Contains(answerLower, "yes") || strings.Contains(answerLower, "ok") || strings.Contains(answerLower, "confirm") || answer == "1" {
-				if err := g.Store().TransitionScanRun(runID, "endpoint_reconcile", 0); err != nil {
-					return errorResult(fmt.Errorf("transition to endpoint_reconcile: %w", err)), nil
-				}
-				return jsonResult(map[string]any{
-					"status":  "confirmed",
-					"message": "Review gate passed. Call chronicle_scan_next_file for endpoint reconciliation.",
-				}), nil
-			}
-			return jsonResult(map[string]any{
-				"status":  "needs_answer",
-				"message": "Answer 'proceed' to continue or 're-review files' to re-extract flagged files.",
-			}), nil
-
-		case "phase1_summary":
-			run, err := g.Store().GetScanRun(runID)
-			if err != nil {
-				return errorResult(fmt.Errorf("get scan run: %w", err)), nil
-			}
-			answerLower := strings.ToLower(answer)
-			if strings.Contains(answerLower, "skip") {
-				if err := g.Store().CompleteScanRun(runID); err != nil {
-					return errorResult(fmt.Errorf("complete scan run: %w", err)), nil
-				}
-				return jsonResult(map[string]any{
-					"status":  "skipped",
-					"message": "Flow tracing skipped. Scan complete.",
-				}), nil
-			}
-			if strings.Contains(answerLower, "yes") || strings.Contains(answerLower, "ok") || strings.Contains(answerLower, "confirm") || answer == "1" {
-				if run.Phase != "phase2_confirm" {
-					return errorResult(fmt.Errorf("scan run %d is in phase %q, expected phase2_confirm", runID, run.Phase)), nil
-				}
-				if err := g.Store().TransitionScanRun(runID, "phase2_extract", 0); err != nil {
-					return errorResult(fmt.Errorf("transition to phase2_extract: %w", err)), nil
-				}
-				return jsonResult(map[string]any{
-					"status":  "confirmed",
-					"message": "Flow tracing confirmed. Call chronicle_scan_next_file to trace flows.",
-				}), nil
-			}
-			return jsonResult(map[string]any{
-				"status":  "needs_answer",
-				"message": "Answer 'yes' to trace flows or 'skip flows' to finish without phase 2.",
-			}), nil
-
-		default:
-			return errorResult(fmt.Errorf("unknown checkpoint: %s", checkpointID)), nil
+		out, err := applyCheckpointAnswer(g, runID, checkpointID, answer)
+		if err != nil {
+			return errorResult(err), nil
 		}
+		return jsonResult(out), nil
 	}
 }
 
@@ -917,6 +823,56 @@ func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
+
+		// Lab autopilot: auto-answer checkpoints instead of blocking.
+		// Bounded loop — a misconfigured answer that doesn't transition
+		// (needs_answer) must not spin forever.
+		for i := 0; i < 4 && action != nil && action.Checkpoint != nil; i++ {
+			run, rerr := g.Store().GetActiveScanRun(domain)
+			if rerr != nil || run == nil {
+				break
+			}
+			labCfg, lerr := g.Store().LabConfigForRevision(run.RevisionID)
+			if lerr != nil || !labCfg.Autopilot {
+				break
+			}
+			answer, ok := labCfg.Answers[action.Checkpoint.ID]
+			if !ok {
+				answer = "proceed"
+			}
+			out, aerr := applyCheckpointAnswer(g, run.RunID, action.Checkpoint.ID, answer)
+			if aerr != nil {
+				// Unknown checkpoint id — record it and stop; never block silently.
+				_, _ = g.Store().AddDiscovery(store.Discovery{
+					DomainKey:   domain,
+					Category:    "unknown_pattern",
+					Severity:    "warning",
+					Title:       fmt.Sprintf("autopilot: unknown checkpoint %q", action.Checkpoint.ID),
+					Description: fmt.Sprintf("autopilot: unknown checkpoint %q (answer %q): %v", action.Checkpoint.ID, answer, aerr),
+					Source:      "system",
+					Confidence:  1.0,
+				})
+				break
+			}
+			_ = g.Store().AppendScanRunAutoConfirm(run.RunID, action.Checkpoint.ID, answer)
+			if status, _ := out["status"].(string); status == "needs_answer" || status == "needs_change" {
+				action.Reason = fmt.Sprintf("autopilot: answer %q for checkpoint %q returned %s — fix the answers map", answer, action.Checkpoint.ID, status)
+				break
+			}
+			if status, _ := out["status"].(string); status == "skipped" {
+				return jsonResult(map[string]any{
+					"domain": domain,
+					"action": "none",
+					"done":   true,
+					"reason": "autopilot: flow tracing skipped, scan complete — finalize with snapshot_create + stale_mark",
+				}), nil
+			}
+			action, err = g.ScanNextAction(domain, tech...)
+			if err != nil {
+				return errorResult(err), nil
+			}
+		}
+
 		if len(infra) > 0 {
 			action.Infrastructure = infra
 		}
