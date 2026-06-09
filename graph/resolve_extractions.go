@@ -24,6 +24,7 @@ type Fact struct {
 	Object     string   `json:"object,omitempty"`      // callee object
 	Decorator  string   `json:"decorator,omitempty"`   // decorator name
 	Target     string   `json:"target,omitempty"`      // URL or target identifier
+	Transport  string   `json:"transport,omitempty"`   // transport mechanism: "queue", "local", "kafka", etc.
 	Confidence float64  `json:"confidence,omitempty"`  // agent confidence [0,1]
 	Note       string   `json:"note,omitempty"`        // agent uncertainty/note
 	Reason     string   `json:"reason,omitempty"`      // reason for relationship (e.g. parent container justification)
@@ -32,6 +33,15 @@ type Fact struct {
 	Trigger    string   `json:"trigger,omitempty"`      // what triggers this flow (endpoint, event, cron)
 	Steps      []string `json:"steps,omitempty"`        // ordered list of steps in the flow
 	Requires   []string `json:"requires,omitempty"`     // services/models this flow depends on
+}
+
+// frameworkInjectDenylist contains NestJS/Node framework plumbing names that
+// should never become provider nodes or INJECTS edges. These are runtime
+// tokens injected via @InjectQueue(), EventEmitter2, etc. — not application
+// services. Add entries in lowercase; matching is case-insensitive.
+var frameworkInjectDenylist = map[string]bool{
+	"queue":        true, // Bull/BullMQ @InjectQueue token
+	"eventemitter2": true, // NestJS event emitter adapter
 }
 
 // ResolveOptions controls obligation gating before resolve.
@@ -616,8 +626,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// If not a known model, fact is kept as raw evidence but doesn't create an edge
 
 	case "calls_service":
-		// Explicit service call — creates CALLS_SERVICE edge
-		// First try to link to existing service:service node, then fall back to code:provider
+		// Explicit service call — creates CALLS_SERVICE edge.
+		// If the target resolves to an in-domain code-layer node (DI provider/controller),
+		// this is a local intra-service call — skip the edge entirely. Only truly external
+		// or unresolvable targets get a CALLS_SERVICE edge.
 		if fact.To == "" {
 			return counts, nil
 		}
@@ -626,6 +638,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		toName := fact.To
+
+		// R4: resolve target and drop if it is a local code-layer node.
+		// We use the same resolution order as resolveClassNameTarget but only look up
+		// existing nodes — we must NOT create new nodes here.
+		if isLocalCodeNode(g, domainKey, toName) {
+			return counts, nil
+		}
+
 		// Try service layer first (service:service:domain:name)
 		svcKey := "service:service:" + domainKey + ":" + normalizePackageName(toName)
 		toNodeKey := svcKey
@@ -762,6 +782,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fact.To == "" {
 			return counts, nil
 		}
+		// R5: skip framework plumbing tokens that are never real application nodes.
+		if frameworkInjectDenylist[strings.ToLower(fact.To)] {
+			return counts, nil
+		}
 		if !isPlausibleClassName(fact.To) {
 			return counts, nil
 		}
@@ -817,7 +841,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "produces":
-		// Produces to topic/queue
+		// Produces to topic/queue.
+		// transport=local means in-process EventEmitter calls — no broker node, no graph edge.
+		if strings.ToLower(fact.Transport) == "local" {
+			return counts, nil
+		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
@@ -849,7 +877,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "consumes":
-		// Consumes from topic/queue
+		// Consumes from topic/queue.
+		// transport=local means in-process EventEmitter calls — no broker node, no graph edge.
+		if strings.ToLower(fact.Transport) == "local" {
+			return counts, nil
+		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
@@ -891,13 +923,21 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if route == "" {
 			route = fact.To
 		}
+		// Normalize the controller base path (fact.From).
+		// When the LLM emits the class name ("TomController") instead of the route
+		// prefix ("tom"), we strip the "Controller"/"Gateway" suffix and lowercase to
+		// recover the conventional NestJS base path. This prevents phantom nodes like
+		// "GET /TomController/status" when the canonical path is "GET /tom/status".
+		basePath := normalizeControllerBase(fact.From)
+
 		// Use joinRoutePath only when route is relative (no leading slash).
-		// If route already starts with "/", it is absolute and fact.From is a class name, not a prefix.
+		// If route already starts with "/", it is already absolute — use it directly
+		// (the basePath / class-name is not a meaningful prefix here).
 		var path string
 		if strings.HasPrefix(route, "/") {
 			path = route
 		} else {
-			path = joinRoutePath(fact.From, route)
+			path = joinRoutePath(basePath, route)
 		}
 		toNodeKey, endpointName := normalizeEndpointKey(domainKey, fact.Method, path)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, endpointName, "")
@@ -2456,4 +2496,59 @@ func normalizePackageName(pkg string) string {
 	// "some-package" → "some-package"
 	name := inferNameFromImport(pkg)
 	return strings.ToLower(strings.ReplaceAll(name, "/", "-"))
+}
+
+// normalizeControllerBase converts a controller identifier to a URL route prefix.
+// When the LLM emits a class name ("TomController") instead of the NestJS @Controller
+// argument ("tom"), we strip the "Controller"/"Gateway" suffix and lowercase to recover
+// the conventional base path. If the value is already lowercase (e.g. "tom", "arena"),
+// it is returned unchanged.
+//   "tom"             → "tom"
+//   "TomController"   → "tom"
+//   "ArenaGateway"    → "arena"
+//   "api/v1"          → "api/v1"
+func normalizeControllerBase(base string) string {
+	if base == "" {
+		return ""
+	}
+	for _, suffix := range []string{"Controller", "Gateway"} {
+		if strings.HasSuffix(base, suffix) {
+			return strings.ToLower(strings.TrimSuffix(base, suffix))
+		}
+	}
+	return base
+}
+
+// isLocalCodeNode returns true when the given name resolves to an established
+// in-domain code-layer node — one that was pre-created or came from a scanned
+// file (identified by a PascalCase display name matching the target). Stem nodes
+// synthesized by resolveClassNameTarget as fallback placeholders use a dot-case
+// name (e.g. "order.service") and are intentionally excluded. This is used by
+// the calls_service handler (R4) to suppress CALLS_SERVICE edges for DI
+// references that are really local intra-service method calls.
+func isLocalCodeNode(g *Graph, domainKey, name string) bool {
+	if name == "" {
+		return false
+	}
+	flat := flattenName(name)
+	for _, nodeType := range []string{"provider", "controller", "module"} {
+		nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: nodeType})
+		for _, n := range nodes {
+			if n.Layer != "code" {
+				continue
+			}
+			// Exclude synthesized placeholder nodes: their Name is the dot-case
+			// derivation (lower-case, contains dots). Real nodes have PascalCase or
+			// path-keyed names (contain slashes). If the name starts with a lowercase
+			// letter AND contains only dots/dashes/lowercase, it's a placeholder.
+			if len(n.Name) > 0 && n.Name[0] >= 'a' && n.Name[0] <= 'z' && !strings.Contains(n.Name, "/") {
+				continue
+			}
+			// Match by display name (case-insensitive flatten)
+			if flattenName(n.Name) == flat {
+				return true
+			}
+		}
+	}
+	return false
 }
