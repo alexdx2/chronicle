@@ -159,6 +159,9 @@ func revisionCreateTool() mcp.Tool {
 		mcp.WithString("before_sha", mcp.Description("Git before SHA")),
 		mcp.WithString("trigger", mcp.Description("Trigger kind (full_scan, manual, git_hook, push_webhook, release_webhook, ci_pipeline)")),
 		mcp.WithString("mode", mcp.Description("Mode (full or incremental)")),
+		mcp.WithBoolean("autopilot", mcp.Description("Lab: auto-answer all scan checkpoints (no interactive confirm)")),
+		mcp.WithString("answers", mcp.Description("Lab: JSON object {checkpoint_id: answer}, e.g. {\"phase1_summary\":\"skip flows\"}. Default answer is 'proceed'.")),
+		mcp.WithString("base_domain", mcp.Description("Lab: inherit scan include/exclude/tech from this manifest domain; 'domain' may be a synthetic lab key like tom-and-jerry__haiku-3x1")),
 	)
 }
 
@@ -184,7 +187,23 @@ func revisionCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
 			mode = "full"
 		}
 
-		id, err := g.Store().CreateRevision(domain, beforeSHA, afterSHA, trigger, mode, "{}")
+		metadata := "{}"
+		autopilot := boolParam(args, "autopilot")
+		answersJSON := strParam(args, "answers")
+		baseDomain := strParam(args, "base_domain")
+		if autopilot || answersJSON != "" || baseDomain != "" {
+			answers := map[string]string{}
+			if answersJSON != "" {
+				if err := json.Unmarshal([]byte(answersJSON), &answers); err != nil {
+					return errorResult(fmt.Errorf("answers must be a JSON object of strings: %w", err)), nil
+				}
+			}
+			lab := store.LabConfig{Autopilot: autopilot, Answers: answers, BaseDomain: baseDomain}
+			b, _ := json.Marshal(map[string]any{"lab": lab})
+			metadata = string(b)
+		}
+
+		id, err := g.Store().CreateRevision(domain, beforeSHA, afterSHA, trigger, mode, metadata)
 		if err != nil {
 			return errorResult(err), nil
 		}
