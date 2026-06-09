@@ -660,11 +660,21 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
-		// Parse optional scope filter (JSON array of glob strings)
+		// Parse optional scope filter — accepts a JSON-encoded string OR a raw []any array.
 		var scope []string
-		if s := strParam(args, "scope"); s != "" {
-			if err := json.Unmarshal([]byte(s), &scope); err != nil {
-				return errorResult(fmt.Errorf("scope must be a JSON array of globs: %w", err)), nil
+		switch sv := args["scope"].(type) {
+		case []any:
+			// Caller passed a native JSON array (e.g. from tool-call parsing).
+			for _, v := range sv {
+				if s, ok := v.(string); ok && s != "" {
+					scope = append(scope, s)
+				}
+			}
+		case string:
+			if sv != "" {
+				if err := json.Unmarshal([]byte(sv), &scope); err != nil {
+					return errorResult(fmt.Errorf("scope must be a JSON array of globs: %w", err)), nil
+				}
 			}
 		}
 

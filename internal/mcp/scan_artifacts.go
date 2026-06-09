@@ -10,6 +10,7 @@ import (
 
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -124,10 +125,17 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("domain and revision_id are required")), nil
 		}
 
-		outboxDir := filepath.Join(graph.ProjectRoot(), ".depbot", "scan-outbox", fmt.Sprintf("%d", revisionID))
+		rootDir := graph.ProjectRoot()
+		outboxDir := filepath.Join(rootDir, ".depbot", "scan-outbox", fmt.Sprintf("%d", revisionID))
 		entries, err := os.ReadDir(outboxDir)
 		if err != nil {
 			return errorResult(fmt.Errorf("read outbox %s: %w", outboxDir, err)), nil
+		}
+
+		// Load manifest tech list for AST rule selection (best-effort; empty → defaults).
+		var manifestTech []string
+		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
+			manifestTech = m.Tech
 		}
 
 		imported := 0
@@ -161,6 +169,14 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 				errMsgs = append(errMsgs, ext.FilePath+": "+err.Error())
 				continue
 			}
+
+			// Merge server-side AST facts with LLM facts for TypeScript and Prisma files.
+			// This ensures deterministic AST imports/from_type are present regardless of
+			// extractor model quality (evidence-first principle).
+			if ext.Status == "extracted" {
+				factsJSON, ext.FromType = graph.MergeASTFactsJSON(ext.FilePath, factsJSON, ext.FromType, manifestTech)
+			}
+
 			errMsg := ext.ErrorMessage
 			if errMsg == "" {
 				errMsg = ext.Error
