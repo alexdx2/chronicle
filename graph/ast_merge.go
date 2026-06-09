@@ -119,6 +119,12 @@ func factKey(f map[string]any) string {
 	method, _ := f["method"].(string)
 	k := strings.ToLower(kind)
 	v := strings.ToLower(val)
+	// method is identity only where it disambiguates (GET vs POST /x, call sites);
+	// for topic/eventing kinds the topic name IS the identity — AST and LLM
+	// record different method names for the same emit/handler.
+	if k != "endpoint" && k != "call" && k != "http_call" && k != "calls_endpoint" {
+		method = ""
+	}
 	if k == "endpoint" {
 		// AST emits route fragments ("status"), LLMs emit full paths
 		// ("/jerry/status") — dedupe on the trailing segment within a file.
