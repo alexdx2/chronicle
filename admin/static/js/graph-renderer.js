@@ -216,6 +216,15 @@ export class GraphRenderer {
           .attr('x', gNode.x - gNode.width / 2 + 10)
           .attr('y', gNode.y - gNode.height / 2 + 14)
           .text(gk.toUpperCase());
+        // Group frames are drillable (e.g. C3-all service frame → that
+        // service's focused C3). The handler decides what a group means.
+        if (callbacks.onGroupDblClick) {
+          gg.style('cursor', 'pointer')
+            .on('dblclick', (event) => {
+              event.stopPropagation();
+              callbacks.onGroupDblClick(gk);
+            });
+        }
       });
     }
 
@@ -300,7 +309,23 @@ export class GraphRenderer {
       .attr('text-anchor', 'middle').attr('dy', 14)
       .attr('fill', d => self.layerColor(d.layer))
       .attr('font-size', 9).attr('opacity', 0.8)
-      .text(d => d.node_type || '');
+      .text(d => d._subtitle || d.node_type || '');
+
+    // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
+    // bottom-right corner; click = callbacks.onDrill (same as dblclick).
+    nodeG.filter(d => !!d._drill).append('text')
+      .attr('class', 'node-drill')
+      .attr('text-anchor', 'end')
+      .attr('x', nw / 2 - 5).attr('y', -nh / 2 + 11)
+      .attr('fill', d => self.layerColor(d.layer))
+      .attr('font-size', 9).attr('font-weight', 600)
+      .style('cursor', 'pointer')
+      .text('→ drill')
+      .on('click', (event, d) => {
+        event.stopPropagation();
+        if (callbacks.onDrill) callbacks.onDrill(d);
+        else if (callbacks.onDblClick) callbacks.onDblClick(d);
+      });
 
     nodeG.on('click', (event, d) => {
       event.stopPropagation();
@@ -363,7 +388,8 @@ export class GraphRenderer {
 
   clearHighlight() {
     if (!this._svg) return;
-    this._nodeG.attr('opacity', 1);
+    // Boundary/ref nodes keep their dim — only highlight overrides reset.
+    this._nodeG.attr('opacity', d => (d._isRef ? 0.4 : 1));
     this._edgeG.attr('opacity', 0.7);
   }
 

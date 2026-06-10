@@ -4,7 +4,6 @@
 import { GraphStore } from './graph-store.js';
 import { GraphPresets } from './graph-presets.js';
 import { GraphRenderer } from './graph-renderer.js';
-import { WorkspaceManager } from './workspace-manager.js';
 import { filterGraph } from './graph-filter.js';
 
 export class GraphController {
@@ -12,7 +11,6 @@ export class GraphController {
     this.store = new GraphStore();
     this.presets = null;
     this.renderer = null;
-    this.workspace = null;
     this._onStateChange = onStateChange || (() => {});
     this._currentPresetName = 'all';
     this._currentPreset = null;
@@ -35,13 +33,11 @@ export class GraphController {
 
     this.presets = new GraphPresets(registry);
     this.renderer = new GraphRenderer(containerEl);
-    this.workspace = new WorkspaceManager(this.store);
     this._currentPreset = this.presets.getPreset('all');
   }
 
   async loadGraph(graphApiResponse) {
     this.store.load(graphApiResponse);
-    if (this.workspace) this.workspace.clear();
     this.render();
   }
 
@@ -49,7 +45,6 @@ export class GraphController {
     this._currentPresetName = name;
     this._currentPreset = this.presets.getPreset(name);
     this._focusNodeIds = null;
-    this.workspace.clear();
     this._onStateChange({ preset: name, focus: null });
     // Clear focus from URL so it doesn't re-apply on next render
     try {
@@ -107,21 +102,6 @@ export class GraphController {
     this.render();
   }
 
-  handleDrop(nodeId, x, y) {
-    this.workspace.dropNode(nodeId, x, y);
-    this.render();
-  }
-
-  handleExpand(nodeId) {
-    this.workspace.expandNode(nodeId);
-    this.render();
-  }
-
-  clearWorkspace() {
-    this.workspace.clear();
-    this.render();
-  }
-
   setLayout(mode) {
     this._layoutMode = mode;
     this.render();
@@ -160,38 +140,6 @@ export class GraphController {
     let layout = this._layoutMode;
     let positionCache = {};
 
-    // If investigating, merge dropped nodes on top of the overview
-    if (this.workspace.isInvestigating) {
-      const view = this.workspace.getViewData();
-      const overviewIds = new Set(nodes.map(n => n.node_id));
-
-      // Add workspace nodes that aren't already in the overview
-      for (const n of view.nodes) {
-        if (!overviewIds.has(n.node_id)) {
-          nodes.push({
-            ...n,
-            _group: (groupField && n.layer !== 'infra') ? (n[groupField] || null) : null,
-          });
-        }
-      }
-
-      // Add workspace edges that aren't already in filtered edges
-      const edgeKeys = new Set(edges.map(e => e.from_node_id + '->' + e.to_node_id));
-      for (const e of view.edges) {
-        const key = e.from_node_id + '->' + e.to_node_id;
-        if (!edgeKeys.has(key)) {
-          edges.push(e);
-        }
-      }
-
-      // Only keep edges where both endpoints are in the final node set
-      const allIds = new Set(nodes.map(n => n.node_id));
-      edges = edges.filter(e => allIds.has(e.from_node_id) && allIds.has(e.to_node_id));
-
-      marks = view.marks;
-      positionCache = view.positionCache;
-    }
-
     this.renderer.render({
       nodes,
       edges,
@@ -212,20 +160,6 @@ export class GraphController {
     let nodes = [...filtered.nodes];
     let edges = [...filtered.edges];
 
-    if (this.workspace.isInvestigating) {
-      const view = this.workspace.getViewData();
-      const overviewIds = new Set(nodes.map(n => n.node_id));
-      for (const n of view.nodes) {
-        if (!overviewIds.has(n.node_id)) nodes.push(n);
-      }
-      const edgeKeys = new Set(edges.map(e => e.from_node_id + '->' + e.to_node_id));
-      for (const e of view.edges) {
-        if (!edgeKeys.has(e.from_node_id + '->' + e.to_node_id)) edges.push(e);
-      }
-      const allIds = new Set(nodes.map(n => n.node_id));
-      edges = edges.filter(e => allIds.has(e.from_node_id) && allIds.has(e.to_node_id));
-    }
-
     const nodeById = {};
     nodes.forEach(n => { nodeById[n.node_id] = n; });
 
@@ -238,7 +172,7 @@ export class GraphController {
     });
 
     let text = `# Graph Export (${nodes.length} nodes, ${edges.length} edges)\n`;
-    text += `# Preset: ${this._currentPresetName} | Mode: ${this.workspace.isInvestigating ? 'investigation' : 'overview'}`;
+    text += `# Preset: ${this._currentPresetName} | Mode: overview`;
     if (this._projectPath) text += ` | Project: ${this._projectPath}`;
     text += '\n\n';
 
@@ -265,7 +199,6 @@ export class GraphController {
   syncToUrl() {
     const params = new URLSearchParams(window.location.search);
     params.set('preset', this._currentPresetName);
-    params.set('mode', 'workspace');
     if (this._focusNodeIds) {
       const firstId = [...this._focusNodeIds][0];
       const node = this.store.getNode(firstId);
@@ -296,12 +229,10 @@ export class GraphController {
     return {
       onClick: (d, edges) => this._onStateChange({ selectedNode: d }),
       onDblClick: (d) => this._onStateChange({ zoomNode: d }),
-      onDrag: (id, x, y) => this.workspace.updatePosition(id, x, y),
       onBackgroundClick: () => {
         this.renderer.clearHighlight();
         this._onStateChange({ selectedNode: null });
       },
-      onExpand: (id) => this.handleExpand(id),
     };
   }
 }
