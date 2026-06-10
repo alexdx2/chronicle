@@ -398,35 +398,62 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		toName := inferNameFromImport(fact.To)
 
-		// Check if target already exists as a different type (e.g. controller)
-		// to avoid creating duplicate provider nodes for controllers
-		toNodeKey := typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
-		if fact.ToType == "" || fact.ToType == "provider" {
-			// Check if a controller node already exists with this name
-			ctrlKey := "code:controller:" + domainKey + ":" + strings.ToLower(toName)
-			if _, err := g.store.GetNodeIDByKey(ctrlKey); err == nil {
-				toNodeKey = ctrlKey
-			}
-			// Also try PascalCase→dot-case resolution
-			dotCase := normalizePascalCase(toName)
-			altKey := "code:provider:" + domainKey + ":" + strings.ToLower(dotCase)
-			if _, err := g.store.GetNodeIDByKey(altKey); err == nil {
-				toNodeKey = altKey
-			}
-		}
-
-		// Ensure nodes exist
+		// Ensure from-node exists
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
-		// Try to resolve target via alias before creating new node
+		// R8-import: for relative import specifiers ("./x" or "../x") resolve the
+		// target path deterministically from the importing file's directory.
+		// This is immune to same-class-name collisions across services (e.g. four
+		// prisma.service.ts files in one domain) because we never touch the alias
+		// table — we go straight to the path-keyed node.
+		// Non-relative (bare) imports fall through to the alias / stem path below.
+		var toNodeKey string
 		var toID int64
-		if candidates, err := g.store.FindCodeNodesByAlias(domainKey, toName, ""); err == nil && len(candidates) == 1 {
-			toID = candidates[0].NodeID
-			toNodeKey = candidates[0].NodeKey
+		if strings.HasPrefix(fact.To, "./") || strings.HasPrefix(fact.To, "../") {
+			resolvedPath := filepath.Join(filepath.Dir(filePath), fact.To)
+			resolvedPath = strings.ReplaceAll(resolvedPath, "\\", "/")
+			// Strip known extensions so the key matches path-keyed nodes.
+			for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
+				resolvedPath = strings.TrimSuffix(resolvedPath, ext)
+			}
+			// Determine node type: check scanFileIndex first, then infer from class name.
+			nodeType := g.scanFileIndex.byPath[resolvedPath+".ts"]
+			if nodeType == "" {
+				nodeType = g.scanFileIndex.byPath[resolvedPath]
+			}
+			if nodeType == "" && len(fact.Symbols) > 0 {
+				nodeType = inferNodeTypeFromClassName(fact.Symbols[0])
+			}
+			toNodeKey = typedNodeKeyFromFile(domainKey, resolvedPath, nodeType)
+			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, inferNameFromPath(resolvedPath), resolvedPath)
 		} else {
-			// Fallback: create as before
-			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
+			// Bare (non-relative) import — use existing alias / stem resolution.
+			// Check if target already exists as a different type (e.g. controller)
+			// to avoid creating duplicate provider nodes for controllers.
+			toNodeKey = typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
+			if fact.ToType == "" || fact.ToType == "provider" {
+				ctrlKey := "code:controller:" + domainKey + ":" + strings.ToLower(toName)
+				if _, err := g.store.GetNodeIDByKey(ctrlKey); err == nil {
+					toNodeKey = ctrlKey
+				}
+				dotCase := normalizePascalCase(toName)
+				altKey := "code:provider:" + domainKey + ":" + strings.ToLower(dotCase)
+				if _, err := g.store.GetNodeIDByKey(altKey); err == nil {
+					toNodeKey = altKey
+				}
+			}
+			if candidates, err := g.store.FindCodeNodesByAlias(domainKey, toName, ""); err == nil && len(candidates) == 1 {
+				toID = candidates[0].NodeID
+				toNodeKey = candidates[0].NodeKey
+			} else {
+				toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
+			}
+		}
+
+		// Guard: never create a self-edge via the import handler.
+		if fromID != 0 && toID != 0 && fromID == toID {
+			return counts, nil
 		}
 
 		// Determine edge type based on from/to node types
