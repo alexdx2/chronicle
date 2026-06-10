@@ -433,6 +433,256 @@ func TestR5_InjectsEventEmitter2_Dropped(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// R7c — distinct topic names must not fuzzy-merge (battle-result ≠ battle-results)
+// ---------------------------------------------------------------------------
+
+// TestR7c_DistinctTopicNames_StayDistinct verifies that topics whose names differ
+// alphabetically (not just punctuation) remain as separate nodes.
+// "battle-result" and "battle-results" differ by a trailing 's' → two nodes.
+func TestR7c_DistinctTopicNames_StayDistinct(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	facts := `[
+		{"kind":"produces","to":"battle-results","transport":"queue","from_type":"provider"},
+		{"kind":"produces","to":"battle-result","transport":"queue","from_type":"provider"}
+	]`
+	g.SaveFileExtraction(revID, domain, "arena-api/src/arena/battle-result.producer.ts", "extracted", "provider", facts, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, _ := s.ListNodes(store.NodeFilter{Domain: domain, NodeType: "topic"})
+	keys := make([]string, 0, len(topics))
+	for _, tp := range topics {
+		keys = append(keys, tp.NodeKey)
+	}
+
+	if len(topics) != 2 {
+		t.Errorf("R7c: expected 2 distinct topic nodes (battle-result + battle-results), got %d: %v", len(topics), keys)
+	}
+
+	hasResult, hasResults := false, false
+	for _, tp := range topics {
+		if strings.Contains(tp.NodeKey, "battle-results") {
+			hasResults = true
+		} else if strings.Contains(tp.NodeKey, "battle-result") {
+			hasResult = true
+		}
+	}
+	if !hasResult {
+		t.Errorf("R7c: missing topic node for 'battle-result'; got %v", keys)
+	}
+	if !hasResults {
+		t.Errorf("R7c: missing topic node for 'battle-results'; got %v", keys)
+	}
+}
+
+// TestR7c_PunctuationOnly_MayMerge verifies that names differing only in punctuation
+// (dot vs dash) resolve to the same topic node.
+func TestR7c_PunctuationOnly_MayMerge(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// Pre-create a topic with dot notation
+	facts := `[{"kind":"produces","to":"battle.result","transport":"queue","from_type":"provider"}]`
+	g.SaveFileExtraction(revID, domain, "service-a/result.producer.ts", "extracted", "provider", facts, "")
+
+	// Second fact uses dash notation — should resolve to same node
+	facts2 := `[{"kind":"consumes","to":"battle-result","transport":"queue","from_type":"provider"}]`
+	g.SaveFileExtraction(revID, domain, "service-b/result.consumer.ts", "extracted", "provider", facts2, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, _ := s.ListNodes(store.NodeFilter{Domain: domain, NodeType: "topic"})
+	if len(topics) != 1 {
+		keys := make([]string, 0, len(topics))
+		for _, tp := range topics {
+			keys = append(keys, tp.NodeKey)
+		}
+		t.Errorf("R7c: punctuation-only difference should yield 1 topic node, got %d: %v", len(topics), keys)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R7a — calls_service local-drop uses real resolution (not PascalCase heuristic)
+// ---------------------------------------------------------------------------
+
+// TestR7b_GatewayEmit_NoPublishesTopic verifies that a WS gateway's server.emit()
+// (transport=local after R7b tagging) does NOT create PUBLISHES_TOPIC edges or
+// contract:topic nodes.
+func TestR7b_GatewayEmit_NoPublishesTopic(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// battle.gateway.ts after R7b+R7d: server.emit produces transport=local
+	gatewayFacts := `[
+		{"kind":"produces","to":"battle-result","transport":"local","from_type":"provider"},
+		{"kind":"endpoint","method":"WS","target":"watch-battle","from_type":"provider"}
+	]`
+	g.SaveFileExtraction(revID, domain, "arena-api/src/arena/battle.gateway.ts", "extracted", "provider", gatewayFacts, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	// No PUBLISHES_TOPIC edges
+	pubEdges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES_TOPIC"})
+	if len(pubEdges) > 0 {
+		t.Errorf("R7b: WS gateway server.emit must not create PUBLISHES_TOPIC; got %d edges", len(pubEdges))
+	}
+
+	// No topic nodes
+	topics, _ := s.ListNodes(store.NodeFilter{Domain: domain, NodeType: "topic"})
+	if len(topics) > 0 {
+		keys := make([]string, 0)
+		for _, tp := range topics {
+			keys = append(keys, tp.NodeKey)
+		}
+		t.Errorf("R7b: WS gateway server.emit must not create topic nodes; got %v", keys)
+	}
+}
+
+// TestR7a_CallsService_PathKeyedNodeDropped verifies that a calls_service fact
+// targeting a class whose node is path-keyed (e.g. arena/arena.service → key has
+// dotted name) is still dropped as a local call.
+// The old isLocalCodeNode PascalCase heuristic missed path-keyed nodes because
+// it matched Name but path-keyed Names are not PascalCase (they contain slashes
+// and are stored as lowercase file paths). The new lookupCodeNode uses key suffix
+// matching to catch these.
+func TestR7a_CallsService_PathKeyedNodeDropped(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// Pre-create a path-keyed node that simulates what resolve creates when
+	// arena.service.ts is scanned with real facts. The key is path-based;
+	// the Name contains a slash (not PascalCase, not dot-case placeholder).
+	s.UpsertNode(store.NodeRow{
+		NodeKey:            "code:provider:testapp:arena-api/src/arena/arena.service",
+		Layer:              "code",
+		NodeType:           "provider",
+		DomainKey:          domain,
+		Name:               "arena-api/src/arena/arena.service",
+		Status:             "active",
+		LastSeenRevisionID: revID,
+	})
+
+	// controller calls_service to ArenaService — this is a local DI call, must be dropped.
+	facts := `[{"kind":"calls_service","to":"ArenaService","from_type":"controller"}]`
+	g.SaveFileExtraction(revID, domain, "arena-api/src/arena/arena.controller.ts", "extracted", "controller", facts, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CALLS_SERVICE"})
+	for _, e := range edges {
+		if !e.Active {
+			continue
+		}
+		if strings.Contains(e.ToNodeKey, "arenaservice") || strings.Contains(e.ToNodeKey, "arena.service") {
+			t.Errorf("R7a: CALLS_SERVICE to local path-keyed node must be dropped; got %s", e.EdgeKey)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R7b — WebSocket gateways are providers, not controllers
+// ---------------------------------------------------------------------------
+
+// TestR7b_Gateway_ClassifiedAsProvider verifies that a file with @WebSocketGateway
+// decorator is classified as from_type=provider (not controller), and that the
+// module CONTAINS edge resolves to the same provider node (no split).
+func TestR7b_Gateway_ClassifiedAsProvider(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// arena.module.ts provides BattleGateway in its providers[] array
+	moduleFacts := `[{"kind":"provides","to":"BattleGateway","from_type":"module"}]`
+	g.SaveFileExtraction(revID, domain, "arena-api/src/arena/arena.module.ts", "extracted", "module", moduleFacts, "")
+
+	// battle.gateway.ts — agent classifies from_type=provider (correct for WS gateway)
+	gatewayFacts := `[{"kind":"injects","to":"ArenaService","from_type":"provider"}]`
+	g.SaveFileExtraction(revID, domain, "arena-api/src/arena/battle.gateway.ts", "extracted", "provider", gatewayFacts, "")
+
+	// arena.service.ts — something to inject
+	g.SaveFileExtraction(revID, domain, "arena-api/src/arena/arena.service.ts", "extracted", "provider", `[]`, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	// BattleGateway node must be a provider, not a controller
+	nodes, _ := s.ListNodes(store.NodeFilter{Domain: domain})
+	var gatewayNode *store.NodeRow
+	for i := range nodes {
+		if strings.Contains(strings.ToLower(nodes[i].NodeKey), "battle.gateway") ||
+			strings.Contains(strings.ToLower(nodes[i].NodeKey), "battlegateway") {
+			gatewayNode = &nodes[i]
+			break
+		}
+	}
+	if gatewayNode == nil {
+		t.Fatal("R7b: BattleGateway node not found")
+	}
+	if gatewayNode.NodeType != "provider" {
+		t.Errorf("R7b: BattleGateway node_type = %q, want \"provider\"", gatewayNode.NodeType)
+	}
+
+	// The CONTAINS edge from the module must point to the same provider node
+	containsEdges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
+	moduleKey := "code:module:testapp:arena-api/src/arena/arena.module"
+	foundContains := false
+	for _, e := range containsEdges {
+		if e.FromNodeKey == moduleKey && e.ToNodeKey == gatewayNode.NodeKey {
+			foundContains = true
+			break
+		}
+	}
+	if !foundContains {
+		t.Errorf("R7b: module CONTAINS edge to BattleGateway provider node not found (moduleKey=%s, gatewayKey=%s)", moduleKey, gatewayNode.NodeKey)
+	}
+
+	// No controller node for BattleGateway should exist
+	for _, n := range nodes {
+		if n.NodeType == "controller" &&
+			(strings.Contains(strings.ToLower(n.NodeKey), "battle.gateway") ||
+				strings.Contains(strings.ToLower(n.NodeKey), "battlegateway")) {
+			t.Errorf("R7b: controller node must not exist for WS gateway; got %s", n.NodeKey)
+		}
+	}
+}
+
+// TestR7a_CallsService_ExternalKept verifies that calls_service to an unresolvable name
+// still creates a CALLS_SERVICE edge (no false-positive local-drop).
+func TestR7a_CallsService_ExternalKept(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// No node for "ExternalBillingService" exists
+	facts := `[{"kind":"calls_service","to":"ExternalBillingService","from_type":"provider"}]`
+	g.SaveFileExtraction(revID, domain, "payments/src/payments.service.ts", "extracted", "provider", facts, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CALLS_SERVICE"})
+	found := false
+	for _, e := range edges {
+		if e.Active {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("R7a: calls_service to unresolvable external should still create CALLS_SERVICE edge")
+	}
+}
+
 // TestR5_InjectsPrismaService_StillWorks verifies that PrismaService (a real
 // application service) is NOT in the denylist and still creates INJECTS edge.
 func TestR5_InjectsPrismaService_StillWorks(t *testing.T) {

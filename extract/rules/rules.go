@@ -14,6 +14,7 @@ import (
 type SemanticFact struct {
 	Kind       string   `json:"kind"`
 	To         string   `json:"to,omitempty"`
+	ToType     string   `json:"to_type,omitempty"`  // node type of target (controller, provider, etc.)
 	From       string   `json:"from,omitempty"`
 	Symbols    []string `json:"symbols,omitempty"`
 	Method     string   `json:"method,omitempty"`
@@ -104,6 +105,18 @@ func (r *Registry) Apply(raw *ast.RawResult) *ApplyResult {
 		}
 	}
 
+	// Detect @WebSocketServer() decorator presence — this marks the file as a WS gateway.
+	// socket.io server.emit() calls are client pushes, not broker publications.
+	// When @WebSocketServer is present, all produces_candidate with method=emit are
+	// tagged transport=local regardless of receiver name (the receiver IS the WS server).
+	hasWebSocketServer := false
+	for _, f := range raw.Facts {
+		if f.Kind == "decorator" && f.Name == "WebSocketServer" {
+			hasWebSocketServer = true
+			break
+		}
+	}
+
 	for _, f := range raw.Facts {
 		switch f.Kind {
 		case "import":
@@ -173,14 +186,50 @@ func (r *Registry) Apply(raw *ast.RawResult) *ApplyResult {
 
 		case "produces_candidate":
 			transport := ""
-			// If the file injects a local emitter type and the method is "emit", tag as local.
+			// If the file injects a local event emitter and the method is "emit", tag as local.
 			if hasLocalEmitter && f.Method == "emit" {
+				transport = "local"
+			}
+			// If the file declares a @WebSocketServer field, all emit() calls are
+			// socket.io client pushes — not message broker publications. Tag as local
+			// so the resolver does not mint a contract:topic node for them.
+			if hasWebSocketServer && f.Method == "emit" {
 				transport = "local"
 			}
 			result.Facts = append(result.Facts, SemanticFact{
 				Kind: "produces", To: f.To, Method: f.Method, Transport: transport, Confidence: 0.95,
 			})
+
+		case "module_member":
+			// Emit provides facts for @Module controllers/providers arrays.
+			// The @Module decorator rule fires earlier in the loop (decorators are
+			// extracted before module_member facts), so result.FromType == "module"
+			// by the time we reach these facts. A post-pass below drops provides
+			// facts from non-module files as a safety guard.
+			toType := "provider"
+			if f.From == "controllers" {
+				toType = "controller"
+			}
+			result.Facts = append(result.Facts, SemanticFact{
+				Kind:       "provides",
+				To:         f.To,
+				ToType:     toType,
+				Confidence: 0.95,
+			})
 		}
+	}
+
+	// Post-pass: strip provides facts emitted from non-module files.
+	// If AST did not classify this file as a module, drop all provides facts —
+	// they come from template noise rather than real @Module declarations.
+	if result.FromType != "module" {
+		var filtered []SemanticFact
+		for _, sf := range result.Facts {
+			if sf.Kind != "provides" {
+				filtered = append(filtered, sf)
+			}
+		}
+		result.Facts = filtered
 	}
 
 	return result

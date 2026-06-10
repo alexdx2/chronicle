@@ -639,10 +639,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		toName := fact.To
 
-		// R4: resolve target and drop if it is a local code-layer node.
-		// We use the same resolution order as resolveClassNameTarget but only look up
-		// existing nodes — we must NOT create new nodes here.
-		if isLocalCodeNode(g, domainKey, toName) {
+		// R7a: resolve target using the real scan-index + alias resolution (same as
+		// provides/injects handlers). If the target resolves to ANY in-domain code-layer
+		// node, this is a local DI call — drop the edge. Using lookupCodeNode instead
+		// of the old PascalCase heuristic catches path-keyed nodes like "arenaservice"
+		// whose Name starts with a lowercase letter.
+		if lookupCodeNode(g, domainKey, toName) {
 			return counts, nil
 		}
 
@@ -1268,7 +1270,13 @@ func (g *Graph) registerNodeAlias(nodeID int64, alias, aliasKind string) {
 }
 
 // resolveTopicKey finds an existing topic node by normalized name, or creates a canonical key.
-// Handles common variations: "battle-results" vs "battle-result", "order.created" vs "order-created".
+//
+// Merge policy (R7c):
+//   - Names that differ ONLY in punctuation (dots vs dashes vs underscores) are treated
+//     as the same topic: "battle.result" == "battle-result" == "battle_result".
+//   - Names that differ alphabetically (adding/removing letters, e.g. "battle-result" vs
+//     "battle-results") are DISTINCT topics — no plural/singular fusion.
+//   - DO NOT remove version suffixes — order.created.v2 is a different topic.
 func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) string {
 	normalized := strings.ToLower(strings.ReplaceAll(topicName, " ", "-"))
 	canonicalKey := "contract:topic:" + domainKey + ":" + normalized
@@ -1278,20 +1286,18 @@ func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) s
 		return canonicalKey
 	}
 
-	// Try only plural/singular variation (the most common agent inconsistency).
-	// DO NOT try dot↔dash — order.created and order-created are different topics.
-	// DO NOT try removing version suffixes — order.created.v2 is a different topic.
-	variants := []string{normalized}
-	if strings.HasSuffix(normalized, "s") {
-		variants = append(variants, strings.TrimSuffix(normalized, "s"))
-	} else {
-		variants = append(variants, normalized+"s")
-	}
+	// Punctuation-only match: dots, dashes, underscores are interchangeable separators.
+	// "battle.result" → stripped: "battleresult"; "battle-result" → "battleresult" → same.
+	// "battle-results" → "battleresults" ≠ "battleresult" → distinct (not merged).
+	strippedNew := strings.NewReplacer(".", "", "-", "", "_", "").Replace(normalized)
 
-	for _, v := range variants {
-		key := "contract:topic:" + domainKey + ":" + v
-		if n, _ := g.store.GetNodeByKey(key); n != nil {
-			return key // Found existing topic — reuse it
+	// Search existing topics for a punctuation-only match.
+	existingTopics, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "topic"})
+	for _, n := range existingTopics {
+		existingName := strings.TrimPrefix(n.NodeKey, "contract:topic:"+domainKey+":")
+		strippedExisting := strings.NewReplacer(".", "", "-", "", "_", "").Replace(existingName)
+		if strippedExisting == strippedNew {
+			return n.NodeKey // reuse the existing canonical key
 		}
 	}
 
@@ -2235,7 +2241,8 @@ func isPlausibleClassName(name string) bool {
 }
 
 func inferNodeTypeFromClassName(className string) string {
-	if strings.HasSuffix(className, "Controller") || strings.HasSuffix(className, "Gateway") {
+	// Only @Controller (REST) defines controllers. @WebSocketGateway → provider.
+	if strings.HasSuffix(className, "Controller") {
 		return "controller"
 	}
 	return "provider"
@@ -2519,13 +2526,60 @@ func normalizeControllerBase(base string) string {
 	return base
 }
 
-// isLocalCodeNode returns true when the given name resolves to an established
-// in-domain code-layer node — one that was pre-created or came from a scanned
-// file (identified by a PascalCase display name matching the target). Stem nodes
-// synthesized by resolveClassNameTarget as fallback placeholders use a dot-case
-// name (e.g. "order.service") and are intentionally excluded. This is used by
-// the calls_service handler (R4) to suppress CALLS_SERVICE edges for DI
-// references that are really local intra-service method calls.
+// lookupCodeNode returns true when the given name resolves to an established
+// in-domain code-layer node via the same scan-index + alias resolution that
+// provides/injects handlers use (resolveClassNameTarget without the create step).
+// This is used by the calls_service handler (R7a) to drop CALLS_SERVICE edges
+// for local DI references.
+func lookupCodeNode(g *Graph, domainKey, name string) bool {
+	if name == "" {
+		return false
+	}
+	dotCase := normalizePascalCase(name)
+	flat := flattenName(name)
+
+	// 1. Scan-file index — covers files that were scanned (even zero-fact).
+	if fp := g.scanFileIndex.byClassName[name]; fp != "" {
+		return true
+	}
+	if fp := g.scanFileIndex.byStem[strings.ToLower(dotCase)]; fp != "" {
+		return true
+	}
+
+	// 2. Alias lookup (class_name, file_stem aliases registered during node creation).
+	if aliasNodes, err := g.store.FindCodeNodesByAlias(domainKey, name, ""); err == nil && len(aliasNodes) > 0 {
+		return true
+	}
+	if aliasNodes, err := g.store.FindCodeNodesByAlias(domainKey, dotCase, ""); err == nil && len(aliasNodes) > 0 {
+		return true
+	}
+
+	// 3. Existing code-layer nodes matched by flattened name or key suffix.
+	for _, nodeType := range []string{"provider", "controller", "module"} {
+		nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: nodeType})
+		for _, n := range nodes {
+			if n.Layer != "code" {
+				continue
+			}
+			if flattenName(n.Name) == flat {
+				return true
+			}
+			// Also match on the last path segment of a path-keyed node key.
+			keyParts := strings.Split(n.NodeKey, ":")
+			if len(keyParts) > 0 {
+				lastPart := keyParts[len(keyParts)-1]
+				if flattenName(filepath.Base(lastPart)) == flat || flattenName(lastPart) == flat {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// isLocalCodeNode is kept for backward compatibility but lookupCodeNode is preferred.
+// It uses the old PascalCase heuristic and is no longer called by the resolve path.
 func isLocalCodeNode(g *Graph, domainKey, name string) bool {
 	if name == "" {
 		return false

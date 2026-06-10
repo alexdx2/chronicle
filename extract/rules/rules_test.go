@@ -154,6 +154,33 @@ func (c semCheck) String() string {
 	return s
 }
 
+// TestR7b_WebSocketGateway_IsProvider verifies that @WebSocketGateway sets from_type=provider,
+// not controller. Only @Controller defines controllers.
+func TestR7b_WebSocketGateway_IsProvider(t *testing.T) {
+	src, err := os.ReadFile("../../fixtures/tom-and-jerry/arena-api/src/arena/battle.gateway.ts")
+	if err != nil {
+		t.Skipf("fixture not available: %v", err)
+	}
+
+	raw := ast.ExtractTypeScript(src)
+	reg := NewRegistry(DefaultRulesets()...)
+	result := reg.Apply(raw)
+
+	fmt.Printf("\nbattle.gateway.ts: from_type=%q, %d facts\n", result.FromType, len(result.Facts))
+	for _, f := range result.Facts {
+		b, _ := json.Marshal(f)
+		fmt.Printf("  %s\n", b)
+	}
+
+	if result.FromType != "provider" {
+		t.Errorf("R7b: @WebSocketGateway from_type = %q, want \"provider\"", result.FromType)
+	}
+	// Must not be classified as controller
+	if result.FromType == "controller" {
+		t.Error("R7b: WS gateway must not be classified as controller")
+	}
+}
+
 // TestBullQueueRuleset verifies that Bull queue decorator patterns produce the correct
 // semantic facts with transport=queue and that job-name decorators don't produce topics.
 func TestBullQueueRuleset(t *testing.T) {
@@ -269,6 +296,130 @@ func TestEventEmitter2TransportLocal(t *testing.T) {
 		if !hasSemFact(result.Facts, c) {
 			t.Errorf("missing fact: %s", c.String())
 		}
+	}
+}
+
+// TestR6_ModuleProvidesFacts verifies that @Module decorator yields one provides fact
+// per controller/provider member, with the correct to_type.
+func TestR6_ModuleProvidesFacts(t *testing.T) {
+	tests := []struct {
+		path              string
+		wantControllers   []string // class names that should appear as to_type=controller
+		wantProviders     []string // class names that should appear as to_type=provider
+	}{
+		{
+			path:          "../../fixtures/tom-and-jerry/arena-api/src/arena/arena.module.ts",
+			wantControllers: []string{"ArenaController"},
+			wantProviders:   []string{"ArenaService", "TomClient", "JerryClient", "BattleResultProducer", "BattleGateway", "BattleGuard", "PrismaService"},
+		},
+		{
+			path:          "../../fixtures/tom-and-jerry/tom-api/src/tom/tom.module.ts",
+			wantControllers: []string{"TomController"},
+			wantProviders:   []string{"TomService", "PrismaService"},
+		},
+		{
+			path:          "../../fixtures/tom-and-jerry/jerry-api/src/jerry/jerry.module.ts",
+			wantControllers: []string{"JerryController"},
+			wantProviders:   []string{"JerryService", "PrismaService"},
+		},
+	}
+
+	reg := NewRegistry(DefaultRulesets()...)
+
+	for _, tt := range tests {
+		src, err := os.ReadFile(tt.path)
+		if err != nil {
+			t.Skipf("fixture not available: %s", tt.path)
+		}
+
+		raw := ast.ExtractTypeScript(src)
+		result := reg.Apply(raw)
+		name := tt.path[strings.LastIndex(tt.path, "/")+1:]
+
+		if result.FromType != "module" {
+			t.Errorf("%s: from_type = %q, want \"module\"", name, result.FromType)
+		}
+
+		// Index provides facts by to → to_type
+		providesByName := map[string]string{}
+		for _, f := range result.Facts {
+			if f.Kind == "provides" {
+				providesByName[f.To] = f.ToType
+			}
+		}
+
+		for _, want := range tt.wantControllers {
+			got, ok := providesByName[want]
+			if !ok {
+				t.Errorf("%s: missing provides fact for controller %q", name, want)
+			} else if got != "controller" {
+				t.Errorf("%s: provides %q to_type = %q, want \"controller\"", name, want, got)
+			}
+		}
+		for _, want := range tt.wantProviders {
+			got, ok := providesByName[want]
+			if !ok {
+				t.Errorf("%s: missing provides fact for provider %q", name, want)
+			} else if got != "provider" {
+				t.Errorf("%s: provides %q to_type = %q, want \"provider\"", name, want, got)
+			}
+		}
+
+		fmt.Printf("\n%s: from_type=%q, provides=%v\n", name, result.FromType, providesByName)
+	}
+}
+
+// TestR6_MergeDeduplication verifies that AST-generated provides facts do not double-up
+// when the LLM also emits provides facts for the same members (factKey dedup by kind|to).
+func TestR6_MergeDeduplication(t *testing.T) {
+	// Simulate AST provides + LLM provides for the same member
+	import_astmerge := func(astFacts, llmFacts []map[string]any) []map[string]any {
+		// Replicate unionFacts logic from graph/ast_merge.go
+		llmKeys := make(map[string]bool)
+		for _, f := range llmFacts {
+			k, _ := f["kind"].(string)
+			v, _ := f["to"].(string)
+			llmKeys[strings.ToLower(k)+"|"+strings.ToLower(v)+"|"] = true
+		}
+		var result []map[string]any
+		for _, f := range astFacts {
+			k, _ := f["kind"].(string)
+			v, _ := f["to"].(string)
+			key := strings.ToLower(k)+"|"+strings.ToLower(v)+"|"
+			if !llmKeys[key] {
+				result = append(result, f)
+			}
+		}
+		result = append(result, llmFacts...)
+		return result
+	}
+
+	astFacts := []map[string]any{
+		{"kind": "provides", "to": "ArenaController", "to_type": "controller"},
+		{"kind": "provides", "to": "ArenaService", "to_type": "provider"},
+	}
+	llmFacts := []map[string]any{
+		{"kind": "provides", "to": "ArenaController", "to_type": "controller"},
+	}
+
+	merged := import_astmerge(astFacts, llmFacts)
+
+	// Should have exactly 2 facts: 1 ArenaService from AST + 1 ArenaController from LLM
+	if len(merged) != 2 {
+		b, _ := json.Marshal(merged)
+		t.Errorf("expected 2 merged facts (no double ArenaController), got %d: %s", len(merged), b)
+	}
+
+	// ArenaController should appear exactly once
+	count := 0
+	for _, f := range merged {
+		to, _ := f["to"].(string)
+		if to == "ArenaController" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("ArenaController appears %d times in merged facts, want 1", count)
 	}
 }
 

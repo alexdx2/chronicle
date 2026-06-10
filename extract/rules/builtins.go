@@ -50,10 +50,14 @@ var GraphQL = Ruleset{
 }
 
 // WebSocket gateway rules.
+// @WebSocketGateway — a NestJS provider registered in the providers[] array of a module,
+// not a controller. Only @Controller (REST/GraphQL) defines controllers.
+// Gateways are typed as "provider" so they land in the right module slot and
+// do not get a phantom EXPOSES_ENDPOINT duplicate when the module CONTAINS edge resolves.
 var WebSocket = Ruleset{
 	Name: "websocket",
 	Decorators: map[string]DecoratorRule{
-		"WebSocketGateway": {SetsFromType: "controller"},
+		"WebSocketGateway": {SetsFromType: "provider"},
 	},
 }
 

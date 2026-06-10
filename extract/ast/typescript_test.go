@@ -103,6 +103,77 @@ func (c rawCheck) String() string {
 	return s
 }
 
+// TestR6_ModuleMemberExtraction verifies that @Module({controllers:[...], providers:[...]})
+// yields one module_member raw fact per member, with From=array name and To=class name.
+func TestR6_ModuleMemberExtraction(t *testing.T) {
+	tests := []struct {
+		path              string
+		wantControllers   []string
+		wantProviders     []string
+	}{
+		{
+			path:            "../../fixtures/tom-and-jerry/arena-api/src/arena/arena.module.ts",
+			wantControllers: []string{"ArenaController"},
+			wantProviders:   []string{"ArenaService", "TomClient", "JerryClient", "BattleResultProducer", "BattleGateway", "BattleGuard", "PrismaService"},
+		},
+		{
+			path:            "../../fixtures/tom-and-jerry/tom-api/src/tom/tom.module.ts",
+			wantControllers: []string{"TomController"},
+			wantProviders:   []string{"TomService", "PrismaService"},
+		},
+		{
+			path:            "../../fixtures/tom-and-jerry/jerry-api/src/jerry/jerry.module.ts",
+			wantControllers: []string{"JerryController"},
+			wantProviders:   []string{"JerryService", "PrismaService"},
+		},
+	}
+
+	for _, tt := range tests {
+		src, err := os.ReadFile(tt.path)
+		if err != nil {
+			t.Skipf("fixture not available: %s", tt.path)
+		}
+
+		result := ExtractTypeScript(src)
+		name := tt.path[strings.LastIndex(tt.path, "/")+1:]
+
+		// Collect module_member facts
+		membersByArray := map[string][]string{}
+		for _, f := range result.Facts {
+			if f.Kind == "module_member" {
+				membersByArray[f.From] = append(membersByArray[f.From], f.To)
+			}
+		}
+
+		for _, want := range tt.wantControllers {
+			found := false
+			for _, got := range membersByArray["controllers"] {
+				if got == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s: missing module_member controllers=%q; got controllers=%v", name, want, membersByArray["controllers"])
+			}
+		}
+		for _, want := range tt.wantProviders {
+			found := false
+			for _, got := range membersByArray["providers"] {
+				if got == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s: missing module_member providers=%q; got providers=%v", name, want, membersByArray["providers"])
+			}
+		}
+
+		fmt.Printf("\n%s module_member facts: controllers=%v providers=%v\n", name, membersByArray["controllers"], membersByArray["providers"])
+	}
+}
+
 func hasRawFact(facts []RawFact, check rawCheck) bool {
 	for _, f := range facts {
 		if f.Kind != check.kind {

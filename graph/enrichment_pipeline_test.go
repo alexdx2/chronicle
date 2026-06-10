@@ -35,11 +35,14 @@ func setupTestGraph(t *testing.T) (*Graph, *store.Store, int64) {
 func TestEnrichment_GoodControllerResponse(t *testing.T) {
 	g, _, revID := setupTestGraph(t)
 
-	// Simulates combined AST + LLM facts for a NestJS controller
+	// Simulates combined AST + LLM facts for a NestJS controller.
+	// calls_service to a local injected service (OrderService) is dropped by R7a —
+	// that's DI, not a cross-service call. Only truly external targets create CALLS_SERVICE.
+	// Using an external service to verify CALLS_SERVICE still works for real external calls.
 	facts := `[
 		{"kind":"endpoint","method":"POST","target":"/orders"},
 		{"kind":"injects","to":"OrderService"},
-		{"kind":"calls_service","to":"OrderService","method":"create"}
+		{"kind":"calls_service","to":"ExternalAuditService","method":"log"}
 	]`
 	g.SaveFileExtraction(revID, "testapp", "src/order.controller.ts", "extracted", "controller", facts, "")
 
@@ -166,9 +169,12 @@ func TestEnrichment_InventedKinds(t *testing.T) {
 func TestEnrichment_CandidateWrapperFormat(t *testing.T) {
 	g, _, revID := setupTestGraph(t)
 
-	// LLM returns candidate wrapper as top-level fact (common mistake)
+	// LLM returns candidate wrapper as top-level fact (common mistake).
+	// c1: calls_service to ExternalPaymentService (external — creates CALLS_SERVICE).
+	// c2: rejected — should be dropped.
+	// c3: uses_model User — creates USES_MODEL.
 	facts := `[
-		{"candidate_id":"c1","decision":"accept","fact":{"kind":"calls_service","to":"OrderService","method":"create"}},
+		{"candidate_id":"c1","decision":"accept","fact":{"kind":"calls_service","to":"ExternalPaymentService","method":"charge"}},
 		{"candidate_id":"c2","decision":"reject","reason":"logging"},
 		{"candidate_id":"c3","decision":"accept","fact":{"kind":"uses_model","to":"User"}}
 	]`
@@ -279,11 +285,14 @@ type GraphAssertion struct {
 func TestEnrichment_MustHaveMustNotHave(t *testing.T) {
 	g, _, revID := setupTestGraph(t)
 
-	// Controller + Service + Prisma model
+	// Controller + Service + Prisma model.
+	// Note: calls_service to a local injected service (OrderService) is correctly dropped
+	// by R7a — that's a DI call, not a cross-service call. We use an external service
+	// target to verify CALLS_SERVICE is still created for real external calls.
 	controllerFacts := `[
 		{"kind":"endpoint","method":"POST","target":"/orders"},
 		{"kind":"injects","to":"OrderService"},
-		{"kind":"calls_service","to":"OrderService","method":"create"}
+		{"kind":"calls_service","to":"ExternalInventoryService","method":"reserve"}
 	]`
 	g.SaveFileExtraction(revID, "testapp", "src/order.controller.ts", "extracted", "controller", controllerFacts, "")
 

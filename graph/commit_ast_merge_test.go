@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alexdx2/chronicle-core/store"
 )
 
 // repoRootFromCWD walks up from cwd until it finds a .git directory.
@@ -195,6 +197,138 @@ func TestFactKey_Dedup(t *testing.T) {
 	// Both should produce the same key (lowercased).
 	if factKey(f1) != factKey(f2) {
 		t.Errorf("factKey mismatch: %q vs %q", factKey(f1), factKey(f2))
+	}
+}
+
+// TestR7d_TransportPreserved_OnLLMWin verifies that when an LLM fact wins over a
+// duplicate AST fact, the AST-only "transport" field is copied to the LLM fact.
+// This prevents local events from creating broker topic nodes when the LLM omits transport.
+func TestR7d_TransportPreserved_OnLLMWin(t *testing.T) {
+	// AST fact has transport=local (tagged by rules layer from @OnEvent decorator).
+	// LLM fact has no transport field (common LLM omission).
+	// After merge, the LLM fact should have transport=local.
+	astFacts := []map[string]any{
+		{"kind": "consumes", "to": "battle.result", "transport": "local"},
+	}
+	llmFacts := []map[string]any{
+		{"kind": "consumes", "to": "battle.result"}, // no transport
+	}
+
+	result := unionFacts(astFacts, llmFacts)
+
+	if len(result) != 1 {
+		b, _ := json.MarshalIndent(result, "", "  ")
+		t.Fatalf("expected 1 merged fact, got %d:\n%s", len(result), string(b))
+	}
+
+	transport, _ := result[0]["transport"].(string)
+	if transport != "local" {
+		t.Errorf("R7d: transport not preserved; got %q, want \"local\"\nfact: %v", transport, result[0])
+	}
+}
+
+// TestR7d_TransportPreserved_ToType verifies that to_type is also preserved from AST.
+func TestR7d_TransportPreserved_ToType(t *testing.T) {
+	astFacts := []map[string]any{
+		{"kind": "provides", "to": "ArenaController", "to_type": "controller"},
+	}
+	llmFacts := []map[string]any{
+		{"kind": "provides", "to": "ArenaController"}, // no to_type
+	}
+
+	result := unionFacts(astFacts, llmFacts)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 fact, got %d", len(result))
+	}
+	toType, _ := result[0]["to_type"].(string)
+	if toType != "controller" {
+		t.Errorf("R7d: to_type not preserved; got %q, want \"controller\"", toType)
+	}
+}
+
+// TestR7d_LLMTransport_NotOverridden verifies that if the LLM already has a transport
+// field, the AST value does NOT override it.
+func TestR7d_LLMTransport_NotOverridden(t *testing.T) {
+	astFacts := []map[string]any{
+		{"kind": "consumes", "to": "battle.result", "transport": "local"},
+	}
+	llmFacts := []map[string]any{
+		{"kind": "consumes", "to": "battle.result", "transport": "kafka"}, // LLM says kafka
+	}
+
+	result := unionFacts(astFacts, llmFacts)
+
+	transport, _ := result[0]["transport"].(string)
+	if transport != "kafka" {
+		t.Errorf("R7d: LLM transport should not be overridden; got %q, want \"kafka\"", transport)
+	}
+}
+
+// TestR7d_LocalTransport_NoTopicCreated verifies the full pipeline: LLM fact without
+// transport + AST duplicate with transport=local → merged fact → no topic node in graph.
+func TestR7d_LocalTransport_NoTopicCreated(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// Simulate: LLM submitted "consumes battle.result" without transport.
+	// AST computed "consumes battle.result transport=local".
+	// After MergeASTFacts, transport=local should be in the merged facts.
+	// After ResolveExtractions, no topic node should be created.
+
+	// We directly test via merged facts in resolve (bypass the file-based merge).
+	// The merged result should have transport=local because AST wins the field.
+	mergedFacts := `[{"kind":"consumes","to":"battle.result","transport":"local","from_type":"provider"}]`
+	g.SaveFileExtraction(revID, domain, "tom-api/src/tom/tom.events.ts", "extracted", "provider", mergedFacts, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, _ := s.ListNodes(store.NodeFilter{Domain: domain, NodeType: "topic"})
+	if len(topics) > 0 {
+		keys := make([]string, 0)
+		for _, tp := range topics {
+			keys = append(keys, tp.NodeKey)
+		}
+		t.Errorf("R7d: local transport consumes must not create topic nodes; got %v", keys)
+	}
+}
+
+// TestR6_ProvidesDedup_NoDoubles verifies that when AST emits provides facts from
+// @Module and the LLM also emits a provides fact for the same member, unionFacts
+// deduplicates on kind|to — leaving exactly one fact per member.
+func TestR6_ProvidesDedup_NoDoubles(t *testing.T) {
+	astFacts := []map[string]any{
+		{"kind": "provides", "to": "ArenaController", "to_type": "controller", "confidence": 0.95},
+		{"kind": "provides", "to": "ArenaService", "to_type": "provider", "confidence": 0.95},
+	}
+	llmFacts := []map[string]any{
+		// LLM also provides ArenaController (e.g. from inference)
+		{"kind": "provides", "to": "ArenaController", "to_type": "controller", "confidence": 0.80},
+	}
+
+	result := unionFacts(astFacts, llmFacts)
+
+	// Should be 2: ArenaService (AST only) + ArenaController (LLM wins)
+	if len(result) != 2 {
+		b, _ := json.MarshalIndent(result, "", "  ")
+		t.Fatalf("expected 2 facts (no double ArenaController), got %d:\n%s", len(result), string(b))
+	}
+
+	count := 0
+	for _, f := range result {
+		to, _ := f["to"].(string)
+		if to == "ArenaController" {
+			count++
+			// LLM fact should win (lower confidence = 0.80)
+			if c, _ := f["confidence"].(float64); c != 0.80 {
+				t.Errorf("LLM fact should win on overlap; confidence = %v, want 0.80", c)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("ArenaController appears %d times, want 1", count)
 	}
 }
 

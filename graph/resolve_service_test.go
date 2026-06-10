@@ -98,7 +98,10 @@ func TestTopicCanonical_ExactMatch(t *testing.T) {
 	}
 }
 
-func TestTopicCanonical_PluralMatch(t *testing.T) {
+// TestTopicCanonical_PluralDistinct verifies that R7c: "battle-result" and "battle-results"
+// are DISTINCT topics — names differing alphabetically (adding 's') must not be merged.
+// Punctuation-only differences (dot vs dash) may merge; letter differences must not.
+func TestTopicCanonical_PluralDistinct(t *testing.T) {
 	g, _, _ := setupTestGraph(t)
 	revID, _ := g.Store().CreateRevision("myapp", "", "abc", "manual", "full", "{}")
 
@@ -106,10 +109,16 @@ func TestTopicCanonical_PluralMatch(t *testing.T) {
 	g.Store().SaveExtraction(revID, "myapp", "producer.ts", "extracted", "provider", `[{"kind":"produces","to":"battle-results"}]`, "")
 	g.ResolveExtractions("myapp", revID)
 
-	// "battle-result" (without s) should resolve to same topic
+	// "battle-result" (without s) must resolve to its OWN canonical key, not merge with "battle-results"
 	key := g.resolveTopicKey("myapp", "battle-result", revID)
-	if key != "contract:topic:myapp:battle-results" {
-		t.Errorf("plural match key = %q, want contract:topic:myapp:battle-results", key)
+	if key != "contract:topic:myapp:battle-result" {
+		t.Errorf("R7c: plural match should NOT merge; got %q, want contract:topic:myapp:battle-result", key)
+	}
+
+	// Punctuation-only: "battle.results" should merge with "battle-results"
+	dotKey := g.resolveTopicKey("myapp", "battle.results", revID)
+	if dotKey != "contract:topic:myapp:battle-results" {
+		t.Errorf("R7c: punctuation-only difference should merge dot→dash; got %q, want contract:topic:myapp:battle-results", dotKey)
 	}
 }
 

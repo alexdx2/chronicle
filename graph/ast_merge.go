@@ -138,21 +138,53 @@ func factKey(f map[string]any) string {
 
 // unionFacts merges AST facts with LLM facts, keeping LLM facts on duplicate.
 // Result order: non-duplicate AST facts first, then all LLM facts.
+//
+// R7d: when an LLM fact wins over a duplicate AST fact, fields that the LLM fact
+// lacks but the AST fact has are copied over. This preserves deterministic fields
+// like "transport" (tagged by AST rules) that LLMs often omit. Without this, an
+// LLM "consumes battle.result" (no transport) would beat an AST "consumes
+// battle.result [transport=local]", and the local-skip guard would never fire.
 func unionFacts(astFacts, llmFacts []map[string]any) []map[string]any {
-	// Index LLM facts by dedup key so we can check for duplicates quickly.
-	llmKeys := make(map[string]bool, len(llmFacts))
-	for _, f := range llmFacts {
-		llmKeys[factKey(f)] = true
+	// Index LLM facts by dedup key for fast lookup.
+	llmByKey := make(map[string]int, len(llmFacts)) // key → index in llmFacts
+	for i, f := range llmFacts {
+		llmByKey[factKey(f)] = i
+	}
+
+	// For each AST fact that matches an LLM fact, copy AST-only fields to the LLM fact.
+	for _, astF := range astFacts {
+		idx, dup := llmByKey[factKey(astF)]
+		if !dup {
+			continue
+		}
+		llmF := llmFacts[idx]
+		// Copy fields present in AST but absent in LLM.
+		for _, field := range []string{"transport", "to_type"} {
+			if astVal, ok := astF[field]; ok {
+				if astVal != nil && astVal != "" {
+					if _, hasInLLM := llmF[field]; !hasInLLM {
+						llmF[field] = astVal
+					} else if s, ok := llmF[field].(string); ok && s == "" {
+						llmF[field] = astVal
+					}
+				}
+			}
+		}
+		llmFacts[idx] = llmF
 	}
 
 	var result []map[string]any
 	// Add AST facts that don't have a matching LLM fact.
+	llmKeys := make(map[string]bool, len(llmFacts))
+	for _, f := range llmFacts {
+		llmKeys[factKey(f)] = true
+	}
 	for _, f := range astFacts {
 		if !llmKeys[factKey(f)] {
 			result = append(result, f)
 		}
 	}
-	// Append all LLM facts (they always win on overlap).
+	// Append all LLM facts (they always win on overlap, now enriched with AST-only fields).
 	result = append(result, llmFacts...)
 	return result
 }

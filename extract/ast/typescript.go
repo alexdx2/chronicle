@@ -15,10 +15,10 @@ import (
 
 // RawFact is a syntax-level fact from AST analysis. No framework interpretation.
 type RawFact struct {
-	Kind        string   `json:"kind"`                   // import, decorator, constructor_param, call, member_call, produces_candidate
+	Kind        string   `json:"kind"`                   // import, decorator, constructor_param, call, member_call, produces_candidate, module_member
 	Name        string   `json:"name,omitempty"`         // decorator name, class name
-	To          string   `json:"to,omitempty"`           // import path, type name
-	From        string   `json:"from,omitempty"`         // object in member_call chain
+	To          string   `json:"to,omitempty"`           // import path, type name, or member class name
+	From        string   `json:"from,omitempty"`         // object in member_call chain, or array name (controllers/providers)
 	Symbols     []string `json:"symbols,omitempty"`      // imported symbols
 	Method      string   `json:"method,omitempty"`       // called method, decorated method
 	Args        string   `json:"args,omitempty"`         // raw decorator arguments text
@@ -99,7 +99,10 @@ func ExtractTypeScript(fileContent []byte) *RawResult {
 	// 6. .emit/.publish/.send with literal string arg
 	result.Facts = append(result.Facts, extractProducerCandidates(root, fileContent, lang)...)
 
-	// 7. Extract enrichment candidates — ambiguous code anchors for LLM classification
+	// 7. @Module({controllers:[...], providers:[...]}) member lists
+	result.Facts = append(result.Facts, extractModuleMembers(root, fileContent, lang)...)
+
+	// 8. Extract enrichment candidates — ambiguous code anchors for LLM classification
 	result.Candidates = extractEnrichmentCandidates(root, fileContent, lang)
 
 	return result
@@ -278,6 +281,84 @@ func findDecoratorTarget(decoratorNode *sitter.Node, src []byte) (kind string, n
 		return "class", ""
 	}
 	return "", ""
+}
+
+// --- @Module member lists ---
+
+// extractModuleMembers finds @Module({controllers:[...], providers:[...]}) and emits one
+// module_member raw fact per identifier, with From set to the array name ("controllers" or
+// "providers") and To set to the class name identifier.
+// Only the top-level @Module class decorator is targeted; method decorators are skipped.
+func extractModuleMembers(root *sitter.Node, src []byte, lang *sitter.Language) []RawFact {
+	// Match: @Module({ controllers: [...], providers: [...] })
+	// Tree shape: decorator → call_expression → arguments → object → pair
+	q, err := sitter.NewQuery(lang, `
+		(decorator
+			(call_expression
+				function: (identifier) @dec_name
+				arguments: (arguments
+					(object
+						(pair
+							key: [(property_identifier)(string)] @key
+							value: (array) @arr
+						)
+					)
+				)
+			)
+		)
+	`)
+	if err != nil {
+		return nil
+	}
+	defer q.Close()
+	cursor := sitter.NewQueryCursor()
+	defer cursor.Close()
+
+	var facts []RawFact
+	matches := cursor.Matches(q, root, src)
+	for m := matches.Next(); m != nil; m = matches.Next() {
+		var decName, key string
+		var arrNode *sitter.Node
+		for _, c := range m.Captures {
+			switch q.CaptureNames()[c.Index] {
+			case "dec_name":
+				decName = c.Node.Utf8Text(src)
+			case "key":
+				key = c.Node.Utf8Text(src)
+				// strip quotes if string key
+				key = strings.Trim(key, `'"`)
+			case "arr":
+				n := c.Node
+				arrNode = &n
+			}
+		}
+		if decName != "Module" {
+			continue
+		}
+		if key != "controllers" && key != "providers" {
+			continue
+		}
+		if arrNode == nil {
+			continue
+		}
+		// Walk the array for identifiers
+		for i := uint(0); i < arrNode.ChildCount(); i++ {
+			child := arrNode.Child(i)
+			if child == nil || child.Kind() != "identifier" {
+				continue
+			}
+			member := child.Utf8Text(src)
+			if member == "" {
+				continue
+			}
+			facts = append(facts, RawFact{
+				Kind: "module_member",
+				From: key,   // "controllers" or "providers"
+				To:   member, // e.g. "ArenaController"
+			})
+		}
+	}
+	return facts
 }
 
 // --- Constructor parameters ---
