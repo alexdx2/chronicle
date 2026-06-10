@@ -48,7 +48,9 @@ a{color:var(--primary);text-decoration:none}
 
 /* Layout */
 .container{max-width:1400px;margin:0 auto;padding:20px 24px}
-.container.fullscreen{max-width:none;padding:8px}
+/* Graph tab: full-bleed canvas — edge-to-edge with small padding */
+.container.graph-bleed{max-width:none;padding:10px 14px}
+.container.graph-bleed .graph-container{height:calc(100vh - 88px)}
 .stat-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
 .content-grid{display:grid;grid-template-columns:1fr 380px;gap:16px}
 .right-col{display:flex;flex-direction:column;gap:16px}
@@ -128,6 +130,16 @@ a{color:var(--primary);text-decoration:none}
 .graph-toolbar .mode-toggle{display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 .graph-toolbar .mode-btn{padding:4px 12px;border:none;background:transparent;font-size:12px;cursor:pointer;transition:all .15s}
 .graph-toolbar .mode-btn.active{background:var(--primary);color:#fff}
+.graph-toolbar .mode-btn.btn-with-ico{display:inline-flex;align-items:center;gap:5px}
+.btn-ico{width:15px;height:15px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* View-mode breadcrumb */
+.crumb-row{display:flex;align-items:center;gap:4px;font-size:12px;padding:5px 12px;background:var(--card);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.crumb{display:inline-flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:3px 10px;border-radius:6px;font-size:12px;font-family:inherit;color:var(--text-muted);transition:background .15s,color .15s}
+.crumb:hover{background:#f5f0e8}
+.crumb.active{color:var(--primary);font-weight:600}
+.crumb-sep{color:var(--text-muted);opacity:.5;font-size:11px;user-select:none}
+.crumb-badge{font-size:10px;font-weight:600;line-height:1;padding:2px 6px;border-radius:8px;background:var(--primary-light);color:var(--primary)}
+.crumb-meta{margin-left:auto;font-size:10px;color:var(--text-muted)}
 .chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--card);transition:all .15s;user-select:none}
 .chip.active{border-color:var(--primary);background:var(--primary-light);color:var(--primary)}
 .chip:hover{border-color:var(--primary)}
@@ -718,13 +730,13 @@ a{color:var(--primary);text-decoration:none}
 
 <!-- Graph Tab -->
 <!-- TAB_PANEL:graph:start -->
-<div class="container" :class="{'fullscreen': graphFullscreen}" x-show="tab==='graph'" x-cloak>
-  <div class="graph-container" :style="graphFullscreen ? 'height:calc(100vh - 100px)' : ''">
+<div class="container graph-bleed" x-show="tab==='graph'" x-cloak>
+  <div class="graph-container">
     <div class="graph-toolbar" style="flex-wrap:wrap;gap:6px">
       <!-- View toggle -->
       <div class="mode-toggle">
-        <button class="mode-btn" :class="{active:!viewActive && graphMode==='tree'}" @click="leaveViewMode();graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree</button>
         <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="leaveViewMode();graphMode='explore';if(modeController){modeController.setMode('explore')}else{renderGraph()};history.pushState(null,'','/graph/explore')">Explore</button>
+        <button class="mode-btn" :class="{active:!viewActive && graphMode==='tree'}" @click="leaveViewMode();graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree</button>
       </div>
 
       <!-- Unified view bar (Tree + Explore only): All = classic /api/graph,
@@ -761,30 +773,34 @@ a{color:var(--primary);text-decoration:none}
       <!-- Right side controls (always visible in every graph state) -->
       <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
         <template x-if="viewActive || graphMode==='explore'">
-          <button class="mode-btn" data-testid="palette-toggle" @click="paletteOpen=!paletteOpen" :class="{active:paletteOpen}">⊞ Palette</button>
+          <button class="mode-btn btn-with-ico" data-testid="palette-toggle" @click="paletteOpen=!paletteOpen" :class="{active:paletteOpen}">
+            <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/></svg>
+            Palette</button>
         </template>
         <template x-if="viewActive || graphMode==='explore'">
-          <button class="mode-btn" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">☰ Filters</button>
+          <button class="mode-btn btn-with-ico" @click="filterSidebarOpen=!filterSidebarOpen" :class="{active:filterSidebarOpen}">
+            <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
+            Filters</button>
         </template>
-        <button class="mode-btn" @click="exportGraphText()" title="Copy graph as text to clipboard">Export</button>
-        <button class="mode-btn" @click="graphFullscreen=!graphFullscreen;$nextTick(()=>renderGraph())" x-text="graphFullscreen ? '⊟' : '⊞'" style="font-size:14px;padding:2px 6px"></button>
+        <button class="mode-btn btn-with-ico" @click="exportGraphText()" title="Copy graph as text to clipboard">
+          <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export</button>
       </div>
     </div>
 
     <!-- View-mode breadcrumb: the spec stack (above the canvas) -->
     <template x-if="viewActive && (viewStack.length > 0 || viewLoading || viewError)">
-      <div data-testid="view-breadcrumb" style="display:flex;align-items:center;gap:4px;font-size:12px;padding:4px 12px;background:var(--card);border-bottom:1px solid var(--border)">
-        <button @click="exitViewMode()"
-                style="background:none;border:none;cursor:pointer;padding:3px 8px;border-radius:4px;font-size:12px;font-family:inherit;color:var(--text-muted)"
-                @mouseenter="$el.style.background='#f5f0e8'" @mouseleave="$el.style.background='none'">All</button>
+      <div data-testid="view-breadcrumb" class="crumb-row">
+        <button class="crumb" @click="exitViewMode()">All</button>
         <template x-for="(entry, i) in viewStack" :key="i">
           <span style="display:flex;align-items:center;gap:4px">
-            <span style="color:var(--border);font-size:10px">/</span>
-            <button @click="popViewTo(i)"
-                    style="background:none;border:none;cursor:pointer;padding:3px 8px;border-radius:4px;font-size:12px;font-family:inherit"
-                    :style="i === viewStack.length - 1 ? 'color:var(--primary);font-weight:600' : 'color:var(--text-muted)'"
-                    @mouseenter="$el.style.background='#f5f0e8'" @mouseleave="$el.style.background='none'"
-                    x-text="entry.title + (entry.spec && entry.spec.pin && entry.spec.pin.length ? ' +' + entry.spec.pin.length + ' pinned' : '')"></button>
+            <span class="crumb-sep">/</span>
+            <button class="crumb" :class="{active: i === viewStack.length - 1}" @click="popViewTo(i)">
+              <span x-text="entry.title"></span>
+              <template x-if="entry.spec && entry.spec.pin && entry.spec.pin.length">
+                <span class="crumb-badge" :title="entry.spec.pin.length + ' pinned'" x-text="'+' + entry.spec.pin.length"></span>
+              </template>
+            </button>
           </span>
         </template>
         <template x-if="viewLoading">
@@ -803,7 +819,7 @@ a{color:var(--primary);text-decoration:none}
           <span style="margin-left:12px;font-size:11px;color:var(--error)" x-text="viewError"></span>
         </template>
         <!-- Grouping indicator: derived from the active spec (always truthful) -->
-        <span data-testid="view-grouped-by" style="margin-left:auto;font-size:10px;color:var(--text-muted)"
+        <span data-testid="view-grouped-by" class="crumb-meta"
               x-text="'grouped by ' + viewGroupedByLabel()"></span>
       </div>
     </template>
@@ -1804,7 +1820,7 @@ function dashboard() {
     originalProject: '',
     projectName: '',
     graphData: { nodes: [], edges: [] },
-    graphMode: 'tree',
+    graphMode: 'explore',
     // C4 Zoom state
     zoomLevel: 'c2',
     zoomScope: {},
@@ -1812,7 +1828,6 @@ function dashboard() {
     zoomMode: 'explore',
     zoomDomainData: [],
     zoomBreadcrumbs: [],
-    graphFullscreen: false,
     graphController: null,
     modeController: null,
     graphPreset: 'all',
@@ -1874,7 +1889,9 @@ function dashboard() {
     groupByField: 'domain_key',
     wsDataSource: 'graph', // 'graph' or 'diagram'
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
-    filterSidebarOpen: false,
+    // Default open on desktop widths (panels are Explore/view-gated in the markup);
+    // the user's toggle choice then persists for the session via plain Alpine state.
+    filterSidebarOpen: window.innerWidth > 1100 && !document.documentElement.classList.contains('embed-mode'),
     hiddenNodeTypes: [],      // string[] of node_type values (legacy — computed from nodeTypeFilter)
     hiddenEdgeTypes: [],      // string[] of edge_type values
     edgeCategories: {},       // category_name → {color, types: {EDGE_TYPE: shortLabel}}
@@ -1893,7 +1910,8 @@ function dashboard() {
     autoFilteredNotice: '',   // shown when auto-preset kicks in for large graphs
     collapsedPaletteGroups: {},
     // Node palette (Explore/view mode): compose Custom views by drag or "+"
-    paletteOpen: false,
+    // Default open on desktop widths, same session-memory rule as filterSidebarOpen.
+    paletteOpen: window.innerWidth > 1100 && !document.documentElement.classList.contains('embed-mode'),
     paletteSearch: '',
     paletteCollapsed: {},     // group key → true when collapsed
     collapsedFilterSections: {},
