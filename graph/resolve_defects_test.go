@@ -785,3 +785,40 @@ func TestR5_InjectsPrismaService_StillWorks(t *testing.T) {
 		t.Error("PrismaService is not a framework injectable; INJECTS edge should exist")
 	}
 }
+
+// HTTP calls to the domain's own services must not leave external_system
+// nodes behind — C1 diagrams would show internal services as outsiders.
+func TestExternalSystem_MergedIntoInternalService(t *testing.T) {
+	g, _, revID := setupTestGraph(t)
+	g.SaveFileExtraction(revID, "extmerge", "tom-api/package.json", "extracted", "",
+		`[{"kind":"declares_service","to":"tom-api"}]`, "")
+	g.SaveFileExtraction(revID, "extmerge", "arena-api/src/tom.client.ts", "extracted", "provider",
+		`[{"kind":"http_call","method":"GET","target":"http://tom-api:3001/tom/status"}]`, "")
+	if _, err := g.ResolveExtractions("extmerge", revID); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	nodes, _ := g.Store().ListNodes(store.NodeFilter{Domain: "extmerge"})
+	var svcKey string
+	for _, n := range nodes {
+		if n.NodeType == "external_system" && n.Status != "deleted" && strings.Contains(strings.ToLower(n.Name), "tom") {
+			t.Errorf("external_system %q survived for internal service", n.NodeKey)
+		}
+		if n.NodeType == "service" && strings.Contains(n.Name, "tom-api") {
+			svcKey = n.NodeKey
+		}
+	}
+	if svcKey == "" {
+		t.Fatal("service node tom-api not created")
+	}
+	active := true
+	edges, _ := g.Store().ListEdges(store.EdgeFilter{Active: &active})
+	found := false
+	for _, e := range edges {
+		if e.EdgeType == "CALLS_SERVICE" && e.ToNodeKey == svcKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("CALLS_SERVICE not repointed to internal service node")
+	}
+}

@@ -312,6 +312,7 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 	// A module = node with ≥2 outbound import edges, 0 endpoints, 0 service actions.
 	// This is generic (not framework-specific) — modules wire things, they don't DO things.
 	g.fixModuleEdges(domainKey)
+	g.mergeExternalSystemsIntoServices(domainKey)
 	g.detectContainsConflicts(domainKey, revisionID)
 	g.detectContainsCycles(domainKey, revisionID)
 	hygiene := g.applyGraphHygiene(domainKey)
@@ -1481,6 +1482,47 @@ func classifyProviderRole(name string) string {
 		return "processor"
 	default:
 		return ""
+	}
+}
+
+// mergeExternalSystemsIntoServices repoints CALLS_SERVICE edges from
+// external_system nodes to in-domain service nodes with the same normalized
+// name, then removes the redundant external node. HTTP calls between a
+// domain's own services are internal — minting an external system for them
+// makes the C1 diagram show the system's own services as outsiders.
+// Runs as a post-pass because service nodes (declares_service facts) may
+// resolve after the http_call facts that referenced them.
+func (g *Graph) mergeExternalSystemsIntoServices(domainKey string) {
+	nodes, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	if err != nil {
+		return
+	}
+	services := map[string]store.NodeRow{}
+	var externals []store.NodeRow
+	for _, n := range nodes {
+		switch n.NodeType {
+		case "service":
+			services[flattenName(n.Name)] = n
+		case "external_system":
+			externals = append(externals, n)
+		}
+	}
+	active := true
+	for _, ext := range externals {
+		svc, ok := services[flattenName(ext.Name)]
+		if !ok {
+			continue
+		}
+		edges, _ := g.store.ListEdges(store.EdgeFilter{Active: &active})
+		for _, e := range edges {
+			if e.ToNodeKey != ext.NodeKey {
+				continue
+			}
+			newKey := e.FromNodeKey + "->" + svc.NodeKey + ":" + e.EdgeType
+			g.store.Exec("UPDATE graph_edges SET to_node_key=?, to_node_id=?, edge_key=? WHERE edge_id=?",
+				svc.NodeKey, svc.NodeID, newKey, e.EdgeID)
+		}
+		g.store.Exec("UPDATE graph_nodes SET status='deleted' WHERE node_id=?", ext.NodeID)
 	}
 }
 
