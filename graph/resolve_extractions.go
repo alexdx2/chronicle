@@ -737,6 +737,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fact.To == "" {
 			return counts, nil
 		}
+		// Only @Module files declare containment. LLMs sometimes emit a spurious
+		// self-provides in controller/provider files — those would create
+		// self-CONTAINS edges that poison conflict/cycle detection.
+		if fact.FromType != "" && fact.FromType != "module" {
+			return counts, nil
+		}
 		moduleType := fact.FromType
 		if moduleType == "" {
 			moduleType = "module"
@@ -762,6 +768,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			}
 		}
 
+		if toID == fromID {
+			return counts, nil // self-CONTAINS is never meaningful
+		}
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONTAINS"
 		confidence := fact.Confidence
 		if confidence == 0 {
@@ -1492,6 +1501,12 @@ func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
 	childParents := map[int64][]store.EdgeRow{}
 	for _, e := range allEdges {
 		if e.EdgeType != "CONTAINS" {
+			continue
+		}
+		if e.FromNodeID == e.ToNodeID || e.FromNodeKey == e.ToNodeKey {
+			// self-CONTAINS is corrupt input — deactivate immediately and never
+			// let it compete with a real parent in tie-breaking
+			g.store.Exec("UPDATE graph_edges SET active=0 WHERE edge_id=?", e.EdgeID)
 			continue
 		}
 		childParents[e.ToNodeID] = append(childParents[e.ToNodeID], e)

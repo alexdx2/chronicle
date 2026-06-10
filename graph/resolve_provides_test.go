@@ -266,3 +266,23 @@ func TestInjects_NoDuplicatePhantomWhenPathNodeExists(t *testing.T) {
 	}
 	t.Errorf("expected INJECTS edge to %s", serviceKey)
 }
+
+// Self-provides from non-module files must not create self-CONTAINS edges
+// (LLMs sometimes emit "provides: OwnClass" inside controller files).
+func TestProvides_NonModuleFile_Ignored(t *testing.T) {
+	g, _, revID := setupTestGraph(t)
+	facts := `[{"kind":"provides","to":"TomController"},{"kind":"endpoint","method":"GET","target":"/tom/status"}]`
+	g.SaveFileExtraction(revID, "selfprov", "svc/src/tom/tom.controller.ts", "extracted", "controller", facts, "")
+	if _, err := g.ResolveExtractions("selfprov", revID); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	edges, _ := g.Store().ListEdges(store.EdgeFilter{})
+	for _, e := range edges {
+		if e.EdgeType == "CONTAINS" && e.FromNodeKey == e.ToNodeKey {
+			t.Errorf("self-CONTAINS created: %s", e.FromNodeKey)
+		}
+		if e.EdgeType == "CONTAINS" && strings.Contains(e.FromNodeKey, "tom.controller") {
+			t.Errorf("controller file created CONTAINS edge: %s -> %s", e.FromNodeKey, e.ToNodeKey)
+		}
+	}
+}

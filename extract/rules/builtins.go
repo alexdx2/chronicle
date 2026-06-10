@@ -81,7 +81,7 @@ func RulesetsForTech(tech []string) []Ruleset {
 	if techSet["nestjs"] || techSet["nest"] {
 		// Bull is a NestJS integration and its decorators are unambiguous —
 		// projects rarely list "bull" in tech explicitly.
-		result = append(result, NestJS, Bull)
+		result = append(result, NestJS, Bull, WebSocket)
 	}
 	if techSet["graphql"] || techSet["apollo"] {
 		result = append(result, GraphQL)
