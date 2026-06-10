@@ -444,7 +444,7 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(checkLanguageTool(), checkLanguageHandler(g))
 	add(mcpIdentityTool(), mcpIdentityHandler())
 	add(commandTool(), commandHandler(g))
-	add(diagramBuildTool(), diagramBuildHandler())
+	add(diagramBuildTool(), diagramBuildHandler(g))
 	add(domainListTool(), domainListHandler(g))
 	add(resolveContextTool(), resolveContextHandler(g))
 	add(contextListTool(), contextListHandler(g))

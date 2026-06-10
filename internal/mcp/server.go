@@ -1,19 +1,19 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
+	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
@@ -83,7 +83,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(checkLanguageTool(), checkLanguageHandler(g))
 	s.AddTool(mcpIdentityTool(), mcpIdentityHandler())
 	s.AddTool(commandTool(), commandHandler(g))
-	s.AddTool(diagramBuildTool(), diagramBuildHandler())
+	s.AddTool(diagramBuildTool(), diagramBuildHandler(g))
 	s.AddTool(domainListTool(), domainListHandler(g))
 	s.AddTool(resolveContextTool(), resolveContextHandler(g))
 	s.AddTool(contextListTool(), contextListHandler(g))
@@ -144,6 +144,9 @@ func resolveKey(g *graph.Graph, raw string) (string, error) {
 
 
 func errorResult(err error) *mcp.CallToolResult {
+	if store.IsCorruptionError(err) {
+		return mcp.NewToolResultError(err.Error() + "\n\n" + store.RecoveryHint)
+	}
 	return mcp.NewToolResultError(err.Error())
 }
 
@@ -1202,12 +1205,53 @@ func importAllHandler(g *graph.Graph) server.ToolHandlerFunc {
 }
 
 // ---------------------------------------------------------------------------
+// view_url helpers (view algebra V2)
+// ---------------------------------------------------------------------------
+
+// keyDomain extracts the domain segment of a canonical node key
+// (layer:type:domain:qualified_name).
+func keyDomain(key string) string {
+	parts := strings.SplitN(key, ":", 4)
+	if len(parts) == 4 {
+		return parts[2]
+	}
+	return ""
+}
+
+// viewSpecURL encodes a ViewSpec into a dashboard deep link:
+// <adminBase>/#v/<base64url(compact spec JSON)>. The #v route is the V3
+// frontend; emitting the URL now is forward-compatible.
+func viewSpecURL(spec viewmodel.ViewSpec) string {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/#v/%s", adminBaseURL(), base64.RawURLEncoding.EncodeToString(data))
+}
+
+// withViewURL re-shapes a struct result into a generic map and appends
+// view_url — the equivalent diagram of the query result. The original
+// fields are untouched.
+func withViewURL(result any, spec viewmodel.ViewSpec) any {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return result
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return result
+	}
+	m["view_url"] = viewSpecURL(spec)
+	return m
+}
+
+// ---------------------------------------------------------------------------
 // chronicle_query_deps
 // ---------------------------------------------------------------------------
 
 func queryDepsTool() mcp.Tool {
 	return mcp.NewTool("chronicle_query_deps",
-		mcp.WithDescription("Query forward dependencies — what does this node depend on? BFS traversal of outgoing edges. Accepts name or full node_key."),
+		mcp.WithDescription("Query forward dependencies — what does this node depend on? BFS traversal of outgoing edges. Accepts name or full node_key. Result includes view_url — a dashboard deep link to the equivalent dependency diagram (forward-looking #v route)."),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'OrderService')")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation kinds to follow")),
 		mcp.WithNumber("depth", mcp.Description("Maximum BFS depth (default 3)")),
@@ -1239,7 +1283,10 @@ func queryDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
-		return jsonResult(nodes), nil
+		return jsonResult(map[string]any{
+			"nodes":    nodes,
+			"view_url": viewSpecURL(viewmodel.PresetSpec("deps", keyDomain(nodeKey), nodeKey)),
+		}), nil
 	}
 }
 
@@ -1485,7 +1532,7 @@ func finalizeIncrementalScanHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func queryPathTool() mcp.Tool {
 	return mcp.NewTool("chronicle_query_path",
-		mcp.WithDescription("Find paths between two nodes. Traverses through Kafka/message topics automatically (producer → topic → consumer). Default mode 'directed' follows data flow. Use 'connected' for undirected exploration. Structural edges (CONTAINS) excluded by default. Returns top-k paths ranked by path score."),
+		mcp.WithDescription("Find paths between two nodes. Traverses through Kafka/message topics automatically (producer → topic → consumer). Default mode 'directed' follows data flow. Use 'connected' for undirected exploration. Structural edges (CONTAINS) excluded by default. Returns top-k paths ranked by path score. Result includes view_url — a dashboard deep link to the equivalent path diagram (forward-looking #v route)."),
 		mcp.WithString("from_node_key", mcp.Required(), mcp.Description("Source node key OR name (e.g. 'ArenaService')")),
 		mcp.WithString("to_node_key", mcp.Required(), mcp.Description("Target node key OR name (e.g. 'SpectatorService')")),
 		mcp.WithNumber("max_depth", mcp.Description("Max depth (default 6)")),
@@ -1534,7 +1581,13 @@ func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		return jsonResult(result), nil
+		pathSpec := viewmodel.ViewSpec{
+			Scope:  viewmodel.ScopeSpec{Domain: keyDomain(fromKey), Nodes: []string{fromKey, toKey}},
+			Expand: &viewmodel.ExpandSpec{Mode: "path"},
+			Group:  viewmodel.GroupSpec{By: "none"},
+			Layout: viewmodel.LayoutSpec{Preset: "path"},
+		}
+		return jsonResult(withViewURL(result, pathSpec)), nil
 	}
 }
 
@@ -1544,7 +1597,7 @@ func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func impactTool() mcp.Tool {
 	return mcp.NewTool("chronicle_impact",
-		mcp.WithDescription("Analyze blast radius of a node change. Reverse dependency traversal with forward expansion to find affected endpoints and topics. Returns impacted components (with impact_score) and affected API surface. Trust scores >= 80. If result is empty or small, graph may be incomplete — search code."),
+		mcp.WithDescription("Analyze blast radius of a node change. Reverse dependency traversal with forward expansion to find affected endpoints and topics. Returns impacted components (with impact_score) and affected API surface. Trust scores >= 80. If result is empty or small, graph may be incomplete — search code. Result includes view_url — a dashboard deep link to the equivalent impact diagram (forward-looking #v route)."),
 		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'OrderService' or 'data:model:orders:order')")),
 		mcp.WithNumber("depth", mcp.Description("Max depth (default 4)")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation filter")),
@@ -1585,7 +1638,7 @@ func impactHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		return jsonResult(result), nil
+		return jsonResult(withViewURL(result, viewmodel.PresetSpec("impact", keyDomain(nodeKey), nodeKey))), nil
 	}
 }
 
@@ -2399,73 +2452,220 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func diagramBuildTool() mcp.Tool {
 	return mcp.NewTool("chronicle_diagram_build",
-		mcp.WithDescription(`Build a live diagram. Accepts a diagram view model: explicit nodes/edges (for overview, synthetic diagrams) and/or node_keys (resolved from graph DB with auto-edge-discovery). Returns session URL.
+		mcp.WithDescription(`Build a live diagram through the unified view-model engine. PRIMARY mode: provide view_spec — a full view-algebra ViewSpec evaluated by BuildView. Alternative: node_keys — nodes are resolved from the graph DB and lifted to a C3-shaped custom selection (components + internal edges + boundary). Returns session URL.
 
-Modes:
-- Pure view model: provide nodes + edges — for overview diagrams where all nodes are synthetic (domains, infra, external).
-- Graph-backed: provide node_keys — nodes resolved from DB, edges auto-discovered.
-- Mixed: both — node_keys resolved + explicit synthetic nodes/edges merged.
+Modes (priority order):
+- View algebra (primary): provide view_spec — {"scope":{"domain":"...","service"|"nodes"|"flow":...},"expand":{"direction":"out|in|both","depth":N,"edges":[...],"mode":"neighbors|path"},"filter":{...},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset":"c1|c2|c3|deps|impact|path|custom"}}. expand.mode "path" needs scope.nodes=[A,B] and traces the shortest path.
+- Graph-backed: provide node_keys — viewmodel.BuildSelection resolves nodes, discovers internal edges and one-hop boundary edges.
+- Legacy view model: provide explicit nodes + edges — stored as a legacy session for the old card viewer.
 
 Node kinds: service, endpoint, model, domain, infrastructure, external, topic, queue, database
 Edge kinds: http, async, data, structural`),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
-		mcp.WithString("nodes", mcp.Description("JSON array of DiagramNode: [{\"key\":\"...\",\"label\":\"...\",\"kind\":\"domain|infrastructure|external|service|...\",\"source_key\":\"optional\",\"domain\":\"optional\"}]")),
-		mcp.WithString("edges", mcp.Description("JSON array of DiagramEdge: [{\"from\":\"node_key\",\"to\":\"node_key\",\"label\":\"HTTP\",\"kind\":\"http|async|data|structural\"}]")),
+		mcp.WithString("domain", mcp.Description("Domain key used to scope node resolution for node_keys, and the default scope.domain for view_spec (optional — empty means all domains)")),
+		mcp.WithString("view_spec", mcp.Description("Full ViewSpec JSON (view algebra: scope/expand/filter/group/collapse/layout). Takes priority over node_keys.")),
+		mcp.WithString("nodes", mcp.Description("LEGACY: JSON array of DiagramNode: [{\"key\":\"...\",\"label\":\"...\",\"kind\":\"domain|infrastructure|external|service|...\",\"source_key\":\"optional\",\"domain\":\"optional\"}]")),
+		mcp.WithString("edges", mcp.Description("LEGACY: JSON array of DiagramEdge: [{\"from\":\"node_key\",\"to\":\"node_key\",\"label\":\"HTTP\",\"kind\":\"http|async|data|structural\"}]")),
 		mcp.WithString("node_keys", mcp.Description("JSON array of graph node_key strings to resolve from DB. Edges auto-discovered.")),
 		mcp.WithString("groups", mcp.Description("JSON object: {\"field\":\"domain|layer|kind\"}")),
 		mcp.WithString("steps", mcp.Description("JSON array of DiagramStep: [{\"title\":\"...\",\"description\":\"...\",\"highlights\":{\"node_key\":\"#color\"},\"notes\":{\"node_key\":\"text\"}}]")),
 		mcp.WithString("annotations", mcp.Description("JSON object: {\"node_key\":{\"note\":\"text\",\"highlight\":\"#color\"}}")),
-		mcp.WithString("hide_edges", mcp.Description("JSON array: [{\"from\":\"key1\",\"to\":\"key2\",\"edge_type\":\"OPTIONAL\"}]")),
+		mcp.WithString("hide_edges", mcp.Description("LEGACY: JSON array: [{\"from\":\"key1\",\"to\":\"key2\",\"edge_type\":\"OPTIONAL\"}]")),
 	)
 }
 
-func diagramBuildHandler() server.ToolHandlerFunc {
+// adminBaseURL returns the absolute base URL of the admin dashboard,
+// matching the URL construction used by chronicle_admin_url.
+func adminBaseURL() string {
+	port := adminPortValue
+	if port == 0 {
+		port = 4200
+	}
+	return fmt.Sprintf("http://localhost:%d", port)
+}
+
+// selectionProjection lifts a View into the legacy Selection shape so the
+// current session renderer (which reads .selection) can draw view_spec
+// sessions until the V3 viewmodel renderer lands. Best-effort: groups are
+// included as components too, because with collapse=true the collapsed
+// edges reference group keys.
+func selectionProjection(v *viewmodel.View, title string) *viewmodel.Selection {
+	sel := &viewmodel.Selection{Level: "custom", Title: title, Missing: v.Missing}
+	for _, grp := range v.Groups {
+		sel.Components = append(sel.Components, viewmodel.Component{
+			Key: grp.Key, Name: grp.Name, Type: grp.Kind,
+		})
+	}
+	for _, n := range v.Nodes {
+		sel.Components = append(sel.Components, viewmodel.Component{
+			Key: n.Key, Name: n.Name, Type: n.Type,
+			Endpoints: n.Endpoints, UsesModels: n.UsesModels,
+		})
+	}
+	for _, e := range v.Edges {
+		sel.InternalEdges = append(sel.InternalEdges, viewmodel.InternalEdge{
+			From: e.From, To: e.To, Kind: strings.ToLower(e.Kind),
+		})
+	}
+	if v.Boundary != nil {
+		sel.Boundary = viewmodel.Boundary{Outgoing: v.Boundary.Out, Incoming: v.Boundary.In}
+	}
+	return sel
+}
+
+// newDiagramSessionID generates a short session id (same scheme the admin
+// /api/diagram/build endpoint used: last 8 hex chars of UnixNano).
+func newDiagramSessionID() string {
+	id := fmt.Sprintf("%x", time.Now().UnixNano())
+	if len(id) > 8 {
+		id = id[len(id)-8:]
+	}
+	return id
+}
+
+func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		title := strParam(args, "title")
 		if title == "" {
 			return errorResult(fmt.Errorf("title is required")), nil
 		}
+		domain := strParam(args, "domain")
 
-		port := adminPortValue
-		if port == 0 {
-			port = 4200
-		}
-
-		payload := map[string]any{"title": title}
-
-		// Parse all JSON string parameters
+		// Parse all JSON string parameters (backward-compatible input shape).
+		parsed := map[string]any{}
 		for _, field := range []string{"nodes", "edges", "node_keys", "steps", "hide_edges", "groups", "annotations"} {
 			if raw := strParam(args, field); raw != "" {
-				var parsed any
-				if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+				var v any
+				if err := json.Unmarshal([]byte(raw), &v); err != nil {
 					return errorResult(fmt.Errorf("invalid %s JSON: %w", field, err)), nil
 				}
-				payload[field] = parsed
+				parsed[field] = v
 			}
 		}
 
-		_, hasNodes := payload["nodes"]
-		_, hasNodeKeys := payload["node_keys"]
-		if !hasNodes && !hasNodeKeys {
-			return errorResult(fmt.Errorf("at least one of 'nodes' or 'node_keys' is required")), nil
+		var nodeKeys []string
+		if raw := strParam(args, "node_keys"); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &nodeKeys); err != nil {
+				return errorResult(fmt.Errorf("invalid node_keys JSON: %w", err)), nil
+			}
 		}
 
-		body, _ := json.Marshal(payload)
-		resp, err := http.Post(fmt.Sprintf("http://localhost:%d/api/diagram/build", port), "application/json", bytes.NewReader(body))
+		viewSpecRaw := strParam(args, "view_spec")
+
+		_, hasNodes := parsed["nodes"]
+		if viewSpecRaw == "" && len(nodeKeys) == 0 && !hasNodes {
+			return errorResult(fmt.Errorf("at least one of 'view_spec', 'node_keys' or 'nodes' is required")), nil
+		}
+
+		sessionID := newDiagramSessionID()
+		url := fmt.Sprintf("%s/#c4/s/%s", adminBaseURL(), sessionID)
+
+		var session map[string]any
+		var nodeCount, edgeCount int
+		missing := []string{}
+
+		if viewSpecRaw != "" {
+			// PRIMARY path: full view-algebra spec → BuildView. The session
+			// stores the View under "view" AND a best-effort Selection
+			// projection under "selection" so the current renderer (which
+			// reads .selection) can draw it until the V3 renderer lands.
+			var spec viewmodel.ViewSpec
+			if err := json.Unmarshal([]byte(viewSpecRaw), &spec); err != nil {
+				return errorResult(fmt.Errorf("invalid view_spec JSON: %w", err)), nil
+			}
+			if spec.Scope.Domain == "" {
+				spec.Scope.Domain = domain
+			}
+			view, err := viewmodel.BuildView(g.Store(), spec)
+			if err != nil {
+				return errorResult(fmt.Errorf("build view: %w", err)), nil
+			}
+			level := spec.Layout.Preset
+			if level == "" {
+				level = "custom"
+			}
+			session = map[string]any{
+				"kind":      "viewmodel",
+				"level":     level,
+				"title":     title,
+				"domain":    spec.Scope.Domain,
+				"view":      view,
+				"selection": selectionProjection(view, title),
+			}
+			nodeCount = len(view.Nodes) + len(view.Groups)
+			edgeCount = len(view.Edges)
+			if view.Missing != nil {
+				missing = view.Missing
+			}
+		} else if len(nodeKeys) > 0 {
+			// node_keys path: selection sugar over the view-model engine.
+			// Keeps writing the "selection"-shaped session the current
+			// frontend renderer reads.
+			sel, err := viewmodel.BuildSelection(g.Store(), domain, nodeKeys, title)
+			if err != nil {
+				return errorResult(fmt.Errorf("build selection: %w", err)), nil
+			}
+			session = map[string]any{
+				"kind":      "viewmodel",
+				"level":     "custom",
+				"title":     title,
+				"domain":    domain,
+				"selection": sel,
+			}
+			nodeCount = len(sel.Components)
+			edgeCount = len(sel.InternalEdges)
+			if sel.Missing != nil {
+				missing = sel.Missing
+			}
+		} else {
+			// LEGACY path: explicit nodes/edges view model, wrapped so the
+			// frontend can fall back to the old card renderer.
+			now := time.Now().UTC().Format(time.RFC3339)
+			session = map[string]any{
+				"kind":       "legacy",
+				"id":         sessionID,
+				"title":      title,
+				"domain":     domain,
+				"created_at": now,
+				"updated_at": now,
+			}
+			for _, f := range []string{"nodes", "edges", "groups", "hide_edges"} {
+				if v, ok := parsed[f]; ok {
+					session[f] = v
+				}
+			}
+			if nodes, ok := parsed["nodes"].([]any); ok {
+				nodeCount = len(nodes)
+			}
+			if edges, ok := parsed["edges"].([]any); ok {
+				edgeCount = len(edges)
+			}
+		}
+
+		// Pass through annotations/steps in both modes.
+		if v, ok := parsed["annotations"]; ok {
+			session["annotations"] = v
+		}
+		if v, ok := parsed["steps"]; ok {
+			session["steps"] = v
+		}
+
+		data, err := json.Marshal(session)
 		if err != nil {
-			return errorResult(fmt.Errorf("failed to build diagram: %w", err)), nil
+			return errorResult(fmt.Errorf("marshal session: %w", err)), nil
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(resp.Body)
-			return errorResult(fmt.Errorf("diagram build failed (%d): %s", resp.StatusCode, string(respBody))), nil
+		if err := g.Store().SaveDiagramSession(sessionID, title, string(data)); err != nil {
+			return errorResult(fmt.Errorf("save diagram session: %w", err)), nil
 		}
 
-		var result map[string]any
-		json.NewDecoder(resp.Body).Decode(&result)
-		return jsonResult(result), nil
+		return jsonResult(map[string]any{
+			"session_id": sessionID,
+			"url":        url,
+			"node_count": nodeCount,
+			"edge_count": edgeCount,
+			"missing":    missing,
+		}), nil
 	}
 }
 
