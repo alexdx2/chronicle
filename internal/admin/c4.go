@@ -622,12 +622,12 @@ func (s *Server) handleC2(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Lifted edges: provider-level → service level, deduplicated.
-	type edgeKey struct{ from, to, kind string }
+	type edgeKey struct{ from, to, kind, label string }
 	edgeSeen := make(map[edgeKey]bool)
 	var c2Edges []c2Edge
 
 	addEdge := func(from, to, kind, label string) {
-		k := edgeKey{from, to, kind}
+		k := edgeKey{from, to, kind, label}
 		if edgeSeen[k] {
 			return
 		}
@@ -660,11 +660,8 @@ func (s *Server) handleC2(w http.ResponseWriter, r *http.Request) {
 			}
 			addEdge(fromSvc.NodeKey, toNode.NodeKey, "async", "publishes")
 		case "CONSUMES_TOPIC":
-			toNode := nodeByID[e.ToNodeID]
-			if toNode == nil {
-				continue
-			}
-			addEdge(fromSvc.NodeKey, toNode.NodeKey, "async", "consumes")
+			// rendered as topic→service below — consumption flows from the
+			// channel to the consumer, not the other way around
 		}
 	}
 
