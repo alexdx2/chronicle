@@ -40,8 +40,15 @@ type Fact struct {
 // tokens injected via @InjectQueue(), EventEmitter2, etc. — not application
 // services. Add entries in lowercase; matching is case-insensitive.
 var frameworkInjectDenylist = map[string]bool{
-	"queue":        true, // Bull/BullMQ @InjectQueue token
-	"eventemitter2": true, // NestJS event emitter adapter
+	"queue":         true, // Bull/BullMQ @InjectQueue token
+	"eventemitter2":  true, // NestJS event emitter adapter
+	// .NET framework plumbing — runtime infrastructure, never application services.
+	"ihubcontext":          true, // SignalR push handle (the hub itself is resolved via IHubContext<XHub> type arg)
+	"iservicescopefactory": true,
+	"ilogger":              true,
+	"iconfiguration":       true,
+	"ihttpcontextaccessor": true,
+	"dbcontextoptions":     true,
 }
 
 // ResolveOptions controls obligation gating before resolve.
@@ -283,6 +290,11 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 	defer func() { g.scanFileIndex = scanFileIndex{} }()
 
 	// Phase 2: Create nodes and edges from facts
+	type pendingParentFact struct {
+		filePath string
+		fact     Fact
+	}
+	var parentRetries []pendingParentFact
 	for _, ff := range allFiles {
 		// File-level from_type: API param > first fact > default "provider"
 		fileNodeType := ff.fromType
@@ -293,6 +305,11 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 		// This allows provides/parent resolution to consult this file's imports first,
 		// making CONTAINS edges deterministic and immune to same-class-name collisions.
 		g.currentFileImportMap = buildFileImportMap(ff.filePath, ff.facts)
+		// Definitions before references within a file: a model_relation processed
+		// before its enum/model definition materializes a phantom node.
+		sort.SliceStable(ff.facts, func(i, j int) bool {
+			return factKindOrder(ff.facts[i].Kind) < factKindOrder(ff.facts[j].Kind)
+		})
 		for _, fact := range ff.facts {
 			if fact.FromType == "" {
 				fact.FromType = fileNodeType
@@ -302,10 +319,27 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 			result.EdgesCreated += created.edges
 			result.EvidenceCreated += created.evidence
 			if unresolved != nil {
-				result.Unresolved = append(result.Unresolved, *unresolved)
+				if fact.Kind == "parent" {
+					// Parent node may simply not exist yet (created by a file
+					// processed later) — retry after all files are resolved.
+					parentRetries = append(parentRetries, pendingParentFact{filePath: ff.filePath, fact: fact})
+				} else {
+					result.Unresolved = append(result.Unresolved, *unresolved)
+				}
 			}
 		}
 		g.currentFileImportMap = nil
+	}
+
+	// Second pass: parent facts that failed on file ordering.
+	for _, pf := range parentRetries {
+		created, unresolved := g.resolveOneFact(domainKey, revisionID, pf.filePath, pf.fact, knownEntities)
+		result.NodesCreated += created.nodes
+		result.EdgesCreated += created.edges
+		result.EvidenceCreated += created.evidence
+		if unresolved != nil {
+			result.Unresolved = append(result.Unresolved, *unresolved)
+		}
 	}
 
 	// Post-resolve: detect module nodes from graph structure and fix edge types.
@@ -313,6 +347,7 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 	// This is generic (not framework-specific) — modules wire things, they don't DO things.
 	g.fixModuleEdges(domainKey)
 	g.mergeExternalSystemsIntoServices(domainKey)
+	g.deriveServiceContains(domainKey, revisionID)
 	g.detectContainsConflicts(domainKey, revisionID)
 	g.detectContainsCycles(domainKey, revisionID)
 	hygiene := g.applyGraphHygiene(domainKey)
@@ -681,7 +716,31 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// node, this is a local DI call — drop the edge. Using lookupCodeNode instead
 		// of the old PascalCase heuristic catches path-keyed nodes like "arenaservice"
 		// whose Name starts with a lowercase letter.
-		if lookupCodeNode(g, domainKey, toName) {
+		isLocal := lookupCodeNode(g, domainKey, toName)
+		if !isLocal && len(toName) >= 3 && toName[0] == 'I' &&
+			toName[1] >= 'A' && toName[1] <= 'Z' && toName[2] >= 'a' && toName[2] <= 'z' {
+			// C# interface convention: "IScoreService" is local when "ScoreService" is.
+			isLocal = lookupCodeNode(g, domainKey, toName[1:])
+		}
+		if isLocal {
+			// Local call — not a service boundary. The dependency itself is still
+			// real (service-locator patterns like GetRequiredService<T> never emit
+			// an injects fact), so record INJECTS; idempotent when constructor
+			// injection already created it. Import-map first: class names like
+			// PrismaService collide across services.
+			toKey, toID := g.resolveViaImportMapThenClassName(domainKey, revisionID, toName, g.currentFileImportMap)
+			if toID != 0 && toKey != fromNodeKey {
+				edgeKey := fromNodeKey + "->" + toKey + ":INJECTS"
+				if _, err := g.store.UpsertEdge(store.EdgeRow{
+					EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
+					FromNodeKey: fromNodeKey, ToNodeKey: toKey,
+					EdgeType: "INJECTS", DerivationKind: "inferred", Active: true,
+					LastSeenRevisionID: revisionID, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.9,
+					Metadata: "{}", ValidFromRevisionID: 0,
+				}); err == nil {
+					counts.edges++
+				}
+			}
 			return counts, nil
 		}
 
@@ -844,8 +903,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
-		// Resolve injection target — matches PascalCase class names to existing file nodes
-		toNodeKey, toID := g.resolveClassNameTarget(domainKey, revisionID, fact.To)
+		// Resolve injection target — import-map first (immune to same-class-name
+		// collisions across services: each service's PrismaService resolves to ITS
+		// file), then class-name / scan-index resolution.
+		toNodeKey, toID := g.resolveViaImportMapThenClassName(domainKey, revisionID, fact.To, g.currentFileImportMap)
 		if toID == 0 {
 			return counts, nil
 		}
@@ -896,6 +957,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Produces to topic/queue.
 		// transport=local means in-process EventEmitter calls — no broker node, no graph edge.
 		if strings.ToLower(fact.Transport) == "local" {
+			return counts, nil
+		}
+		// WebSocket pushes (SignalR Clients.*.SendAsync, socket.io emit) are
+		// client fan-out, not broker topics — no topic node.
+		if strings.ToLower(fact.Transport) == "websocket" || strings.EqualFold(fact.Method, "SendAsync") {
 			return counts, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
@@ -1035,22 +1101,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.nodes++
 		counts.evidence++
 
-		// Create USES_MODEL edge if source is a service/provider (not schema file)
-		if !strings.HasSuffix(filePath, ".prisma") {
-			fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
-			fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
-			edgeKey := fromNodeKey + "->" + nodeKey + ":USES_MODEL"
-			_, err := g.store.UpsertEdge(store.EdgeRow{
-				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: modelID,
-				FromNodeKey: fromNodeKey, ToNodeKey: nodeKey,
-				EdgeType: "USES_MODEL", DerivationKind: "hard", Active: true,
-				LastSeenRevisionID: revisionID, Confidence: 0.90, Freshness: 1.0, TrustScore: 0.90,
-				Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
-			})
-			if err == nil {
-				counts.edges++
-			}
-		}
+		// "model" means this file DEFINES the model (prisma schema, EF DbContext,
+		// entity class). Usage is a separate "uses_model" fact — defining a model
+		// must not create a USES_MODEL edge from the declaring file.
+		_ = modelID
 
 	case "enum":
 		// Enum/type defined in schema — data:enum node
@@ -1208,6 +1262,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "parent":
 		// Parent container relationship — creates CONTAINS edge from parent to child
 		if fact.To == "" {
+			return counts, nil
+		}
+		// Entity/schema files live in the data layer — their models are graph
+		// nodes already; a code-layer CONTAINS for the defining file is noise.
+		if fact.FromType == "model" || fact.FromType == "schema" {
 			return counts, nil
 		}
 
@@ -1932,8 +1991,15 @@ func mergeVotedExtractions(extractions []store.ExtractionRow) []store.Extraction
 		}
 	}
 
-	// Merge each vote group
-	for _, votes := range voteGroups {
+	// Merge each vote group — iterate keys sorted: map order is random and
+	// file processing order must be deterministic run-to-run.
+	groupKeys := make([]string, 0, len(voteGroups))
+	for k := range voteGroups {
+		groupKeys = append(groupKeys, k)
+	}
+	sort.Strings(groupKeys)
+	for _, k := range groupKeys {
+		votes := voteGroups[k]
 		if len(votes) == 0 {
 			continue
 		}
@@ -2030,7 +2096,11 @@ func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
 	// Merge candidate votes — union strategy:
 	// Hard facts (model, endpoint, declares_service, etc.): accept even 1 vote
 	// Inferred facts (calls_service, etc.): require 2/3 majority
-	for _, factList := range candidateVotes {
+	// Iterate map keys sorted — fact order inside a file must be deterministic
+	// (the resolver creates nodes in fact order; a model_relation processed
+	// before its enum definition materializes a phantom model node).
+	for _, cid := range sortedMapKeys(candidateVotes) {
+		factList := candidateVotes[cid]
 		count := len(factList)
 		confidence := voteConfidence(count, totalVotes, factList[0])
 		if confidence == 0 {
@@ -2053,7 +2123,8 @@ func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
 	}
 
 	// Merge free-form votes (fallback) — same union strategy
-	for _, factList := range freeformVotes {
+	for _, key := range sortedMapKeys(freeformVotes) {
+		factList := freeformVotes[key]
 		count := len(factList)
 		confidence := voteConfidence(count, totalVotes, factList[0])
 		if confidence == 0 {
@@ -2076,6 +2147,15 @@ func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
 	merged.FactsJSON = mergedJSON
 	merged.Status = "extracted"
 	return merged
+}
+
+func sortedMapKeys(m map[string][]map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // canonicalFactKey produces a stable key for voting comparison.
@@ -2209,7 +2289,7 @@ func extractNodeType(nodeKey string) string {
 // e.g. "arena-api/src/arena/arena.service.ts" → "arena-api/src/arena/arena.service"
 func inferPathKey(filePath string) string {
 	p := filePath
-	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".go", ".py", ".json", ".yaml", ".yml", ".prisma", ".graphql", ".proto"} {
+	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".go", ".py", ".json", ".yaml", ".yml", ".prisma", ".graphql", ".proto", ".csproj", ".cs", ".java", ".rb"} {
 		p = strings.TrimSuffix(p, ext)
 	}
 	p = strings.ReplaceAll(p, "\\", "/")
@@ -2223,7 +2303,7 @@ func inferNameFromPath(filePath string) string {
 	parts := strings.Split(filePath, "/")
 	filename := parts[len(parts)-1]
 	// Remove extensions
-	for _, ext := range []string{".ts", ".tsx", ".js", ".go", ".json", ".yaml", ".yml", ".prisma"} {
+	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".go", ".py", ".json", ".yaml", ".yml", ".prisma", ".graphql", ".proto", ".csproj", ".cs", ".java", ".rb"} {
 		filename = strings.TrimSuffix(filename, ext)
 	}
 	return filename
@@ -2342,6 +2422,10 @@ func inferNodeTypeFromClassName(className string) string {
 	if strings.HasSuffix(className, "Controller") {
 		return "controller"
 	}
+	// SignalR hubs are WS controllers (dotnet pack: Hub subclass = controller surface).
+	if strings.HasSuffix(className, "Hub") {
+		return "controller"
+	}
 	return "provider"
 }
 
@@ -2434,6 +2518,104 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 		return "", 0
 	}
 
+	// Generic wrapper (C#): "IHubContext<ScoreHub>" — the type argument is the
+	// real application target; the wrapper is framework plumbing.
+	if i := strings.Index(className, "<"); i > 0 && strings.HasSuffix(className, ">") {
+		inner := strings.TrimSpace(className[i+1 : len(className)-1])
+		if key, id := g.resolveClassNameTarget(domainKey, revisionID, inner); id != 0 {
+			return key, id
+		}
+		className = className[:i]
+	}
+
+	// C# interface convention: "IScoreService" resolves to its implementation
+	// "ScoreService" when that class is a known node. Only applies when the
+	// stripped name resolves — otherwise the interface name is kept as-is.
+	if len(className) >= 3 && className[0] == 'I' &&
+		className[1] >= 'A' && className[1] <= 'Z' &&
+		className[2] >= 'a' && className[2] <= 'z' {
+		if key, id := g.lookupClassNameTarget(domainKey, revisionID, className[1:]); id != 0 {
+			return key, id
+		}
+	}
+
+	if key, id := g.lookupClassNameTarget(domainKey, revisionID, className); id != 0 {
+		return key, id
+	}
+
+	// Last resort: create stem-based provider (may merge when file is processed later).
+	dotCase := normalizePascalCase(className)
+	nodeType := inferNodeTypeFromClassName(className)
+	key := typedNodeKey(domainKey, strings.ToLower(dotCase), nodeType)
+	id := g.ensureNodeID(domainKey, revisionID, key, dotCase, "")
+	return key, id
+}
+
+// deriveServiceContains adds deterministic service→code CONTAINS edges from path
+// ownership: a code node whose file lives under a service's root directory (the
+// dir of its .csproj) and has no CONTAINS parent belongs to that service.
+// Restricted to module-less stacks (C# files) — in NestJS the @Module is the
+// container and service→module containment is intentionally not modeled.
+func (g *Graph) deriveServiceContains(domainKey string, revisionID int64) {
+	services, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "service"})
+	type svcRoot struct {
+		key  string
+		id   int64
+		root string
+	}
+	var roots []svcRoot
+	for _, s := range services {
+		if s.Status != "active" || s.FilePath == "" {
+			continue
+		}
+		dir := filepath.ToSlash(filepath.Dir(s.FilePath))
+		roots = append(roots, svcRoot{s.NodeKey, s.NodeID, dir + "/"})
+	}
+	if len(roots) == 0 {
+		return
+	}
+	sort.Slice(roots, func(i, j int) bool { return len(roots[i].root) > len(roots[j].root) })
+
+	containsEdges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
+	hasParent := map[string]bool{}
+	for _, e := range containsEdges {
+		if e.Active {
+			hasParent[e.ToNodeKey] = true
+		}
+	}
+
+	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	for _, n := range nodes {
+		if n.Status != "active" || n.FilePath == "" || !strings.HasPrefix(n.NodeKey, "code:") {
+			continue
+		}
+		if !strings.HasSuffix(strings.ToLower(n.FilePath), ".cs") {
+			continue
+		}
+		if hasParent[n.NodeKey] {
+			continue
+		}
+		for _, r := range roots {
+			if !strings.HasPrefix(filepath.ToSlash(n.FilePath), r.root) {
+				continue
+			}
+			edgeKey := r.key + "->" + n.NodeKey + ":CONTAINS"
+			_, _ = g.store.UpsertEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: r.id, ToNodeID: n.NodeID,
+				FromNodeKey: r.key, ToNodeKey: n.NodeKey,
+				EdgeType: "CONTAINS", DerivationKind: "inferred", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.9,
+				Metadata: "{}", ValidFromRevisionID: 0,
+			})
+			break
+		}
+	}
+}
+
+// lookupClassNameTarget resolves a class name to an existing (or scanned-file-backed)
+// node without ever creating a phantom stem-based node. Returns ("", 0) when the
+// name doesn't resolve.
+func (g *Graph) lookupClassNameTarget(domainKey string, revisionID int64, className string) (string, int64) {
 	// Scanned file index — covers zero-fact files referenced by module provides/injects.
 	if fp := g.scanFileIndex.byClassName[className]; fp != "" {
 		nodeType := g.scanFileIndex.byPath[fp]
@@ -2502,11 +2684,7 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 		return nodeKey, id
 	}
 
-	// Last resort: create stem-based provider (may merge when file is processed later).
-	nodeType := inferNodeTypeFromClassName(className)
-	key := typedNodeKey(domainKey, strings.ToLower(dotCase), nodeType)
-	id := g.ensureNodeID(domainKey, revisionID, key, dotCase, "")
-	return key, id
+	return "", 0
 }
 
 // resolveInjectTarget is kept for callers outside resolveOneFact.
@@ -2534,10 +2712,31 @@ func fileNodeTypeFromFacts(facts []Fact) string {
 	return "provider"
 }
 
+// factKindOrder orders facts within one file: definitions → structure → references.
+func factKindOrder(kind string) int {
+	switch kind {
+	case "declares_service", "model", "enum":
+		return 0
+	case "import", "provides", "endpoint":
+		return 1
+	case "model_relation", "parent":
+		return 3
+	default:
+		return 2
+	}
+}
+
 func fileTypeOrderFromFacts(facts []Fact) int {
+	// Service-declaring files (package.json, .csproj) strictly first: parent
+	// facts in code files reference the service node by name.
 	for _, f := range facts {
-		if f.Kind == "declares_service" || f.Kind == "model" || f.Kind == "enum" {
-			return 0 // boundary + schema files first — creates service/model nodes before references
+		if f.Kind == "declares_service" {
+			return 0
+		}
+	}
+	for _, f := range facts {
+		if f.Kind == "model" || f.Kind == "enum" {
+			return 1 // schema files next — creates model nodes before references
 		}
 	}
 	for _, f := range facts {

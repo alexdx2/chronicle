@@ -187,13 +187,16 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 		}
 	}
 
-	// Create service nodes from manifest
+	// Create service nodes from manifest — ONLY explicitly declared ones.
+	// Inferred services (from include-glob path segments) are not evidence:
+	// real service nodes come from declares_service facts (package.json,
+	// .csproj) during resolve.
 	if m != nil && revisionID > 0 {
-		services := m.InferServices()
+		services := m.Services
 		for _, svc := range services {
 			svcDomain := domainKey
-			if len(m.Domains) > 0 {
-				svcDomain = m.Domains[0].Name
+			if len(m.Domains) > 0 && m.Domains[0].Key != "" {
+				svcDomain = m.Domains[0].Key
 			}
 			nodeKey := "service:service:" + svcDomain + ":" + svc.Key
 			g.store.UpsertNode(store.NodeRow{

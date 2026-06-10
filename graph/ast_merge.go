@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/extract/ast"
+	"github.com/alexdx2/chronicle-core/extract/deterministic"
 	"github.com/alexdx2/chronicle-core/extract/prisma"
 	"github.com/alexdx2/chronicle-core/extract/rules"
 )
@@ -74,6 +75,85 @@ func MergeASTFacts(filePath string, llmFacts []map[string]any, llmFromType strin
 				fromType = "schema"
 			}
 			mergedFacts = unionFacts(astFacts, llmFacts)
+			return mergedFacts, fromType
+		}
+	}
+
+	// --- C# / .NET — deterministic regex extraction (no tree-sitter grammar yet) ---
+	lower := strings.ToLower(filePath)
+	if strings.HasSuffix(lower, ".cs") || strings.HasSuffix(lower, ".csproj") {
+		content := readFileContent(filePath)
+		if content != nil {
+			cands := deterministic.ExtractCandidates(filePath, content)
+			var detFacts []map[string]any
+			detTopics := map[string]bool{}
+			detFromType := ""
+			for _, c := range cands {
+				if c.Kind == "injects" {
+					// AddScoped<I,Impl> registrations are DI wiring hints for the
+					// agent, not constructor injection — never merge as facts.
+					continue
+				}
+				f := map[string]any{"kind": c.Kind}
+				if c.To != "" {
+					f["to"] = c.To
+				}
+				if c.Method != "" {
+					f["method"] = c.Method
+				}
+				if c.Target != "" {
+					f["target"] = c.Target
+				}
+				if c.Kind == "consumes" {
+					detTopics[strings.ToLower(c.To)] = true
+				}
+				if detFromType == "" && c.FromType != "" {
+					detFromType = c.FromType
+				}
+				detFacts = append(detFacts, f)
+			}
+			// Subscribe("topic") strings are the broker truth. LLMs often emit the
+			// deserialized payload class ("BattleResultEvent") as the consumes
+			// target — drop LLM consumes facts that don't match a deterministic
+			// topic when hard Subscribe evidence exists.
+			if len(detTopics) > 0 {
+				filtered := llmFacts[:0]
+				for _, f := range llmFacts {
+					if kind, _ := f["kind"].(string); kind == "consumes" {
+						to, _ := f["to"].(string)
+						if !detTopics[strings.ToLower(to)] {
+							continue
+						}
+					}
+					filtered = append(filtered, f)
+				}
+				llmFacts = filtered
+			}
+			if fromType == "" && detFromType != "" {
+				fromType = detFromType
+			}
+			// DbContext subclasses are injectable providers, not entity files —
+			// deterministic override regardless of the LLM's from_type guess.
+			if strings.Contains(string(content), ": DbContext") {
+				fromType = "provider"
+			}
+			// Entity files: when every substantive fact is a data definition the
+			// file IS a model file, whatever the LLM guessed. DbContext classes
+			// stay providers (they are injectable), detected by base class.
+			if len(llmFacts) > 0 && !strings.Contains(string(content), "DbContext") {
+				allData := true
+				for _, f := range llmFacts {
+					k, _ := f["kind"].(string)
+					if k != "model" && k != "enum" && k != "model_relation" && k != "parent" {
+						allData = false
+						break
+					}
+				}
+				if allData {
+					fromType = "model"
+				}
+			}
+			mergedFacts = unionFacts(detFacts, llmFacts)
 			return mergedFacts, fromType
 		}
 	}

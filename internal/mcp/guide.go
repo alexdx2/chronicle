@@ -215,6 +215,17 @@ func ExtractionHints(technology string) string {
 			"middleware":  "classes in MIDDLEWARE setting — cross-cutting concerns",
 		}
 
+	case "dotnet", "csharp", "cs", "aspnet", "aspnetcore":
+		hints["technology"] = "dotnet"
+		hints["recognition_patterns"] = map[string]string{
+			"DI":          "Constructor injection; IScoreService → ScoreService convention. Skip ILogger/IConfiguration/IServiceScopeFactory.",
+			"HTTP":        "[ApiController] + [HttpGet/Post/...]; [Route(\"api/[controller]\")] — substitute [controller] with the class name minus 'Controller', lowercased",
+			"EF Core":     "DbSet<X> in DbContext → model nodes; FK property (OrderId) → model_relation from the FK side ONLY",
+			"SignalR":     "Hub subclass = controller (WS surface); public hub methods → WS endpoints; IHubContext<XHub> injection → injects XHub",
+			"Kafka":       "consumer.Subscribe(\"topic\") / ProduceAsync(\"topic\") — the topic STRING is the target, never the payload class",
+			"background":  "BackgroundService/IHostedService = provider; extract consumes + service calls from ExecuteAsync",
+		}
+
 	case "spring", "java":
 		hints["technology"] = "spring"
 		hints["recognition_patterns"] = map[string]string{

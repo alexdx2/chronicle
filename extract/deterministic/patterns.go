@@ -27,6 +27,9 @@ var (
 	reEventPattern = regexp.MustCompile(`@EventPattern\('([^']+)'\)`)
 	reDeclaresSvc = regexp.MustCompile(`<AssemblyName>([^<]+)</AssemblyName>`)
 	reAddScoped   = regexp.MustCompile(`Add(Scoped|Singleton|Transient)<([^>]+)>`)
+	reDbSet       = regexp.MustCompile(`DbSet<(\w+)>`)
+	reSendAsync   = regexp.MustCompile(`\.SendAsync\("([^"]+)"`)
+	reCtrlClass   = regexp.MustCompile(`class\s+(\w+)Controller\b`)
 )
 
 // ExtractCandidates returns regex-derived fact hints for a source file.
@@ -71,10 +74,26 @@ func ExtractCandidates(filePath string, content []byte) []Candidate {
 		out = append(out, Candidate{Kind: "consumes", To: m[1], Reason: "@EventPattern"})
 	}
 
+	// EF Core DbSet declarations — model definitions
+	for _, m := range reDbSet.FindAllStringSubmatch(text, -1) {
+		out = append(out, Candidate{Kind: "model", To: m[1], Reason: "EF Core DbSet"})
+	}
+
+	// SignalR server push — produces with SendAsync method (resolve skips topic creation)
+	for _, m := range reSendAsync.FindAllStringSubmatch(text, -1) {
+		out = append(out, Candidate{Kind: "produces", To: m[1], Method: "SendAsync", Reason: "SignalR SendAsync"})
+	}
+
 	// ASP.NET routing
 	routePrefix := ""
 	if m := reRouteAttr.FindStringSubmatch(text); len(m) > 1 {
 		routePrefix = strings.TrimSuffix(m[1], "/")
+		// "[controller]" token → controller class name minus the suffix, lowercased
+		if strings.Contains(routePrefix, "[controller]") {
+			if cm := reCtrlClass.FindStringSubmatch(text); len(cm) > 1 {
+				routePrefix = strings.ReplaceAll(routePrefix, "[controller]", strings.ToLower(cm[1]))
+			}
+		}
 	}
 	for _, m := range reHttpAttr.FindAllStringSubmatch(text, -1) {
 		method := strings.ToUpper(strings.TrimPrefix(m[1], "Http"))

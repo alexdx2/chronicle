@@ -100,6 +100,7 @@ func (s *Store) SaveExtractionWithVote(revisionID int64, domainKey, filePath, st
 // ListExtractions returns all extractions for a revision.
 func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]ExtractionRow, error) {
 	q := `SELECT extraction_id, revision_id, domain_key, file_path, status,
+	             COALESCE(from_type,''),
 	             facts_json, COALESCE(error_message,''), created_at
 	      FROM scan_extractions
 	      WHERE revision_id = ? AND domain_key = ?
@@ -114,7 +115,7 @@ func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]Extractio
 	for rows.Next() {
 		var r ExtractionRow
 		if err := rows.Scan(&r.ExtractionID, &r.RevisionID, &r.DomainKey,
-			&r.FilePath, &r.Status, &r.FactsJSON, &r.ErrorMessage, &r.CreatedAt); err != nil {
+			&r.FilePath, &r.Status, &r.FromType, &r.FactsJSON, &r.ErrorMessage, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

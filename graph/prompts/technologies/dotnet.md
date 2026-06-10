@@ -81,8 +81,13 @@ DbContext classes define data models:
 Entity configuration:
 `modelBuilder.Entity<Order>()` => already covered by DbSet.
 
-Navigation properties define relations:
-`public List<OrderItem> Items { get; set; }` (in Order entity) => `{"kind":"model_relation","from":"Order","to":"OrderItem"}`
+Relations are emitted from the FOREIGN-KEY side only (the model that holds the FK):
+`OrderItem` has `public int OrderId { get; set; }` => `{"kind":"model_relation","from":"OrderItem","to":"Order"}`
+Do NOT also emit the reverse direction for the collection navigation property
+(`Order.Items`) — one relation, FK side wins. Same rule as Prisma scans.
+
+Entity class files (`Models/*.cs`, plain POCO entities) get `"from_type": "model"` —
+they are data definitions, not providers.
 
 EF usage in code:
 `_context.Orders.FindAsync(id)` => `{"kind":"uses_model","to":"Order"}`
@@ -113,6 +118,9 @@ Constructor injection in hubs:
 `public ScoreHub(IBattleService battles, ILogger<ScoreHub> log)` =>
 `{"kind":"injects","to":"IBattleService"}` (skip ILogger)
 
+`IHubContext<XHub>` injection means the class pushes through that hub — emit the
+hub class, not the wrapper: `IHubContext<ScoreHub> hub` => `{"kind":"injects","to":"ScoreHub"}`.
+
 Hub methods exposed to clients:
 `public async Task JoinRoom(string room)` => `{"kind":"endpoint","method":"WS","target":"JoinRoom"}`
 
@@ -123,6 +131,17 @@ Client invocations (server push):
 
 `public class CleanupWorker : BackgroundService` or `IHostedService` — treat as provider.
 Extract any service calls, event consumption, or scheduled operations from `ExecuteAsync`.
+
+Service-locator resolution counts as injection:
+`scope.ServiceProvider.GetRequiredService<IScoreService>()` => `{"kind":"injects","to":"IScoreService"}`
+
+## Kafka (Confluent.Kafka)
+
+The TOPIC STRING is the consumes/produces target — never the payload class.
+`consumer.Subscribe("battle-results")` => `{"kind":"consumes","to":"battle-results"}`
+`producer.ProduceAsync("battle-results", ...)` => `{"kind":"produces","to":"battle-results"}`
+`JsonSerializer.Deserialize<BattleResultEvent>(...)` is the payload type — do NOT
+emit a consumes fact for it.
 
 ## Events / Messaging
 
