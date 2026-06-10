@@ -415,6 +415,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/diagram/", s.handleDiagram)
 	mux.HandleFunc("/api/diagram", s.handleDiagram)
 	mux.HandleFunc("/api/evidence", s.handleEvidence)
+	mux.HandleFunc("/api/c4/c1", s.handleC1)
+	mux.HandleFunc("/api/c4/c2", s.handleC2)
+	mux.HandleFunc("/api/c4/c3", s.handleC3)
 }
 
 // ServeHTTP implements http.Handler for testing.
@@ -1806,6 +1809,12 @@ func (s *Server) handleDiagramBuild(w http.ResponseWriter, r *http.Request) {
 				for _, gn := range foundNodes {
 					idToKey[gn.NodeID] = gn.NodeKey
 				}
+				// Track existing edges for dedup (fromKey, toKey, edgeType).
+				type diagEdgeKey struct{ from, to, edgeType string }
+				existingEdgeKeys := make(map[diagEdgeKey]bool, len(diagramEdges))
+				for _, de := range diagramEdges {
+					existingEdgeKeys[diagEdgeKey{de.From, de.To, de.Label}] = true
+				}
 				for _, ge := range discoveredEdges {
 					fromKey := idToKey[ge.FromNodeID]
 					toKey := idToKey[ge.ToNodeID]
@@ -1824,6 +1833,11 @@ func (s *Server) handleDiagramBuild(w http.ResponseWriter, r *http.Request) {
 					if hidden {
 						continue
 					}
+					dk := diagEdgeKey{fromKey, toKey, ge.EdgeType}
+					if existingEdgeKeys[dk] {
+						continue
+					}
+					existingEdgeKeys[dk] = true
 					diagramEdges = append(diagramEdges, DiagramEdge{
 						From:  fromKey,
 						To:    toKey,

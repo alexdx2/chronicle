@@ -185,6 +185,7 @@ func (s *Store) GetNodesByKeys(keys []string) ([]NodeRow, []string, error) {
 		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
 		FROM graph_nodes
 		WHERE node_key IN (` + placeholders + `) AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		  AND status = 'active'
 		ORDER BY node_key
 	`
 
