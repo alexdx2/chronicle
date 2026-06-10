@@ -423,6 +423,103 @@ func TestR6_MergeDeduplication(t *testing.T) {
 	}
 }
 
+// TestEventPattern_IsBrokerConsumer verifies that @EventPattern (@nestjs/microservices)
+// produces a consumes fact WITHOUT transport=local (it is a Kafka/broker consumer, not
+// an in-process EventEmitter event). Without this fix, the resolver's local-skip guard
+// would suppress the CONSUMES_TOPIC edge and the broker dependency is lost.
+func TestEventPattern_IsBrokerConsumer(t *testing.T) {
+	src, err := os.ReadFile("../../fixtures/tom-and-jerry/spectators-api/src/spectators/battle-result.consumer.ts")
+	if err != nil {
+		t.Skipf("fixture not available: %v", err)
+	}
+
+	raw := ast.ExtractTypeScript(src)
+	reg := NewRegistry(DefaultRulesets()...)
+	result := reg.Apply(raw)
+
+	fmt.Printf("\nbattle-result.consumer.ts: from_type=%q, %d facts\n", result.FromType, len(result.Facts))
+	for _, f := range result.Facts {
+		b, _ := json.Marshal(f)
+		fmt.Printf("  %s\n", b)
+	}
+
+	// Must have a consumes fact for battle-results WITHOUT transport=local.
+	found := false
+	for _, f := range result.Facts {
+		if f.Kind == "consumes" && f.To == "battle-results" {
+			found = true
+			if f.Transport == "local" {
+				t.Errorf("@EventPattern transport must not be \"local\" — got %q (broker consumer, not EventEmitter)", f.Transport)
+			}
+		}
+	}
+	if !found {
+		t.Error("missing consumes fact for battle-results from @EventPattern")
+	}
+}
+
+// TestOnEvent_StaysLocal verifies that @OnEvent (EventEmitter2) keeps transport=local.
+// This is the in-process event pattern — no broker topic node should be created.
+func TestOnEvent_StaysLocal(t *testing.T) {
+	src, err := os.ReadFile("../../fixtures/tom-and-jerry/tom-api/src/tom/tom.events.ts")
+	if err != nil {
+		t.Skipf("fixture not available: %v", err)
+	}
+
+	raw := ast.ExtractTypeScript(src)
+	reg := NewRegistry(DefaultRulesets()...)
+	result := reg.Apply(raw)
+
+	// All @OnEvent decorators must have transport=local.
+	for _, f := range result.Facts {
+		if f.Kind == "consumes" {
+			if f.Transport != "local" {
+				t.Errorf("@OnEvent fact for %q has transport=%q, want \"local\"", f.To, f.Transport)
+			}
+		}
+	}
+
+	// Sanity: verify we see the expected events.
+	if !hasSemFact(result.Facts, semCheck{kind: "consumes", to: "tom.weapon.equipped", transport: "local"}) {
+		t.Error("missing consumes[local] for tom.weapon.equipped")
+	}
+	if !hasSemFact(result.Facts, semCheck{kind: "consumes", to: "battle.result", transport: "local"}) {
+		t.Error("missing consumes[local] for battle.result")
+	}
+}
+
+// TestEventPattern_ResolverCreatesConsumesTopic verifies the full pipeline:
+// @EventPattern fact with no transport=local → resolver creates CONSUMES_TOPIC edge
+// (the lab-lost battle-result.consumer CONSUMES battle-results regression).
+func TestEventPattern_ResolverCreatesConsumesTopic(t *testing.T) {
+	// This is a graph-level test but lives here to keep EventPattern coverage together.
+	// We use direct fact injection (no AST merge) to test the resolver guard.
+	// Import the graph package is not possible from rules package, so we test via
+	// the fact that transport is NOT "local" — the resolver guard fires on "local" only.
+	// The actual graph-level test is in graph/resolve_defects_test.go.
+
+	// Verify that EventPattern facts have no transport tag.
+	src := []byte(`
+import { EventPattern } from '@nestjs/microservices';
+export class BattleResultConsumer {
+  @EventPattern('battle-results')
+  handleBattleResult(event: any) {}
+}`)
+	raw := ast.ExtractTypeScript(src)
+	reg := NewRegistry(DefaultRulesets()...)
+	result := reg.Apply(raw)
+
+	for _, f := range result.Facts {
+		if f.Kind == "consumes" && f.To == "battle-results" {
+			if f.Transport == "local" {
+				t.Errorf("EventPattern transport must not be local; got %q", f.Transport)
+			}
+			return
+		}
+	}
+	t.Error("missing consumes fact for battle-results")
+}
+
 func hasSemFact(facts []SemanticFact, check semCheck) bool {
 	for _, f := range facts {
 		if f.Kind != check.kind {

@@ -550,10 +550,8 @@ func TestR7b_GatewayEmit_NoPublishesTopic(t *testing.T) {
 // TestR7a_CallsService_PathKeyedNodeDropped verifies that a calls_service fact
 // targeting a class whose node is path-keyed (e.g. arena/arena.service → key has
 // dotted name) is still dropped as a local call.
-// The old isLocalCodeNode PascalCase heuristic missed path-keyed nodes because
-// it matched Name but path-keyed Names are not PascalCase (they contain slashes
-// and are stored as lowercase file paths). The new lookupCodeNode uses key suffix
-// matching to catch these.
+// lookupCodeNode uses key suffix matching to catch path-keyed nodes (their Names
+// contain slashes and are stored as lowercase file paths, not PascalCase).
 func TestR7a_CallsService_PathKeyedNodeDropped(t *testing.T) {
 	g, s, revID := setupTestGraph(t)
 	domain := "testapp"
@@ -680,6 +678,75 @@ func TestR7a_CallsService_ExternalKept(t *testing.T) {
 	}
 	if !found {
 		t.Error("R7a: calls_service to unresolvable external should still create CALLS_SERVICE edge")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect 2 — @EventPattern is a broker consumer, NOT a local event
+// ---------------------------------------------------------------------------
+
+// TestEventPattern_CreatesConsumesTopic verifies the full graph pipeline for
+// @EventPattern facts: transport must NOT be "local", so the resolver creates a
+// real CONSUMES_TOPIC edge and broker topic node.
+// This is the lab-lost regression: battle-result.consumer CONSUMES battle-results.
+func TestEventPattern_CreatesConsumesTopic(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// Simulate the fact produced by @EventPattern('battle-results') with no transport
+	// tag (the fixed behaviour — previously this had transport=local which suppressed
+	// the edge).
+	facts := `[{"kind":"consumes","to":"battle-results","from_type":"provider"}]`
+	g.SaveFileExtraction(revID, domain, "spectators-api/src/spectators/battle-result.consumer.ts", "extracted", "provider", facts, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A topic node for "battle-results" must be created.
+	topics, _ := s.ListNodes(store.NodeFilter{Domain: domain, NodeType: "topic"})
+	found := false
+	for _, tp := range topics {
+		if strings.Contains(tp.NodeKey, "battle-results") || strings.Contains(tp.NodeKey, "battle.results") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("EventPattern: CONSUMES_TOPIC must create a topic node for battle-results; topics: %v", topics)
+	}
+
+	// A CONSUMES_TOPIC edge must exist.
+	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONSUMES_TOPIC"})
+	if len(edges) == 0 {
+		t.Error("EventPattern: expected CONSUMES_TOPIC edge; none found")
+	}
+}
+
+// TestOnEvent_NoTopicNode verifies that @OnEvent (transport=local) does NOT create
+// a broker topic node or CONSUMES_TOPIC edge — it's in-process.
+func TestOnEvent_NoTopicNode(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	domain := "testapp"
+
+	// @OnEvent facts have transport=local — must be suppressed.
+	facts := `[
+		{"kind":"consumes","to":"tom.weapon.equipped","transport":"local","from_type":"provider"},
+		{"kind":"consumes","to":"battle.result","transport":"local","from_type":"provider"}
+	]`
+	g.SaveFileExtraction(revID, domain, "tom-api/src/tom/tom.events.ts", "extracted", "provider", facts, "")
+
+	if _, err := g.ResolveExtractions(domain, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, _ := s.ListNodes(store.NodeFilter{Domain: domain, NodeType: "topic"})
+	if len(topics) > 0 {
+		keys := make([]string, 0, len(topics))
+		for _, tp := range topics {
+			keys = append(keys, tp.NodeKey)
+		}
+		t.Errorf("OnEvent: local transport must not create topic nodes; got %v", keys)
 	}
 }
 

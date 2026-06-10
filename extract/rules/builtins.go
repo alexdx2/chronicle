@@ -16,8 +16,10 @@ var NestJS = Ruleset{
 		"Delete":           {EmitsKind: "endpoint", EmitsMethod: "DELETE", TargetFrom: "first_string_arg"},
 		"Patch":            {EmitsKind: "endpoint", EmitsMethod: "PATCH", TargetFrom: "first_string_arg"},
 		"SubscribeMessage": {EmitsKind: "endpoint", EmitsMethod: "WS", TargetFrom: "first_string_arg"},
-		// In-process events: transport=local so the resolver does not mint broker topic nodes.
-		"EventPattern": {EmitsKind: "consumes", TargetFrom: "first_string_arg", TransportTag: "local"},
+		// @OnEvent (EventEmitter2) is in-process: transport=local suppresses broker topic nodes.
+		// @EventPattern (@nestjs/microservices) is a Kafka/broker consumer: no local tag,
+		// so the resolver creates a real CONSUMES_TOPIC edge to the broker topic node.
+		"EventPattern": {EmitsKind: "consumes", TargetFrom: "first_string_arg"},
 		"OnEvent":      {EmitsKind: "consumes", TargetFrom: "first_string_arg", TransportTag: "local"},
 		// @Process('jobname') — job-name handlers are NOT separate topics; skip emission.
 		// (Handled by the Bull ruleset instead via @Processor on the class.)

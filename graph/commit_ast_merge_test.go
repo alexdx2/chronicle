@@ -332,6 +332,97 @@ func TestR6_ProvidesDedup_NoDoubles(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Defect 3 — AST from_type classification beats LLM from_type
+// ---------------------------------------------------------------------------
+
+// TestMergeASTFacts_ASTFromType_WinsOnConflict verifies that when the AST detects
+// a from_type (e.g. "provider" from @WebSocketGateway) and the LLM has already
+// supplied a different from_type (e.g. "controller"), the AST value wins.
+// Deterministic decorator classification is ground truth; LLMs mislabel gateways.
+func TestMergeASTFacts_ASTFromType_WinsOnConflict(t *testing.T) {
+	root := repoRootFromCWD(t)
+	if root == "" {
+		t.Skip("could not locate repo root (.git)")
+	}
+	// battle.gateway.ts has @WebSocketGateway — AST should detect from_type="provider".
+	relPath := "fixtures/tom-and-jerry/arena-api/src/arena/battle.gateway.ts"
+	if _, err := os.Stat(filepath.Join(root, relPath)); err != nil {
+		t.Skipf("fixture absent: %s", relPath)
+	}
+	orig, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	// LLM artifact says "controller" (the bug: gateways are not controllers).
+	_, fromType := MergeASTFacts(relPath, nil, "controller", nil)
+
+	if fromType != "provider" {
+		t.Errorf("Defect3: AST from_type must win; got %q, want \"provider\" (AST sees @WebSocketGateway)", fromType)
+	}
+}
+
+// TestMergeASTFacts_ASTFromType_NoConflict_LLMKept verifies that when the LLM has
+// a from_type and the AST has NO opinion (semantic.FromType == ""), the LLM value
+// is kept unchanged.
+func TestMergeASTFacts_ASTFromType_NoConflict_LLMKept(t *testing.T) {
+	// For a non-TS file, AST has no opinion — LLM from_type must be preserved.
+	_, fromType := MergeASTFactsJSON("src/main.go", "[]", "controller", nil)
+	if fromType != "controller" {
+		t.Errorf("non-TS file: LLM from_type should be kept; got %q, want \"controller\"", fromType)
+	}
+}
+
+// TestMergeASTFacts_ASTFromType_SameValue_Unchanged verifies that when AST and LLM
+// agree on from_type, the result is unchanged (no spurious flip).
+func TestMergeASTFacts_ASTFromType_SameValue_Unchanged(t *testing.T) {
+	root := repoRootFromCWD(t)
+	if root == "" {
+		t.Skip("could not locate repo root (.git)")
+	}
+	// arena.module.ts — AST says "module", LLM says "module" — should stay "module".
+	relPath := "fixtures/tom-and-jerry/arena-api/src/arena/arena.module.ts"
+	if _, err := os.Stat(filepath.Join(root, relPath)); err != nil {
+		t.Skipf("fixture absent: %s", relPath)
+	}
+	orig, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	_, fromType := MergeASTFacts(relPath, nil, "module", nil)
+	if fromType != "module" {
+		t.Errorf("same from_type: expected \"module\", got %q", fromType)
+	}
+}
+
+// TestMergeASTFacts_ASTFromType_EmptyLLM_ASTFills verifies that when LLM has no
+// from_type ("") and AST detects one, the AST value fills the gap (original behavior).
+func TestMergeASTFacts_ASTFromType_EmptyLLM_ASTFills(t *testing.T) {
+	root := repoRootFromCWD(t)
+	if root == "" {
+		t.Skip("could not locate repo root (.git)")
+	}
+	relPath := "fixtures/tom-and-jerry/arena-api/src/arena/battle.gateway.ts"
+	if _, err := os.Stat(filepath.Join(root, relPath)); err != nil {
+		t.Skipf("fixture absent: %s", relPath)
+	}
+	orig, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	// LLM has no opinion → AST from_type should fill it.
+	_, fromType := MergeASTFacts(relPath, nil, "", nil)
+	if fromType != "provider" {
+		t.Errorf("empty LLM from_type: AST should fill with \"provider\"; got %q", fromType)
+	}
+}
+
 // TestUnionFacts_LLMWinsOnOverlap verifies that on duplicate, the LLM fact is kept.
 func TestUnionFacts_LLMWinsOnOverlap(t *testing.T) {
 	astFacts := []map[string]any{

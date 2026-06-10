@@ -20,6 +20,13 @@ type Graph struct {
 
 	// scanFileIndex is populated during ResolveExtractions for class-name → file_path lookup.
 	scanFileIndex scanFileIndex
+
+	// currentFileImportMap is set per-file during ResolveExtractions.
+	// It maps each imported symbol to the resolved absolute file path derived from
+	// the relative import specifier, allowing provides/parent resolution to consult
+	// the module's own import declarations before falling back to class-name heuristics.
+	// symbol → resolved file path (no extension, relative to module file dir)
+	currentFileImportMap map[string]string
 }
 
 // defaultEvidenceConfidence returns the confidence for an evidence row.

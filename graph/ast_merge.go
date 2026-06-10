@@ -33,7 +33,11 @@ func MergeASTFacts(filePath string, llmFacts []map[string]any, llmFromType strin
 
 			astFacts := parseFacts(semantic.FactsJSON())
 
-			if fromType == "" && semantic.FromType != "" {
+			// AST classification from decorators is ground truth — it wins over the LLM's
+			// from_type when there is a conflict.  LLMs mislabel gateways (@WebSocketGateway
+			// → "provider", not "controller") and modules.  Only keep the LLM's value when
+			// the AST has no opinion (semantic.FromType == "").
+			if semantic.FromType != "" {
 				fromType = semantic.FromType
 			}
 

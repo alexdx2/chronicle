@@ -289,6 +289,10 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 		if fileNodeType == "" {
 			fileNodeType = fileNodeTypeFromFacts(ff.facts)
 		}
+		// Build the per-file import map: symbol → resolved file path (no ext).
+		// This allows provides/parent resolution to consult this file's imports first,
+		// making CONTAINS edges deterministic and immune to same-class-name collisions.
+		g.currentFileImportMap = buildFileImportMap(ff.filePath, ff.facts)
 		for _, fact := range ff.facts {
 			if fact.FromType == "" {
 				fact.FromType = fileNodeType
@@ -301,6 +305,7 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 				result.Unresolved = append(result.Unresolved, *unresolved)
 			}
 		}
+		g.currentFileImportMap = nil
 	}
 
 	// Post-resolve: detect module nodes from graph structure and fix edge types.
@@ -743,7 +748,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
-		toNodeKey, toID := g.resolveClassNameTarget(domainKey, revisionID, fact.To)
+		// Import-map-first resolution (R8): look up the symbol in this file's import
+		// declarations before falling back to class-name heuristics.  This makes
+		// module CONTAINS edges deterministic and immune to same-class-name collisions
+		// across services (e.g. four prisma.service.ts files in the domain).
+		toNodeKey, toID := g.resolveViaImportMapThenClassName(domainKey, revisionID, fact.To, g.currentFileImportMap)
 		if toID == 0 {
 			return counts, &UnresolvedRef{
 				FromFile: filePath,
@@ -2254,6 +2263,84 @@ func (g *Graph) registerClassNameAliases(nodeID int64, fileStem string) {
 	}
 }
 
+// buildFileImportMap builds a symbol → resolved file path map from the import facts of a file.
+// The resolved path is the module file's directory joined with the relative import specifier
+// (extension stripped), e.g.:
+//
+//	moduleFile: "svc-a/src/tom/tom.module.ts"
+//	import symbols=["TomController"] to="./tom.controller"
+//	→ "TomController" → "svc-a/src/tom/tom.controller"
+//
+// Only relative imports (starting with "./" or "../") are indexed; package imports are skipped.
+func buildFileImportMap(moduleFilePath string, facts []Fact) map[string]string {
+	m := make(map[string]string)
+	moduleDir := filepath.Dir(moduleFilePath)
+	for _, f := range facts {
+		if f.Kind != "import" {
+			continue
+		}
+		if !strings.HasPrefix(f.To, "./") && !strings.HasPrefix(f.To, "../") {
+			continue
+		}
+		// Resolve the relative path from the module file's directory.
+		resolved := filepath.Join(moduleDir, f.To)
+		// Strip known TS/JS extensions so keys match path-keyed node keys.
+		for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
+			resolved = strings.TrimSuffix(resolved, ext)
+		}
+		// Normalize path separators.
+		resolved = strings.ReplaceAll(resolved, "\\", "/")
+		// Index each symbol imported from this path.
+		for _, sym := range f.Symbols {
+			if sym != "" {
+				m[sym] = resolved
+			}
+		}
+		// Also index the bare stem as a fallback (e.g. if symbols list is empty).
+		stem := inferNameFromImport(f.To)
+		if stem != "" && len(f.Symbols) == 0 {
+			m[stem] = resolved
+		}
+	}
+	return m
+}
+
+// resolveViaImportMapThenClassName resolves a provides/parent target symbol to a node.
+// Strategy:
+//  1. Import-map lookup: if the symbol appears in the module file's import declarations,
+//     use the resolved file path to find the exact node (path-keyed, domain-scoped).
+//     This is O(1) and immune to same-class-name collisions across services.
+//  2. Fall back to class-name / scan-index resolution (resolveClassNameTarget).
+func (g *Graph) resolveViaImportMapThenClassName(domainKey string, revisionID int64, symbol string, importMap map[string]string) (string, int64) {
+	if importMap != nil {
+		if resolvedPath, ok := importMap[symbol]; ok {
+			// Look up the node by each candidate type (controller, provider, module).
+			// The actual node type is already stored in the scanFileIndex.
+			nodeType := g.scanFileIndex.byPath[resolvedPath+".ts"]
+			if nodeType == "" {
+				// Try without extension (paths in scanFileIndex may lack extension).
+				nodeType = g.scanFileIndex.byPath[resolvedPath]
+			}
+			if nodeType == "" {
+				// Infer from class name as last resort.
+				nodeType = inferNodeTypeFromClassName(symbol)
+			}
+			nodeKey := typedNodeKeyFromFile(domainKey, resolvedPath, nodeType)
+			// Try to get existing node first.
+			if id, err := g.store.GetNodeIDByKey(nodeKey); err == nil {
+				return nodeKey, id
+			}
+			// Node may not exist yet if this file hasn't been processed; ensure it.
+			id := g.ensureNodeID(domainKey, revisionID, nodeKey, inferNameFromPath(resolvedPath), resolvedPath)
+			if id != 0 {
+				return nodeKey, id
+			}
+		}
+	}
+	// Fall back to existing class-name / scan-index resolution.
+	return g.resolveClassNameTarget(domainKey, revisionID, symbol)
+}
+
 func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, className string) (string, int64) {
 	if !isPlausibleClassName(className) {
 		return "", 0
@@ -2578,31 +2665,3 @@ func lookupCodeNode(g *Graph, domainKey, name string) bool {
 	return false
 }
 
-// isLocalCodeNode is kept for backward compatibility but lookupCodeNode is preferred.
-// It uses the old PascalCase heuristic and is no longer called by the resolve path.
-func isLocalCodeNode(g *Graph, domainKey, name string) bool {
-	if name == "" {
-		return false
-	}
-	flat := flattenName(name)
-	for _, nodeType := range []string{"provider", "controller", "module"} {
-		nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: nodeType})
-		for _, n := range nodes {
-			if n.Layer != "code" {
-				continue
-			}
-			// Exclude synthesized placeholder nodes: their Name is the dot-case
-			// derivation (lower-case, contains dots). Real nodes have PascalCase or
-			// path-keyed names (contain slashes). If the name starts with a lowercase
-			// letter AND contains only dots/dashes/lowercase, it's a placeholder.
-			if len(n.Name) > 0 && n.Name[0] >= 'a' && n.Name[0] <= 'z' && !strings.Contains(n.Name, "/") {
-				continue
-			}
-			// Match by display name (case-insensitive flatten)
-			if flattenName(n.Name) == flat {
-				return true
-			}
-		}
-	}
-	return false
-}
