@@ -317,6 +317,10 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 	g.detectContainsCycles(domainKey, revisionID)
 	hygiene := g.applyGraphHygiene(domainKey)
 	result.Hygiene = hygiene
+	// Deterministic flow derivation: always fresh after each resolve.
+	// This replaces the LLM phase-2 flow tracing (which is gated off).
+	// Flows are derived from endpoint → controller → transitive INJECTS closure.
+	_ = g.DeriveFlows(domainKey, revisionID)
 	// Mark all extractions as resolved
 	if err := g.store.MarkExtractionsResolved(revisionID, domainKey); err != nil {
 		return nil, fmt.Errorf("ResolveExtractions mark resolved: %w", err)
