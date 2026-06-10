@@ -16,7 +16,7 @@ func TestIdentity_FingerprintStable(t *testing.T) {
 		t.Fatalf("codename mismatch")
 	}
 	// Golden — bump intentionally when ReleaseCodename, SchemaGeneration, or Capabilities change.
-	const golden = "76f9c2ec4a37"
+	const golden = "1f8b19d6ea28"
 	if id.Fingerprint != golden {
 		t.Fatalf("fingerprint changed to %q — update golden if release contract changed", id.Fingerprint)
 	}

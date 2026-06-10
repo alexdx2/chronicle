@@ -11,10 +11,10 @@ import (
 
 // ReleaseCodename is a human-memorable release marker. Bump when scan/MCP contract changes.
 // Agents compare this string — not semver alone — to detect stale MCP servers.
-const ReleaseCodename = "kestrel-ap3"
+const ReleaseCodename = "osprey-vw1"
 
 // SchemaGeneration bumps when MCP tool response shapes change incompatibly.
-const SchemaGeneration = 3
+const SchemaGeneration = 4
 
 // BuildTime is set at compile time via -ldflags (optional).
 var BuildTime = ""
@@ -31,6 +31,7 @@ var Capabilities = []string{
 	"pool_status_v2",
 	"quality_warnings",
 	"scan_review_gate",
+	"view_algebra",
 }
 
 // MCPIdentity is the full identity payload for agents and operators.
