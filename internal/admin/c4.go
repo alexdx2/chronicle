@@ -227,6 +227,8 @@ func (s *Server) handleC1(w http.ResponseWriter, r *http.Request) {
 			}
 		case n.NodeType == "topic":
 			stats.Topics++
+		case n.Layer == "flow" && n.NodeType == "use_case":
+			stats.Flows++
 		}
 	}
 
