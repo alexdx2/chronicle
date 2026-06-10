@@ -44,6 +44,14 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
+	// WAL hygiene: cap journal growth and checkpoint aggressively. Scan-lab and
+	// multi-process access (MCP server + admin + per-call CLI spawns) otherwise
+	// grow the -wal unbounded; an interrupted checkpoint on a large WAL is the
+	// main "database disk image is malformed" path we have observed.
+	if _, err := db.Exec("PRAGMA journal_size_limit = 16777216"); err == nil {
+		_, _ = db.Exec("PRAGMA wal_autocheckpoint = 500")
+	}
+
 	s := &Store{conn: db, db: db, dbPath: dbPath}
 	if err := s.migrate(); err != nil {
 		db.Close()
@@ -82,6 +90,24 @@ func (s *Store) reconnectIfNeeded(err error) {
 		}
 	}
 }
+
+// IsCorruptionError reports whether err indicates an unrecoverable database
+// file problem (malformed image / not-a-database). Callers should surface
+// RecoveryHint instead of retrying.
+func IsCorruptionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database disk image is malformed") ||
+		strings.Contains(msg, "file is not a database")
+}
+
+// RecoveryHint is the actionable message for corrupted databases.
+const RecoveryHint = "chronicle.db is corrupted (likely an interrupted WAL checkpoint). " +
+	"Recovery: stop all chronicle processes, delete chronicle.db together with " +
+	"chronicle.db-wal and chronicle.db-shm (deleting the db but keeping -wal/-shm " +
+	"corrupts the next database too), then re-scan or re-import the domain."
 
 // Exec runs a raw SQL statement. Used for post-resolve fixes and migrations.
 func (s *Store) Exec(query string, args ...any) error {
