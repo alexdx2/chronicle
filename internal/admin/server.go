@@ -418,6 +418,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/c4/c1", s.handleC1)
 	mux.HandleFunc("/api/c4/c2", s.handleC2)
 	mux.HandleFunc("/api/c4/c3", s.handleC3)
+	mux.HandleFunc("/api/view", s.handleView)
 }
 
 // ServeHTTP implements http.Handler for testing.
@@ -1906,19 +1907,54 @@ func edgeTypeToKind(edgeType string) string {
 	}
 }
 
+// diagramSessionCounts extracts node/edge counts from a stored session blob.
+// Supports both legacy sessions (nodes/edges arrays) and viewmodel sessions
+// (selection.components / selection.internal_edges).
+func diagramSessionCounts(dataJSON string) (kind string, nodeCount, edgeCount int) {
+	var d struct {
+		Kind      string            `json:"kind"`
+		Nodes     []json.RawMessage `json:"nodes"`
+		Edges     []json.RawMessage `json:"edges"`
+		Selection *struct {
+			Components    []json.RawMessage `json:"components"`
+			InternalEdges []json.RawMessage `json:"internal_edges"`
+		} `json:"selection"`
+	}
+	if json.Unmarshal([]byte(dataJSON), &d) != nil {
+		return "", 0, 0
+	}
+	if d.Selection != nil {
+		return d.Kind, len(d.Selection.Components), len(d.Selection.InternalEdges)
+	}
+	return d.Kind, len(d.Nodes), len(d.Edges)
+}
+
+// handleDiagramList reads sessions from the store (source of truth) so that
+// sessions saved directly via SaveDiagramSession (e.g. by the MCP
+// chronicle_diagram_build tool) are visible without an admin restart.
 func (s *Server) handleDiagramList(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	sessions := make([]map[string]any, 0, len(s.diagrams))
-	for _, session := range s.diagrams {
+	rows, err := s.getStore().ListDiagramSessions()
+	if err != nil {
+		httpError(w, err, 500)
+		return
+	}
+	sessions := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		id := row["session_id"]
+		_, dataJSON, err := s.getStore().GetDiagramSession(id)
+		if err != nil {
+			continue
+		}
+		kind, nodeCount, edgeCount := diagramSessionCounts(dataJSON)
 		sessions = append(sessions, map[string]any{
-			"id":         session.ID,
-			"title":      session.Title,
-			"node_count": len(session.Nodes),
-			"edge_count": len(session.Edges),
-			"created_at": session.CreatedAt,
+			"id":         id,
+			"title":      row["title"],
+			"kind":       kind,
+			"node_count": nodeCount,
+			"edge_count": edgeCount,
+			"created_at": row["created_at"],
 		})
 	}
-	s.mu.RUnlock()
 	httpJSON(w, map[string]any{"sessions": sessions})
 }
 
@@ -1950,11 +1986,18 @@ func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id str
 	s.mu.RLock()
 	session, ok := s.diagrams[id]
 	s.mu.RUnlock()
-	if !ok {
-		http.Error(w, "session not found", 404)
+	if ok {
+		httpJSON(w, session)
 		return
 	}
-	httpJSON(w, session)
+	// Fall back to the store: sessions saved directly via SaveDiagramSession
+	// (e.g. viewmodel sessions from the MCP diagram tool) are served raw.
+	if _, dataJSON, err := s.getStore().GetDiagramSession(id); err == nil && dataJSON != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(dataJSON))
+		return
+	}
+	http.Error(w, "session not found", 404)
 }
 
 
