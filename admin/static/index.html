@@ -269,7 +269,6 @@ a{color:var(--primary);text-decoration:none}
 .demo-mode .graph-svg *{transition:none!important}
 /* Embed demo: chromeless self-driving tour */
 .demo-mode.embed-mode .tab-bar{display:none!important}
-.demo-mode.embed-mode .graph-toolbar{display:none!important}
 .demo-mode.embed-mode .container{padding:0!important;max-width:none!important}
 .demo-mode.embed-mode .graph-container{border-radius:0!important}
 @keyframes pulse {
@@ -1958,12 +1957,20 @@ function dashboard() {
         this.tab = 'graph';
         this.graphMode = 'explore';
         this._initViewLevel = path.split('/')[2];
+        this._bootViewPending = true; // no default-render flash: wait for the view
       } else if (path === '/graph' || path.startsWith('/graph')) {
         this.tab = 'graph';
       } else if (path === '/language') {
         this.tab = 'language';
       } else if (path === '/settings') {
         this.tab = 'settings';
+      }
+      // View deep links via hash (#v/<spec>, #c4/s/<id>) also boot straight
+      // into a view — suppress the default render until it lands.
+      if (location.hash.indexOf('#v/') === 0 || location.hash.indexOf('#c4') === 0) {
+        this.tab = 'graph';
+        this.graphMode = 'explore';
+        this._bootViewPending = true;
       }
       // SLOT:EXTRA_ROUTES
 
@@ -2505,6 +2512,14 @@ function dashboard() {
         this._embedDemoTimer = setTimeout(runStep, step.dwell);
       };
       this._embedDemoTimer = setTimeout(runStep, 1200);
+      // The toolbar stays interactive in embed mode — the first real user
+      // interaction takes over and the tour stops for good.
+      const stop = () => {
+        clearTimeout(this._embedDemoTimer);
+        this._embedDemoTimer = null;
+        document.removeEventListener('pointerdown', stop, true);
+      };
+      document.addEventListener('pointerdown', stop, true);
     },
 
     async fetchScanProgress() {
@@ -3614,6 +3629,12 @@ function dashboard() {
     renderGraph() {
       const container = document.getElementById('graph-canvas');
       if (!container) return;
+      // Booting straight into a view (/graph/c2, #v/…): suppress the default
+      // render — the view replaces it in a moment and the swap reads as a flash.
+      if (this._bootViewPending && !this.viewActive) {
+        container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">Loading view…</div>';
+        return;
+      }
       // View mode (Level=C1/C2/C3 or deep-linked spec) — render the view stack
       if (this.viewActive) {
         this.renderViewMode();
@@ -4715,6 +4736,12 @@ function dashboard() {
       } catch (e) {
         this.viewError = e.message;
         this.viewLoading = false;
+        // Boot-into-view failed: fall back to the default render.
+        if (this._bootViewPending) {
+          this._bootViewPending = false;
+          this.loading.graph = false;
+          this.$nextTick(() => this.renderGraph());
+        }
         return;
       }
       this.viewLoading = false;
@@ -4802,6 +4829,11 @@ function dashboard() {
     async renderViewMode() {
       const top = this.viewStack[this.viewStack.length - 1];
       if (!top) return;
+      // First view render after boot-into-view: release the default-render gate.
+      if (this._bootViewPending) {
+        this._bootViewPending = false;
+        this.loading.graph = false;
+      }
       const renderer = await this._getViewRenderer();
       if (!renderer) return;
       const adapted = ViewAdapter.adaptView(top.view, this.edgeCategoryLookup);
