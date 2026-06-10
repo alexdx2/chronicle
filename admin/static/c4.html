@@ -49,7 +49,7 @@ body {
 .main { display: flex; flex: 1; overflow: hidden; }
 .canvas-area {
   flex: 1; overflow: auto; position: relative; padding: 28px;
-  display: flex; align-items: flex-start; justify-content: flex-start;
+  display: flex; align-items: flex-start; justify-content: center;
 }
 .canvas-area.center-v { align-items: center; justify-content: center; }
 .sidebar {
@@ -754,35 +754,36 @@ function buildPath(fromId, toId, allRects, opts) {
     const perpX = -dy / len;
     const perpY =  dx / len;
 
+    // Sweep offsets symmetrically; sample the REAL cubic (10 segments) for
+    // intersection — the old two-segment midpoint test let bezier bulges
+    // pass straight through cards (publishes arrow vs tom-api).
+    const cubicCrosses = (cx1, cy1, cx2, cy2) => {
+      let px = ax, py = ay;
+      for (let i = 1; i <= 10; i++) {
+        const t = i / 10, mt = 1 - t;
+        const x = mt*mt*mt*ax + 3*mt*mt*t*cx1 + 3*mt*t*t*cx2 + t*t*t*bx;
+        const y = mt*mt*mt*ay + 3*mt*mt*t*cy1 + 3*mt*t*t*cy2 + t*t*t*by;
+        for (const r of allRects) {
+          if (rectsOverlap(r, fr) || rectsOverlap(r, tr)) continue;
+          if (segmentIntersectsRect(px, py, x, y, r, 6)) return true;
+        }
+        px = x; py = y;
+      }
+      return false;
+    };
+
+    const sweep = [0, bend, -bend, bend*1.6, -bend*1.6, bend*2.4, -bend*2.4];
     let perpOff = 0;
-
-    for (let iter = 0; iter < 3; iter++) {
-      const cx1 = ax + dx * 0.25 + perpX * perpOff;
-      const cy1 = ay + dy * 0.25 + perpY * perpOff;
-      const cx2 = ax + dx * 0.75 + perpX * perpOff;
-      const cy2 = ay + dy * 0.75 + perpY * perpOff;
-
-      const pathD = `M${ax},${ay} C${cx1},${cy1} ${cx2},${cy2} ${bx},${by}`;
-
-      // Sample the cubic bezier for intersection check (approximate as 3 quads)
-      // Simple check: test midpoint segment
-      const mid = { x: (ax+bx)/2 + perpX*perpOff, y: (ay+by)/2 + perpY*perpOff };
-      let crosses = false;
-      for (const r of allRects) {
-        const fromEl2 = document.getElementById(fromId);
-        const toEl2   = document.getElementById(toId);
-        const fr2 = fromEl2 ? getBoundingRelSvg(fromEl2) : null;
-        const tr2 = toEl2   ? getBoundingRelSvg(toEl2)   : null;
-        if (fr2 && rectsOverlap(r, fr2)) continue;
-        if (tr2 && rectsOverlap(r, tr2)) continue;
-        if (segmentIntersectsRect(ax, ay, mid.x, mid.y, r, 8)) { crosses = true; break; }
-        if (segmentIntersectsRect(mid.x, mid.y, bx, by, r, 8)) { crosses = true; break; }
+    for (const off of sweep) {
+      const cx1 = ax + dx * 0.25 + perpX * off;
+      const cy1 = ay + dy * 0.25 + perpY * off;
+      const cx2 = ax + dx * 0.75 + perpX * off;
+      const cy2 = ay + dy * 0.75 + perpY * off;
+      if (!cubicCrosses(cx1, cy1, cx2, cy2)) {
+        return { d: `M${ax},${ay} C${cx1},${cy1} ${cx2},${cy2} ${bx},${by}`,
+                 ax, ay, bx, by, cx1, cy1, cx2, cy2, cubic: true, perpOff: off };
       }
-
-      if (!crosses) {
-        return { d: pathD, ax, ay, bx, by, cx1, cy1, cx2, cy2, cubic: true, perpOff };
-      }
-      perpOff = perpOff === 0 ? bend : -perpOff + (perpOff > 0 ? -20 : 20);
+      perpOff = off;
     }
 
     // Accept last
@@ -864,11 +865,13 @@ function computeLabelPos(pathInfo, label, allRects) {
    ARROW ENGINE
 ────────────────────────────────────────────────────── */
 let arrowGroups = [];
+let placedLabelRects = [];
 let pendingArrows = [];  // drawn after layout
 
 function clearArrows() {
   arrowGroups = [];
   pendingArrows = [];
+  placedLabelRects = [];
   const svg = document.getElementById('arrow-svg');
   Array.from(svg.children).forEach(c => {
     if (c.tagName.toLowerCase() !== 'defs') c.remove();
@@ -936,9 +939,11 @@ function drawArrow({ fromId, toId, kind, label, groupKey }) {
 
   // Label
   if (label) {
-    const labelPos = computeLabelPos(pathInfo, label, allRects);
+    const labelPos = computeLabelPos(pathInfo, label, allRects.concat(placedLabelRects));
     if (labelPos) {
       const lw = label.length * 5 + 8;
+      placedLabelRects.push({ left: labelPos.lx - lw/2 - 4, right: labelPos.lx + lw/2 + 4,
+                              top: labelPos.ly - 10, bottom: labelPos.ly + 10 });
       const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       bg.className.baseVal = 'arrow-label-bg';
       bg.setAttribute('x', labelPos.lx - lw/2);
