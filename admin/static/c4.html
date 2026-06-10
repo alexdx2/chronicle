@@ -47,7 +47,11 @@ body {
 
 /* ── Main layout ── */
 .main { display: flex; flex: 1; overflow: hidden; }
-.canvas-area { flex: 1; overflow: auto; position: relative; padding: 28px; }
+.canvas-area {
+  flex: 1; overflow: auto; position: relative; padding: 28px;
+  display: flex; align-items: flex-start; justify-content: flex-start;
+}
+.canvas-area.center-v { align-items: center; justify-content: center; }
 .sidebar {
   width: 190px; background: #111128;
   border-left: 1px solid #2a2a4a;
@@ -159,10 +163,17 @@ body {
 }
 .c2-row { display: flex; gap: 14px; flex-wrap: wrap; }
 
+/* 2-per-row grid for services */
+.c2-svc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 220px);
+  gap: 120px 140px;
+}
+
 .svc-card {
   background: linear-gradient(135deg, #1e3a5f, #162a48);
   border: 2px solid #2a5a8a; border-radius: 8px;
-  padding: 14px 18px; min-width: 170px; flex: 1; max-width: 230px;
+  padding: 14px 18px; width: 220px;
   cursor: pointer; transition: all 0.2s;
 }
 .svc-card:hover { border-color: #4a8ad5; transform: translateY(-2px); box-shadow: 0 4px 16px rgba(58,123,213,0.18); }
@@ -228,13 +239,19 @@ body {
   width: 3px; height: 10px;
   background: #d4915e; border-radius: 2px;
 }
-.comp-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 3-per-row grid for component cards */
+.comp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(200px, 1fr));
+  gap: 10px 10px;
+}
 
 .comp-card {
   background: #141430; border: 1px solid #2a2a4a;
   border-radius: 6px; padding: 9px 12px;
-  min-width: 140px; flex: 1; max-width: 200px;
+  min-width: 200px;
   transition: all 0.15s; cursor: default;
+  overflow: hidden;
 }
 .comp-card:hover { border-color: #4a4a7a; background: #1a1a3a; }
 .comp-card.t-controller { border-left: 3px solid #4a9aea; }
@@ -245,17 +262,27 @@ body {
   font-size: 7px; color: #4a4a6a;
   text-transform: uppercase; letter-spacing: 0.4px; margin-top: 1px;
 }
+.comp-card .ep-pills {
+  display: flex; flex-wrap: wrap; gap: 2px; margin-top: 4px;
+}
 .comp-card .ep-pill {
-  display: inline-block; margin: 2px 2px 0 0;
+  display: inline-block;
   font-size: 7px; color: #4a7aad;
   background: #0a1a2a; padding: 1px 5px;
   border-radius: 3px; border: 1px solid #1a3a5a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
+}
+.comp-card .model-chips {
+  display: flex; flex-wrap: wrap; gap: 2px; margin-top: 4px;
 }
 .comp-card .model-chip {
-  display: inline-block; margin: 2px 2px 0 0;
+  display: inline-block;
   font-size: 7px; color: #7a4ab0;
   background: #1a0a2a; padding: 1px 5px;
   border-radius: 3px; border: 1px solid #3a1a5a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 /* Boundary panel */
@@ -515,6 +542,325 @@ function setLegend(items) {
 }
 
 /* ──────────────────────────────────────────────────────
+   GEOMETRY HELPERS
+────────────────────────────────────────────────────── */
+
+/**
+ * Get the bounding rect of a DOM element relative to the SVG overlay.
+ */
+function getBoundingRelSvg(el) {
+  const svgEl = document.getElementById('arrow-svg');
+  const svgRect = svgEl.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  return {
+    left:   r.left   - svgRect.left,
+    top:    r.top    - svgRect.top,
+    right:  r.right  - svgRect.left,
+    bottom: r.bottom - svgRect.top,
+    width:  r.width,
+    height: r.height,
+    cx: r.left + r.width  / 2 - svgRect.left,
+    cy: r.top  + r.height / 2 - svgRect.top,
+  };
+}
+
+/**
+ * Collect all card rects that exist in the current DOM (for crossing guard).
+ */
+function collectAllCardRects() {
+  const rects = [];
+  document.querySelectorAll('#content .card-node').forEach(el => {
+    rects.push(getBoundingRelSvg(el));
+  });
+  return rects;
+}
+
+/**
+ * Segment-vs-rect intersection test.
+ * Returns true if the line segment (x1,y1)→(x2,y2) passes through rect
+ * (ignores if the segment endpoint is inside the rect — that's expected).
+ * Uses parametric clipping: tests against all four rect edges.
+ */
+function segmentIntersectsRect(x1, y1, x2, y2, rect, margin) {
+  const m = margin || 4;
+  const rl = rect.left   + m;
+  const rr = rect.right  - m;
+  const rt = rect.top    + m;
+  const rb = rect.bottom - m;
+
+  // Fast reject: segment bounding box doesn't overlap rect at all
+  if (Math.max(x1,x2) < rl || Math.min(x1,x2) > rr) return false;
+  if (Math.max(y1,y2) < rt || Math.min(y1,y2) > rb) return false;
+
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+
+  // Check if ANY interior point of the segment lies within the rect
+  // We clip the segment to the rect using Liang-Barsky
+  let t0 = 0, t1 = 1;
+
+  function clip(p, q) {
+    if (Math.abs(p) < 1e-10) {
+      return q >= 0; // parallel — outside if q<0
+    }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+    else        { if (r < t0) return false; if (r < t1) t1 = r; }
+    return true;
+  }
+
+  if (!clip(-dx, x1 - rl)) return false;
+  if (!clip( dx, rr - x1)) return false;
+  if (!clip(-dy, y1 - rt)) return false;
+  if (!clip( dy, rb - y1)) return false;
+
+  // Segment intersects the rect if the clipped interval is interior
+  // (t0 > small epsilon means entry is not at the very start = from-card)
+  // (t1 < 1-epsilon means exit is not at the very end = to-card)
+  return t0 < t1 && t0 > 0.05 && t1 < 0.95;
+}
+
+/**
+ * Evaluate a quadratic bezier at t: P = (1-t)^2 A + 2t(1-t) C + t^2 B
+ */
+function quadBezierPt(ax, ay, cx, cy, bx, by, t) {
+  const mt = 1 - t;
+  return {
+    x: mt*mt*ax + 2*mt*t*cx + t*t*bx,
+    y: mt*mt*ay + 2*mt*t*cy + t*t*by,
+  };
+}
+
+/**
+ * Does a quadratic bezier arc (sampled at 8 points) intersect any unrelated card?
+ * fromId/toId are the endpoints — we skip those two rects.
+ */
+function arcIntersectsCards(ax, ay, cx, cy, bx, by, allRects, fromId, toId) {
+  const fromEl = document.getElementById(fromId);
+  const toEl   = document.getElementById(toId);
+  const fromRect = fromEl ? getBoundingRelSvg(fromEl) : null;
+  const toRect   = toEl   ? getBoundingRelSvg(toEl)   : null;
+
+  const samples = 10;
+  for (let i = 0; i < samples - 1; i++) {
+    const t0 = i / samples;
+    const t1 = (i + 1) / samples;
+    const p0 = quadBezierPt(ax, ay, cx, cy, bx, by, t0);
+    const p1 = quadBezierPt(ax, ay, cx, cy, bx, by, t1);
+
+    for (const r of allRects) {
+      // Skip the from and to cards themselves
+      if (fromRect && rectsOverlap(r, fromRect)) continue;
+      if (toRect   && rectsOverlap(r, toRect))   continue;
+      if (segmentIntersectsRect(p0.x, p0.y, p1.x, p1.y, r, 6)) return true;
+    }
+  }
+  return false;
+}
+
+function rectsOverlap(a, b) {
+  return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
+}
+
+/**
+ * Determine exit/entry edge anchor points between two rects.
+ */
+function edgePoints(fRect, tRect) {
+  const dx = tRect.cx - fRect.cx;
+  const dy = tRect.cy - fRect.cy;
+
+  let ax, ay, bx, by;
+
+  if (Math.abs(dx) > Math.abs(dy)) {
+    if (dx > 0) {
+      ax = fRect.right;  ay = fRect.cy;
+      bx = tRect.left;   by = tRect.cy;
+    } else {
+      ax = fRect.left;   ay = fRect.cy;
+      bx = tRect.right;  by = tRect.cy;
+    }
+  } else {
+    if (dy > 0) {
+      ax = fRect.cx; ay = fRect.bottom;
+      bx = tRect.cx; by = tRect.top;
+    } else {
+      ax = fRect.cx; ay = fRect.top;
+      bx = tRect.cx; by = tRect.bottom;
+    }
+  }
+
+  return { ax, ay, bx, by };
+}
+
+/**
+ * Determine if two rects are in the same horizontal row (cy within threshold).
+ */
+function sameRow(r1, r2, thresh) {
+  return Math.abs(r1.cy - r2.cy) < (thresh || 60);
+}
+
+/**
+ * Build a path string for an arc between two points.
+ * For same-row cards: quadratic arc above or below.
+ * For cross-row cards: cubic bezier using side anchors.
+ * Applies crossing guard: bumps perpendicular offset until clear (max 3 iters).
+ */
+function buildPath(fromId, toId, allRects, opts) {
+  const fromEl = document.getElementById(fromId);
+  const toEl   = document.getElementById(toId);
+  if (!fromEl || !toEl) return null;
+
+  const fr = getBoundingRelSvg(fromEl);
+  const tr = getBoundingRelSvg(toEl);
+
+  const sameRowCards = sameRow(fr, tr, 70);
+
+  if (sameRowCards) {
+    // Same-row: arc above the row (negative dy = upward control point)
+    // anchor from top-center → to top-center, control point above midpoint
+    const ax = fr.cx;
+    const ay = fr.top;
+    const bx = tr.cx;
+    const by = tr.top;
+    const mx = (ax + bx) / 2;
+    const my = Math.min(ay, by);
+
+    const baseOffset = 60; // baseline arc height above cards
+    let offset = baseOffset;
+
+    for (let iter = 0; iter < 3; iter++) {
+      const cx = mx;
+      const cy = my - offset;
+      if (!arcIntersectsCards(ax, ay, cx, cy, bx, by, allRects, fromId, toId)) {
+        return { d: `M${ax},${ay} Q${cx},${cy} ${bx},${by}`, cx, cy, ax, ay, bx, by, quad: true };
+      }
+      offset += 40;
+    }
+    // Accept last attempt
+    const cx = mx;
+    const cy = my - offset;
+    return { d: `M${ax},${ay} Q${cx},${cy} ${bx},${by}`, cx, cy, ax, ay, bx, by, quad: true };
+
+  } else {
+    // Cross-row: use edge anchors, cubic bezier
+    const { ax, ay, bx, by } = edgePoints(fr, tr);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const bend = Math.min(dist * 0.45, 100);
+
+    // Perpendicular unit vector
+    const len = dist || 1;
+    const perpX = -dy / len;
+    const perpY =  dx / len;
+
+    let perpOff = 0;
+
+    for (let iter = 0; iter < 3; iter++) {
+      const cx1 = ax + dx * 0.25 + perpX * perpOff;
+      const cy1 = ay + dy * 0.25 + perpY * perpOff;
+      const cx2 = ax + dx * 0.75 + perpX * perpOff;
+      const cy2 = ay + dy * 0.75 + perpY * perpOff;
+
+      const pathD = `M${ax},${ay} C${cx1},${cy1} ${cx2},${cy2} ${bx},${by}`;
+
+      // Sample the cubic bezier for intersection check (approximate as 3 quads)
+      // Simple check: test midpoint segment
+      const mid = { x: (ax+bx)/2 + perpX*perpOff, y: (ay+by)/2 + perpY*perpOff };
+      let crosses = false;
+      for (const r of allRects) {
+        const fromEl2 = document.getElementById(fromId);
+        const toEl2   = document.getElementById(toId);
+        const fr2 = fromEl2 ? getBoundingRelSvg(fromEl2) : null;
+        const tr2 = toEl2   ? getBoundingRelSvg(toEl2)   : null;
+        if (fr2 && rectsOverlap(r, fr2)) continue;
+        if (tr2 && rectsOverlap(r, tr2)) continue;
+        if (segmentIntersectsRect(ax, ay, mid.x, mid.y, r, 8)) { crosses = true; break; }
+        if (segmentIntersectsRect(mid.x, mid.y, bx, by, r, 8)) { crosses = true; break; }
+      }
+
+      if (!crosses) {
+        return { d: pathD, ax, ay, bx, by, cx1, cy1, cx2, cy2, cubic: true, perpOff };
+      }
+      perpOff = perpOff === 0 ? bend : -perpOff + (perpOff > 0 ? -20 : 20);
+    }
+
+    // Accept last
+    const cx1 = ax + dx * 0.25 + perpX * perpOff;
+    const cy1 = ay + dy * 0.25 + perpY * perpOff;
+    const cx2 = ax + dx * 0.75 + perpX * perpOff;
+    const cy2 = ay + dy * 0.75 + perpY * perpOff;
+    return { d: `M${ax},${ay} C${cx1},${cy1} ${cx2},${cy2} ${bx},${by}`, ax, ay, bx, by, cx1, cy1, cx2, cy2, cubic: true, perpOff };
+  }
+}
+
+/**
+ * Compute label position on a path.
+ * Uses midpoint (t=0.5) then nudges 14px perpendicular.
+ * If the label rect intersects any card, tries t=0.35 then t=0.65.
+ */
+function computeLabelPos(pathInfo, label, allRects) {
+  if (!label) return null;
+
+  // Approximate label size
+  const lw = label.length * 5 + 8;
+  const lh = 12;
+
+  function testPos(lx, ly) {
+    const lr = { left: lx - lw/2, right: lx + lw/2, top: ly - lh/2, bottom: ly + lh/2,
+                 cx: lx, cy: ly, width: lw, height: lh };
+    for (const r of allRects) {
+      if (rectsOverlap(lr, r)) return false;
+    }
+    return true;
+  }
+
+  function midOfPath(t) {
+    if (pathInfo.quad) {
+      return quadBezierPt(pathInfo.ax, pathInfo.ay, pathInfo.cx, pathInfo.cy, pathInfo.bx, pathInfo.by, t);
+    }
+    // Cubic: approximate with 3 quadratics; for label just do linear blend of control pts
+    const mt = 1 - t;
+    const x = mt*mt*mt*pathInfo.ax + 3*mt*mt*t*pathInfo.cx1 + 3*mt*t*t*pathInfo.cx2 + t*t*t*pathInfo.bx;
+    const y = mt*mt*mt*pathInfo.ay + 3*mt*mt*t*pathInfo.cy1 + 3*mt*t*t*pathInfo.cy2 + t*t*t*pathInfo.by;
+    return { x, y };
+  }
+
+  // Tangent at midpoint for perpendicular nudge
+  function tangentAtMid() {
+    if (pathInfo.quad) {
+      const p0 = quadBezierPt(pathInfo.ax, pathInfo.ay, pathInfo.cx, pathInfo.cy, pathInfo.bx, pathInfo.by, 0.45);
+      const p1 = quadBezierPt(pathInfo.ax, pathInfo.ay, pathInfo.cx, pathInfo.cy, pathInfo.bx, pathInfo.by, 0.55);
+      const dx = p1.x - p0.x; const dy = p1.y - p0.y;
+      const len = Math.sqrt(dx*dx+dy*dy) || 1;
+      return { px: -dy/len, py: dx/len };
+    }
+    const dx = pathInfo.bx - pathInfo.ax;
+    const dy = pathInfo.by - pathInfo.ay;
+    const len = Math.sqrt(dx*dx+dy*dy) || 1;
+    return { px: -dy/len, py: dx/len };
+  }
+
+  const { px, py } = tangentAtMid();
+  const nudge = 14;
+
+  for (const t of [0.5, 0.35, 0.65, 0.25, 0.75]) {
+    const m = midOfPath(t);
+    const lx = m.x + px * nudge;
+    const ly = m.y + py * nudge;
+    if (testPos(lx, ly)) return { lx, ly };
+    // Try other side
+    const lx2 = m.x - px * nudge;
+    const ly2 = m.y - py * nudge;
+    if (testPos(lx2, ly2)) return { lx: lx2, ly: ly2 };
+  }
+
+  // Fallback: just use midpoint nudged
+  const m = midOfPath(0.5);
+  return { lx: m.x + px * nudge, ly: m.y + py * nudge };
+}
+
+/* ──────────────────────────────────────────────────────
    ARROW ENGINE
 ────────────────────────────────────────────────────── */
 let arrowGroups = [];
@@ -524,7 +870,6 @@ function clearArrows() {
   arrowGroups = [];
   pendingArrows = [];
   const svg = document.getElementById('arrow-svg');
-  // Remove all arrow groups (keep defs)
   Array.from(svg.children).forEach(c => {
     if (c.tagName.toLowerCase() !== 'defs') c.remove();
   });
@@ -537,7 +882,6 @@ function queueArrows(arrows) {
 
 function flushArrows() {
   if (!pendingArrows.length) return;
-  // Give DOM a tick to settle positions
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       pendingArrows.forEach(a => drawArrow(a));
@@ -555,37 +899,9 @@ function drawArrow({ fromId, toId, kind, label, groupKey }) {
   const toEl   = document.getElementById(toId);
   if (!fromEl || !toEl) return;
 
-  const svg = document.getElementById('arrow-svg');
-  const svgRect = svg.getBoundingClientRect();
-
-  const fRect = fromEl.getBoundingClientRect();
-  const tRect = toEl.getBoundingClientRect();
-
-  const fx = fRect.left + fRect.width  / 2 - svgRect.left;
-  const fy = fRect.top  + fRect.height / 2 - svgRect.top;
-  const tx = tRect.left + tRect.width  / 2 - svgRect.left;
-  const ty = tRect.top  + tRect.height / 2 - svgRect.top;
-
-  // Exit points: use edge midpoints instead of centers for cleaner routing
-  const {ax, ay, bx, by} = edgePoints(fRect, tRect, svgRect);
-
-  // Cubic bezier control points
-  const dx = bx - ax;
-  const dy = by - ay;
-  const dist = Math.sqrt(dx*dx + dy*dy);
-  const bend = Math.min(dist * 0.4, 80);
-
-  // Perpendicular offset to curve away from direct line
-  const mx = (ax + bx) / 2;
-  const my = (ay + by) / 2;
-
-  // Control points: slightly off the direct line
-  const cx1 = ax + dx * 0.25;
-  const cy1 = ay + dy * 0.25 - bend * 0.3;
-  const cx2 = ax + dx * 0.75;
-  const cy2 = ay + dy * 0.75 - bend * 0.3;
-
-  const pathD = `M${ax},${ay} C${cx1},${cy1} ${cx2},${cy2} ${bx},${by}`;
+  const allRects = collectAllCardRects();
+  const pathInfo = buildPath(fromId, toId, allRects, {});
+  if (!pathInfo) return;
 
   const colors = {
     http:   '#4a8ad5',
@@ -595,93 +911,60 @@ function drawArrow({ fromId, toId, kind, label, groupKey }) {
   };
   const color = colors[kind] || '#4a5a7a';
   const dashed = kind === 'async' ? '5,3' : kind === 'inject' ? '3,3' : null;
-  const marker = `url(#arr-${kind === 'inject' ? 'inject' : kind === 'async' ? 'async' : kind === 'infra' ? 'infra' : 'solid'})`;
+  const markerName = kind === 'inject' ? 'inject' : kind === 'async' ? 'async' : kind === 'infra' ? 'infra' : 'solid';
+  const marker = `url(#arr-${markerName})`;
 
+  const svg = document.getElementById('arrow-svg');
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   g.className.baseVal = 'arrow-group';
   if (groupKey) {
-    g.dataset.from = fromId;
-    g.dataset.to   = toId;
+    g.dataset.from  = fromId;
+    g.dataset.to    = toId;
     g.dataset.group = groupKey;
   }
 
   // Path
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', pathD);
+  path.setAttribute('d', pathInfo.d);
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', color);
   path.setAttribute('stroke-width', '1.5');
   path.setAttribute('marker-end', marker);
   path.className.baseVal = 'arrow-path';
   if (dashed) path.setAttribute('stroke-dasharray', dashed);
-
   g.appendChild(path);
 
   // Label
   if (label) {
-    const lx = (ax + bx) / 2 + (cy1 - ay) * -0.15;
-    const ly = (ay + by) / 2 + (cx1 - ax) * 0.05 - 8;
+    const labelPos = computeLabelPos(pathInfo, label, allRects);
+    if (labelPos) {
+      const lw = label.length * 5 + 8;
+      const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bg.className.baseVal = 'arrow-label-bg';
+      bg.setAttribute('x', labelPos.lx - lw/2);
+      bg.setAttribute('y', labelPos.ly - 6);
+      bg.setAttribute('width', lw);
+      bg.setAttribute('height', '12');
+      bg.setAttribute('rx', '3');
+      bg.setAttribute('fill', '#111128');
+      bg.setAttribute('opacity', '0.85');
+      g.appendChild(bg);
 
-    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    bg.className.baseVal = 'arrow-label-bg';
-    bg.setAttribute('x', lx - 18); bg.setAttribute('y', ly - 8);
-    bg.setAttribute('width', '36'); bg.setAttribute('height', '12');
-    bg.setAttribute('rx', '3'); bg.setAttribute('fill', '#111128');
-    bg.setAttribute('opacity', '0.85');
-    g.appendChild(bg);
-
-    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    txt.className.baseVal = 'arrow-label-text';
-    txt.setAttribute('x', lx); txt.setAttribute('y', ly);
-    txt.setAttribute('text-anchor', 'middle');
-    txt.setAttribute('dominant-baseline', 'middle');
-    txt.setAttribute('font-size', '7');
-    txt.setAttribute('fill', color);
-    txt.textContent = label;
-    g.appendChild(txt);
+      const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      txt.className.baseVal = 'arrow-label-text';
+      txt.setAttribute('x', labelPos.lx);
+      txt.setAttribute('y', labelPos.ly);
+      txt.setAttribute('text-anchor', 'middle');
+      txt.setAttribute('dominant-baseline', 'middle');
+      txt.setAttribute('font-size', '7');
+      txt.setAttribute('fill', color);
+      txt.textContent = label;
+      g.appendChild(txt);
+    }
   }
 
   svg.appendChild(g);
   arrowGroups.push({ el: g, fromId, toId, groupKey });
-}
-
-function edgePoints(fRect, tRect, svgRect) {
-  // Determine exit/entry edges based on relative positions
-  const fcx = fRect.left + fRect.width/2;
-  const fcy = fRect.top  + fRect.height/2;
-  const tcx = tRect.left + tRect.width/2;
-  const tcy = tRect.top  + tRect.height/2;
-
-  const sx = svgRect.left;
-  const sy = svgRect.top;
-
-  const dx = tcx - fcx;
-  const dy = tcy - fcy;
-
-  let ax, ay, bx, by;
-
-  // From card exit
-  if (Math.abs(dx) > Math.abs(dy)) {
-    // Horizontal dominant
-    if (dx > 0) {
-      ax = fRect.right  - sx; ay = fcy - sy;
-      bx = tRect.left   - sx; by = tcy - sy;
-    } else {
-      ax = fRect.left   - sx; ay = fcy - sy;
-      bx = tRect.right  - sx; by = tcy - sy;
-    }
-  } else {
-    // Vertical dominant
-    if (dy > 0) {
-      ax = fcx - sx; ay = fRect.bottom - sy;
-      bx = tcx - sx; by = tRect.top    - sy;
-    } else {
-      ax = fcx - sx; ay = fRect.top    - sy;
-      bx = tcx - sx; by = tRect.bottom - sy;
-    }
-  }
-
-  return { ax, ay, bx, by };
 }
 
 /* ── Hover highlight ── */
@@ -713,7 +996,6 @@ function setupHoverHighlight(cardEls, getRelatedGroupKeys) {
     el.addEventListener('mouseleave', leave);
   });
 
-  // Click empty space to reset
   document.getElementById('canvas-area').addEventListener('click', e => {
     if (e.target.closest('.card-node, button, a')) return;
     leave();
@@ -768,7 +1050,6 @@ function renderC1(data) {
     stats.topics     && `${stats.topics} topics`,
   ].filter(Boolean).join(' · ');
 
-  // External systems
   const externalsHtml = (data.externals || []).map(ex => {
     const id = keyToId(ex.key);
     const callers = ex.calls_from && ex.calls_from.length
@@ -779,7 +1060,6 @@ function renderC1(data) {
     </div>`;
   }).join('');
 
-  // Infra
   const infraHtml = (data.infra || []).map(inf => {
     const id = keyToId(inf.key);
     const unused = !inf.used;
@@ -809,10 +1089,12 @@ function renderC1(data) {
       ` : ''}
     </div>`;
 
+  // Center vertically when content is short
+  document.getElementById('canvas-area').classList.add('center-v');
+
   clearArrows();
   requestAnimationFrame(() => requestAnimationFrame(() => {
     renderC1Arrows(data);
-    // Hover
     const cards = Array.from(document.querySelectorAll('#content .card-node'));
     setupHoverHighlight(cards, (id) => {
       const related = new Set();
@@ -852,12 +1134,45 @@ function renderC2(data) {
     { color: '#9080c0', label: 'Async (consumes)', dashed: true },
   ]);
 
-  // Separate internal queue topics from kafka topics
   const internalTopics = (data.topics || []).filter(t => t.internal);
   const externalTopics = (data.topics || []).filter(t => !t.internal);
 
-  // Build service cards — internal queue topics render as small badge on their service
-  const svcHtml = (data.services || []).map(svc => {
+  // Sort services so that:
+  //   publishers of external topics → top-left
+  //   consumers of external topics  → bottom-right
+  //   others fill remaining cells in order
+  // Grid order: [0]=top-left, [1]=top-right, [2]=bottom-left, [3]=bottom-right
+  const pubKeys = new Set();
+  const conKeys = new Set();
+  externalTopics.forEach(t => {
+    (t.publishers || []).forEach(n => pubKeys.add(n));
+    (t.consumers  || []).forEach(n => conKeys.add(n));
+  });
+
+  const svcs = data.services || [];
+  const ordered = new Array(svcs.length).fill(null);
+  const used = new Set();
+
+  // Place publisher at index 0 (top-left)
+  const pubIdx = svcs.findIndex(s => pubKeys.has(s.name));
+  if (pubIdx >= 0) { ordered[0] = svcs[pubIdx]; used.add(pubIdx); }
+
+  // Place consumer at last index (bottom-right for 4 svcs = index 3)
+  const conIdx = svcs.findIndex((s, i) => conKeys.has(s.name) && !used.has(i));
+  if (conIdx >= 0) { ordered[svcs.length - 1] = svcs[conIdx]; used.add(conIdx); }
+
+  // Fill remaining slots
+  let slot = 1;
+  svcs.forEach((s, i) => {
+    if (used.has(i)) return;
+    while (slot < ordered.length && ordered[slot] !== null) slot++;
+    if (slot < ordered.length) { ordered[slot] = s; slot++; }
+  });
+
+  const orderedSvcs = ordered.filter(Boolean);
+
+  // Helper: build one service card HTML
+  function buildSvcCard(svc) {
     const id = keyToId(svc.key);
     const s  = svc.stats || {};
     const queues = internalTopics.filter(t =>
@@ -877,7 +1192,7 @@ function renderC2(data) {
       ${queueBadges ? `<div style="margin-top:5px">${queueBadges}</div>` : ''}
       <div class="drill">→ components</div>
     </div>`;
-  }).join('');
+  }
 
   // External cards
   const extHtml = (data.externals || []).map(ex => {
@@ -888,7 +1203,7 @@ function renderC2(data) {
     </div>`;
   }).join('');
 
-  // Topic pills (kafka / non-internal)
+  // Topic pills (kafka / non-internal) — sit between the two service rows
   const topicsHtml = externalTopics.map(t => {
     const id = keyToId(t.key);
     return `<div class="topic-pill card-node" id="${id}">
@@ -897,20 +1212,34 @@ function renderC2(data) {
     </div>`;
   }).join('');
 
+  // Layout: externals row (top), 2×2 grid of services, topics row (bottom)
+  const cols = 2;
+  const row1Svcs = orderedSvcs.slice(0, cols);
+  const row2Svcs = orderedSvcs.slice(cols);
+
+  const row1Html = row1Svcs.map(svc => buildSvcCard(svc)).join('');
+  const row2Html = row2Svcs.map(svc => buildSvcCard(svc)).join('');
+
+  document.getElementById('canvas-area').classList.remove('center-v');
   document.getElementById('content').innerHTML = `
     <div class="c2-layout">
       ${extHtml ? `
-        <div class="section-label">External Systems</div>
-        <div class="c2-row">${extHtml}</div>
+        <div>
+          <div class="section-label">External Systems</div>
+          <div class="c2-row" style="margin-top:8px">${extHtml}</div>
+        </div>
       ` : ''}
       <div>
         <div class="section-label">Services</div>
-        <div class="c2-row">${svcHtml}</div>
+        <div class="c2-svc-grid" style="margin-top:8px">
+          ${row1Html}
+          ${row2Html}
+        </div>
       </div>
       ${topicsHtml ? `
         <div>
           <div class="section-label">Topics / Channels</div>
-          <div class="c2-row">${topicsHtml}</div>
+          <div class="c2-row" style="margin-top:8px">${topicsHtml}</div>
         </div>
       ` : ''}
     </div>`;
@@ -936,7 +1265,6 @@ function drillC3(svcName) {
 }
 
 function renderC2Arrows(data) {
-  // Filter out internal topics from arrow rendering (they show as badge)
   const internalTopicKeys = new Set(
     (data.topics || []).filter(t => t.internal).map(t => t.key)
   );
@@ -969,22 +1297,15 @@ function renderC3(data) {
     { color: '#d4d45e', label: 'Gateway' },
   ]);
 
-  // Build component id map
   const compById = {};
   (data.components || []).forEach(c => {
     compById[c.key] = c;
   });
 
-  // Module groups
   const modulesHtml = (data.modules || []).map(mod => {
-    // Get members that are components
     const members = (mod.members || [])
       .map(k => compById[k])
       .filter(Boolean);
-
-    // Also add orphan components not in any module member list
-    // (from data.components that don't appear in any module)
-    const memberKeys = new Set(mod.members || []);
 
     const compsHtml = members.map(c => renderCompCard(c)).join('');
     return `<div class="module-box">
@@ -993,7 +1314,6 @@ function renderC3(data) {
     </div>`;
   }).join('');
 
-  // Components not assigned to any module
   const allModMemberKeys = new Set(
     (data.modules || []).flatMap(m => m.members || [])
   );
@@ -1004,7 +1324,6 @@ function renderC3(data) {
       <div class="comp-grid">${orphans.map(c => renderCompCard(c)).join('')}</div>
     </div>` : '';
 
-  // Boundary panel
   const boundary = data.boundary || {};
   const outgoing = (boundary.outgoing || []).map(b =>
     `<div class="boundary-item">
@@ -1041,6 +1360,7 @@ function renderC3(data) {
       ${!outgoing && !incoming ? '<div style="color:#3a3a5a;font-size:9px">No boundary connections</div>' : ''}
     </div>`;
 
+  document.getElementById('canvas-area').classList.remove('center-v');
   document.getElementById('content').innerHTML = `
     <div class="c3-layout">
       <div class="c3-body">
@@ -1084,8 +1404,8 @@ function renderCompCard(c) {
   return `<div class="comp-card card-node ${typeClass}" id="${id}">
     <h5>${esc(c.name)}</h5>
     <div class="comp-type">${esc(c.type || '')}</div>
-    ${epPills ? `<div style="margin-top:4px">${epPills}</div>` : ''}
-    ${modelChips ? `<div style="margin-top:4px">${modelChips}</div>` : ''}
+    ${epPills ? `<div class="ep-pills">${epPills}</div>` : ''}
+    ${modelChips ? `<div class="model-chips">${modelChips}</div>` : ''}
   </div>`;
 }
 
