@@ -297,6 +297,149 @@ func (s *Store) DeleteEdge(key string) error {
 	return nil
 }
 
+// ErrEdgeKeyConflict is returned by RepointEdge when the recomputed edge_key
+// already belongs to another current edge (edge_key is UNIQUE). Callers decide:
+// hygiene merges deactivate the now-duplicate edge; other passes skip.
+var ErrEdgeKeyConflict = errors.New("edge key already exists")
+
+// EdgeRepoint describes which identity fields of an edge change. Zero fields
+// keep their current value; the new edge_key is derived from the result.
+type EdgeRepoint struct {
+	NewFromNodeID  int64
+	NewFromNodeKey string
+	NewToNodeID    int64
+	NewToNodeKey   string
+	NewEdgeType    string
+}
+
+// RepointEdge rewrites an edge's endpoints and/or type (post-resolve merge
+// passes: external-system → service repoint, module-edge re-type, duplicate
+// node merge) and recomputes its edge_key. Emits one edge_rekey event keyed by
+// the OLD edge_key; replay re-applies by old key, resolving node ids by key.
+// Returns ErrEdgeKeyConflict (without mutating) if the new key is taken.
+func (s *Store) RepointEdge(edgeID int64, r EdgeRepoint) error {
+	cur, err := s.getEdgeByID(edgeID)
+	if err != nil {
+		return fmt.Errorf("RepointEdge: %w", err)
+	}
+
+	fromKey, toKey, edgeType := cur.FromNodeKey, cur.ToNodeKey, cur.EdgeType
+	fields := map[string]any{}
+	sets := []string{"edge_key = ?"}
+	var args []any
+	if r.NewFromNodeKey != "" {
+		fromKey = r.NewFromNodeKey
+		sets = append(sets, "from_node_key = ?", "from_node_id = ?")
+		args = append(args, r.NewFromNodeKey, r.NewFromNodeID)
+		fields["from"] = r.NewFromNodeKey
+	}
+	if r.NewToNodeKey != "" {
+		toKey = r.NewToNodeKey
+		sets = append(sets, "to_node_key = ?", "to_node_id = ?")
+		args = append(args, r.NewToNodeKey, r.NewToNodeID)
+		fields["to"] = r.NewToNodeKey
+	}
+	if r.NewEdgeType != "" {
+		edgeType = r.NewEdgeType
+		sets = append(sets, "edge_type = ?")
+		args = append(args, r.NewEdgeType)
+		fields["edge_type"] = r.NewEdgeType
+	}
+	newKey := fromKey + "->" + toKey + ":" + edgeType
+	if newKey == cur.EdgeKey {
+		return nil // nothing changes
+	}
+	var taken int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM graph_edges WHERE edge_key = ?`, newKey).Scan(&taken); err != nil {
+		return fmt.Errorf("RepointEdge key check: %w", err)
+	}
+	if taken > 0 {
+		return fmt.Errorf("RepointEdge %q -> %q: %w", cur.EdgeKey, newKey, ErrEdgeKeyConflict)
+	}
+
+	args = append([]any{newKey}, args...)
+	args = append(args, edgeID)
+	if _, err := s.db.Exec(
+		`UPDATE graph_edges SET `+strings.Join(sets, ", ")+` WHERE edge_id = ?`, args...); err != nil {
+		return fmt.Errorf("RepointEdge update: %w", err)
+	}
+	fields["new_edge_key"] = newKey
+	return s.appendEvent(journalEvent{
+		DomainKey: domainFromEdgeKey(cur.EdgeKey),
+		Kind:      EvEdgeRekey,
+		Key:       cur.EdgeKey,
+		Fields:    fields,
+	})
+}
+
+// DeactivateEdge sets active=0 on an edge by id and journals an edge_status
+// event keyed by edge_key, with a reason for forensics. Transition-only:
+// an already-inactive edge emits nothing.
+//
+// Status/evidence coherence rule (journal P2 spec §2.1): edge active is
+// recomputed from evidence after replay, so a forced deactivation must
+// invalidate the edge's valid evidence in the same write — otherwise the
+// replayed db recomputes the edge back to active and diverges from live.
+func (s *Store) DeactivateEdge(edgeID int64, reason string) error {
+	cur, err := s.getEdgeByID(edgeID)
+	if err != nil {
+		return fmt.Errorf("DeactivateEdge: %w", err)
+	}
+	res, err := s.db.Exec(`UPDATE graph_edges SET active = 0 WHERE edge_id = ? AND active = 1`, edgeID)
+	if err != nil {
+		return fmt.Errorf("DeactivateEdge update: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil // already inactive — no transition, no event
+	}
+	if err := s.appendEvent(journalEvent{
+		DomainKey: domainFromEdgeKey(cur.EdgeKey),
+		Kind:      EvEdgeStatus,
+		Key:       cur.EdgeKey,
+		Fields:    map[string]any{"active": false, "reason": reason},
+	}); err != nil {
+		return err
+	}
+	// The structural decision (self-loop, duplicate, conflict, cycle, merge)
+	// rejects the edge's supporting claims — invalidate them so replay-side
+	// trust recompute converges on active=0.
+	return s.markEvidenceStatusForOwner("edge", edgeID, cur.EdgeKey, "invalidated")
+}
+
+// UpdateEdgeMetadata replaces an edge's metadata by id and journals an
+// edge_meta event keyed by edge_key.
+func (s *Store) UpdateEdgeMetadata(edgeID int64, metadata string) error {
+	cur, err := s.getEdgeByID(edgeID)
+	if err != nil {
+		return fmt.Errorf("UpdateEdgeMetadata: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE graph_edges SET metadata = ? WHERE edge_id = ?`, metadata, edgeID); err != nil {
+		return fmt.Errorf("UpdateEdgeMetadata update: %w", err)
+	}
+	return s.appendEvent(journalEvent{
+		DomainKey: domainFromEdgeKey(cur.EdgeKey),
+		Kind:      EvEdgeMeta,
+		Key:       cur.EdgeKey,
+		Fields:    map[string]any{"metadata": metadata},
+	})
+}
+
+// getEdgeByID returns the identity columns of an edge by row id.
+func (s *Store) getEdgeByID(edgeID int64) (*EdgeRow, error) {
+	r := &EdgeRow{EdgeID: edgeID}
+	err := s.db.QueryRow(`
+		SELECT edge_key, COALESCE(from_node_key,''), COALESCE(to_node_key,''), edge_type, from_node_id, to_node_id
+		FROM graph_edges WHERE edge_id = ?`, edgeID,
+	).Scan(&r.EdgeKey, &r.FromNodeKey, &r.ToNodeKey, &r.EdgeType, &r.FromNodeID, &r.ToNodeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("edge %d: %w", edgeID, ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("edge %d: %w", edgeID, err)
+	}
+	return r, nil
+}
+
 // UpdateEdgeTrust updates computed trust fields on an edge.
 func (s *Store) UpdateEdgeTrust(edgeID int64, confidence, freshness, trustScore float64, status string) error {
 	activeInt := 1
@@ -471,6 +614,12 @@ func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error
 			Kind: EvEdgeStatus, Key: sub.key,
 			Fields: map[string]any{"active": false, "status": "stale"},
 		}); err != nil {
+			return 0, err
+		}
+		// Stale the edge's evidence too (journaled) — same convergence rule as
+		// MarkStaleNodes: post-replay trust recompute derives status from
+		// evidence, and valid evidence would flip the edge back to active.
+		if err := s.markEvidenceStatusForOwner("edge", sub.id, sub.key, "stale"); err != nil {
 			return 0, err
 		}
 	}

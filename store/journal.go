@@ -27,6 +27,13 @@ const (
 	EvSnapshot       = "snapshot"
 	EvRevisionOpen   = "revision_open"
 	EvRevisionClose  = "revision_close"
+	// Post-resolve correction events: the resolver's merge/hygiene passes
+	// rewrite identity (keys), endpoints, type, and metadata of existing
+	// facts instead of upserting new ones — each rewrite is its own kind so
+	// replay can re-apply it by natural key.
+	EvNodeRekey = "node_rekey" // stem-merge: node re-keyed + its edge keys rewritten
+	EvEdgeRekey = "edge_rekey" // edge re-pointed (from/to/type changed) + new edge_key
+	EvEdgeMeta  = "edge_meta"  // edge metadata replaced (e.g. unmatched_calls)
 )
 
 // journalEvent is one semantic mutation bound for the outbox.
@@ -127,9 +134,9 @@ func (s *Store) appendEvent(ev journalEvent) error {
 
 func changelogEntityType(kind string) string {
 	switch kind {
-	case EvNodeUpsert, EvNodeStatus:
+	case EvNodeUpsert, EvNodeStatus, EvNodeRekey:
 		return "node"
-	case EvEdgeUpsert, EvEdgeStatus:
+	case EvEdgeUpsert, EvEdgeStatus, EvEdgeRekey, EvEdgeMeta:
 		return "edge"
 	case EvEvidenceAdd, EvEvidenceStatus:
 		return "evidence"

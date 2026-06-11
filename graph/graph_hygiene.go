@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -197,36 +198,28 @@ func (g *Graph) mergeNodeIntoCanonical(canonical, duplicate store.NodeRow) bool 
 		return false
 	}
 
-	g.store.Exec(
-		"UPDATE graph_edges SET from_node_id = ?, from_node_key = ? WHERE from_node_id = ? AND active = 1",
-		canonical.NodeID, canonical.NodeKey, duplicate.NodeID,
-	)
-	g.store.Exec(
-		"UPDATE graph_edges SET to_node_id = ?, to_node_key = ? WHERE to_node_id = ? AND active = 1",
-		canonical.NodeID, canonical.NodeKey, duplicate.NodeID,
-	)
-	g.store.Exec(
-		"UPDATE graph_edges SET edge_key = from_node_key || '->' || to_node_key || ':' || edge_type WHERE (from_node_id = ? OR to_node_id = ?) AND active = 1",
-		canonical.NodeID, canonical.NodeID,
-	)
-
-	// Drop duplicate edges that collided after redirect (same edge_key).
-	edges, _ := g.store.ListEdges(store.EdgeFilter{})
-	byKey := make(map[string][]store.EdgeRow)
+	// Repoint every active edge touching the duplicate onto the canonical node,
+	// edge by edge through the instrumented store method (journaled). An edge
+	// whose repointed key collides with an existing edge is a duplicate
+	// relationship — tombstone it instead (edge_key is UNIQUE).
+	active := true
+	edges, _ := g.store.ListEdges(store.EdgeFilter{Active: &active})
 	for _, e := range edges {
-		if !e.Active {
+		var r store.EdgeRepoint
+		if e.FromNodeID == duplicate.NodeID {
+			r.NewFromNodeID, r.NewFromNodeKey = canonical.NodeID, canonical.NodeKey
+		}
+		if e.ToNodeID == duplicate.NodeID {
+			r.NewToNodeID, r.NewToNodeKey = canonical.NodeID, canonical.NodeKey
+		}
+		if r.NewFromNodeKey == "" && r.NewToNodeKey == "" {
 			continue
 		}
-		byKey[e.EdgeKey] = append(byKey[e.EdgeKey], e)
-	}
-	for key, group := range byKey {
-		if len(group) <= 1 {
-			continue
+		err := g.store.RepointEdge(e.EdgeID, r)
+		if errors.Is(err, store.ErrEdgeKeyConflict) {
+			err = g.store.DeactivateEdge(e.EdgeID, "merge_duplicate")
 		}
-		for _, dup := range group[1:] {
-			_ = g.store.Exec("UPDATE graph_edges SET active = 0 WHERE edge_id = ?", dup.EdgeID)
-		}
-		_ = key
+		g.noteEvidenceErr(err)
 	}
 
 	if err := g.store.DeleteNode(duplicate.NodeKey); err != nil {

@@ -35,3 +35,4 @@ docs/superpowers/
 .depbot/tmp/
 .depbot/scan-work/
 .depbot/scan-outbox/
+.gstack/

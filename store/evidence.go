@@ -572,6 +572,78 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 	return staleCount, affectedEdgeIDs, affectedNodeIDs, nil
 }
 
+// markEvidenceStatusForOwner moves all valid/revalidated evidence rows attached
+// to one node or edge to newStatus and journals one evidence_status event per
+// transitioned row (transition-only, uid backfilled for legacy rows). Status is
+// recomputed from evidence after journal replay — a fact whose status was
+// forced (stale-mark, merge-delete) while its evidence stayed valid recomputes
+// back to active on the replay side and diverges from live. Callers:
+// MarkStaleNodes/MarkStaleEdges → "stale"; node delete chokepoints → "superseded"
+// (the fact's representation was replaced, e.g. external_system merged into a
+// real service node).
+func (s *Store) markEvidenceStatusForOwner(targetKind string, ownerID int64, ownerKey, newStatus string) error {
+	ownerCol := "node_id"
+	domain := DomainFromNodeKey(ownerKey)
+	if targetKind == "edge" {
+		ownerCol = "edge_id"
+		domain = domainFromEdgeKey(ownerKey)
+	}
+
+	type staleSubject struct {
+		id          int64
+		uid         string
+		sourceKind  string
+		repoName    string
+		filePath    string
+		lineStart   int
+		extractorID string
+		polarity    string
+	}
+	rows, err := s.db.Query(`
+		SELECT evidence_id, COALESCE(evidence_uid,''), source_kind, COALESCE(repo_name,''),
+		       COALESCE(file_path,''), COALESCE(line_start,0), extractor_id, evidence_polarity
+		FROM graph_evidence
+		WHERE `+ownerCol+` = ? AND evidence_status IN ('valid','revalidated')`, ownerID)
+	if err != nil {
+		return fmt.Errorf("markEvidenceStatusForOwner select: %w", err)
+	}
+	var subjects []staleSubject
+	for rows.Next() {
+		var sub staleSubject
+		if err := rows.Scan(&sub.id, &sub.uid, &sub.sourceKind, &sub.repoName,
+			&sub.filePath, &sub.lineStart, &sub.extractorID, &sub.polarity); err != nil {
+			rows.Close()
+			return fmt.Errorf("markEvidenceStatusForOwner scan: %w", err)
+		}
+		subjects = append(subjects, sub)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("markEvidenceStatusForOwner rows: %w", err)
+	}
+
+	for _, sub := range subjects {
+		if _, err := s.db.Exec(
+			`UPDATE graph_evidence SET evidence_status=? WHERE evidence_id = ?`, newStatus, sub.id); err != nil {
+			return fmt.Errorf("markEvidenceStatusForOwner update: %w", err)
+		}
+		if sub.uid == "" {
+			sub.uid = EvidenceKey(targetKind, ownerKey, sub.sourceKind, sub.repoName, sub.filePath, sub.lineStart, sub.extractorID, sub.polarity)
+			if _, err := s.db.Exec(`UPDATE graph_evidence SET evidence_uid = ? WHERE evidence_id = ?`, sub.uid, sub.id); err != nil {
+				return fmt.Errorf("markEvidenceStatusForOwner uid backfill: %w", err)
+			}
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domain,
+			Kind:      EvEvidenceStatus, Key: sub.uid, OwnerKey: ownerKey,
+			Fields: map[string]any{"status": newStatus},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CountEvidenceByStatus returns counts of evidence grouped by status for a domain.
 func (s *Store) CountEvidenceByStatus(domainKey string) (map[string]int, error) {
 	q := `SELECT e.evidence_status, COUNT(*)

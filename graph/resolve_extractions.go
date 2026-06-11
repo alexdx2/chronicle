@@ -2,6 +2,7 @@ package graph
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -1503,6 +1504,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if err == nil && id > 0 {
 			counts.nodes++
 		}
+		// Evidence-first invariant (spec §1.2): the declaring file (package.json,
+		// .csproj, …) is the evidence for this service node's existence.
+		g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, fact.To, filePath,
+			"chronicle:resolve:declares_service", "service_declaration"))
+		counts.evidence++
 	}
 
 	return counts, nil, nil
@@ -1612,13 +1618,9 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 	if filePath != "" && name != "" {
 		existing := g.findNodeByNameInDomain(domainKey, name)
 		if existing != nil && existing.Layer == "code" && existing.FilePath == "" {
-			// Found a stem-based node — merge by updating its key and file path
-			g.store.Exec("UPDATE graph_nodes SET node_key = ?, file_path = ?, last_seen_revision_id = ? WHERE node_id = ?",
-				nodeKey, filePath, revisionID, existing.NodeID)
-			// Also update edge keys that reference the old node key
-			g.store.Exec("UPDATE graph_edges SET from_node_key = ? WHERE from_node_id = ?", nodeKey, existing.NodeID)
-			g.store.Exec("UPDATE graph_edges SET to_node_key = ? WHERE to_node_id = ?", nodeKey, existing.NodeID)
-			g.store.Exec("UPDATE graph_edges SET edge_key = from_node_key || '->' || to_node_key || ':' || edge_type WHERE from_node_id = ? OR to_node_id = ?", existing.NodeID, existing.NodeID)
+			// Found a stem-based node — merge by re-keying it (node + edge keys)
+			// through the instrumented store method so the rewrite is journaled.
+			g.noteEvidenceErr(g.store.RekeyNode(existing.NodeID, existing.NodeKey, nodeKey, filePath, revisionID))
 			return existing.NodeID
 		}
 	}
@@ -1666,6 +1668,13 @@ func (g *Graph) addCreationEvidence(nodeKey string, revisionID int64, name, file
 	}); err != nil {
 		return fmt.Errorf("creation evidence for %s: %w", nodeKey, err)
 	}
+	// Coherence rule (journal P2 spec §2.1): node status is recomputed from
+	// evidence after replay. AddEvidence's dedup-hit revalidates a stale row
+	// back to valid — without a live-side recompute the node would stay stale
+	// while replay recomputes it active (kafka/redis multi-revision case).
+	if err := g.RecalculateNodeTrust(id); err != nil {
+		return fmt.Errorf("recalculate trust for %s: %w", nodeKey, err)
+	}
 	return nil
 }
 
@@ -1703,6 +1712,11 @@ func (g *Graph) addEdgeCreationEvidence(edgeKey string, revisionID int64, filePa
 		ValidFromRevisionID: revisionID,
 	}); err != nil {
 		return fmt.Errorf("creation evidence for %s: %w", edgeKey, err)
+	}
+	// Same coherence rule as addCreationEvidence: a dedup-hit revalidation must
+	// recompute the owner's derived active/trust on the live side.
+	if err := g.RecalculateEdgeTrust(edge.EdgeID); err != nil {
+		return fmt.Errorf("recalculate trust for %s: %w", edgeKey, err)
 	}
 	return nil
 }
@@ -1803,11 +1817,15 @@ func (g *Graph) mergeExternalSystemsIntoServices(domainKey string) {
 			if e.ToNodeKey != ext.NodeKey {
 				continue
 			}
-			newKey := e.FromNodeKey + "->" + svc.NodeKey + ":" + e.EdgeType
-			g.store.Exec("UPDATE graph_edges SET to_node_key=?, to_node_id=?, edge_key=? WHERE edge_id=?",
-				svc.NodeKey, svc.NodeID, newKey, e.EdgeID)
+			err := g.store.RepointEdge(e.EdgeID, store.EdgeRepoint{
+				NewToNodeID: svc.NodeID, NewToNodeKey: svc.NodeKey,
+			})
+			if errors.Is(err, store.ErrEdgeKeyConflict) {
+				continue // an edge to the real service already exists — keep behavior: leave this one as-is
+			}
+			g.noteEvidenceErr(err)
 		}
-		g.store.Exec("UPDATE graph_nodes SET status='deleted' WHERE node_id=?", ext.NodeID)
+		g.noteEvidenceErr(g.store.SetNodeStatus(ext.NodeID, "deleted"))
 	}
 }
 
@@ -1897,7 +1915,9 @@ func (g *Graph) materializeExternalEndpoints(domainKey string, revisionID int64)
 		if err != nil {
 			continue
 		}
-		g.store.Exec("UPDATE graph_edges SET metadata=? WHERE edge_id=?", string(buf), edge.EdgeID)
+		if err := g.store.UpdateEdgeMetadata(edge.EdgeID, string(buf)); err != nil {
+			return err
+		}
 	}
 	g.pendingExtEndpoints = nil
 	return nil
@@ -1941,8 +1961,11 @@ func (g *Graph) fixModuleEdges(domainKey string) {
 			continue
 		}
 		if e.EdgeType == "INJECTS" || e.EdgeType == "DEPENDS_ON" {
-			newKey := e.FromNodeKey + "->" + e.ToNodeKey + ":CONTAINS"
-			g.store.Exec("UPDATE graph_edges SET edge_type='CONTAINS', edge_key=? WHERE edge_id=?", newKey, e.EdgeID)
+			err := g.store.RepointEdge(e.EdgeID, store.EdgeRepoint{NewEdgeType: "CONTAINS"})
+			if errors.Is(err, store.ErrEdgeKeyConflict) {
+				continue // a CONTAINS edge for this pair already exists — keep behavior: leave this one as-is
+			}
+			g.noteEvidenceErr(err)
 		}
 	}
 }
@@ -1964,7 +1987,7 @@ func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
 		if e.FromNodeID == e.ToNodeID || e.FromNodeKey == e.ToNodeKey {
 			// self-CONTAINS is corrupt input — deactivate immediately and never
 			// let it compete with a real parent in tie-breaking
-			g.store.Exec("UPDATE graph_edges SET active=0 WHERE edge_id=?", e.EdgeID)
+			g.noteEvidenceErr(g.store.DeactivateEdge(e.EdgeID, "self_contains"))
 			continue
 		}
 		childParents[e.ToNodeID] = append(childParents[e.ToNodeID], e)
@@ -1996,8 +2019,10 @@ func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
 				if e.EdgeID == best.EdgeID {
 					continue
 				}
-				// Silent dedup — same relationship, just remove the duplicate
-				g.store.Exec("DELETE FROM graph_edges WHERE edge_id = ?", e.EdgeID)
+				// Silent dedup — same relationship; tombstone instead of physical
+				// delete (spec §2.1: graph facts are never hard-deleted with the
+				// journal on — replay would keep a row the live db lost).
+				g.noteEvidenceErr(g.store.DeactivateEdge(e.EdgeID, "duplicate_contains"))
 			}
 		}
 
@@ -2018,7 +2043,7 @@ func (g *Graph) detectContainsConflicts(domainKey string, revisionID int64) {
 			if p.FromNodeID == best.FromNodeID {
 				continue // keep all edges from the winning parent
 			}
-			g.store.Exec("UPDATE graph_edges SET active = 0 WHERE edge_id = ?", p.EdgeID)
+			g.noteEvidenceErr(g.store.DeactivateEdge(p.EdgeID, "contains_conflict"))
 
 			child, _ := g.store.GetNodeByID(childID)
 			childName := ""
@@ -2069,7 +2094,7 @@ func (g *Graph) detectContainsCycles(domainKey string, revisionID int64) {
 			} else if inStack[child] {
 				// Cycle — deactivate this edge
 				edge := edgeByPair[[2]int64{node, child}]
-				g.store.Exec("UPDATE graph_edges SET active = 0 WHERE edge_id = ?", edge.EdgeID)
+				g.noteEvidenceErr(g.store.DeactivateEdge(edge.EdgeID, "contains_cycle"))
 
 				n1, _ := g.store.GetNodeByID(node)
 				n2, _ := g.store.GetNodeByID(child)

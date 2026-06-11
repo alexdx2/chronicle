@@ -167,6 +167,56 @@ func (s *Store) applyJournalEvent(ev flushedEvent) error {
 			AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)`, str("status"), ev.Key)
 		return err
 
+	case EvNodeRekey:
+		// ev.Key is the OLD node key — resolve the node by it, then re-apply
+		// the same rewrites as Store.RekeyNode (node key + denormalized edge keys).
+		nodeID, err := s.GetNodeIDByKey(ev.Key)
+		if err != nil {
+			return fmt.Errorf("node_rekey %s: %w", ev.Key, err)
+		}
+		newKey := str("new_key")
+		if _, err := s.db.Exec(
+			`UPDATE graph_nodes SET node_key = ?, file_path = ? WHERE node_id = ?`,
+			newKey, nullableStr(str("file_path")), nodeID); err != nil {
+			return fmt.Errorf("node_rekey %s: %w", ev.Key, err)
+		}
+		return s.rekeyNodeEdges(nodeID, newKey)
+
+	case EvEdgeRekey:
+		// ev.Key is the OLD edge key; from/to/edge_type fields are present only
+		// when they changed. Node ids are resolved by key — ids differ per db.
+		sets := []string{"edge_key = ?"}
+		args := []any{str("new_edge_key")}
+		if from := str("from"); from != "" {
+			fromID, err := s.GetNodeIDByKey(from)
+			if err != nil {
+				return fmt.Errorf("edge_rekey %s: from %q: %w", ev.Key, from, err)
+			}
+			sets = append(sets, "from_node_key = ?", "from_node_id = ?")
+			args = append(args, from, fromID)
+		}
+		if to := str("to"); to != "" {
+			toID, err := s.GetNodeIDByKey(to)
+			if err != nil {
+				return fmt.Errorf("edge_rekey %s: to %q: %w", ev.Key, to, err)
+			}
+			sets = append(sets, "to_node_key = ?", "to_node_id = ?")
+			args = append(args, to, toID)
+		}
+		if et := str("edge_type"); et != "" {
+			sets = append(sets, "edge_type = ?")
+			args = append(args, et)
+		}
+		args = append(args, ev.Key)
+		_, err := s.db.Exec(`UPDATE graph_edges SET `+strings.Join(sets, ", ")+`
+			WHERE edge_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)`, args...)
+		return err
+
+	case EvEdgeMeta:
+		_, err := s.db.Exec(`UPDATE graph_edges SET metadata = ? WHERE edge_key = ?
+			AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)`, str("metadata"), ev.Key)
+		return err
+
 	case EvEdgeUpsert:
 		fromID, _ := s.GetNodeIDByKey(str("from"))
 		toID, _ := s.GetNodeIDByKey(str("to"))

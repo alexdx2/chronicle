@@ -426,8 +426,14 @@ func (s *Store) SearchNodesByName(name string) ([]NodeRow, error) {
 	return out, rows.Err()
 }
 
-// DeleteNode sets the status of the node to 'deleted'.
+// DeleteNode sets the status of the node to 'deleted' (tombstone) and
+// supersedes its valid evidence — see SetNodeStatus for why deleted facts
+// must not keep valid existence evidence.
 func (s *Store) DeleteNode(key string) error {
+	nodeID, err := s.GetNodeIDByKey(key)
+	if err != nil {
+		return fmt.Errorf("DeleteNode %q: %w", key, ErrNotFound)
+	}
 	res, err := s.db.Exec(`UPDATE graph_nodes SET status='deleted' WHERE node_key=?`, key)
 	if err != nil {
 		return fmt.Errorf("DeleteNode: %w", err)
@@ -443,6 +449,83 @@ func (s *Store) DeleteNode(key string) error {
 		Fields:    map[string]any{"status": "deleted"},
 	}); err != nil {
 		return err
+	}
+	return s.markEvidenceStatusForOwner("node", nodeID, key, "superseded")
+}
+
+// RekeyNode re-keys a node to a new node_key (stem-merge: an import fact minted
+// the node under a class-name key before the file scan produced the path key)
+// and rewrites the denormalized keys on every edge touching it. One node_rekey
+// event keyed by the OLD key carries the whole rewrite — replay re-applies the
+// same UPDATEs after resolving the node by its old key.
+func (s *Store) RekeyNode(nodeID int64, oldKey, newKey, filePath string, revisionID int64) error {
+	if _, err := s.db.Exec(
+		`UPDATE graph_nodes SET node_key = ?, file_path = ?, last_seen_revision_id = ? WHERE node_id = ?`,
+		newKey, nullableStr(filePath), revisionID, nodeID); err != nil {
+		return fmt.Errorf("RekeyNode node update: %w", err)
+	}
+	if err := s.rekeyNodeEdges(nodeID, newKey); err != nil {
+		return fmt.Errorf("RekeyNode: %w", err)
+	}
+	return s.appendEvent(journalEvent{
+		DomainKey:  DomainFromNodeKey(oldKey),
+		RevisionID: revisionID,
+		Kind:       EvNodeRekey,
+		Key:        oldKey,
+		Fields:     map[string]any{"new_key": newKey, "file_path": filePath},
+	})
+}
+
+// rekeyNodeEdges rewrites the denormalized from/to node keys and the derived
+// edge_key on every edge touching nodeID. Shared by RekeyNode and its replay.
+func (s *Store) rekeyNodeEdges(nodeID int64, newKey string) error {
+	if _, err := s.db.Exec(
+		`UPDATE graph_edges SET from_node_key = ? WHERE from_node_id = ?`, newKey, nodeID); err != nil {
+		return fmt.Errorf("edge from_node_key update: %w", err)
+	}
+	if _, err := s.db.Exec(
+		`UPDATE graph_edges SET to_node_key = ? WHERE to_node_id = ?`, newKey, nodeID); err != nil {
+		return fmt.Errorf("edge to_node_key update: %w", err)
+	}
+	if _, err := s.db.Exec(
+		`UPDATE graph_edges SET edge_key = from_node_key || '->' || to_node_key || ':' || edge_type
+		 WHERE from_node_id = ? OR to_node_id = ?`, nodeID, nodeID); err != nil {
+		return fmt.Errorf("edge_key recompute: %w", err)
+	}
+	return nil
+}
+
+// SetNodeStatus sets a node's status by id and journals the transition as a
+// node_status event keyed by node_key. No-op (and no event) if the status
+// already matches — transition-only, like MarkStaleNodes.
+func (s *Store) SetNodeStatus(nodeID int64, status string) error {
+	var nodeKey, oldStatus string
+	if err := s.db.QueryRow(
+		`SELECT node_key, status FROM graph_nodes WHERE node_id = ?`, nodeID,
+	).Scan(&nodeKey, &oldStatus); err != nil {
+		return fmt.Errorf("SetNodeStatus lookup %d: %w", nodeID, err)
+	}
+	if oldStatus == status {
+		return nil
+	}
+	if _, err := s.db.Exec(`UPDATE graph_nodes SET status = ? WHERE node_id = ?`, status, nodeID); err != nil {
+		return fmt.Errorf("SetNodeStatus update: %w", err)
+	}
+	if err := s.appendEvent(journalEvent{
+		DomainKey: DomainFromNodeKey(nodeKey),
+		Kind:      EvNodeStatus,
+		Key:       nodeKey,
+		Fields:    map[string]any{"status": status},
+	}); err != nil {
+		return err
+	}
+	if status == "deleted" {
+		// A deleted node must not keep valid existence evidence: trust recompute
+		// derives status from evidence and would resurrect it (on the journal
+		// replay side first — live and replay then diverge). The merge passes
+		// delete placeholders whose representation moved to another node, so
+		// their evidence is superseded, not refuted.
+		return s.markEvidenceStatusForOwner("node", nodeID, nodeKey, "superseded")
 	}
 	return nil
 }
@@ -504,6 +587,12 @@ func (s *Store) MarkStaleNodes(domainKey string, revisionID int64) (int64, error
 			Kind: EvNodeStatus, Key: sub.key,
 			Fields: map[string]any{"status": "stale"},
 		}); err != nil {
+			return 0, err
+		}
+		// Stale the node's evidence too (journaled). Status is recomputed from
+		// evidence after journal replay — a stale node with valid evidence
+		// recomputes back to active and replay diverges from live.
+		if err := s.markEvidenceStatusForOwner("node", sub.id, sub.key, "stale"); err != nil {
 			return 0, err
 		}
 	}
