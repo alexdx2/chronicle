@@ -237,6 +237,7 @@ source_kinds:
   - manual_resolution
   - user_feedback
   - manual
+  - synthetic
 
 node_statuses:
   - active

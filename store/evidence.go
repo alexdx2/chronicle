@@ -62,6 +62,28 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 	if polarity == "" {
 		polarity = "positive"
 	}
+
+	// Resolve owner key + stable evidence identity + domain for journaling.
+	// A missing owner is an integrity bug: evidence pointing at a nonexistent
+	// node/edge would journal an event with an empty owner_key, which then
+	// hard-fails replay on another machine — fail loud here instead. (Callers
+	// always pass a real id: zero ids match no row and fail the same way.)
+	ownerKey := ""
+	if e.TargetKind == "node" {
+		if err := s.db.QueryRow(`SELECT node_key FROM graph_nodes WHERE node_id = ?`, e.NodeID).Scan(&ownerKey); err != nil || ownerKey == "" {
+			return 0, fmt.Errorf("AddEvidence: owner node %d not found (err=%v)", e.NodeID, err)
+		}
+	} else {
+		if err := s.db.QueryRow(`SELECT edge_key FROM graph_edges WHERE edge_id = ?`, e.EdgeID).Scan(&ownerKey); err != nil || ownerKey == "" {
+			return 0, fmt.Errorf("AddEvidence: owner edge %d not found (err=%v)", e.EdgeID, err)
+		}
+	}
+	evKey := EvidenceKey(e.TargetKind, ownerKey, e.SourceKind, e.RepoName, e.FilePath, e.LineStart, e.ExtractorID, polarity)
+	domain := DomainFromNodeKey(ownerKey)
+	if e.TargetKind == "edge" {
+		domain = domainFromEdgeKey(ownerKey)
+	}
+
 	const dedupQ = `
 		SELECT evidence_id FROM graph_evidence
 		WHERE target_kind = ?
@@ -91,9 +113,12 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 	if err == nil {
 		// Update existing — return to valid (revalidation is an event, not a state).
 		newStatus := "valid"
-		var oldStatus string
-		s.db.QueryRow("SELECT evidence_status FROM graph_evidence WHERE evidence_id=?", existingID).Scan(&oldStatus)
+		var oldStatus, existingUID string
+		s.db.QueryRow("SELECT evidence_status, COALESCE(evidence_uid,'') FROM graph_evidence WHERE evidence_id=?", existingID).Scan(&oldStatus, &existingUID)
 		_ = oldStatus // stale → valid on re-observation
+		if existingUID != "" {
+			evKey = existingUID // respect a caller-supplied uid already on the row
+		}
 
 		const updQ = `
 			UPDATE graph_evidence
@@ -102,13 +127,21 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 			    commit_sha=?,
 			    extractor_version=?,
 			    evidence_status=?,
-			    last_verified_revision_id=?
+			    last_verified_revision_id=?,
+			    evidence_uid=COALESCE(evidence_uid, ?)
 			WHERE evidence_id=?
 		`
 		_, err = s.db.Exec(updQ, e.Confidence, nullableStr(e.CommitSHA), e.ExtractorVersion,
-			newStatus, nullableInt64(e.ValidFromRevisionID), existingID)
+			newStatus, nullableInt64(e.ValidFromRevisionID), evKey, existingID)
 		if err != nil {
 			return 0, fmt.Errorf("AddEvidence update: %w", err)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domain, RevisionID: e.ValidFromRevisionID,
+			Kind: EvEvidenceStatus, Key: evKey, OwnerKey: ownerKey,
+			Fields: map[string]any{"status": "valid", "confidence": e.Confidence},
+		}); err != nil {
+			return 0, err
 		}
 		return existingID, nil
 	}
@@ -130,6 +163,10 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 	assertion := e.Assertion
 	if assertion == "" {
 		assertion = "{}"
+	}
+	uid := e.EvidenceUID
+	if uid == "" {
+		uid = evKey
 	}
 
 	const insQ = `
@@ -156,7 +193,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		nullableStr(e.ASTRule), nullableStr(e.SnippetHash), nullableStr(e.CommitSHA),
 		e.Confidence, status, polarity,
 		nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ValidFromRevisionID),
-		nullableInt64(e.ContextID), nullableStr(e.EvidenceUID),
+		nullableInt64(e.ContextID), nullableStr(uid),
 		assertion, assertionKind, assertionVersion,
 		defaultStr(e.VerificationStatus, "unverified"), defaultStr(e.VerificationReason, ""),
 		e.Metadata,
@@ -165,6 +202,48 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		return 0, fmt.Errorf("AddEvidence insert: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	evFields := map[string]any{
+		"target_kind":       e.TargetKind,
+		"source_kind":       e.SourceKind,
+		"repo_name":         e.RepoName,
+		"file_path":         e.FilePath,
+		"line_start":        e.LineStart,
+		"line_end":          e.LineEnd,
+		"locator":           e.Locator,
+		"extractor_id":      e.ExtractorID,
+		"extractor_version": e.ExtractorVersion,
+		"confidence":        e.Confidence,
+		"polarity":          polarity,
+		"assertion":         assertion,
+		"assertion_kind":    assertionKind,
+		"status":            status,
+	}
+	// Optional columns: omitted when empty/zero to keep journal lines compact.
+	if e.Metadata != "" && e.Metadata != "{}" {
+		evFields["metadata"] = e.Metadata
+	}
+	if e.ASTRule != "" {
+		evFields["ast_rule"] = e.ASTRule
+	}
+	if e.SnippetHash != "" {
+		evFields["snippet_hash"] = e.SnippetHash
+	}
+	if e.CommitSHA != "" {
+		evFields["commit_sha"] = e.CommitSHA
+	}
+	if e.ColumnStart != 0 {
+		evFields["column_start"] = e.ColumnStart
+	}
+	if e.ColumnEnd != 0 {
+		evFields["column_end"] = e.ColumnEnd
+	}
+	if err := s.appendEvent(journalEvent{
+		DomainKey: domain, RevisionID: e.ValidFromRevisionID,
+		Kind: EvEvidenceAdd, Key: uid, OwnerKey: ownerKey,
+		Fields: evFields,
+	}); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 
@@ -289,6 +368,37 @@ func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) 
 
 // UpdateEvidenceVerification updates an evidence row after mechanical verification.
 func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificationStatus, verificationReason string, lineStart, lineEnd int, revisionID int64) error {
+	// Resolve identity + owner for journaling (and uid backfill for legacy rows).
+	var (
+		uid, targetKind, ownerKey      string
+		sourceKind, repoName, filePath string
+		rowLineStart                   int
+		extractorID, polarity          string
+	)
+	selErr := s.db.QueryRow(`
+		SELECT COALESCE(e.evidence_uid,''), e.target_kind,
+		       COALESCE(n.node_key, ed.edge_key, ''),
+		       e.source_kind, COALESCE(e.repo_name,''), COALESCE(e.file_path,''),
+		       COALESCE(e.line_start,0), e.extractor_id, e.evidence_polarity
+		FROM graph_evidence e
+		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+		WHERE e.evidence_id = ?
+	`, evidenceID).Scan(&uid, &targetKind, &ownerKey,
+		&sourceKind, &repoName, &filePath,
+		&rowLineStart, &extractorID, &polarity)
+	if errors.Is(selErr, sql.ErrNoRows) {
+		return nil // row absent — original behavior was a no-op UPDATE
+	}
+	if selErr != nil {
+		return fmt.Errorf("UpdateEvidenceVerification lookup: %w", selErr)
+	}
+	if ownerKey == "" {
+		// Evidence pointing at a missing node/edge is an integrity bug; an
+		// event with an empty owner would hard-fail replay — fail loud now.
+		return fmt.Errorf("UpdateEvidenceVerification: evidence %d has no owner node/edge", evidenceID)
+	}
+
 	_, err := s.db.Exec(`
 		UPDATE graph_evidence
 		SET evidence_status = ?,
@@ -303,7 +413,39 @@ func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificatio
 		lineStart, lineStart, lineEnd, lineEnd,
 		revisionID, revisionID,
 		evidenceID)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if uid == "" {
+		// Legacy row without a uid — compute from its own dedup tuple and backfill.
+		uid = EvidenceKey(targetKind, ownerKey, sourceKind, repoName, filePath, rowLineStart, extractorID, polarity)
+		if _, err := s.db.Exec(`UPDATE graph_evidence SET evidence_uid = ? WHERE evidence_id = ?`, uid, evidenceID); err != nil {
+			return fmt.Errorf("UpdateEvidenceVerification uid backfill: %w", err)
+		}
+	}
+	domain := DomainFromNodeKey(ownerKey)
+	if targetKind == "edge" {
+		domain = domainFromEdgeKey(ownerKey)
+	}
+	verFields := map[string]any{
+		"status":              status,
+		"verification_status": verificationStatus,
+		"verification_reason": verificationReason,
+	}
+	// The live UPDATE moves line_start/line_end when > 0 — the event must
+	// carry them too or replayed rows keep the stale locations.
+	if lineStart > 0 {
+		verFields["line_start"] = lineStart
+	}
+	if lineEnd > 0 {
+		verFields["line_end"] = lineEnd
+	}
+	return s.appendEvent(journalEvent{
+		DomainKey: domain, RevisionID: revisionID,
+		Kind: EvEvidenceStatus, Key: uid, OwnerKey: ownerKey,
+		Fields: verFields,
+	})
 }
 
 // MarkEvidenceStaleByFiles marks all valid/revalidated evidence from the given file paths as stale.
@@ -324,6 +466,50 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 		args[i] = fp
 	}
 
+	// Select transitioning rows first (transition-only journaling: rows already
+	// stale/invalidated/superseded are excluded by the same status predicate as the UPDATE).
+	type staleSubject struct {
+		id          int64
+		uid         string
+		targetKind  string
+		ownerKey    string
+		sourceKind  string
+		repoName    string
+		filePath    string
+		lineStart   int
+		extractorID string
+		polarity    string
+	}
+	selQ := `SELECT e.evidence_id, COALESCE(e.evidence_uid,''), e.target_kind,
+			COALESCE(n.node_key, ed.edge_key, ''),
+			e.source_kind, COALESCE(e.repo_name,''), COALESCE(e.file_path,''),
+			COALESCE(e.line_start,0), e.extractor_id, e.evidence_polarity
+		FROM graph_evidence e
+		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+		WHERE e.file_path IN (` + placeholders + `)
+		AND e.evidence_status IN ('valid','revalidated')`
+	selRows, err := s.db.Query(selQ, args...)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles select: %w", err)
+	}
+	var subjects []staleSubject
+	for selRows.Next() {
+		var sub staleSubject
+		if err := selRows.Scan(&sub.id, &sub.uid, &sub.targetKind, &sub.ownerKey,
+			&sub.sourceKind, &sub.repoName, &sub.filePath,
+			&sub.lineStart, &sub.extractorID, &sub.polarity); err != nil {
+			selRows.Close()
+			return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles select scan: %w", err)
+		}
+		subjects = append(subjects, sub)
+	}
+	if err := selRows.Err(); err != nil {
+		selRows.Close()
+		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles select rows: %w", err)
+	}
+	selRows.Close()
+
 	// Mark stale.
 	updQ := `UPDATE graph_evidence SET evidence_status='stale'
 		WHERE file_path IN (` + placeholders + `)
@@ -333,6 +519,27 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles update: %w", err)
 	}
 	staleCount, _ = res.RowsAffected()
+
+	// Journal one evidence_status per transitioned row (backfilling legacy NULL uids).
+	for _, sub := range subjects {
+		if sub.uid == "" {
+			sub.uid = EvidenceKey(sub.targetKind, sub.ownerKey, sub.sourceKind, sub.repoName, sub.filePath, sub.lineStart, sub.extractorID, sub.polarity)
+			if _, err := s.db.Exec(`UPDATE graph_evidence SET evidence_uid = ? WHERE evidence_id = ?`, sub.uid, sub.id); err != nil {
+				return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles uid backfill: %w", err)
+			}
+		}
+		domain := DomainFromNodeKey(sub.ownerKey)
+		if sub.targetKind == "edge" {
+			domain = domainFromEdgeKey(sub.ownerKey)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domain,
+			Kind:      EvEvidenceStatus, Key: sub.uid, OwnerKey: sub.ownerKey,
+			Fields: map[string]any{"status": "stale"},
+		}); err != nil {
+			return staleCount, nil, nil, err
+		}
+	}
 
 	// Get affected edge IDs.
 	edgeQ := `SELECT DISTINCT edge_id FROM graph_evidence
@@ -498,23 +705,26 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 		args[i] = fp
 	}
 
-	// SELECT all current valid evidence rows from those files.
-	selQ := `SELECT evidence_id, target_kind,
-	         COALESCE(node_id,0), COALESCE(edge_id,0),
-	         source_kind,
-	         COALESCE(repo_name,''), COALESCE(file_path,''),
-	         COALESCE(line_start,0), COALESCE(line_end,0),
-	         COALESCE(column_start,0), COALESCE(column_end,0),
-	         COALESCE(locator,''),
-	         extractor_id, extractor_version,
-	         COALESCE(ast_rule,''), COALESCE(snippet_hash,''), COALESCE(commit_sha,''),
-	         confidence, evidence_polarity,
-	         COALESCE(evidence_uid,''),
-	         COALESCE(metadata,'{}')
-	    FROM graph_evidence
-	    WHERE file_path IN (` + placeholders + `)
-	      AND evidence_status IN ('valid','revalidated')
-	      AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)`
+	// SELECT all current valid evidence rows from those files (owner key joined for journaling).
+	selQ := `SELECT e.evidence_id, e.target_kind,
+	         COALESCE(e.node_id,0), COALESCE(e.edge_id,0),
+	         e.source_kind,
+	         COALESCE(e.repo_name,''), COALESCE(e.file_path,''),
+	         COALESCE(e.line_start,0), COALESCE(e.line_end,0),
+	         COALESCE(e.column_start,0), COALESCE(e.column_end,0),
+	         COALESCE(e.locator,''),
+	         e.extractor_id, e.extractor_version,
+	         COALESCE(e.ast_rule,''), COALESCE(e.snippet_hash,''), COALESCE(e.commit_sha,''),
+	         e.confidence, e.evidence_polarity,
+	         COALESCE(e.evidence_uid,''),
+	         COALESCE(e.metadata,'{}'),
+	         COALESCE(n.node_key, ed.edge_key, '')
+	    FROM graph_evidence e
+	    LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+	    LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+	    WHERE e.file_path IN (` + placeholders + `)
+	      AND e.evidence_status IN ('valid','revalidated')
+	      AND (e.valid_to_revision_id IS NULL OR e.valid_to_revision_id = 0)`
 
 	rows, err := s.db.Query(selQ, args...)
 	if err != nil {
@@ -543,6 +753,7 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 		polarity         string
 		evidenceUID      string
 		metadata         string
+		ownerKey         string
 	}
 
 	var found []evidenceInfo
@@ -555,7 +766,7 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 			&e.locator, &e.extractorID, &e.extractorVersion,
 			&e.astRule, &e.snippetHash, &e.commitSHA,
 			&e.confidence, &e.polarity, &e.evidenceUID,
-			&e.metadata,
+			&e.metadata, &e.ownerKey,
 		); err != nil {
 			return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned scan: %w", err)
 		}
@@ -569,6 +780,15 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 	edgeSet := map[int64]bool{}
 
 	for _, e := range found {
+		// Resolve stable identity; backfill legacy rows so the superseding row
+		// carries the SAME uid as the row it replaces.
+		if e.evidenceUID == "" {
+			e.evidenceUID = EvidenceKey(e.targetKind, e.ownerKey, e.sourceKind, e.repoName, e.filePath, e.lineStart, e.extractorID, e.polarity)
+			if _, err := s.db.Exec(`UPDATE graph_evidence SET evidence_uid = ? WHERE evidence_id = ?`, e.evidenceUID, e.id); err != nil {
+				return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned uid backfill: %w", err)
+			}
+		}
+
 		// Close old row.
 		_, err := s.db.Exec(`UPDATE graph_evidence SET valid_to_revision_id = ? WHERE evidence_id = ?`,
 			revisionID, e.id)
@@ -610,6 +830,19 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 		)
 		if err != nil {
 			return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned insert: %w", err)
+		}
+
+		// Journal the transition (transition-only: select already excluded stale rows).
+		domain := DomainFromNodeKey(e.ownerKey)
+		if e.targetKind == "edge" {
+			domain = domainFromEdgeKey(e.ownerKey)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domain, RevisionID: revisionID,
+			Kind: EvEvidenceStatus, Key: e.evidenceUID, OwnerKey: e.ownerKey,
+			Fields: map[string]any{"status": "stale"},
+		}); err != nil {
+			return staleCount, nil, nil, err
 		}
 
 		staleCount++

@@ -184,6 +184,10 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 				Name:      infra.Name,
 				Status:    "active",
 			})
+			if err := g.addCreationEvidence(nodeKey, revisionID, infra.Name,
+				".depbot/chronicle.domain.yaml", "chronicle:manifest", "manifest_key"); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -212,6 +216,10 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 				TrustScore:         1.0,
 				Metadata:           "{}",
 			})
+			if err := g.addCreationEvidence(nodeKey, revisionID, svc.Key,
+				".depbot/chronicle.domain.yaml", "chronicle:manifest", "manifest_key"); err != nil {
+				return nil, err
+			}
 		}
 	}
 

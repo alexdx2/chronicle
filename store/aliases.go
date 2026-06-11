@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -29,6 +31,14 @@ func (s *Store) AddAlias(a AliasRow) (int64, error) {
 		confidence = 0.8
 	}
 
+	// Resolve the owner before inserting: an alias on a nonexistent node is an
+	// integrity bug, and a journal event with an empty owner_key hard-fails
+	// replay later — fail loud at emission time instead.
+	var ownerKey string
+	if err := s.db.QueryRow(`SELECT node_key FROM graph_nodes WHERE node_id = ?`, a.NodeID).Scan(&ownerKey); err != nil || ownerKey == "" {
+		return 0, fmt.Errorf("AddAlias: owner node %d not found (err=%v)", a.NodeID, err)
+	}
+
 	res, err := s.db.Exec(`
 		INSERT INTO node_aliases (node_id, alias, normalized_alias, alias_kind, confidence)
 		VALUES (?, ?, ?, ?, ?)
@@ -37,6 +47,19 @@ func (s *Store) AddAlias(a AliasRow) (int64, error) {
 		return 0, fmt.Errorf("AddAlias: %w", err)
 	}
 	id, _ := res.LastInsertId()
+
+	if err := s.appendEvent(journalEvent{
+		DomainKey: DomainFromNodeKey(ownerKey),
+		Kind:      EvAliasAdd,
+		Key:       ownerKey + "#alias:" + normalized,
+		OwnerKey:  ownerKey,
+		Fields: map[string]any{
+			"alias": a.Alias, "alias_kind": a.AliasKind,
+			"confidence": confidence, "normalized_alias": normalized,
+		},
+	}); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 
@@ -123,6 +146,25 @@ func (s *Store) FindCodeNodesByAlias(domain, alias, pathPrefix string) ([]NodeRo
 
 // RemoveAlias deletes an alias by ID.
 func (s *Store) RemoveAlias(aliasID int64) error {
+	var normalized, ownerKey string
+	lookupErr := s.db.QueryRow(`
+		SELECT a.normalized_alias, COALESCE(n.node_key,'')
+		FROM node_aliases a
+		LEFT JOIN graph_nodes n ON a.node_id = n.node_id
+		WHERE a.alias_id = ?
+	`, aliasID).Scan(&normalized, &ownerKey)
+	if errors.Is(lookupErr, sql.ErrNoRows) {
+		return fmt.Errorf("RemoveAlias %d: %w", aliasID, ErrNotFound)
+	}
+	if lookupErr != nil {
+		return fmt.Errorf("RemoveAlias lookup: %w", lookupErr)
+	}
+	if ownerKey == "" {
+		// Alias row pointing at a missing node is an integrity bug; an event
+		// with an empty owner_key hard-fails replay — fail loud here.
+		return fmt.Errorf("RemoveAlias: alias %d has no owner node", aliasID)
+	}
+
 	res, err := s.db.Exec(`DELETE FROM node_aliases WHERE alias_id = ?`, aliasID)
 	if err != nil {
 		return fmt.Errorf("RemoveAlias: %w", err)
@@ -131,7 +173,13 @@ func (s *Store) RemoveAlias(aliasID int64) error {
 	if n == 0 {
 		return fmt.Errorf("RemoveAlias %d: %w", aliasID, ErrNotFound)
 	}
-	return nil
+	return s.appendEvent(journalEvent{
+		DomainKey: DomainFromNodeKey(ownerKey),
+		Kind:      EvAliasDel,
+		Key:       ownerKey + "#alias:" + normalized,
+		OwnerKey:  ownerKey,
+		Fields:    map[string]any{"normalized_alias": normalized},
+	})
 }
 
 func scanAliases(rows interface {

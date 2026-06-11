@@ -34,6 +34,21 @@ func (s *Store) UpsertTerm(t DomainTerm) (int64, error) {
 	antiJSON, _ := json.Marshal(t.AntiPatterns)
 	examplesJSON, _ := json.Marshal(t.Examples)
 
+	emitSet := func() error {
+		return s.appendEvent(journalEvent{
+			DomainKey: t.DomainKey,
+			Kind:      EvGlossarySet,
+			Key:       "term:" + t.DomainKey + ":" + t.Term,
+			Fields: map[string]any{
+				"description":   t.Description,
+				"context":       t.Context,
+				"aliases":       string(aliasesJSON),
+				"anti_patterns": string(antiJSON),
+				"examples":      string(examplesJSON),
+			},
+		})
+	}
+
 	// Try update first
 	res, err := s.db.Exec(`
 		UPDATE domain_language SET aliases=?, anti_patterns=?, description=?, context=?, examples=?,
@@ -49,6 +64,9 @@ func (s *Store) UpsertTerm(t DomainTerm) (int64, error) {
 	if rows > 0 {
 		var id int64
 		s.db.QueryRow("SELECT term_id FROM domain_language WHERE domain_key=? AND term=?", t.DomainKey, t.Term).Scan(&id)
+		if err := emitSet(); err != nil {
+			return 0, err
+		}
 		return id, nil
 	}
 
@@ -60,6 +78,9 @@ func (s *Store) UpsertTerm(t DomainTerm) (int64, error) {
 	)
 	if err != nil {
 		return 0, fmt.Errorf("UpsertTerm insert: %w", err)
+	}
+	if err := emitSet(); err != nil {
+		return 0, err
 	}
 	return res.LastInsertId()
 }
@@ -136,8 +157,19 @@ func (s *Store) CheckLanguage(domainKey string) ([]LanguageViolation, error) {
 }
 
 func (s *Store) DeleteTerm(domainKey, term string) error {
-	_, err := s.db.Exec(`DELETE FROM domain_language WHERE domain_key = ? AND term = ?`, domainKey, term)
-	return err
+	res, err := s.db.Exec(`DELETE FROM domain_language WHERE domain_key = ? AND term = ?`, domainKey, term)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil // nothing deleted — no event
+	}
+	return s.appendEvent(journalEvent{
+		DomainKey: domainKey,
+		Kind:      EvGlossaryDel,
+		Key:       "term:" + domainKey + ":" + term,
+		Fields:    map[string]any{"domain_key": domainKey, "term": term},
+	})
 }
 
 func (s *Store) RemoveAntiPattern(domainKey, term, antiPattern string) error {

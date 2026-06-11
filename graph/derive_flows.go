@@ -120,7 +120,9 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 		flowKey := "flow:use_case:" + domainKey + ":" + epSuffix
 
 		// Upsert the flow node.
-		g.ensureFlowNode(domainKey, revisionID, flowKey, flowName)
+		if err := g.ensureFlowNode(domainKey, revisionID, flowKey, flowName); err != nil {
+			return err
+		}
 
 		// Get the flow node ID.
 		flowID, err := g.store.GetNodeIDByKey(flowKey)
@@ -145,6 +147,10 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 			TrustScore:         0.9,
 			Metadata:           "{}",
 		})
+		if err := g.addEdgeCreationEvidence(triggerEdgeKey, revisionID, "",
+			"chronicle:derive_flows", "system_generated", ""); err != nil {
+			return err
+		}
 
 		// Upsert REQUIRES: flow → each provider in closure.
 		for _, provID := range closureIDs {
@@ -168,6 +174,10 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 				TrustScore:         0.9,
 				Metadata:           "{}",
 			})
+			if err := g.addEdgeCreationEvidence(reqEdgeKey, revisionID, "",
+				"chronicle:derive_flows", "system_generated", ""); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -247,9 +257,9 @@ func deriveFlowName(endpointName string) string {
 }
 
 // ensureFlowNode creates a flow:use_case node if it doesn't already exist.
-func (g *Graph) ensureFlowNode(domainKey string, revisionID int64, nodeKey, name string) {
+func (g *Graph) ensureFlowNode(domainKey string, revisionID int64, nodeKey, name string) error {
 	if _, err := g.store.GetNodeIDByKey(nodeKey); err == nil {
-		return // already exists
+		return nil // already exists
 	}
 	g.store.UpsertNode(store.NodeRow{
 		NodeKey:            nodeKey,
@@ -264,4 +274,6 @@ func (g *Graph) ensureFlowNode(domainKey string, revisionID int64, nodeKey, name
 		TrustScore:         0.9,
 		Metadata:           "{}",
 	})
+	return g.addCreationEvidence(nodeKey, revisionID, name, "",
+		"chronicle:derive_flows", "system_generated")
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -235,9 +236,31 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 	return g.ResolveExtractionsWithOptions(domainKey, revisionID, ResolveOptions{})
 }
 
-// ResolveExtractionsWithOptions builds the graph, optionally allowing degraded resolve
-// when each file has at least one extraction (interactive agent mode).
+// testHookResolveInTx is called (when set, tests only) with the InTx state of the resolve body's store.
+var testHookResolveInTx func(bool)
+
+// ResolveExtractionsWithOptions builds the graph inside a single transaction,
+// optionally allowing degraded resolve when each file has at least one
+// extraction (interactive agent mode).
 func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64, opts ResolveOptions) (*ResolveExtractionsResult, error) {
+	if g.store.InTx() {
+		return g.resolveExtractionsInTx(domainKey, revisionID, opts)
+	}
+	var result *ResolveExtractionsResult
+	err := g.store.WithTx(func(tx *store.Store) error {
+		g2 := *g
+		g2.store = tx
+		r, err := g2.resolveExtractionsInTx(domainKey, revisionID, opts)
+		result = r
+		return err
+	})
+	return result, err
+}
+
+func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts ResolveOptions) (*ResolveExtractionsResult, error) {
+	if testHookResolveInTx != nil {
+		testHookResolveInTx(g.store.InTx())
+	}
 	degradedFiles, err := g.finalizeObligationsBeforeResolve(domainKey, revisionID, opts.AllowDegraded)
 	if err != nil {
 		return nil, err
@@ -256,6 +279,8 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 		Degraded:       len(degradedFiles) > 0,
 		DegradedFiles:  degradedFiles,
 	}
+	g.pendingExtEndpoints = nil
+	g.evidenceErr = nil
 
 	// Collect all facts across all files
 	var allFiles []fileFacts
@@ -314,7 +339,10 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 			if fact.FromType == "" {
 				fact.FromType = fileNodeType
 			}
-			created, unresolved := g.resolveOneFact(domainKey, revisionID, ff.filePath, fact, knownEntities)
+			created, unresolved, err := g.resolveOneFact(domainKey, revisionID, ff.filePath, fact, knownEntities)
+			if err != nil {
+				return nil, fmt.Errorf("resolving %s fact in %s: %w", fact.Kind, ff.filePath, err)
+			}
 			result.NodesCreated += created.nodes
 			result.EdgesCreated += created.edges
 			result.EvidenceCreated += created.evidence
@@ -333,7 +361,10 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 
 	// Second pass: parent facts that failed on file ordering.
 	for _, pf := range parentRetries {
-		created, unresolved := g.resolveOneFact(domainKey, revisionID, pf.filePath, pf.fact, knownEntities)
+		created, unresolved, err := g.resolveOneFact(domainKey, revisionID, pf.filePath, pf.fact, knownEntities)
+		if err != nil {
+			return nil, fmt.Errorf("resolving %s fact in %s: %w", pf.fact.Kind, pf.filePath, err)
+		}
 		result.NodesCreated += created.nodes
 		result.EdgesCreated += created.edges
 		result.EvidenceCreated += created.evidence
@@ -347,7 +378,12 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 	// This is generic (not framework-specific) — modules wire things, they don't DO things.
 	g.fixModuleEdges(domainKey)
 	g.mergeExternalSystemsIntoServices(domainKey)
-	g.deriveServiceContains(domainKey, revisionID)
+	if err := g.materializeExternalEndpoints(domainKey, revisionID); err != nil {
+		return nil, err
+	}
+	if err := g.deriveServiceContains(domainKey, revisionID); err != nil {
+		return nil, err
+	}
 	g.detectContainsConflicts(domainKey, revisionID)
 	g.detectContainsCycles(domainKey, revisionID)
 	hygiene := g.applyGraphHygiene(domainKey)
@@ -355,7 +391,14 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 	// Deterministic flow derivation: always fresh after each resolve.
 	// This replaces the LLM phase-2 flow tracing (which is gated off).
 	// Flows are derived from endpoint → controller → transitive INJECTS closure.
-	_ = g.DeriveFlows(domainKey, revisionID)
+	if err := g.DeriveFlows(domainKey, revisionID); err != nil {
+		return nil, fmt.Errorf("ResolveExtractions derive flows: %w", err)
+	}
+	// Evidence writes journal events; a failure swallowed on a void path
+	// (ensureNodeID) must abort the transaction, not commit a journal hole.
+	if g.evidenceErr != nil {
+		return nil, fmt.Errorf("ResolveExtractions evidence: %w", g.evidenceErr)
+	}
 	// Mark all extractions as resolved
 	if err := g.store.MarkExtractionsResolved(revisionID, domainKey); err != nil {
 		return nil, fmt.Errorf("ResolveExtractions mark resolved: %w", err)
@@ -420,14 +463,14 @@ func (g *Graph) collectKnownEntities(allFiles []fileFacts) map[string]bool {
 	return entities
 }
 
-func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath string, fact Fact, _ map[string]bool) (createdCounts, *UnresolvedRef) {
+func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath string, fact Fact, _ map[string]bool) (createdCounts, *UnresolvedRef, error) {
 	var counts createdCounts
 
 	switch fact.Kind {
 	case "import":
 		// Filter: skip infrastructure and architectural deps
 		if !ShouldTrackDependency(fact.To) {
-			return counts, nil
+			return counts, nil, nil
 		}
 
 		// Create evidence for an import relationship
@@ -493,7 +536,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Guard: never create a self-edge via the import handler.
 		if fromID != 0 && toID != 0 && fromID == toID {
-			return counts, nil
+			return counts, nil, nil
 		}
 
 		// Determine edge type based on from/to node types
@@ -517,7 +560,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		if err != nil {
 			// Edge might already exist — that's fine
-			return counts, nil
+			return counts, nil, nil
 		}
 		counts.edges++
 
@@ -542,7 +585,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "dependency":
 		// Filter: skip infrastructure and architectural deps
 		if !ShouldTrackDependency(fact.To) {
-			return counts, nil
+			return counts, nil, nil
 		}
 
 		// Pick assertion kind based on file type
@@ -581,6 +624,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
 		targetName := inferExternalSystemName(fact.Target)
+		// gRPC targets ("grpc://host/pkg.Service/Method") are endpoints too —
+		// the method is the transport, not an HTTP verb.
+		callMethod := fact.Method
+		if strings.HasPrefix(cleanCallTarget(fact.Target), "grpc") {
+			callMethod = "GRPC"
+		}
 
 		// Check if hostname matches a known service via DNS alias
 		var toNodeKey string
@@ -598,6 +647,15 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// No alias match — create external_system node
 			toNodeKey = "service:external_system:" + domainKey + ":" + strings.ToLower(targetName)
 			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
+			// Remember the endpoint reference: if the host is still external
+			// after the merge pass, the post-pass materializes the endpoint
+			// as a boundary node so the contract path isn't lost.
+			if p := extractPathFromURL(fact.Target); p != "" {
+				g.pendingExtEndpoints = append(g.pendingExtEndpoints, pendingExtEndpoint{
+					FromNodeKey: fromNodeKey, FromNodeID: fromID,
+					ToNodeKey: toNodeKey, Method: callMethod, Path: p,
+				})
+			}
 		}
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
@@ -613,10 +671,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 
-		// Evidence: text_contains assertion for the URL
+		// Evidence: text_contains assertion for the URL. Method is kept so the
+		// external-endpoint post-pass can rebuild the endpoint key.
 		assertion, _ := json.Marshal(map[string]any{
 			"substring": fact.Target,
 			"context":   "fetch",
+			"method":    fact.Method,
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
@@ -628,7 +688,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Also create CALLS_ENDPOINT edge if we can extract a path from the URL
 		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" {
-			epNodeKey, _ := normalizeEndpointKey(domainKey, fact.Method, endpointPath)
+			epNodeKey, _ := normalizeEndpointKey(domainKey, callMethod, endpointPath)
 			// Only create edge if the endpoint node already exists (was exposed by another file)
 			if epID, err2 := g.store.GetNodeIDByKey(epNodeKey); err2 == nil {
 				callEpEdgeKey := fromNodeKey + "->" + epNodeKey + ":CALLS_ENDPOINT"
@@ -642,16 +702,27 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				if err3 == nil {
 					counts.edges++
 				}
+				if _, err := g.AddEdgeEvidence(callEpEdgeKey, validate.EvidenceInput{
+					TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+					ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+					Confidence: 0.80, RevisionID: revisionID,
+					AssertionKind: "text_contains", Assertion: string(assertion),
+				}); err != nil {
+					return counts, nil, err
+				}
+				counts.evidence++
 			}
 		}
 
 	case "call":
 		// Method call — evidence for the call expression
 		if fact.Method == "" && fact.Object == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
-		g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		if err := g.ensureNode(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath); err != nil {
+			return counts, nil, err
+		}
 
 		assertion, _ := json.Marshal(map[string]any{
 			"callee_object": fact.Object,
@@ -675,7 +746,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "member_call":
 		// 3-level member chain: this.X.Y.method() — promote Y to USES_MODEL if it matches a known model
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		// Capitalize first letter to match model node naming
 		candidateName := strings.ToUpper(fact.To[:1]) + fact.To[1:]
@@ -694,6 +765,16 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			if err == nil {
 				counts.edges++
 			}
+			assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
+			if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				Confidence: 0.90, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(assertion),
+			}); err != nil {
+				return counts, nil, err
+			}
+			counts.evidence++
 		}
 		// If not a known model, fact is kept as raw evidence but doesn't create an edge
 
@@ -703,7 +784,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// this is a local intra-service call — skip the edge entirely. Only truly external
 		// or unresolvable targets get a CALLS_SERVICE edge.
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -740,8 +821,18 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				}); err == nil {
 					counts.edges++
 				}
+				assertion, _ := json.Marshal(map[string]any{"substring": toName})
+				if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+					TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+					ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+					Confidence: 0.9, RevisionID: revisionID,
+					AssertionKind: "text_contains", Assertion: string(assertion),
+				}); err != nil {
+					return counts, nil, err
+				}
+				counts.evidence++
 			}
-			return counts, nil
+			return counts, nil, nil
 		}
 
 		// Try service layer first (service:service:domain:name)
@@ -769,11 +860,21 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if err == nil {
 			counts.edges++
 		}
+		assertion, _ := json.Marshal(map[string]any{"substring": toName})
+		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: confidence, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		}); err != nil {
+			return counts, nil, err
+		}
+		counts.evidence++
 
 	case "uses_model":
 		// Explicit model usage — creates USES_MODEL edge
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -798,11 +899,21 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if err == nil {
 			counts.edges++
 		}
+		assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
+		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: confidence, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		}); err != nil {
+			return counts, nil, err
+		}
+		counts.evidence++
 
 	case "calls_endpoint":
 		// Internal API call — creates CALLS_ENDPOINT edge
 		if fact.Target == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -822,17 +933,27 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if err == nil {
 			counts.edges++
 		}
+		assertion, _ := json.Marshal(map[string]any{"substring": fact.Target})
+		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.85, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		}); err != nil {
+			return counts, nil, err
+		}
+		counts.evidence++
 
 	case "provides":
 		// Module registration — module CONTAINS controller/provider (fact schema contract).
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		// Only @Module files declare containment. LLMs sometimes emit a spurious
 		// self-provides in controller/provider files — those would create
 		// self-CONTAINS edges that poison conflict/cycle detection.
 		if fact.FromType != "" && fact.FromType != "module" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		moduleType := fact.FromType
 		if moduleType == "" {
@@ -841,7 +962,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, moduleType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		if fromID == 0 {
-			return counts, nil
+			return counts, nil, nil
 		}
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
@@ -856,11 +977,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				Kind:     "provides",
 				Target:   fact.To,
 				Reason:   fmt.Sprintf("provides target %q not resolved to a code node", fact.To),
-			}
+			}, nil
 		}
 
 		if toID == fromID {
-			return counts, nil // self-CONTAINS is never meaningful
+			return counts, nil, nil // self-CONTAINS is never meaningful
 		}
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONTAINS"
 		confidence := fact.Confidence
@@ -891,14 +1012,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "injects":
 		// Constructor DI — creates INJECTS edge (stronger than import)
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		// R5: skip framework plumbing tokens that are never real application nodes.
 		if frameworkInjectDenylist[strings.ToLower(fact.To)] {
-			return counts, nil
+			return counts, nil, nil
 		}
 		if !isPlausibleClassName(fact.To) {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -908,7 +1029,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// file), then class-name / scan-index resolution.
 		toNodeKey, toID := g.resolveViaImportMapThenClassName(domainKey, revisionID, fact.To, g.currentFileImportMap)
 		if toID == 0 {
-			return counts, nil
+			return counts, nil, nil
 		}
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
@@ -936,7 +1057,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "decorator":
 		// Decorator — evidence for decorator on class/method
 		if fact.Decorator == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		assertion, _ := json.Marshal(map[string]any{
 			"decorator_name": fact.Decorator,
@@ -957,12 +1078,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Produces to topic/queue.
 		// transport=local means in-process EventEmitter calls — no broker node, no graph edge.
 		if strings.ToLower(fact.Transport) == "local" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		// WebSocket pushes (SignalR Clients.*.SendAsync, socket.io emit) are
 		// client fan-out, not broker topics — no topic node.
 		if strings.ToLower(fact.Transport) == "websocket" || strings.EqualFold(fact.Method, "SendAsync") {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -998,7 +1119,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Consumes from topic/queue.
 		// transport=local means in-process EventEmitter calls — no broker node, no graph edge.
 		if strings.ToLower(fact.Transport) == "local" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -1123,7 +1244,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "model_relation":
 		// Relationship between models, or model→enum field reference
 		if fact.From == "" || fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		fromNodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.From)
 		// Determine target type: check if To is an enum (by fact.ToType or existing node)
@@ -1152,11 +1273,21 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if err == nil {
 			counts.edges++
 		}
+		assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
+		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		}); err != nil {
+			return counts, nil, err
+		}
+		counts.evidence++
 
 	case "flow":
 		// Business flow / use case — creates flow node + edges to triggers and requirements
 		if fact.FlowName == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		// Key from trigger (deterministic) — not from flow_name (agent-dependent)
 		// "POST /arena/attack" → "post__arena_attack", "battle-results" → "battle-results"
@@ -1166,7 +1297,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		flowKeyBase := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(triggerForKey, " ", "_"), "/", "_"))
 		flowKey := "flow:use_case:" + domainKey + ":" + flowKeyBase
-		g.ensureNode(domainKey, revisionID, flowKey, fact.FlowName, filePath)
+		if err := g.ensureNode(domainKey, revisionID, flowKey, fact.FlowName, filePath); err != nil {
+			return counts, nil, err
+		}
 		counts.nodes++
 
 		// Evidence: the orchestrating method exists in the file
@@ -1208,6 +1341,16 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			if err == nil {
 				counts.edges++
 			}
+			triggerAssertion, _ := json.Marshal(map[string]any{"substring": triggerPath})
+			if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				Confidence: 0.85, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(triggerAssertion),
+			}); err != nil {
+				return counts, nil, err
+			}
+			counts.evidence++
 		}
 
 		// Requirements → REQUIRES edges
@@ -1242,7 +1385,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "delegates":
 		// Record delegation — creates obligation for delegated file if not already scanned
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		delegatedFile := fact.To
 		if !strings.HasPrefix(delegatedFile, "/") {
@@ -1257,17 +1400,17 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			Kind:     "delegation",
 			Target:   delegatedFile,
 			Reason:   fmt.Sprintf("delegates to %s via %s — ensure this file is also scanned", delegatedFile, fact.Method),
-		}
+		}, nil
 
 	case "parent":
 		// Parent container relationship — creates CONTAINS edge from parent to child
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		// Entity/schema files live in the data layer — their models are graph
 		// nodes already; a code-layer CONTAINS for the defining file is noise.
 		if fact.FromType == "model" || fact.FromType == "schema" {
-			return counts, nil
+			return counts, nil, nil
 		}
 
 		// Child = the file being scanned
@@ -1292,7 +1435,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				Kind:     "parent",
 				Target:   fact.To,
 				Reason:   fmt.Sprintf("parent node %q not found in domain %s", fact.To, domainKey),
-			}
+			}, nil
 		}
 
 		// Self-reference guard
@@ -1305,7 +1448,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				Source:      "system",
 				Confidence:  0.3,
 			})
-			return counts, nil
+			return counts, nil, nil
 		}
 
 		// Create CONTAINS edge: parent → child
@@ -1345,7 +1488,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "declares_service":
 		// Create a service-layer node for a deployable service (from package.json, Dockerfile, etc.)
 		if fact.To == "" {
-			return counts, nil
+			return counts, nil, nil
 		}
 		svcName := normalizePackageName(fact.To)
 		nodeKey := "service:service:" + domainKey + ":" + svcName
@@ -1362,7 +1505,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 	}
 
-	return counts, nil
+	return counts, nil, nil
 }
 
 // registerNodeAlias stores a name as an alias for a node.
@@ -1480,7 +1623,9 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 		}
 	}
 
-	g.ensureNode(domainKey, revisionID, nodeKey, name, filePath)
+	// ensureNodeID's int-only signature predates the journal; evidence-write
+	// failures surface via the accumulator so the enclosing resolve tx aborts.
+	g.noteEvidenceErr(g.ensureNode(domainKey, revisionID, nodeKey, name, filePath))
 	id, _ = g.store.GetNodeIDByKey(nodeKey)
 	if id > 0 && filePath != "" {
 		g.registerClassNameAliases(id, inferNameFromPath(filePath))
@@ -1488,7 +1633,81 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 	return id
 }
 
-func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, filePath string) {
+// addCreationEvidence records why an auto-created node exists. Every creation
+// path must call it — the evidence-first invariant: no active entity without
+// at least one evidence row. A missing node (creation failed upstream) is
+// tolerated as before; a failed evidence WRITE is returned — it journals an
+// event, and a dropped journal event corrupts replay.
+func (g *Graph) addCreationEvidence(nodeKey string, revisionID int64, name, filePath, extractorID, assertionKind string) error {
+	id, err := g.store.GetNodeIDByKey(nodeKey)
+	if err != nil {
+		return nil
+	}
+	sourceKind := "file"
+	locator := filePath
+	if filePath == "" {
+		sourceKind = "synthetic"
+		locator = nodeKey
+	}
+	assertion, _ := json.Marshal(map[string]string{"kind": assertionKind, "name": name})
+	if _, err := g.store.AddEvidence(store.EvidenceRow{
+		TargetKind:          "node",
+		NodeID:              id,
+		SourceKind:          sourceKind,
+		FilePath:            filePath,
+		Locator:             locator,
+		ExtractorID:         extractorID,
+		ExtractorVersion:    "1.0",
+		Confidence:          0.6,
+		AssertionKind:       assertionKind,
+		Assertion:           string(assertion),
+		Metadata:            "{}",
+		ValidFromRevisionID: revisionID,
+	}); err != nil {
+		return fmt.Errorf("creation evidence for %s: %w", nodeKey, err)
+	}
+	return nil
+}
+
+// addEdgeCreationEvidence records why an auto-created edge exists — the edge
+// counterpart of addCreationEvidence. Derived/synthetic edges (no source file)
+// get source_kind "synthetic" with the edge key as locator. A missing edge is
+// tolerated as before; a failed evidence WRITE is returned (journal integrity).
+func (g *Graph) addEdgeCreationEvidence(edgeKey string, revisionID int64, filePath, extractorID, assertionKind, assertion string) error {
+	edge, err := g.store.GetEdgeByKey(edgeKey)
+	if err != nil {
+		return nil
+	}
+	sourceKind := "file"
+	locator := filePath
+	if filePath == "" {
+		sourceKind = "synthetic"
+		locator = edgeKey
+	}
+	if assertion == "" {
+		buf, _ := json.Marshal(map[string]string{"kind": assertionKind, "edge_key": edgeKey})
+		assertion = string(buf)
+	}
+	if _, err := g.store.AddEvidence(store.EvidenceRow{
+		TargetKind:          "edge",
+		EdgeID:              edge.EdgeID,
+		SourceKind:          sourceKind,
+		FilePath:            filePath,
+		Locator:             locator,
+		ExtractorID:         extractorID,
+		ExtractorVersion:    "1.0",
+		Confidence:          0.6,
+		AssertionKind:       assertionKind,
+		Assertion:           assertion,
+		Metadata:            "{}",
+		ValidFromRevisionID: revisionID,
+	}); err != nil {
+		return fmt.Errorf("creation evidence for %s: %w", edgeKey, err)
+	}
+	return nil
+}
+
+func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, filePath string) error {
 	_, err := g.store.GetNodeIDByKey(nodeKey)
 	if err != nil {
 		parts := strings.SplitN(nodeKey, ":", 4)
@@ -1517,7 +1736,10 @@ func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, fi
 			Metadata:           "{}",
 			SupportKind:        supportKind,
 		})
+		return g.addCreationEvidence(nodeKey, revisionID, name, filePath,
+			"chronicle:resolve:ensure_node", "referenced_entity")
 	}
+	return nil
 }
 
 // classifyProviderRole returns a support kind string for NestJS support providers
@@ -1587,6 +1809,110 @@ func (g *Graph) mergeExternalSystemsIntoServices(domainKey string) {
 		}
 		g.store.Exec("UPDATE graph_nodes SET status='deleted' WHERE node_id=?", ext.NodeID)
 	}
+}
+
+// materializeExternalEndpoints creates boundary endpoint nodes for HTTP calls
+// whose target stayed an external system after the merge pass. A standalone
+// repo calling GET http://jerry-api:3002/jerry/status knows the exact endpoint
+// it depends on — dropping the path loses the contract. The endpoint is
+// created with status="external" (defined elsewhere; federation resolves it
+// to the owning repo). In-domain calls are unaffected: their external_system
+// placeholders were merged and deleted by mergeExternalSystemsIntoServices.
+func (g *Graph) materializeExternalEndpoints(domainKey string, revisionID int64) error {
+	if len(g.pendingExtEndpoints) == 0 {
+		return nil
+	}
+	externals, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "external_system", Status: "active"})
+	if err != nil || len(externals) == 0 {
+		return nil
+	}
+	extKeys := make(map[string]bool, len(externals))
+	for _, n := range externals {
+		extKeys[n.NodeKey] = true
+	}
+
+	dynamicByEdge := map[string][]map[string]string{}
+	for _, p := range g.pendingExtEndpoints {
+		// Skip targets that turned out to be in-domain services — their
+		// endpoints exist locally and resolved (or will reconcile) normally.
+		if !extKeys[p.ToNodeKey] {
+			continue
+		}
+		// Only static paths become contract nodes. ID-bearing URLs
+		// (/users/abc-123) need LLM parameterization (/users/:id) in the
+		// endpoint_reconcile phase — a literal ID baked into an endpoint
+		// key is garbage, not a contract. The concrete call is preserved in
+		// CALLS_SERVICE edge metadata so federation can pattern-match it
+		// against the owning repo's parameterized endpoints.
+		if pathLooksDynamic(p.Path) {
+			ek := p.FromNodeKey + "->" + p.ToNodeKey + ":CALLS_SERVICE"
+			m := p.Method
+			if m == "" {
+				m = "GET"
+			}
+			dynamicByEdge[ek] = append(dynamicByEdge[ek], map[string]string{
+				"method": strings.ToUpper(m), "path": p.Path,
+			})
+			continue
+		}
+		method := p.Method
+		if method == "" {
+			method = "GET"
+		}
+		epKey, epName := normalizeEndpointKey(domainKey, method, p.Path)
+		epID, err := g.store.GetNodeIDByKey(epKey)
+		if err != nil {
+			epID, err = g.store.UpsertNode(store.NodeRow{
+				NodeKey: epKey, Layer: "contract", NodeType: "endpoint",
+				DomainKey: domainKey, Name: epName, Status: "external",
+				FirstSeenRevisionID: revisionID, LastSeenRevisionID: revisionID,
+				Confidence: 0.8, Freshness: 1.0, TrustScore: 0.8, Metadata: "{}",
+			})
+			if err != nil {
+				continue
+			}
+		}
+		edgeKey := p.FromNodeKey + "->" + epKey + ":CALLS_ENDPOINT"
+		_, _ = g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: edgeKey, FromNodeID: p.FromNodeID, ToNodeID: epID,
+			FromNodeKey: p.FromNodeKey, ToNodeKey: epKey,
+			EdgeType: "CALLS_ENDPOINT", DerivationKind: "linked", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.80, Freshness: 1.0, TrustScore: 0.80,
+			Metadata: "{}", ValidFromRevisionID: 0,
+		})
+		if err := g.addEdgeCreationEvidence(edgeKey, revisionID, "",
+			"chronicle:resolve:external_endpoint", "system_generated", ""); err != nil {
+			return err
+		}
+	}
+	for edgeKey, calls := range dynamicByEdge {
+		edge, err := g.store.GetEdgeByKey(edgeKey)
+		if err != nil {
+			continue
+		}
+		meta := map[string]any{}
+		_ = json.Unmarshal([]byte(edge.Metadata), &meta)
+		meta["unmatched_calls"] = calls
+		buf, err := json.Marshal(meta)
+		if err != nil {
+			continue
+		}
+		g.store.Exec("UPDATE graph_edges SET metadata=? WHERE edge_id=?", string(buf), edge.EdgeID)
+	}
+	g.pendingExtEndpoints = nil
+	return nil
+}
+
+// pathLooksDynamic reports whether a URL path probably embeds a concrete
+// value (ID, UUID, number) rather than being a static route. Segments with
+// digits are the practical signal: /users/abc-123, /orders/42, hex hashes.
+func pathLooksDynamic(path string) bool {
+	for _, seg := range strings.Split(path, "/") {
+		if strings.ContainsAny(seg, "0123456789") {
+			return true
+		}
+	}
+	return false
 }
 
 // fixModuleEdges reclassifies edges for nodes that the agent explicitly typed as "module".
@@ -2556,7 +2882,7 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 // dir of its .csproj) and has no CONTAINS parent belongs to that service.
 // Restricted to module-less stacks (C# files) — in NestJS the @Module is the
 // container and service→module containment is intentionally not modeled.
-func (g *Graph) deriveServiceContains(domainKey string, revisionID int64) {
+func (g *Graph) deriveServiceContains(domainKey string, revisionID int64) error {
 	services, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "service"})
 	type svcRoot struct {
 		key  string
@@ -2569,10 +2895,16 @@ func (g *Graph) deriveServiceContains(domainKey string, revisionID int64) {
 			continue
 		}
 		dir := filepath.ToSlash(filepath.Dir(s.FilePath))
-		roots = append(roots, svcRoot{s.NodeKey, s.NodeID, dir + "/"})
+		root := dir + "/"
+		if dir == "." {
+			// csproj at the repo root (standalone repo scan): the service
+			// owns every parentless code file — "./" would match nothing.
+			root = ""
+		}
+		roots = append(roots, svcRoot{s.NodeKey, s.NodeID, root})
 	}
 	if len(roots) == 0 {
-		return
+		return nil
 	}
 	sort.Slice(roots, func(i, j int) bool { return len(roots[i].root) > len(roots[j].root) })
 
@@ -2607,9 +2939,14 @@ func (g *Graph) deriveServiceContains(domainKey string, revisionID int64) {
 				LastSeenRevisionID: revisionID, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.9,
 				Metadata: "{}", ValidFromRevisionID: 0,
 			})
+			if err := g.addEdgeCreationEvidence(edgeKey, revisionID, n.FilePath,
+				"chronicle:resolve:service_containment", "system_generated", ""); err != nil {
+				return err
+			}
 			break
 		}
 	}
+	return nil
 }
 
 // lookupClassNameTarget resolves a class name to an existing (or scanned-file-backed)
@@ -2752,11 +3089,21 @@ func fileTypeOrderFromFacts(facts []Fact) int {
 	return 3 // everything else last
 }
 
+// cleanCallTarget normalizes an http_call target before host/path parsing.
+// Extractors report what the code says, which is often not a plain URL:
+// "process.env.TOM_API_URL + '/tom/status'", "`${base}/x`", quoted fragments.
+// Strips quotes/backticks/spaces and concatenation operators so the remaining
+// string parses like a URL again.
+func cleanCallTarget(url string) string {
+	r := strings.NewReplacer("'", "", "\"", "", "`", "", " +", "", "+ ", "", " ", "")
+	return r.Replace(strings.TrimSpace(url))
+}
+
 func extractPathFromURL(url string) string {
 	// "http://tom-api:3001/tom/status" → "/tom/status"
 	// "http://api:3000/orders/stats?from=2024" → "/orders/stats"
-	u := url
-	for _, prefix := range []string{"https://", "http://"} {
+	u := cleanCallTarget(url)
+	for _, prefix := range []string{"https://", "http://", "grpc://", "grpcs://"} {
 		u = strings.TrimPrefix(u, prefix)
 	}
 	if idx := strings.Index(u, "/"); idx >= 0 {
@@ -2814,19 +3161,83 @@ func normalizeEndpointKey(domainKey, method, path string) (nodeKey string, displ
 func inferExternalSystemName(url string) string {
 	// "http://notifications:3005/push" → "notifications"
 	// "https://hooks.example.com/battles" → "hooks.example.com"
-	u := url
-	for _, prefix := range []string{"https://", "http://"} {
+	// "${TOM_API_URL}/tom/status" → "tom-api" (env template → identity)
+	u := cleanCallTarget(url)
+	for _, prefix := range []string{"https://", "http://", "grpc://", "grpcs://"} {
 		u = strings.TrimPrefix(u, prefix)
 	}
 	// Take host part
 	if idx := strings.Index(u, "/"); idx > 0 {
 		u = u[:idx]
 	}
-	// Remove port
-	if idx := strings.Index(u, ":"); idx > 0 {
+	// Remove port — but not inside an unclosed ${...} template
+	if idx := strings.Index(u, ":"); idx > 0 && !strings.Contains(u[idx:], "}") {
 		u = u[:idx]
 	}
+	if name, ok := envVarServiceName(u); ok {
+		return name
+	}
 	return u
+}
+
+// envVarRe matches an environment-variable identifier (SCREAMING_SNAKE).
+var envVarRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// envVarSuffixNoise are trailing env-var name tokens that describe the KIND of
+// value, not the service identity: TOM_API_URL → TOM_API.
+var envVarSuffixNoise = map[string]bool{
+	"URL": true, "URI": true, "BASE": true, "BASEURL": true,
+	"HOST": true, "ADDR": true, "ADDRESS": true, "ENDPOINT": true, "PORT": true,
+}
+
+// envVarServiceName derives a service identity from a templated host:
+//   - env vars:   "${TOM_API_URL}" / "$JERRY_API_URL" / "process.env.TOM_API_URL" → "tom-api"
+//   - properties: "${tom-api.base-url}" (Spring @Value style) → "tom-api"
+//
+// Returns ok=false when the host is not a template reference. A bare
+// SCREAMING word without wrapper or underscore (e.g. "LOCALHOST") is treated
+// as a hostname, not an env var.
+func envVarServiceName(host string) (string, bool) {
+	h := strings.TrimSpace(host)
+	for _, w := range []string{"process.env.", "os.environ.", "env.", "ENV."} {
+		h = strings.TrimPrefix(h, w)
+	}
+	hadWrapper := false
+	for _, pre := range []string{"${", "$", "{"} {
+		if strings.HasPrefix(h, pre) {
+			h = strings.TrimPrefix(h, pre)
+			hadWrapper = true
+		}
+	}
+	h = strings.TrimSuffix(h, "}")
+	if h != strings.TrimSpace(host) {
+		hadWrapper = true
+	}
+
+	if envVarRe.MatchString(h) {
+		if !hadWrapper && !strings.Contains(h, "_") {
+			return "", false
+		}
+		tokens := strings.Split(h, "_")
+		for len(tokens) > 1 && envVarSuffixNoise[tokens[len(tokens)-1]] {
+			tokens = tokens[:len(tokens)-1]
+		}
+		return strings.ToLower(strings.Join(tokens, "-")), true
+	}
+
+	// Property-placeholder form ("tom-api.base-url"): only when wrapped —
+	// a bare dotted lowercase host is a legitimate DNS name.
+	if hadWrapper {
+		segs := strings.Split(h, ".")
+		flat := func(s string) string {
+			return strings.ToUpper(strings.NewReplacer("-", "", "_", "").Replace(s))
+		}
+		for len(segs) > 1 && envVarSuffixNoise[flat(segs[len(segs)-1])] {
+			segs = segs[:len(segs)-1]
+		}
+		return strings.ToLower(strings.Join(segs, "-")), true
+	}
+	return "", false
 }
 
 // buildDependencyAssertion picks the right assertion kind based on file extension.

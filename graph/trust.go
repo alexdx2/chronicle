@@ -26,9 +26,14 @@ var (
 		"avro": true, "proto": true, "schema_registry": true,
 		"terraform": true, "k8s": true, "git": true, "ci": true,
 	}
+	// Manual/operator evidence: explicit human assertions
+	manualSourceKinds = map[string]bool{
+		"user_feedback": true, "manual": true,
+	}
 	// LLM/weak evidence
 	llmSourceKinds = map[string]bool{
-		"webhook": true, // convention-based, not structural
+		"webhook":   true, // convention-based, not structural
+		"synthetic": true, // system-generated placeholder, no source backing
 	}
 )
 
@@ -52,7 +57,7 @@ func ConfidenceCap(evidence []store.EvidenceRow) float64 {
 		if codeSourceKinds[e.SourceKind] {
 			hasCode = true
 		}
-		if e.SourceKind == "user_feedback" && e.EvidencePolarity == "positive" {
+		if manualSourceKinds[e.SourceKind] && e.EvidencePolarity == "positive" {
 			hasManual = true
 		}
 	}
@@ -245,6 +250,30 @@ func (g *Graph) RecalculateEdgeTrust(edgeID int64) error {
 	return g.store.UpdateEdgeTrust(edgeID, confidence, freshness, trustScore, status)
 }
 
+// RecalculateAllTrust recomputes trust for every current node and edge.
+// Used after journal replay — trust is derived, never journaled.
+func (g *Graph) RecalculateAllTrust() error {
+	nodes, err := g.store.ListNodes(store.NodeFilter{})
+	if err != nil {
+		return err
+	}
+	for _, n := range nodes {
+		if err := g.RecalculateNodeTrust(n.NodeID); err != nil {
+			return err
+		}
+	}
+	edges, err := g.store.ListEdges(store.EdgeFilter{})
+	if err != nil {
+		return err
+	}
+	for _, e := range edges {
+		if err := g.RecalculateEdgeTrust(e.EdgeID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RecalculateNodeTrust recomputes trust for a node from its evidence.
 func (g *Graph) RecalculateNodeTrust(nodeID int64) error {
 	evidence, err := g.store.ListEvidenceByNode(nodeID)
@@ -262,6 +291,13 @@ func (g *Graph) RecalculateNodeTrust(nodeID int64) error {
 	switch status {
 	case "contradicted", "removed":
 		status = "deleted"
+	}
+	// Preserve boundary markers: evidence supports an external node's existence,
+	// not its locality. Only contradiction (→ deleted) may override "external".
+	if status != "deleted" {
+		if node, nerr := g.store.GetNodeByID(nodeID); nerr == nil && node.Status == "external" {
+			status = "external"
+		}
 	}
 	return g.store.UpdateNodeTrust(nodeID, confidence, freshness, trustScore, status)
 }

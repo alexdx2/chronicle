@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -50,6 +51,7 @@ func NewRootCmd() *cobra.Command {
 		newImpactCmd(),
 		newAdminCmd(),
 		newAliasCmd(),
+		newJournalCmd(),
 	)
 
 	return root
@@ -127,6 +129,8 @@ func openGraph() *graph.Graph {
 		}
 	}
 
+	s.SetJournalActor(journalActor())
+
 	var reg *registry.Registry
 	if _, statErr := os.Stat(registryPath); statErr == nil {
 		reg, err = registry.LoadFile(registryPath)
@@ -143,6 +147,22 @@ func openGraph() *graph.Graph {
 	}
 
 	return graph.New(s, reg)
+}
+
+// journalActor returns the configured git identity, or hostname.
+// Resolved once at startup and stamped on every journal event.
+func journalActor() string {
+	out, err := exec.Command("git", "config", "user.email").Output()
+	if err == nil {
+		if v := strings.TrimSpace(string(out)); v != "" {
+			return v
+		}
+	}
+	host, _ := os.Hostname()
+	if host == "" {
+		return "unknown"
+	}
+	return host
 }
 
 // ensureDepbotDir creates .depbot/ and skeleton manifest if they don't exist.

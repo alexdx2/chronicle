@@ -57,3 +57,28 @@ func TestOpenIdempotent(t *testing.T) {
 	}
 	defer s2.Close()
 }
+
+func TestInTxAndDirPropagation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if s.InTx() {
+		t.Fatal("fresh store must not report InTx")
+	}
+	err = s.WithTx(func(tx *Store) error {
+		if !tx.InTx() {
+			t.Error("tx store must report InTx")
+		}
+		if tx.Dir() != s.Dir() {
+			t.Errorf("tx store Dir = %q, want %q", tx.Dir(), s.Dir())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

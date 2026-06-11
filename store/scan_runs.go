@@ -61,6 +61,33 @@ func (s *Store) GetScanRun(runID int64) (*ScanRunRow, error) {
 	return &r, nil
 }
 
+// GetScanRunByRevision returns the most recent run for a revision.
+// NOT the same as GetScanRun: run_id and revision_id drift apart as soon as
+// a project has revisions without runs — confusing them makes checkout claim
+// obligations and then fail, silently burning the wave's attempt budget.
+func (s *Store) GetScanRunByRevision(revisionID int64) (*ScanRunRow, error) {
+	var r ScanRunRow
+	var updatedAt sql.NullString
+	var autopilot int
+	err := s.db.QueryRow(`
+		SELECT run_id, revision_id, domain_key, phase, status,
+		       total_files, extracted_files, resolved, COALESCE(votes_needed,1),
+		       autopilot, auto_confirms, created_at, updated_at
+		FROM scan_runs WHERE revision_id = ?
+		ORDER BY run_id DESC LIMIT 1
+	`, revisionID).Scan(&r.RunID, &r.RevisionID, &r.DomainKey, &r.Phase, &r.Status,
+		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded,
+		&autopilot, &r.AutoConfirms, &r.CreatedAt, &updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("GetScanRunByRevision: %w", err)
+	}
+	r.Autopilot = autopilot != 0
+	if updatedAt.Valid {
+		r.UpdatedAt = updatedAt.String
+	}
+	return &r, nil
+}
+
 // GetActiveScanRun returns the most recent non-finalized, non-failed run for a domain.
 // Returns nil, nil if no active run exists.
 func (s *Store) GetActiveScanRun(domainKey string) (*ScanRunRow, error) {

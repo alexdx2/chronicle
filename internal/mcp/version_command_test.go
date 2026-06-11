@@ -22,10 +22,10 @@ func TestVersionCommandRegistered(t *testing.T) {
 
 func TestVersionIdentityFingerprintStable(t *testing.T) {
 	id := version.Identity()
-	if id.ReleaseCodename != "osprey-vw1" {
-		t.Fatalf("release_codename = %q, want osprey-vw1", id.ReleaseCodename)
+	if id.ReleaseCodename != "osprey-fed1" {
+		t.Fatalf("release_codename = %q, want osprey-fed1", id.ReleaseCodename)
 	}
-	if id.Fingerprint != "1f8b19d6ea28" {
-		t.Fatalf("fingerprint = %q, want 1f8b19d6ea28", id.Fingerprint)
+	if id.Fingerprint != "9d2d8920ffd4" {
+		t.Fatalf("fingerprint = %q, want 9d2d8920ffd4", id.Fingerprint)
 	}
 }

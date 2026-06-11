@@ -64,7 +64,14 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// No existing current version — insert new.
-		return s.insertNodeVersion(n)
+		id, err := s.insertNodeVersion(n)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.emitNodeUpsert(n); err != nil {
+			return 0, err
+		}
+		return id, nil
 	}
 
 	// Existing: check immutable fields.
@@ -80,7 +87,14 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("UpsertNode close old version: %w", err)
 		}
-		return s.insertNodeVersion(n)
+		id, err := s.insertNodeVersion(n)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.emitNodeUpsert(n); err != nil {
+			return 0, err
+		}
+		return id, nil
 	}
 
 	// Legacy mode: update in place.
@@ -102,7 +116,61 @@ func (s *Store) UpsertNode(n NodeRow) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("UpsertNode update: %w", err)
 	}
+	if err := s.emitNodeUpsert(n); err != nil {
+		return 0, err
+	}
 	return existingID, nil
+}
+
+// emitNodeUpsert records a node_upsert journal event for n.
+func (s *Store) emitNodeUpsert(n NodeRow) error {
+	return s.appendEvent(journalEvent{
+		DomainKey:  n.DomainKey,
+		RevisionID: n.LastSeenRevisionID,
+		Kind:       EvNodeUpsert,
+		Key:        n.NodeKey,
+		Fields:     nodeEventFields(n),
+	})
+}
+
+// nodeEventFields builds the journal event payload for a node upsert.
+// Derived values (confidence/freshness/trust_score) are excluded by design.
+func nodeEventFields(n NodeRow) map[string]any {
+	f := map[string]any{
+		"name": n.Name, "layer": n.Layer, "node_type": n.NodeType,
+		"domain_key": n.DomainKey, "status": n.Status,
+	}
+	if n.QualifiedName != "" {
+		f["qualified_name"] = n.QualifiedName
+	}
+	if n.RepoName != "" {
+		f["repo_name"] = n.RepoName
+	}
+	if n.FilePath != "" {
+		f["file_path"] = n.FilePath
+	}
+	if n.Lang != "" {
+		f["lang"] = n.Lang
+	}
+	if n.OwnerKey != "" {
+		f["owner_key"] = n.OwnerKey
+	}
+	if n.Environment != "" {
+		f["environment"] = n.Environment
+	}
+	if n.Visibility != "" {
+		f["visibility"] = n.Visibility
+	}
+	if n.SymbolName != "" {
+		f["symbol_name"] = n.SymbolName
+	}
+	if n.SupportKind != "" {
+		f["support_kind"] = n.SupportKind
+	}
+	if n.Metadata != "" && n.Metadata != "{}" {
+		f["metadata"] = n.Metadata
+	}
+	return f
 }
 
 // insertNodeVersion inserts a new node row including versioning columns.
@@ -368,6 +436,14 @@ func (s *Store) DeleteNode(key string) error {
 	if n == 0 {
 		return fmt.Errorf("DeleteNode %q: %w", key, ErrNotFound)
 	}
+	if err := s.appendEvent(journalEvent{
+		DomainKey: DomainFromNodeKey(key),
+		Kind:      EvNodeStatus,
+		Key:       key,
+		Fields:    map[string]any{"status": "deleted"},
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -382,18 +458,56 @@ func (s *Store) UpdateNodeTrust(nodeID int64, confidence, freshness, trustScore 
 	return nil
 }
 
-// MarkStaleNodes marks active nodes with last_seen_revision_id < revisionID as stale.
+// MarkStaleNodes marks active nodes not seen in this revision as stale and
+// journals one node_status event per actual transition. Repeated calls are
+// no-ops: only rows still 'active' transition, so no duplicate events.
+// Only CURRENT versions (valid_to unset) are considered: in versioned mode a
+// closed historical row keeps status='active' but a re-seen node's current row
+// has last_seen = this revision — marking the closed row would emit a bogus
+// stale event for a node that is still very much alive.
 func (s *Store) MarkStaleNodes(domainKey string, revisionID int64) (int64, error) {
-	res, err := s.db.Exec(`
-		UPDATE graph_nodes
-		SET status='stale'
+	rows, err := s.db.Query(`
+		SELECT node_id, node_key FROM graph_nodes
 		WHERE domain_key=? AND status='active' AND last_seen_revision_id < ?
-	`, domainKey, revisionID)
+		  AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		ORDER BY node_key`, domainKey, revisionID)
 	if err != nil {
-		return 0, fmt.Errorf("MarkStaleNodes: %w", err)
+		return 0, fmt.Errorf("MarkStaleNodes select: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
+	type staleRow struct {
+		id  int64
+		key string
+	}
+	var subjects []staleRow
+	for rows.Next() {
+		var r staleRow
+		if err := rows.Scan(&r.id, &r.key); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("MarkStaleNodes scan: %w", err)
+		}
+		subjects = append(subjects, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("MarkStaleNodes rows: %w", err)
+	}
+
+	for _, sub := range subjects {
+		if _, err := s.db.Exec(`
+			UPDATE graph_nodes
+			SET status='stale'
+			WHERE node_id=? AND status='active'`, sub.id); err != nil {
+			return 0, fmt.Errorf("MarkStaleNodes update: %w", err)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domainKey, RevisionID: revisionID,
+			Kind: EvNodeStatus, Key: sub.key,
+			Fields: map[string]any{"status": "stale"},
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return int64(len(subjects)), nil
 }
 
 // nullableStr returns nil for empty strings so they're stored as NULL.

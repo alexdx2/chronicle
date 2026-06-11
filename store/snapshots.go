@@ -47,6 +47,19 @@ func (s *Store) CreateSnapshot(snap SnapshotRow) (int64, error) {
 		return 0, fmt.Errorf("CreateSnapshot: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	if err := s.appendEvent(journalEvent{
+		DomainKey: snap.DomainKey, RevisionID: snap.RevisionID,
+		Kind: EvSnapshot,
+		Key:  fmt.Sprintf("snapshot:%s:%d", snap.DomainKey, id),
+		Fields: map[string]any{
+			"snapshot_kind": snap.Kind,
+			"node_count":    snap.NodeCount,
+			"edge_count":    snap.EdgeCount,
+			"summary":       snap.Summary,
+		},
+	}); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 

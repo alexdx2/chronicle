@@ -337,3 +337,36 @@ func TestImportAllIdempotent(t *testing.T) {
 		t.Errorf("expected 1 edge after double import, got %d", len(edges))
 	}
 }
+
+func TestImportAutoEvidenceForFilelessNodes(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID, err := g.store.CreateRevision("dom", "", "abc", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+
+	// One node, no file_path, no explicit evidence.
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{
+				NodeKey:   "code:provider:dom:phantomservice",
+				Layer:     "code",
+				NodeType:  "provider",
+				DomainKey: "dom",
+				Name:      "PhantomService",
+			},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if result.NodesCreated != 1 {
+		t.Fatalf("NodesCreated = %d, want 1", result.NodesCreated)
+	}
+
+	if n := countZeroEvidenceNodes(t, g.store); n != 0 {
+		t.Fatalf("import left %d nodes without evidence", n)
+	}
+}

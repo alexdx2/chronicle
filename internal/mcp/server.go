@@ -258,6 +258,25 @@ func nodeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
+
+		// Evidence-first: a manual upsert is itself an assertion by the operator.
+		// Fetch by ID — the node_key may have been auto-generated or normalized.
+		// Evidence failures surface as tool errors: the evidence write journals
+		// an event, and a silently dropped event corrupts replay.
+		if node, nerr := g.Store().GetNodeByID(id); nerr == nil {
+			if _, err := g.AddNodeEvidence(node.NodeKey, validate.EvidenceInput{
+				TargetKind:       "node",
+				SourceKind:       "manual",
+				Locator:          node.NodeKey,
+				ExtractorID:      "mcp:node_upsert",
+				ExtractorVersion: "1.0",
+				AssertionKind:    "manual_assertion",
+				Confidence:       0.9,
+				RevisionID:       revisionID,
+			}); err != nil {
+				return errorResult(fmt.Errorf("node upserted (id=%d) but evidence write failed: %w", id, err)), nil
+			}
+		}
 		return jsonResult(map[string]any{"node_id": id}), nil
 	}
 }
@@ -395,6 +414,25 @@ func edgeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 		id, err := g.UpsertEdge(input, revisionID)
 		if err != nil {
 			return errorResult(err), nil
+		}
+
+		// Evidence-first: a manual upsert is itself an assertion by the operator.
+		// Evidence failures surface as tool errors (journal integrity).
+		edgeKey := input.EdgeKey
+		if edgeKey == "" {
+			edgeKey = validate.BuildEdgeKey(fromNodeKey, toNodeKey, input.EdgeType)
+		}
+		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind:       "edge",
+			SourceKind:       "manual",
+			Locator:          edgeKey,
+			ExtractorID:      "mcp:edge_upsert",
+			ExtractorVersion: "1.0",
+			AssertionKind:    "manual_assertion",
+			Confidence:       0.9,
+			RevisionID:       revisionID,
+		}); err != nil {
+			return errorResult(fmt.Errorf("edge upserted (id=%d) but evidence write failed: %w", id, err)), nil
 		}
 		return jsonResult(map[string]any{"edge_id": id}), nil
 	}

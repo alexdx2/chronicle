@@ -72,6 +72,15 @@ With `--live-check`, Chronicle verifies evidence against source files at query t
 
 This is read-only — the graph is not modified, just annotated with what's drifted. Off by default to avoid filesystem overhead on every query.
 
+### Event journal (experimental, shadow mode)
+
+Every graph mutation is also recorded as a semantic event in
+`.depbot/events/<domain>.jsonl` (append-only, git-friendly, `merge=union`).
+The SQLite db stays the source of truth for now; the journal is validated in
+scan-lab by `chronicle journal verify`, which replays events into a temp db
+and diffs it against the live graph. Planned: `chronicle db rebuild` from the
+journal, making the db a disposable cache.
+
 ## Commands
 
 | Command | What it does |

@@ -22,7 +22,7 @@ func (s *Store) AppendChangelog(r ChangelogRow) (int64, error) {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 	res, err := s.db.Exec(q,
-		r.RevisionID, r.ContextID, r.EntityType, r.EntityKey,
+		nullableInt64(r.RevisionID), nullableInt64(r.ContextID), r.EntityType, r.EntityKey,
 		nullableInt64(r.EntityID), r.ChangeType, nullableStr(r.FieldChanges),
 	)
 	if err != nil {
@@ -39,7 +39,7 @@ func (s *Store) AppendChangelog(r ChangelogRow) (int64, error) {
 // on entity_key and revision range.
 func (s *Store) QueryChangelog(contextID int64, entityKey string, fromRevision, toRevision int64) ([]ChangelogRow, error) {
 	base := `
-		SELECT changelog_id, revision_id, context_id, entity_type, entity_key,
+		SELECT changelog_id, COALESCE(revision_id, 0), COALESCE(context_id, 0), entity_type, entity_key,
 		       COALESCE(entity_id, 0), change_type, COALESCE(field_changes, ''),
 		       created_at
 		FROM graph_changelog WHERE context_id = ?`

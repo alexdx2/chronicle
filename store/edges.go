@@ -43,6 +43,25 @@ type EdgeFilter struct {
 // If ValidFromRevisionID > 0, versioned mode: close old row, insert new.
 // If ValidFromRevisionID == 0, legacy mode: update in place.
 func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
+	// The journal (and cross-db diffing) identifies edge endpoints by node key,
+	// not row id — ids differ across replays. Callers that resolved nodes by id
+	// may leave the keys empty; backfill them so both the persisted row and the
+	// emitted journal event are replayable.
+	if e.FromNodeKey == "" && e.FromNodeID > 0 {
+		n, err := s.GetNodeByID(e.FromNodeID)
+		if err != nil {
+			return 0, fmt.Errorf("UpsertEdge resolve from_node_key: %w", err)
+		}
+		e.FromNodeKey = n.NodeKey
+	}
+	if e.ToNodeKey == "" && e.ToNodeID > 0 {
+		n, err := s.GetNodeByID(e.ToNodeID)
+		if err != nil {
+			return 0, fmt.Errorf("UpsertEdge resolve to_node_key: %w", err)
+		}
+		e.ToNodeKey = n.NodeKey
+	}
+
 	const selQ = `SELECT edge_id FROM graph_edges WHERE edge_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0) ORDER BY edge_id DESC LIMIT 1`
 	var existingID int64
 	err := s.db.QueryRow(selQ, e.EdgeKey).Scan(&existingID)
@@ -74,6 +93,9 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 			return 0, fmt.Errorf("UpsertEdge insert: %w", err)
 		}
 		id, _ := res.LastInsertId()
+		if err := s.emitEdgeUpsert(e); err != nil {
+			return 0, err
+		}
 		return id, nil
 	}
 
@@ -103,6 +125,9 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 			return 0, fmt.Errorf("UpsertEdge versioned insert: %w", err)
 		}
 		id, _ := res.LastInsertId()
+		if err := s.emitEdgeUpsert(e); err != nil {
+			return 0, err
+		}
 		return id, nil
 	}
 
@@ -123,7 +148,37 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("UpsertEdge update: %w", err)
 	}
+	if err := s.emitEdgeUpsert(e); err != nil {
+		return 0, err
+	}
 	return existingID, nil
+}
+
+// emitEdgeUpsert records an edge_upsert journal event for e.
+func (s *Store) emitEdgeUpsert(e EdgeRow) error {
+	return s.appendEvent(journalEvent{
+		DomainKey:  DomainFromNodeKey(e.FromNodeKey),
+		RevisionID: e.LastSeenRevisionID,
+		Kind:       EvEdgeUpsert,
+		Key:        e.EdgeKey,
+		Fields:     edgeEventFields(e),
+	})
+}
+
+// edgeEventFields builds the journal event payload for an edge upsert.
+// Derived values (confidence/freshness/trust_score) are excluded by design.
+func edgeEventFields(e EdgeRow) map[string]any {
+	f := map[string]any{
+		"from": e.FromNodeKey, "to": e.ToNodeKey, "edge_type": e.EdgeType,
+		"derivation_kind": e.DerivationKind, "active": e.Active,
+	}
+	if e.ContextKey != "" {
+		f["context_key"] = e.ContextKey
+	}
+	if e.Metadata != "" && e.Metadata != "{}" {
+		f["metadata"] = e.Metadata
+	}
+	return f
 }
 
 // GetEdgeByKey returns the current (non-closed) edge with the given edge_key.
@@ -230,6 +285,14 @@ func (s *Store) DeleteEdge(key string) error {
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("DeleteEdge %q: %w", key, ErrNotFound)
+	}
+	if err := s.appendEvent(journalEvent{
+		DomainKey: domainFromEdgeKey(key),
+		Kind:      EvEdgeStatus,
+		Key:       key,
+		Fields:    map[string]any{"active": false},
+	}); err != nil {
+		return err
 	}
 	return nil
 }
@@ -358,20 +421,58 @@ func (s *Store) GetEdgesBetweenNodes(nodeIDs []int64) ([]EdgeRow, error) {
 	return out, rows.Err()
 }
 
-// MarkStaleEdges marks active edges (from nodes in domainKey) with last_seen < revisionID as inactive.
+// MarkStaleEdges marks active edges (from nodes in domainKey) with last_seen < revisionID
+// as inactive and journals one edge_status event per actual transition. Repeated calls
+// are no-ops: only rows still active=1 transition, so no duplicate events.
+// Only CURRENT versions (valid_to unset) are considered: a closed historical
+// row keeps active=1 but the re-seen edge's current row has last_seen = this
+// revision — touching the closed row would emit a bogus stale event for an
+// edge that is still alive.
 func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error) {
-	res, err := s.db.Exec(`
-		UPDATE graph_edges
-		SET active=0
+	rows, err := s.db.Query(`
+		SELECT edge_id, edge_key FROM graph_edges
 		WHERE active=1
 		  AND last_seen_revision_id < ?
+		  AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
 		  AND from_node_id IN (
 		    SELECT node_id FROM graph_nodes WHERE domain_key=?
 		  )
-	`, revisionID, domainKey)
+		ORDER BY edge_key`, revisionID, domainKey)
 	if err != nil {
-		return 0, fmt.Errorf("MarkStaleEdges: %w", err)
+		return 0, fmt.Errorf("MarkStaleEdges select: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
+	type staleRow struct {
+		id  int64
+		key string
+	}
+	var subjects []staleRow
+	for rows.Next() {
+		var r staleRow
+		if err := rows.Scan(&r.id, &r.key); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("MarkStaleEdges scan: %w", err)
+		}
+		subjects = append(subjects, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("MarkStaleEdges rows: %w", err)
+	}
+
+	for _, sub := range subjects {
+		if _, err := s.db.Exec(`
+			UPDATE graph_edges
+			SET active=0
+			WHERE edge_id=? AND active=1`, sub.id); err != nil {
+			return 0, fmt.Errorf("MarkStaleEdges update: %w", err)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domainKey, RevisionID: revisionID,
+			Kind: EvEdgeStatus, Key: sub.key,
+			Fields: map[string]any{"active": false, "status": "stale"},
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return int64(len(subjects)), nil
 }

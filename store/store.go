@@ -22,6 +22,9 @@ type Store struct {
 	conn   *sql.DB // the underlying connection, nil for tx-based stores
 	db     DBTX    // the active executor (db or tx)
 	dbPath string  // path to the database file (for reconnect on reset)
+
+	journalActor    string // actor recorded on journal events (see SetJournalActor)
+	suppressJournal bool   // when true, appendEvent is a no-op (replay path)
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -30,7 +33,19 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=60000")
+	// modernc.org/sqlite uses _pragma=name(value) DSN syntax; the mattn-style
+	// _journal_mode/_busy_timeout params were silently ignored (probe 2026-06-11:
+	// journal_mode=delete, busy_timeout=0 — the root cause of "database is
+	// locked (5)" under multi-process access). foreign_keys stays off as before;
+	// enabling it is a separate decision (may surface latent violations).
+	// WAL hygiene (journal_size_limit / wal_autocheckpoint) lives in the DSN so
+	// it applies to EVERY pooled connection, not just the first one: scan-lab and
+	// multi-process access (MCP server + admin + per-call CLI spawns) otherwise
+	// grow the -wal unbounded; an interrupted checkpoint on a large WAL is the
+	// main "database disk image is malformed" path we have observed.
+	db, err := sql.Open("sqlite", dbPath+
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(60000)"+
+		"&_pragma=journal_size_limit(16777216)&_pragma=wal_autocheckpoint(500)")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
@@ -44,18 +59,15 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
-	// WAL hygiene: cap journal growth and checkpoint aggressively. Scan-lab and
-	// multi-process access (MCP server + admin + per-call CLI spawns) otherwise
-	// grow the -wal unbounded; an interrupted checkpoint on a large WAL is the
-	// main "database disk image is malformed" path we have observed.
-	if _, err := db.Exec("PRAGMA journal_size_limit = 16777216"); err == nil {
-		_, _ = db.Exec("PRAGMA wal_autocheckpoint = 500")
-	}
-
 	s := &Store{conn: db, db: db, dbPath: dbPath}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrating database: %w", err)
+	}
+
+	// Drain any events left unflushed by a previous process (crash, kill).
+	if _, err := s.FlushJournal(); err != nil {
+		fmt.Fprintf(os.Stderr, "chronicle: journal flush on open failed: %v\n", err)
 	}
 
 	return s, nil
@@ -64,6 +76,11 @@ func Open(dbPath string) (*Store, error) {
 // Dir returns the .depbot directory containing the database file.
 func (s *Store) Dir() string {
 	return filepath.Dir(s.dbPath)
+}
+
+// InTx reports whether this Store is a transaction-scoped store created by WithTx.
+func (s *Store) InTx() bool {
+	return s.conn == nil
 }
 
 func (s *Store) Close() error {
@@ -83,7 +100,7 @@ func (s *Store) reconnectIfNeeded(err error) {
 		if s.conn != nil {
 			s.conn.Close()
 		}
-		db, openErr := sql.Open("sqlite", s.dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=60000")
+		db, openErr := sql.Open("sqlite", s.dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(60000)")
 		if openErr == nil {
 			s.conn = db
 			s.db = db
@@ -115,6 +132,11 @@ func (s *Store) Exec(query string, args ...any) error {
 	return err
 }
 
+// QueryRowScan runs a single-row query and scans into dest.
+func (s *Store) QueryRowScan(query string, dest ...any) error {
+	return s.db.QueryRow(query).Scan(dest...)
+}
+
 // WithTx runs fn inside a database transaction. If fn returns an error, the tx is rolled back.
 func (s *Store) WithTx(fn func(tx *Store) error) error {
 	if s.conn == nil {
@@ -125,13 +147,21 @@ func (s *Store) WithTx(fn func(tx *Store) error) error {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 
-	txStore := &Store{conn: nil, db: sqlTx}
+	txStore := &Store{conn: nil, db: sqlTx, dbPath: s.dbPath, journalActor: s.journalActor, suppressJournal: s.suppressJournal}
 
 	if err := fn(txStore); err != nil {
 		sqlTx.Rollback()
 		return err
 	}
-	return sqlTx.Commit()
+	if err := sqlTx.Commit(); err != nil {
+		return err
+	}
+	// Best-effort journal flush: a flush failure must not fail the committed
+	// mutation — the events stay in the outbox for the next flush.
+	if _, ferr := s.FlushJournal(); ferr != nil {
+		fmt.Fprintf(os.Stderr, "chronicle: journal flush failed (events retained in outbox): %v\n", ferr)
+	}
+	return nil
 }
 
 func (s *Store) migrate() error {
@@ -220,6 +250,9 @@ func (s *Store) migrate() error {
 	if err := s.migrateScanRunPhases(); err != nil {
 		return err
 	}
+	if err := s.migrateChangelogForJournal(); err != nil {
+		return err
+	}
 	s.backfillContexts()
 	return nil
 }
@@ -264,6 +297,47 @@ func (s *Store) migrateScanRunPhases() error {
 		DROP TABLE scan_runs;
 		ALTER TABLE scan_runs_new RENAME TO scan_runs;
 		CREATE INDEX IF NOT EXISTS idx_scan_runs_domain_status ON scan_runs(domain_key, status);
+	`)
+	return err
+}
+
+// migrateChangelogForJournal recreates graph_changelog when its constraints
+// predate the event journal: the old shape had NOT NULL + FK revision_id and
+// context_id and CHECKs that reject journal event kinds (e.g. 'node_upsert')
+// and the 'meta' entity type. SQLite cannot ALTER constraints; table
+// recreation is required.
+func (s *Store) migrateChangelogForJournal() error {
+	var tableSQL string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='graph_changelog'`).Scan(&tableSQL); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if strings.Contains(tableSQL, "'meta'") {
+		return nil // already journal-compatible
+	}
+	_, err := s.db.Exec(`
+		CREATE TABLE graph_changelog_new (
+		    changelog_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+		    revision_id   INTEGER,
+		    context_id    INTEGER,
+		    entity_type   TEXT NOT NULL CHECK (entity_type IN ('node','edge','evidence','meta')),
+		    entity_key    TEXT NOT NULL,
+		    entity_id     INTEGER,
+		    change_type   TEXT NOT NULL,
+		    field_changes TEXT,
+		    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		);
+		INSERT INTO graph_changelog_new
+		  SELECT changelog_id, revision_id, context_id, entity_type, entity_key,
+		         entity_id, change_type, field_changes, created_at
+		  FROM graph_changelog;
+		DROP TABLE graph_changelog;
+		ALTER TABLE graph_changelog_new RENAME TO graph_changelog;
+		CREATE INDEX IF NOT EXISTS idx_changelog_revision ON graph_changelog(revision_id);
+		CREATE INDEX IF NOT EXISTS idx_changelog_context ON graph_changelog(context_id);
+		CREATE INDEX IF NOT EXISTS idx_changelog_entity ON graph_changelog(entity_type, entity_key);
 	`)
 	return err
 }
@@ -348,7 +422,7 @@ func (s *Store) ResetDB() error {
 	if s.conn != nil {
 		if err := s.conn.Ping(); err != nil && s.dbPath != "" {
 			s.conn.Close()
-			db, err := sql.Open("sqlite", s.dbPath+"?_journal_mode=WAL&_foreign_keys=on&_busy_timeout=60000")
+			db, err := sql.Open("sqlite", s.dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(60000)")
 			if err != nil {
 				return fmt.Errorf("reopening database: %w", err)
 			}
@@ -360,10 +434,13 @@ func (s *Store) ResetDB() error {
 	// Auto-close any running scans — user explicitly asked for reset
 	s.db.Exec("UPDATE scan_runs SET status='failed' WHERE status='running'")
 
-	tables := []string{"scan_runs", "scan_extractions", "scan_obligations", "evidence_verification_runs", "node_aliases", "graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts"}
+	tables := []string{"scan_runs", "scan_extractions", "scan_obligations", "evidence_verification_runs", "node_aliases", "graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts", "journal_outbox", "journal_state", "journal_applied_events"}
 	for _, t := range tables {
 		s.db.Exec("DROP TABLE IF EXISTS " + t)
 	}
+	// Reset = journal restarts from zero: stale event files would diverge from
+	// the empty graph by construction, so drop them with the journal tables.
+	os.RemoveAll(filepath.Join(s.Dir(), "events"))
 	return s.migrate()
 }
 
@@ -583,13 +660,12 @@ CREATE TABLE IF NOT EXISTS knowledge_contexts (
 
 CREATE TABLE IF NOT EXISTS graph_changelog (
     changelog_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    revision_id   INTEGER NOT NULL REFERENCES graph_revisions(revision_id),
-    context_id    INTEGER NOT NULL REFERENCES knowledge_contexts(context_id),
-    entity_type   TEXT NOT NULL CHECK (entity_type IN ('node','edge','evidence')),
+    revision_id   INTEGER,
+    context_id    INTEGER,
+    entity_type   TEXT NOT NULL CHECK (entity_type IN ('node','edge','evidence','meta')),
     entity_key    TEXT NOT NULL,
     entity_id     INTEGER,
-    change_type   TEXT NOT NULL
-                    CHECK (change_type IN ('created','updated','stale','invalidated','revalidated','deleted')),
+    change_type   TEXT NOT NULL,
     field_changes TEXT,
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
@@ -692,6 +768,36 @@ CREATE TABLE IF NOT EXISTS scan_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scan_runs_domain_status ON scan_runs(domain_key, status);
+
+CREATE TABLE IF NOT EXISTS journal_outbox (
+  outbox_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id    TEXT NOT NULL UNIQUE,
+  lamport     INTEGER NOT NULL,
+  actor       TEXT NOT NULL,
+  ts          TEXT NOT NULL,
+  revision_id INTEGER,
+  domain_key  TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  subject_key TEXT NOT NULL,
+  owner_key   TEXT,
+  fields      TEXT NOT NULL DEFAULT '{}',
+  flushed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_journal_outbox_unflushed ON journal_outbox(flushed_at) WHERE flushed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS journal_state (
+  actor        TEXT PRIMARY KEY,
+  last_lamport INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS journal_applied_events (
+  event_id   TEXT PRIMARY KEY,
+  domain_key TEXT NOT NULL,
+  lamport    INTEGER NOT NULL,
+  actor      TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
 `
 
 // SaveDiagramSession upserts a diagram session as a JSON blob.

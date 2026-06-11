@@ -361,6 +361,19 @@ func TestL3_FullScan_MockedLLM(t *testing.T) {
 			}
 		}
 	}
+
+	// === Phase 4: Evidence-first acceptance ===
+	rep, err := g.Store().EvidenceCoverageReport(domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.NodesWithoutEvidence != 0 || rep.EdgesWithoutEvidence != 0 {
+		t.Errorf("evidence-first violated: %d nodes / %d edges without evidence",
+			rep.NodesWithoutEvidence, rep.EdgesWithoutEvidence)
+	}
+	if rep.IncompleteEvidence != 0 {
+		t.Errorf("%d evidence rows missing required fields", rep.IncompleteEvidence)
+	}
 }
 
 func TestL3_FullScan_Idempotent(t *testing.T) {

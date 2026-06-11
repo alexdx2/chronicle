@@ -35,7 +35,19 @@ func (s *Store) CreateRevision(domainKey, beforeSHA, afterSHA, triggerKind, mode
 	if err != nil {
 		return 0, fmt.Errorf("CreateRevision last insert id: %w", err)
 	}
+	if err := s.emitRevisionOpen(domainKey, id, afterSHA, mode, triggerKind); err != nil {
+		return 0, err
+	}
 	return id, nil
+}
+
+// emitRevisionOpen journals the start of a revision (exactly one event per Create*Revision call).
+func (s *Store) emitRevisionOpen(domainKey string, id int64, afterSHA, mode, triggerKind string) error {
+	return s.appendEvent(journalEvent{
+		DomainKey: domainKey, RevisionID: id, Kind: EvRevisionOpen,
+		Key:    fmt.Sprintf("revision:%s:%d", domainKey, id),
+		Fields: map[string]any{"after_sha": afterSHA, "mode": mode, "trigger": triggerKind},
+	})
 }
 
 // CreateRevisionWithContext inserts a new revision linked to a knowledge context and returns the revision_id.
@@ -48,6 +60,9 @@ func (s *Store) CreateRevisionWithContext(domainKey, beforeSHA, afterSHA, trigge
 		return 0, fmt.Errorf("CreateRevisionWithContext: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	if err := s.emitRevisionOpen(domainKey, id, afterSHA, mode, triggerKind); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 

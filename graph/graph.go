@@ -27,6 +27,36 @@ type Graph struct {
 	// the module's own import declarations before falling back to class-name heuristics.
 	// symbol → resolved file path (no extension, relative to module file dir)
 	currentFileImportMap map[string]string
+
+	// pendingExtEndpoints accumulates endpoint references from http_call facts
+	// whose host stayed unresolved (external_system placeholder) during
+	// ResolveExtractions. Evidence can't carry them — its dedup key collapses
+	// multiple calls from one file. Materialized as status="external" endpoint
+	// nodes in the post-pass if the target is still external after merging.
+	pendingExtEndpoints []pendingExtEndpoint
+
+	// evidenceErr records the first evidence-write failure on a void path
+	// (ensureNodeID → ensureNode) during ResolveExtractions. Evidence writes
+	// journal events; silently dropping a failure inside a tx that then
+	// commits corrupts replay. resolveExtractionsInTx checks it before
+	// returning so the transaction aborts instead.
+	evidenceErr error
+}
+
+// noteEvidenceErr records the first evidence-write failure during a resolve pass.
+func (g *Graph) noteEvidenceErr(err error) {
+	if err != nil && g.evidenceErr == nil {
+		g.evidenceErr = err
+	}
+}
+
+// pendingExtEndpoint is one unresolved http_call endpoint reference.
+type pendingExtEndpoint struct {
+	FromNodeKey string
+	FromNodeID  int64
+	ToNodeKey   string // external_system placeholder the call targets
+	Method      string
+	Path        string
 }
 
 // defaultEvidenceConfidence returns the confidence for an evidence row.

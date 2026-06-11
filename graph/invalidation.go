@@ -67,7 +67,23 @@ func (g *Graph) InvalidateChanged(domainKey string, revisionID int64, changedFil
 
 // InvalidateChangedInContext marks evidence from changed files as stale, then
 // auto-verifies files where mechanical verifiers can check assertions.
+// All mutations run inside a single transaction.
 func (g *Graph) InvalidateChangedInContext(domainKey string, revisionID int64, changedFiles []string, contextID int64) (*InvalidateResult, error) {
+	if g.store.InTx() {
+		return g.invalidateChangedInTx(domainKey, revisionID, changedFiles, contextID)
+	}
+	var result *InvalidateResult
+	err := g.store.WithTx(func(tx *store.Store) error {
+		g2 := *g
+		g2.store = tx
+		r, err := g2.invalidateChangedInTx(domainKey, revisionID, changedFiles, contextID)
+		result = r
+		return err
+	})
+	return result, err
+}
+
+func (g *Graph) invalidateChangedInTx(domainKey string, revisionID int64, changedFiles []string, contextID int64) (*InvalidateResult, error) {
 	if len(changedFiles) == 0 {
 		return &InvalidateResult{}, nil
 	}
@@ -144,7 +160,23 @@ func (g *Graph) InvalidateChangedInContext(domainKey string, revisionID int64, c
 
 // FinalizeIncrementalScan completes an incremental scan.
 // Reports scan status, uncovered files, needs_review edges, and obligation state.
+// All mutations run inside a single transaction.
 func (g *Graph) FinalizeIncrementalScan(domainKey string, revisionID int64) (*FinalizeResult, error) {
+	if g.store.InTx() {
+		return g.finalizeIncrementalScanInTx(domainKey, revisionID)
+	}
+	var result *FinalizeResult
+	err := g.store.WithTx(func(tx *store.Store) error {
+		g2 := *g
+		g2.store = tx
+		r, err := g2.finalizeIncrementalScanInTx(domainKey, revisionID)
+		result = r
+		return err
+	})
+	return result, err
+}
+
+func (g *Graph) finalizeIncrementalScanInTx(domainKey string, revisionID int64) (*FinalizeResult, error) {
 	counts, err := g.store.CountEvidenceByStatus(domainKey)
 	if err != nil {
 		return nil, err
@@ -243,6 +275,10 @@ func (g *Graph) FinalizeIncrementalScan(domainKey string, revisionID int64) (*Fi
 		result.ScanStatus = "review_required"
 	default:
 		result.ScanStatus = "incomplete"
+	}
+
+	if err := g.store.AppendRevisionClose(domainKey, revisionID, result.ScanStatus); err != nil {
+		return nil, err
 	}
 
 	return result, nil

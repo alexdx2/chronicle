@@ -467,7 +467,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 			}
 		}
 		for _, n := range payload.Nodes {
-			if n.FilePath == "" || explicitNodeEvidence[n.NodeKey] {
+			if explicitNodeEvidence[n.NodeKey] {
 				continue
 			}
 			evInput := validate.EvidenceInput{
@@ -478,6 +478,15 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				ExtractorVersion: "1.0",
 				Confidence:       0.8,
 				RevisionID:       revisionID,
+			}
+			if n.FilePath == "" {
+				// No file backing — record synthetic evidence so the node still
+				// carries an explanation of why it exists (evidence-first invariant).
+				evInput.SourceKind = "synthetic"
+				evInput.Locator = n.NodeKey
+				evInput.ExtractorID = "chronicle:system"
+				evInput.AssertionKind = "system_generated"
+				evInput.Confidence = 0.6
 			}
 			if _, err := txGraph.AddNodeEvidence(n.NodeKey, evInput); err == nil {
 				result.EvidenceCreated++

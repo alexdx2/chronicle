@@ -71,12 +71,12 @@ func (g *Graph) ScanCheckoutBatches(revisionID int64, obligationType string, lim
 		return nil, nil
 	}
 
-	run, err := g.store.GetScanRun(revisionID)
+	run, err := g.store.GetScanRunByRevision(revisionID)
 	if err != nil {
 		return nil, fmt.Errorf("ScanCheckoutBatches: %w", err)
 	}
 	if run == nil {
-		return nil, fmt.Errorf("scan run %d not found", revisionID)
+		return nil, fmt.Errorf("scan run for revision %d not found", revisionID)
 	}
 
 	projectRoot := ProjectRoot()
