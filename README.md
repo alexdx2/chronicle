@@ -78,8 +78,9 @@ Every graph mutation is also recorded as a semantic event in
 `.depbot/events/<domain>.jsonl` (append-only, git-friendly, `merge=union`).
 The SQLite db stays the source of truth for now; the journal is validated in
 scan-lab by `chronicle journal verify`, which replays events into a temp db
-and diffs it against the live graph. Planned: `chronicle db rebuild` from the
-journal, making the db a disposable cache.
+and diffs it against the live graph. `chronicle journal rebuild` rebuilds
+`chronicle.db` from the journal (replay + carry-over of non-journaled local
+state + verified atomic swap) — the db is now reproducible from the journal.
 
 ## Commands
 
