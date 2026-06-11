@@ -19,15 +19,23 @@
 .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .6s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 :root{
-  --bg:#faf6ef;--card:#fff;--card-alt:#f0e9dd;--border:#d9cbb5;--text:#3b2f20;--text-muted:#a08b6e;--text-secondary:#5c4e3c;
-  --primary:#6b4423;--primary-light:#f0e9dd;--success:#2d6a30;--warning:#b8963e;
+  --bg:#faf6ef;--card:#fff;--card-alt:#f0e9dd;--border:#d9cbb5;--text:#3b2f20;--text-muted:#8a7355;--text-secondary:#5c4e3c;
+  --primary:#6b4423;--primary-light:#f0e9dd;--success:#2d6a30;--warning:#b8963e;--warning-text:#8a6b1e;
   --error:#9e2b2b;--error-light:#fbe0e0;--code:#8b5a2b;--contract:#1a7a2e;
-  --service:#c23030;--flow:#b85c2e;--ownership:#c4880a;--infra:#2e5f8a;--ci:#a83262;
+  --service:#c23030;--flow:#b85c2e;--ownership:#c4880a;--infra:#2e5f8a;--ci:#a83262;--data:#6a3d9a;
+  --surface-dark:#2a2518;--text-on-dark:#f0e9dd;
   --radius:8px;--shadow:0 1px 3px rgba(59,47,32,.06);
   --font-serif:'Lora',Georgia,serif;--font-mono:'JetBrains Mono','Source Code Pro',monospace;
 }
 body{font-family:var(--font-serif);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;background-image:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(139,115,85,0.02) 3px,rgba(139,115,85,0.02) 6px)}
 a{color:var(--primary);text-decoration:none}
+/* Native controls pick up the warm theme instead of browser-default blue */
+:root{accent-color:var(--primary)}
+button,input,select,textarea{font-family:inherit}
+:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:2px}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+}
 
 /* Header */
 .header{background:var(--card);border-bottom:2px solid var(--text);padding:6px 24px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100;box-shadow:var(--shadow)}
@@ -39,7 +47,7 @@ a{color:var(--primary);text-decoration:none}
 .header .meta{font-size:12px;color:var(--text-muted);display:flex;gap:16px}
 .header .meta span{display:flex;align-items:center;gap:4px}
 .tab-bar{display:flex;gap:4px;margin-left:auto}
-.tab-btn{padding:6px 16px;border:none;background:transparent;color:var(--text-muted);font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--radius);transition:all .15s;font-family:var(--font-serif)}
+.tab-btn{padding:6px 16px;border:none;background:transparent;color:var(--text-muted);font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--radius);transition:background .15s,color .15s;font-family:var(--font-serif)}
 .tab-btn.active{background:var(--card-alt);color:var(--text)}
 .tab-btn:hover:not(.active){background:var(--primary-light);color:var(--primary)}
 .tab-btn.live-session{background:linear-gradient(135deg,#3b2f20,#6b4423);color:#faf6ef;font-weight:600;position:relative;box-shadow:0 2px 8px rgba(59,47,32,0.3)}
@@ -53,6 +61,7 @@ a{color:var(--primary);text-decoration:none}
 .container.graph-bleed .graph-container{height:calc(100vh - 88px)}
 .stat-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
 .content-grid{display:grid;grid-template-columns:1fr 380px;gap:16px}
+.content-grid>*{min-width:0}
 .right-col{display:flex;flex-direction:column;gap:16px}
 
 /* Cards */
@@ -67,7 +76,7 @@ a{color:var(--primary);text-decoration:none}
 .stat-card .label{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);margin-top:4px;font-family:var(--font-serif)}
 .stat-card.primary .value{color:var(--primary)}
 .stat-card.success .value{color:var(--success)}
-.stat-card.warning .value{color:var(--warning)}
+.stat-card.warning .value{color:var(--warning-text)}
 .stat-card.error .value{color:var(--error)}
 
 /* Requests panel */
@@ -75,7 +84,8 @@ a{color:var(--primary);text-decoration:none}
 .request-panel .card-body{overflow-y:auto;padding:0;flex:1}
 .req-summary{display:flex;gap:16px;padding:8px 16px;background:var(--bg);font-size:12px;color:var(--text-muted);border-bottom:1px solid var(--border)}
 .req-summary strong{color:var(--text)}
-.req-row{display:grid;grid-template-columns:130px 1fr 70px 60px;gap:8px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background .1s;cursor:pointer}
+.req-row{display:grid;grid-template-columns:130px minmax(0,1fr) 70px 60px;gap:8px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background .1s;cursor:pointer}
+.req-row .tool{overflow-wrap:anywhere}
 .req-row:hover{background:var(--bg)}
 .req-row.error-row{border-left:3px solid var(--error)}
 .req-row .ts{color:var(--text-muted);font-family:var(--font-mono);font-size:11px}
@@ -92,6 +102,18 @@ a{color:var(--primary);text-decoration:none}
 .badge.ok{background:#dcf5dd;color:#2d6a30}
 .badge.err{background:var(--error-light);color:var(--error)}
 .badge.empty{background:#fdf0d0;color:#8a6b3e}
+/* Extracted inline-style patterns (design-debt pass) */
+.muted{color:var(--text-muted)}
+.muted-12{color:var(--text-muted);font-size:12px}
+.muted-note{color:var(--text-muted);font-style:italic;font-size:10px}
+.card-desc{color:var(--text-muted);font-size:12px;margin-bottom:12px}
+.empty-state{padding:60px;text-align:center;color:var(--text-muted)}
+.section-label{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px}
+.btn-outline-xs{font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer}
+.btn-outline-xs:hover{background:var(--primary-light)}
+.sub-panel{margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.row-4{display:flex;gap:4px;align-items:center}
+.row-8{display:flex;gap:8px;align-items:center}
 
 /* Breakdown table */
 .breakdown-list{list-style:none}
@@ -111,10 +133,11 @@ a{color:var(--primary);text-decoration:none}
 .validation-bar .status{font-size:13px;font-weight:500;flex:1}
 .validation-bar .status.valid{color:var(--success)}
 .validation-bar .status.invalid{color:var(--error)}
-.btn{padding:6px 14px;border:none;border-radius:var(--radius);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
+.btn{padding:6px 14px;border:none;border-radius:var(--radius);font-size:12px;font-weight:500;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
 .btn-primary{background:var(--primary);color:#fff}
 .btn-primary:hover{opacity:.9}
 .btn-sm{padding:4px 10px;font-size:11px}
+.btn:disabled,.mode-btn:disabled{opacity:.45;cursor:not-allowed}
 
 /* Graph tab */
 .graph-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 110px)}
@@ -128,7 +151,7 @@ a{color:var(--primary);text-decoration:none}
 .step-description-panel{overflow-y:auto;flex-shrink:0;background:var(--card-alt);border-top:2px solid var(--primary)}
 .graph-toolbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
 .graph-toolbar .mode-toggle{display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.graph-toolbar .mode-btn{padding:4px 12px;border:none;background:transparent;font-size:12px;cursor:pointer;transition:all .15s}
+.graph-toolbar .mode-btn{padding:4px 12px;border:none;background:transparent;font-size:12px;cursor:pointer;transition:background .15s,color .15s}
 .graph-toolbar .mode-btn.active{background:var(--primary);color:#fff}
 .graph-toolbar .mode-btn.btn-with-ico{display:inline-flex;align-items:center;gap:5px}
 .btn-ico{width:15px;height:15px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -140,7 +163,7 @@ a{color:var(--primary);text-decoration:none}
 .crumb-sep{color:var(--text-muted);opacity:.5;font-size:11px;user-select:none}
 .crumb-badge{font-size:10px;font-weight:600;line-height:1;padding:2px 6px;border-radius:8px;background:var(--primary-light);color:var(--primary)}
 .crumb-meta{margin-left:auto;font-size:10px;color:var(--text-muted)}
-.chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--card);transition:all .15s;user-select:none}
+.chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--card);transition:background .15s,color .15s,border-color .15s;user-select:none}
 .chip.active{border-color:var(--primary);background:var(--primary-light);color:var(--primary)}
 .chip:hover{border-color:var(--primary)}
 .graph-svg{width:100%;background:#faf6ef}
@@ -163,7 +186,7 @@ a{color:var(--primary);text-decoration:none}
 .bottom-panel-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#faf6ef;z-index:1}
 .bottom-panel-body{padding:12px 16px;display:flex;gap:24px;font-size:11px}
 .bottom-panel-col{flex:1;min-width:0}
-.bottom-panel-col h4{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px}
+.bottom-panel-col h4{font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px}
 .graph-svg .node-circle{stroke-width:2;cursor:pointer;transition:opacity .2s,stroke-width .2s}
 .graph-svg .node-circle:hover{opacity:.85}
 .graph-svg .node-rect.selected,.graph-svg .node-circle.selected{stroke:#000;stroke-width:3}
@@ -181,20 +204,20 @@ a{color:var(--primary);text-decoration:none}
 .diagram-tabs{display:flex;align-items:flex-end;gap:1px;background:linear-gradient(to bottom,#ede5d8,#e4dace);padding:3px 6px 0;overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;flex-shrink:0;min-height:34px}
 .diagram-tabs::-webkit-scrollbar{height:3px}
 .diagram-tabs::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-.diagram-tab{display:flex;align-items:center;gap:6px;padding:6px 10px 5px;font-size:12px;font-family:var(--font-serif);user-select:none;cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;transition:all .15s;position:relative;top:1px;color:var(--text-muted);background:transparent;min-width:0;flex:0 1 200px;max-width:240px}
+.diagram-tab{display:flex;align-items:center;gap:6px;padding:6px 10px 5px;font-size:12px;font-family:var(--font-serif);user-select:none;cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;transition:background .15s,color .15s,border-color .15s;position:relative;top:1px;color:var(--text-muted);background:transparent;min-width:0;flex:0 1 200px;max-width:240px}
 .diagram-tab:hover{background:rgba(255,255,255,.6);color:var(--text-secondary)}
 .diagram-tab.active{background:var(--card);color:var(--primary);font-weight:600;border-color:var(--border);box-shadow:0 -1px 3px rgba(59,47,32,.04)}
 .diagram-tab .tab-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .diagram-tab .tab-meta{font-size:10px;font-family:var(--font-mono);opacity:.5;letter-spacing:-.3px;flex-shrink:0}
-.diagram-tab .tab-close{width:16px;height:16px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:13px;line-height:1;opacity:0;transition:all .12s;color:var(--text-muted);flex-shrink:0}
-.diagram-tab:hover .tab-close{opacity:.5}
+.diagram-tab .tab-close{width:16px;height:16px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:13px;line-height:1;opacity:0;transition:opacity .12s,background .12s,color .12s;color:var(--text-muted);flex-shrink:0;background:none;border:none;cursor:pointer;padding:0}
+.diagram-tab:hover .tab-close,.diagram-tab .tab-close:focus-visible{opacity:.5}
 .diagram-tab .tab-close:hover{opacity:1;background:rgba(158,43,43,.1);color:var(--error)}
 .diagram-tab.active .tab-close{opacity:.4}
 .diagram-tab.active .tab-close:hover{opacity:1;background:rgba(158,43,43,.1);color:var(--error)}
 
 /* Filter sidebar */
 .filter-sidebar{width:200px;background:var(--card);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;font-size:11px;padding:10px}
-.filter-sidebar h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:10px 0 4px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none}
+.filter-sidebar h4{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:10px 0 4px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none}
 .filter-sidebar h4:hover{color:var(--text)}
 .filter-sidebar h4 .chevron{font-size:8px;transition:transform .15s}
 .filter-sidebar label{display:flex;align-items:center;gap:5px;padding:2px 0;cursor:pointer;color:var(--text)}
@@ -262,12 +285,13 @@ a{color:var(--primary);text-decoration:none}
 .growth-tooltip .tt-nodes{color:#6b8f71}
 .growth-tooltip .tt-edges{color:#b8860b}
 .chart-toggle{display:flex;gap:2px;background:var(--card-alt);border-radius:var(--radius);padding:2px}
-.chart-toggle button{border:none;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--font-serif);font-size:11px;color:var(--text-muted);background:transparent;transition:all .15s}
+.chart-toggle button{border:none;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--font-serif);font-size:11px;color:var(--text-muted);background:transparent;transition:background .15s,color .15s}
 .chart-toggle button.active{background:var(--card);color:var(--text);box-shadow:var(--shadow)}
 
 /* Responsive */
 @media(max-width:1024px){.stat-grid{grid-template-columns:repeat(3,1fr)}.content-grid{grid-template-columns:1fr}}
-@media(max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:768px){.header{flex-wrap:wrap;padding:8px 12px;gap:8px}.header .logo-group img{width:44px;height:44px}.tab-bar{margin-left:0;width:100%;justify-content:flex-start;overflow-x:auto}.container{padding:12px}}
+@media(max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr)}.req-row{grid-template-columns:90px minmax(0,1fr) auto}.req-row .dur{display:none}}
 /* Embed mode: graph-only, no chrome */
 .embed-mode header{display:none!important}
 .embed-mode .fed-bar{display:none!important}
@@ -320,7 +344,7 @@ a{color:var(--primary);text-decoration:none}
         <!-- Current project -->
         <template x-if="originalProject">
           <div style="margin-bottom:10px">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Current</div>
+            <div class="section-label">Current</div>
             <div @click="resetToDefault()" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-radius:6px;color:var(--text);font-size:12px;border:1px solid var(--primary);cursor:pointer;background:var(--primary)08">
               <span style="font-weight:600" x-text="originalProject.split('/').pop()"></span>
               <span style="color:var(--text-muted);font-size:10px;font-family:var(--font-mono)" x-text="originalProject"></span>
@@ -331,7 +355,7 @@ a{color:var(--primary);text-decoration:none}
         <!-- Discovered projects (auto-scanned .depbot/ folders) -->
         <template x-if="discoveredProjects && discoveredProjects.length > 0">
           <div style="margin-bottom:10px">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Discovered</div>
+            <div class="section-label">Discovered</div>
             <div style="max-height:200px;overflow-y:auto">
               <template x-for="p in discoveredProjects" :key="p.path">
                 <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:8px 10px;border-radius:6px;color:var(--text);font-size:12px;margin-bottom:3px;border:1px solid var(--border);cursor:pointer"
@@ -348,7 +372,7 @@ a{color:var(--primary);text-decoration:none}
         <!-- Recent projects from localStorage -->
         <template x-if="getRecentProjects().length > 0">
           <div style="margin-bottom:10px">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Recent</div>
+            <div class="section-label">Recent</div>
             <template x-for="p in getRecentProjects()" :key="p.path">
               <div @click="switchProject(p.path)" style="display:flex;justify-content:space-between;padding:8px 10px;border-radius:6px;color:var(--text);font-size:12px;margin-bottom:3px;border:1px solid var(--border);cursor:pointer"
                  @mouseenter="$el.style.background='#f5f0e8';$el.style.borderColor='var(--primary)'" @mouseleave="$el.style.background='';$el.style.borderColor='var(--border)'">
@@ -360,7 +384,7 @@ a{color:var(--primary);text-decoration:none}
         </template>
 
         <!-- Open by path -->
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:4px">Open by path</div>
+        <div class="section-label">Open by path</div>
         <div style="display:flex;gap:6px">
           <input x-model="switchPath" placeholder="/home/user/my-project"
                  @keydown.enter="switchProject()"
@@ -407,41 +431,41 @@ a{color:var(--primary);text-decoration:none}
 <div class="container" x-show="tab==='overview'" x-cloak>
   <!-- Scan Progress Panel -->
   <template x-if="scanProgress && scanProgress.phase !== 'idle'">
-  <div class="card" style="margin-bottom:1.5rem; border-left:3px solid #7db87d;">
-      <h3 style="margin-top:0; display:flex; align-items:center; gap:0.5rem;">
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#7db87d;animation:pulse 1.5s infinite;"></span>
+  <div class="card" style="margin-bottom:20px;border-left:3px solid var(--success);padding:16px">
+      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--text-secondary)">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);animation:pulse 1.5s infinite;"></span>
           Scan in progress
-          <span style="font-weight:normal;color:#888;font-size:0.85em;" x-text="'— ' + scanProgress.phase.replace(/_/g,' ')"></span>
+          <span style="font-weight:normal;color:var(--text-muted);font-size:12px;" x-text="'— ' + scanProgress.phase.replace(/_/g,' ')"></span>
       </h3>
 
       <template x-if="scanProgress.total_files > 0">
-      <div style="margin-bottom:1rem;">
-          <div style="display:flex;justify-content:space-between;font-size:0.85em;color:#aaa;margin-bottom:0.3rem;">
+      <div style="margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-bottom:4px;">
               <span x-text="scanProgress.extracted_files + ' / ' + scanProgress.total_files + ' files'"></span>
               <span x-text="Math.round(scanProgress.extracted_files / scanProgress.total_files * 100) + '%'"></span>
           </div>
-          <div style="height:6px;background:#333;border-radius:3px;overflow:hidden;">
-              <div style="height:100%;background:#7db87d;border-radius:3px;transition:width 0.3s;"
+          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+              <div style="height:100%;background:var(--success);border-radius:3px;transition:width 0.3s;"
                    :style="'width:' + (scanProgress.extracted_files / scanProgress.total_files * 100) + '%'"></div>
           </div>
       </div>
       </template>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:0.5rem;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;">
           <template x-for="[type, count] in Object.entries(scanProgress.nodes_by_type || {}).sort((a,b) => b[1]-a[1]).slice(0,8)">
-              <div style="background:#1a1a2e;padding:0.4rem 0.6rem;border-radius:4px;font-size:0.85em;">
-                  <span x-text="count" style="font-weight:bold;color:#7db87d;"></span>
-                  <span x-text="type" style="color:#ccc;"></span>
+              <div style="background:var(--card-alt);padding:6px 10px;border-radius:4px;font-size:12px;">
+                  <span x-text="count" style="font-weight:bold;color:var(--success);"></span>
+                  <span x-text="type" style="color:var(--text-secondary);"></span>
               </div>
           </template>
       </div>
 
       <template x-if="scanProgress.total_edges > 0">
-      <div style="margin-top:0.8rem;font-size:0.85em;color:#aaa;">
-          <span style="color:#ccc;">Confidence:</span>
+      <div style="margin-top:12px;font-size:12px;color:var(--text-muted);">
+          <span style="color:var(--text-secondary);">Confidence:</span>
           <template x-for="[deriv, count] in Object.entries(scanProgress.edges_by_derivation || {})">
-              <span style="margin-left:0.5rem;">
-                  <span x-text="Math.round(count / scanProgress.total_edges * 100) + '%'" style="color:#7db87d;"></span>
+              <span style="margin-left:8px;">
+                  <span x-text="Math.round(count / scanProgress.total_edges * 100) + '%'" style="color:var(--success);"></span>
                   <span x-text="deriv"></span>
               </span>
           </template>
@@ -449,11 +473,11 @@ a{color:var(--primary);text-decoration:none}
       </template>
 
       <template x-if="Object.keys(scanProgress.facts_by_kind || {}).length > 0">
-      <div style="margin-top:0.8rem;">
-          <div style="font-size:0.8em;color:#888;margin-bottom:0.3rem;">Extraction facts (current scan):</div>
-          <div style="display:flex;flex-wrap:wrap;gap:0.3rem;">
+      <div style="margin-top:12px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Extraction facts (current scan):</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;">
               <template x-for="[kind, count] in Object.entries(scanProgress.facts_by_kind).sort((a,b) => b[1]-a[1])">
-                  <span style="background:#252540;padding:0.2rem 0.5rem;border-radius:3px;font-size:0.8em;"
+                  <span style="background:var(--card-alt);color:var(--text-secondary);padding:3px 8px;border-radius:3px;font-size:11px;"
                         x-text="count + ' ' + kind"></span>
               </template>
           </div>
@@ -461,11 +485,11 @@ a{color:var(--primary);text-decoration:none}
       </template>
 
       <template x-if="scanEvents.length > 0">
-      <div style="margin-top:0.8rem;">
-          <div style="font-size:0.8em;color:#888;margin-bottom:0.3rem;">Recent events:</div>
+      <div style="margin-top:12px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Recent events:</div>
           <template x-for="event in scanEvents.slice(0, 5)">
-              <div style="font-size:0.8em;color:#aaa;padding:0.15rem 0;">
-                  <span style="color:#7db87d;" x-text="event.kind.replace(/_/g,' ')"></span>
+              <div style="font-size:11px;color:var(--text-muted);padding:2px 0;">
+                  <span style="color:var(--success);" x-text="event.kind.replace(/_/g,' ')"></span>
                   <span x-text="event.data?.message || ''"></span>
               </div>
           </template>
@@ -474,16 +498,7 @@ a{color:var(--primary);text-decoration:none}
   </div>
   </template>
 
-  <template x-if="scanProgress && scanProgress.phase === 'idle' && scanProgress.total_nodes > 0">
-  <div class="card" style="margin-bottom:1.5rem; border-left:3px solid #6b9bd2; opacity:0.8;">
-      <h3 style="margin-top:0; font-size:0.95em; color:#aaa;">
-          Graph: <span x-text="scanProgress.total_nodes" style="color:#6b9bd2;"></span> nodes,
-          <span x-text="scanProgress.total_edges" style="color:#6b9bd2;"></span> edges,
-          <span x-text="scanProgress.total_evidence" style="color:#6b9bd2;"></span> evidence items
-      </h3>
-  </div>
-  </template>
-
+  
   <!-- Onboarding banner for new projects -->
   <template x-if="(stats.graph?.node_count ?? 0) === 0">
     <div style="background:linear-gradient(135deg,#f5f0e8,#f0e9dd);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:16px">
@@ -659,6 +674,7 @@ a{color:var(--primary);text-decoration:none}
         </div>
       </div>
 
+      <!-- SECTION:knowledge_growth:start -->
       <!-- Knowledge Growth -->
       <div class="card">
         <div class="card-header">
@@ -680,6 +696,7 @@ a{color:var(--primary);text-decoration:none}
           </template>
         </div>
       </div>
+      <!-- SECTION:knowledge_growth:end -->
     </div>
   </div>
 
@@ -752,7 +769,7 @@ a{color:var(--primary);text-decoration:none}
       </template>
       <!-- Repo filter (Tree + Explore only) -->
       <template x-if="!viewActive && (graphMode==='tree' || graphMode==='explore') && allRepos.length > 1">
-        <div style="display:flex;gap:4px;align-items:center">
+        <div class="row-4">
           <span style="font-size:10px;color:var(--text-muted)">Repo:</span>
           <select @change="graphRepoFilter=$event.target.value;renderGraph()" style="font-size:10px;padding:2px 6px;border:1px solid var(--border);border-radius:4px">
             <option value="">All repos</option>
@@ -907,7 +924,7 @@ a{color:var(--primary);text-decoration:none}
         <div class="filter-sidebar">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <strong>Filters</strong>
-            <div style="display:flex;gap:4px;align-items:center">
+            <div class="row-4">
               <template x-if="!viewActive">
                 <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];hiddenDomains=[];minConfidence=0;groupByField='domain_key';nodeTypeFilter={};_collapsibleTypes=[];syncSidebarToController();renderGraph()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset all</button>
               </template>
@@ -1017,7 +1034,7 @@ a{color:var(--primary);text-decoration:none}
                 <template x-for="entry in typeGlossaryEntries()" :key="entry[0]">
                   <div style="font-size:9px;line-height:1.5;display:flex;gap:4px">
                     <span style="font-weight:600;white-space:nowrap" x-text="entry[0]"></span>
-                    <span style="color:var(--text-muted)" x-text="'— ' + entry[1]"></span>
+                    <span class="muted" x-text="'— ' + entry[1]"></span>
                   </div>
                 </template>
               </div>
@@ -1084,7 +1101,7 @@ a{color:var(--primary);text-decoration:none}
               <template x-for="entry in typeGlossaryEntries()" :key="entry[0]">
                 <div style="font-size:9px;line-height:1.5;display:flex;gap:4px">
                   <span style="font-weight:600;white-space:nowrap" x-text="entry[0]"></span>
-                  <span style="color:var(--text-muted)" x-text="'— ' + entry[1]"></span>
+                  <span class="muted" x-text="'— ' + entry[1]"></span>
                 </div>
               </template>
             </div>
@@ -1175,7 +1192,7 @@ a{color:var(--primary);text-decoration:none}
           <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0e9dd;color:var(--text-secondary)" x-text="selectedNode.layer"></span>
           <template x-if="selectedNode && !viewActive && ['service','module','container'].includes(selectedNode.node_type) && ['c1','c2'].includes(graphPreset)">
             <button @click="zoomIntoNode(selectedNode)"
-                    style="font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer">
+                    class="btn-outline-xs">
               Zoom in ↓
             </button>
           </template>
@@ -1184,9 +1201,9 @@ a{color:var(--primary);text-decoration:none}
           <template x-if="selectedNode && (viewActive || graphMode==='explore') && selectedNode.node_key && String(selectedNode.node_key).includes(':')">
             <span style="display:flex;gap:4px">
               <button data-testid="pivot-deps" @click="viewPivot('deps')"
-                      style="font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer">Dependencies →</button>
+                      class="btn-outline-xs">Dependencies →</button>
               <button data-testid="pivot-impact" @click="viewPivot('impact')"
-                      style="font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer">← Dependents</button>
+                      class="btn-outline-xs">← Dependents</button>
               <button data-testid="pivot-path" @click="viewPivot('path')"
                       style="font-size:10px;padding:2px 10px;border:1px solid var(--border);border-radius:4px;background:transparent;color:var(--text);cursor:pointer">Path to…</button>
             </span>
@@ -1194,7 +1211,7 @@ a{color:var(--primary);text-decoration:none}
           <!-- C1 system box: drill into C2 -->
           <template x-if="selectedNode && viewActive && selectedNode._vgroup && selectedNode.node_type==='domain'">
             <button @click="enterViewLevel('c2')"
-                    style="font-size:10px;padding:2px 10px;border:1px solid var(--primary);border-radius:4px;background:transparent;color:var(--primary);cursor:pointer">→ drill to C2</button>
+                    class="btn-outline-xs">→ drill to C2</button>
           </template>
           <!-- Custom view: remove this node from the selection -->
           <template x-if="selectedNode && viewActive && isInCustomView(selectedNode.node_key)">
@@ -1213,7 +1230,7 @@ a{color:var(--primary);text-decoration:none}
       <template x-if="selectedNode && selectedNode._vgroup && selectedNode._stats">
         <div data-testid="group-stats" style="display:flex;gap:14px;flex-wrap:wrap;font-size:10px;color:var(--text-secondary);padding:2px 0 6px">
           <template x-for="[k, v] in Object.entries(selectedNode._stats || {})" :key="k">
-            <span><strong x-text="v"></strong> <span style="color:var(--text-muted)" x-text="k"></span></span>
+            <span><strong x-text="v"></strong> <span class="muted" x-text="k"></span></span>
           </template>
         </div>
       </template>
@@ -1221,10 +1238,10 @@ a{color:var(--primary);text-decoration:none}
       <template x-if="selectedNode && viewActive && ((selectedNode._endpoints||[]).length > 0 || (selectedNode._usesModels||[]).length > 0)">
         <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--text-secondary);padding:2px 0 6px">
           <template x-if="(selectedNode._endpoints||[]).length > 0">
-            <span><span style="color:var(--text-muted)">Endpoints:</span> <span x-text="(selectedNode._endpoints||[]).map(ep => ep.name).join(' · ')"></span></span>
+            <span><span class="muted">Endpoints:</span> <span x-text="(selectedNode._endpoints||[]).map(ep => ep.name).join(' · ')"></span></span>
           </template>
           <template x-if="(selectedNode._usesModels||[]).length > 0">
-            <span><span style="color:var(--text-muted)">Models:</span> <span x-text="(selectedNode._usesModels||[]).join(' · ')"></span></span>
+            <span><span class="muted">Models:</span> <span x-text="(selectedNode._usesModels||[]).join(' · ')"></span></span>
           </template>
         </div>
       </template>
@@ -1239,7 +1256,7 @@ a{color:var(--primary);text-decoration:none}
             </div>
           </template>
           <template x-if="getNodeContext(selectedNode).incoming.length === 0">
-            <div style="color:var(--text-muted);font-style:italic;font-size:10px">none</div>
+            <div class="muted-note">none</div>
           </template>
         </div>
 
@@ -1253,7 +1270,7 @@ a{color:var(--primary);text-decoration:none}
             </div>
           </template>
           <template x-if="getNodeContext(selectedNode).internal.length === 0">
-            <div style="color:var(--text-muted);font-style:italic;font-size:10px">none</div>
+            <div class="muted-note">none</div>
           </template>
         </div>
 
@@ -1267,7 +1284,7 @@ a{color:var(--primary);text-decoration:none}
             </div>
           </template>
           <template x-if="getNodeContext(selectedNode).outgoing.length === 0">
-            <div style="color:var(--text-muted);font-style:italic;font-size:10px">none</div>
+            <div class="muted-note">none</div>
           </template>
         </div>
 
@@ -1277,7 +1294,7 @@ a{color:var(--primary);text-decoration:none}
           <template x-if="nodeEvidence && nodeEvidence.total_evidence > 0">
             <div>
               <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px">
-                <span style="color:var(--text-muted)">Confidence</span>
+                <span class="muted">Confidence</span>
                 <strong x-text="Math.round((selectedNode?.confidence||0)*100)+'%'"
                         :style="{color: (selectedNode?.confidence||0)>=0.85?'#2d6a30':(selectedNode?.confidence||0)>=0.65?'#b8963e':'#c25757'}"></strong>
               </div>
@@ -1300,7 +1317,7 @@ a{color:var(--primary);text-decoration:none}
             </div>
           </template>
           <template x-if="!nodeEvidence || nodeEvidence.total_evidence === 0">
-            <div style="color:var(--text-muted);font-style:italic;font-size:10px">loading...</div>
+            <div class="muted-note">loading...</div>
           </template>
         </div>
       </div>
@@ -1353,7 +1370,7 @@ a{color:var(--primary);text-decoration:none}
           <div style="padding:10px;margin-bottom:8px;border:1px solid var(--border);border-radius:8px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
               <strong style="font-size:14px;color:var(--primary)" x-text="t.term"></strong>
-              <div style="display:flex;gap:4px;align-items:center">
+              <div class="row-4">
                 <span x-show="t.context" style="font-size:9px;padding:1px 8px;border-radius:10px;background:#f0e9dd;color:var(--text-secondary)" x-text="t.context"></span>
                 <button @click="editTerm(t)" style="border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:11px" title="Edit">✎</button>
                 <button @click="deleteTerm(t.term)" style="border:none;background:none;color:var(--border);cursor:pointer;font-size:14px" title="Delete">&times;</button>
@@ -1361,19 +1378,19 @@ a{color:var(--primary);text-decoration:none}
             </div>
             <p style="font-size:12px;color:var(--text);margin-bottom:6px" x-text="t.description"></p>
             <div x-show="t.aliases && t.aliases.length" style="font-size:10px;margin-bottom:4px">
-              <span style="color:var(--text-muted)">Also known as:</span>
+              <span class="muted">Also known as:</span>
               <template x-for="a in t.aliases" :key="a">
                 <span style="background:#f0e9dd;color:var(--primary);padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="a"></span>
               </template>
             </div>
             <div x-show="t.anti_patterns && t.anti_patterns.length" style="font-size:10px;margin-bottom:4px">
-              <span style="color:var(--text-muted)">Don't use:</span>
+              <span class="muted">Don't use:</span>
               <template x-for="a in t.anti_patterns" :key="a">
                 <span style="background:var(--error-light);color:var(--error);padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px;text-decoration:line-through" x-text="a"></span>
               </template>
             </div>
             <div x-show="t.examples && t.examples.length" style="font-size:10px">
-              <span style="color:var(--text-muted)">Examples:</span>
+              <span class="muted">Examples:</span>
               <template x-for="e in t.examples" :key="e">
                 <span style="font-family:var(--font-mono);background:#f0eed8;color:#2d6a30;padding:0 6px;border-radius:4px;margin-left:4px;font-size:10px" x-text="e"></span>
               </template>
@@ -1411,7 +1428,7 @@ a{color:var(--primary);text-decoration:none}
               <div style="font-size:11px;color:var(--text-secondary)">
                 Uses "<span style="color:var(--error);text-decoration:line-through" x-text="v.matched_anti_pattern"></span>"
                 → should use "<span style="color:var(--primary);font-weight:500" x-text="v.suggested_term"></span>"
-                <span x-show="v.term_context" style="color:var(--text-muted)" x-text="'(context: ' + v.term_context + ')'"></span>
+                <span x-show="v.term_context" class="muted" x-text="'(context: ' + v.term_context + ')'"></span>
               </div>
               <button @click="dismissViolation(v.suggested_term, v.matched_anti_pattern)"
                       style="border:1px solid var(--border);background:#fff;color:var(--text-muted);cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;flex-shrink:0"
@@ -1433,17 +1450,18 @@ a{color:var(--primary);text-decoration:none}
   <div class="card" style="width:100%">
     <div class="card-header">
       <h3>Domain Manifest</h3>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div class="row-8">
         <span x-show="manifestSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
         <button @click="saveManifest()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save</button>
       </div>
     </div>
     <div class="card-body">
-      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
-        Edit <code x-text="manifestPath" style="background:#f0e9dd;padding:2px 6px;border-radius:3px"></code> — defines which repositories belong to this domain.
+      <p class="card-desc">
+        Edit <code x-text="manifestPath || '.depbot/chronicle.domain.yaml'" style="background:#f0e9dd;padding:2px 6px;border-radius:3px"></code> — defines which repositories belong to this domain.
       </p>
       <textarea x-model="manifestContent"
         style="width:100%;min-height:300px;font-family:var(--font-mono);font-size:13px;line-height:1.6;padding:12px;border:1px solid var(--border);border-radius:6px;background:#faf6ef;resize:vertical;color:var(--text);box-sizing:border-box"
+        placeholder="# No manifest yet — describe your domain, e.g.&#10;domains:&#10;  my-domain:&#10;    name: My Domain&#10;    description: What this domain covers&#10;    scan:&#10;      include:&#10;        - &quot;src/**&quot;&#10;      exclude:&#10;        - &quot;**/node_modules/**&quot;"
         spellcheck="false"></textarea>
       <p x-show="manifestError" style="color:#9e2b2b;font-size:12px;margin-top:8px" x-text="manifestError"></p>
     </div>
@@ -1453,25 +1471,25 @@ a{color:var(--primary);text-decoration:none}
   <div class="card" style="width:100%;margin-top:16px">
     <div class="card-header">
       <h3>Command Prompts</h3>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div class="row-8">
         <span x-show="promptSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
         <button @click="saveAllPrompts()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
       </div>
     </div>
     <div class="card-body">
-      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+      <p class="card-desc">
         These are the instructions Claude follows for each command. Edit any prompt to customize for this project.
       </p>
 
       <template x-for="cmd in promptOrder" :key="cmd">
-        <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div class="sub-panel">
           <div @click="expandedPrompt = expandedPrompt === cmd ? null : cmd"
                style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
             <div>
               <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="'chronicle ' + cmd"></code>
               <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="promptDescriptions[cmd] || ''"></span>
             </div>
-            <span style="color:var(--text-muted);font-size:12px" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
+            <span class="muted-12" x-text="expandedPrompt === cmd ? '▼' : '▶'"></span>
           </div>
           <div x-show="expandedPrompt === cmd" x-cloak>
             <textarea x-model="commandPrompts[cmd]" @input="promptSaved=false"
@@ -1487,25 +1505,25 @@ a{color:var(--primary);text-decoration:none}
   <div class="card" style="width:100%;margin-top:16px">
     <div class="card-header">
       <h3>Extraction Guides</h3>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div class="row-8">
         <span x-show="guideSaved" x-transition style="color:#2d6a30;font-size:12px">Saved!</span>
         <button @click="saveAllGuides()" style="background:#6b4423;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px">Save All</button>
       </div>
     </div>
     <div class="card-body">
-      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+      <p class="card-desc">
         These guides are sent to extraction agents during scanning. Customize them per project to improve extraction quality.
       </p>
 
       <template x-for="[key, label] in [['guide_fact_schema','Fact Schema (non-TS files)'],['guide_enrichment','Enrichment (candidate classification)'],['guide_flow','Flow Tracing (phase 2)']]" :key="key">
-        <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div class="sub-panel">
           <div @click="expandedGuide = expandedGuide === key ? null : key"
                style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
             <div>
               <code style="font-weight:600;color:var(--primary);font-size:12px" x-text="key"></code>
               <span style="color:var(--text-muted);font-size:11px;margin-left:8px" x-text="label"></span>
             </div>
-            <span style="color:var(--text-muted);font-size:12px" x-text="expandedGuide === key ? '&#9660;' : '&#9654;'"></span>
+            <span class="muted-12" x-text="expandedGuide === key ? '&#9660;' : '&#9654;'"></span>
           </div>
           <div x-show="expandedGuide === key" x-cloak>
             <textarea x-model="guidePrompts[key]" @input="guideSaved=false"
@@ -1521,18 +1539,18 @@ a{color:var(--primary);text-decoration:none}
   <div class="card" style="width:100%;margin-top:16px">
     <div class="card-header">
       <h3>Edge Categories</h3>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div class="row-8">
         <button @click="addCustomCategory()" style="background:none;border:1px solid var(--border);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--text)">+ Add Category</button>
         <button @click="resetEdgeCategories()" style="background:none;border:1px solid var(--border);padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--text-muted)">Reset Defaults</button>
       </div>
     </div>
     <div class="card-body">
-      <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">
+      <p class="card-desc">
         Configure how edge types are visually grouped. Each category has a color and maps edge types to short labels shown on diagram arrows.
       </p>
 
       <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
-        <div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div class="sub-panel">
           <div @click="editingCategory === cat ? cancelEditCategory() : startEditCategory(cat)"
                style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#f5f0e8;cursor:pointer;user-select:none">
             <div style="display:flex;align-items:center;gap:8px">
@@ -1543,7 +1561,7 @@ a{color:var(--primary);text-decoration:none}
               <span style="font-weight:600;font-size:13px;text-transform:capitalize" x-text="cat"></span>
               <span style="color:var(--text-muted);font-size:11px" x-text="Object.keys(def.types||{}).length + ' edge types'"></span>
             </div>
-            <span style="color:var(--text-muted);font-size:12px" x-text="editingCategory === cat ? '▼' : '▶'"></span>
+            <span class="muted-12" x-text="editingCategory === cat ? '▼' : '▶'"></span>
           </div>
           <div x-show="editingCategory === cat" x-cloak style="padding:12px;background:#fff">
             <div style="display:grid;grid-template-columns:1fr 80px 30px;gap:4px;align-items:center;font-size:11px;margin-bottom:8px">
@@ -1581,7 +1599,7 @@ a{color:var(--primary);text-decoration:none}
       <div class="diagram-tab" :class="{active: diagramSessionId === sess.id}" @click="openSessionInC4(sess.id)">
         <span class="tab-title" x-text="sess.title"></span>
         <span class="tab-meta" x-text="sess.node_count + '·' + sess.edge_count"></span>
-        <span class="tab-close" @click.stop="closeDiagramSession(sess.id)" title="Close">×</span>
+        <button class="tab-close" @click.stop="closeDiagramSession(sess.id)" title="Close" aria-label="Close diagram tab">×</button>
       </div>
     </template>
   </div>
@@ -1642,13 +1660,13 @@ a{color:var(--primary);text-decoration:none}
                 </span>
               </template>
               <template x-if="diagramStep < 0">
-                <span style="color:var(--text-muted);font-size:12px">No highlights</span>
+                <span class="muted-12">No highlights</span>
               </template>
             </span>
             <button class="mode-btn" @click="diagramStep=Math.min((Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)-1" style="padding:4px 10px;font-size:14px">▶</button>
           </div>
         </template>
-        <div style="display:flex;gap:4px;align-items:center">
+        <div class="row-4">
           <div class="mode-toggle">
             <button class="mode-btn" :class="{active:diagramMode==='strict'}" @click="diagramMode='strict';_diagramPositions={};renderDiagram()">Strict</button>
             <button class="mode-btn" :class="{active:diagramMode==='free'}" @click="diagramMode='free';renderDiagram()">Free</button>
@@ -1716,7 +1734,7 @@ a{color:var(--primary);text-decoration:none}
       <div class="filter-sidebar" style="width:200px;height:100%;border-left:1px solid var(--border);overflow-y:auto">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
           <strong>Filters</strong>
-          <div style="display:flex;gap:4px;align-items:center">
+          <div class="row-4">
             <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];nodeTypeFilter={};_collapsibleTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
             <button @click="diagramSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
           </div>
@@ -1774,7 +1792,8 @@ a{color:var(--primary);text-decoration:none}
 <script>
 function dashboard() {
   return {
-    tab: document.documentElement.dataset.defaultTab || 'overview',
+    // --dev serves this file unrendered, so the slot placeholder may leak through.
+    tab: (function(t) { return (t && t.indexOf('SLOT:') === -1) ? t : 'overview'; })(document.documentElement.dataset.defaultTab),
     domain: '',
     settingsRepo: '',
     version: '',
@@ -2613,8 +2632,9 @@ function dashboard() {
     },
 
     layerColor(layer) {
-      const colors = {code:'#8b5a2b',contract:'#1a7a2e',service:'#c23030',data:'#6a3d9a',flow:'#b85c2e',ownership:'#c4880a',infra:'#2e5f8a',ci:'#a83262'};
-      return colors[layer] || '#b8a898';
+      // Single source of truth: the :root layer tokens (shared with graph-renderer).
+      const v = (getComputedStyle(document.documentElement).getPropertyValue('--' + layer) || '').trim();
+      return v || '#b8a898';
     },
 
     diagramNodeStyle(kind) {
@@ -2805,14 +2825,14 @@ function dashboard() {
         html += '<div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px">External Systems</div>';
         html += '<div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">';
         externals.forEach(n => {
-          html += '<div style="background:#2a2a3e;border:1px dashed #3a3a5a;border-radius:6px;padding:10px 14px;text-align:center;min-width:100px"><div style="font-size:10px;color:#a0a0b0">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:#4a4a6a">' + n.node_type + '</div></div>';
+          html += '<div style="background:var(--card);border:1px dashed var(--border);border-radius:6px;padding:10px 14px;text-align:center;min-width:100px"><div style="font-size:10px;color:var(--text-secondary)">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:var(--text-muted)">' + n.node_type + '</div></div>';
         });
-        html += '</div><div style="width:1px;height:16px;background:#2a3a5a"></div>';
+        html += '</div><div style="width:1px;height:16px;background:var(--border)"></div>';
       }
-      html += '<div style="background:linear-gradient(135deg,#1e3a5f,#1a2d4d);border:2px solid #3a7bd5;border-radius:10px;padding:18px 32px;text-align:center;cursor:pointer;transition:all 0.2s" onmouseover="this.style.borderColor=\'#5a9bf5\'" onmouseout="this.style.borderColor=\'#3a7bd5\'" onclick="document.querySelector(\'[x-data]\').__x.$data.setZoom(\'c2\')"><div style="font-size:14px;color:#fff">Platform</div><div style="font-size:8px;color:#4a7aad;margin-top:4px">' + serviceCount + ' services \xb7 ' + modelCount + ' models \xb7 ' + epCount + ' endpoints \xb7 ' + flowCount + ' flows</div><div style="font-size:8px;color:#3a6a9a;margin-top:6px">Click to drill down \u2192</div></div>';
+      html += '<div style="background:linear-gradient(135deg,#fff,#f0e9dd);border:2px solid var(--primary);border-radius:10px;padding:18px 32px;text-align:center;cursor:pointer;transition:border-color .2s,transform .2s" onmouseover="this.style.borderColor=\'var(--text)\'" onmouseout="this.style.borderColor=\'var(--primary)\'" onclick="document.querySelector(\'[x-data]\').__x.$data.setZoom(\'c2\')"><div style="font-size:14px;color:var(--text)">Platform</div><div style="font-size:8px;color:var(--text-muted);margin-top:4px">' + serviceCount + ' services \xb7 ' + modelCount + ' models \xb7 ' + epCount + ' endpoints \xb7 ' + flowCount + ' flows</div><div style="font-size:8px;color:var(--text-muted);margin-top:6px">Click to drill down \u2192</div></div>';
       if (infra.length > 0) {
-        html += '<div style="width:1px;height:16px;background:#2a3a5a"></div><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px">Infrastructure</div><div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">';
-        infra.forEach(n => { html += '<div style="background:#1a2e1a;border:1px solid #2d5a2d;border-radius:6px;padding:8px 12px;text-align:center;min-width:90px"><div style="font-size:10px;color:#7db87d">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:#4a8a4a">' + n.node_type + '</div></div>'; });
+        html += '<div style="width:1px;height:16px;background:var(--border)"></div><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px">Infrastructure</div><div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">';
+        infra.forEach(n => { html += '<div style="background:#dcf5dd;border:1px solid var(--success);border-radius:6px;padding:8px 12px;text-align:center;min-width:90px"><div style="font-size:10px;color:var(--success)">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:var(--success)">' + n.node_type + '</div></div>'; });
         html += '</div>';
       }
       html += '</div>';
@@ -2847,13 +2867,13 @@ function dashboard() {
         const domCount = c.domains.size;
         const modCount = (c.types['module'] || 0) + (c.types['controller'] || 0) + (c.types['provider'] || 0);
         const safeKey = c.key.replace(/'/g, "\\'");
-        html += '<div style="background:linear-gradient(135deg,#1e3a5f,#162a48);border:2px solid #2a5a8a;border-radius:8px;padding:14px 18px;min-width:180px;flex:1;max-width:240px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.borderColor=\'#4a8ad5\';this.style.transform=\'translateY(-1px)\'" onmouseout="this.style.borderColor=\'#2a5a8a\';this.style.transform=\'\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC3(\'' + safeKey + '\',\'' + safeKey + '\')"><div style="font-size:12px;color:#fff;font-weight:600">' + c.key + '</div><div style="font-size:9px;color:#4a7aad;margin-top:2px">' + c.nodes.length + ' nodes</div><div style="display:flex;gap:8px;margin-top:8px;font-size:9px;color:#3a6a9a">' + (epCount ? '<span><b style="color:#6a9ad0">' + epCount + '</b> endpoints</span>' : '') + (domCount > 1 ? '<span><b style="color:#6a9ad0">' + domCount + '</b> domains</span>' : '') + (modCount ? '<span><b style="color:#6a9ad0">' + modCount + '</b> components</span>' : '') + '</div><div style="font-size:8px;color:#3a5a8a;margin-top:6px">\u2192 domains</div></div>';
+        html += '<div style="background:linear-gradient(135deg,#fff,#f0e9dd);border:2px solid var(--border);border-radius:8px;padding:14px 18px;min-width:180px;flex:1;max-width:240px;cursor:pointer;transition:border-color .2s,transform .2s" onmouseover="this.style.borderColor=\'var(--primary)\';this.style.transform=\'translateY(-1px)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.transform=\'\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC3(\'' + safeKey + '\',\'' + safeKey + '\')"><div style="font-size:12px;color:var(--text);font-weight:600">' + c.key + '</div><div style="font-size:9px;color:var(--text-muted);margin-top:2px">' + c.nodes.length + ' nodes</div><div style="display:flex;gap:8px;margin-top:8px;font-size:9px;color:var(--text-muted)">' + (epCount ? '<span><b style="color:var(--primary)">' + epCount + '</b> endpoints</span>' : '') + (domCount > 1 ? '<span><b style="color:var(--primary)">' + domCount + '</b> domains</span>' : '') + (modCount ? '<span><b style="color:var(--primary)">' + modCount + '</b> components</span>' : '') + '</div><div style="font-size:8px;color:var(--text-muted);margin-top:6px">\u2192 domains</div></div>';
       });
       html += '</div>';
       if (uniqueCross.length > 0) {
         html += '<div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin:16px 0 8px">Connections</div>';
         uniqueCross.slice(0, 20).forEach(e => {
-          html += '<div style="font-size:10px;color:#4a6a8a;padding:2px 0"><span style="color:#6a9ad0;font-weight:500">' + e.from + '</span> <span style="font-size:8px;color:#3a5a7a;background:#111828;padding:1px 4px;border-radius:2px;margin:0 4px">' + e.type + '</span> <span style="color:#6a9ad0;font-weight:500">' + e.to + '</span></div>';
+          html += '<div style="font-size:10px;color:var(--text-secondary);padding:2px 0"><span style="color:var(--primary);font-weight:500">' + e.from + '</span> <span style="font-size:8px;color:var(--text-muted);background:var(--card-alt);padding:1px 4px;border-radius:2px;margin:0 4px">' + e.type + '</span> <span style="color:var(--primary);font-weight:500">' + e.to + '</span></div>';
         });
       }
       html += '</div>';
@@ -2899,7 +2919,7 @@ function dashboard() {
         if (d.models) tags.push(d.models + ' models');
         if (d.events) tags.push(d.events + ' events');
         const safeKey = d.key.replace(/'/g, "\\'");
-        html += '<div style="background:#111128;border:1px solid #2a2a4a;border-radius:8px;padding:14px 18px;margin-bottom:10px;cursor:pointer;transition:all 0.15s;display:flex;justify-content:space-between;align-items:flex-start" onmouseover="this.style.borderColor=\'#3a4a6a\';this.style.background=\'#161638\'" onmouseout="this.style.borderColor=\'#2a2a4a\';this.style.background=\'#111128\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC4(\'' + safeKey + '\',\'' + safeKey + '\')"><div><div style="font-size:12px;color:#c0c0e0;font-weight:600;margin-bottom:2px">' + d.key + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + tags.map(t => '<span style="font-size:8px;color:#4a6a8a;background:#0a0a1a;padding:2px 6px;border-radius:3px">' + t + '</span>').join('') + '</div></div><div style="text-align:right">' + (connected ? '<div style="font-size:8px;color:#3a4a6a">Connected: <b style="color:#5a7a9a">' + connected + '</b></div>' : '') + '<div style="font-size:8px;color:#3a5a7a;margin-top:4px">\u2192 components</div></div></div>';
+        html += '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px 18px;margin-bottom:10px;cursor:pointer;transition:border-color .15s,background .15s;display:flex;justify-content:space-between;align-items:flex-start" onmouseover="this.style.borderColor=\'var(--text-muted)\';this.style.background=\'var(--bg)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.background=\'var(--card)\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC4(\'' + safeKey + '\',\'' + safeKey + '\')"><div><div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:2px">' + d.key + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + tags.map(t => '<span style="font-size:8px;color:var(--text-secondary);background:var(--card-alt);padding:2px 6px;border-radius:3px">' + t + '</span>').join('') + '</div></div><div style="text-align:right">' + (connected ? '<div style="font-size:8px;color:var(--text-muted)">Connected: <b style="color:var(--text-secondary)">' + connected + '</b></div>' : '') + '<div style="font-size:8px;color:var(--text-muted);margin-top:4px">\u2192 components</div></div></div>';
       });
       html += '</div>';
       container.innerHTML = html;
@@ -2934,19 +2954,19 @@ function dashboard() {
       if (extDeps.length > 0) groups['External Dependencies'] = extDeps;
       const domEdges = {};
       allEdges.forEach(e => { if (domNodeIds.has(e.from_node_id) && domNodeIds.has(e.to_node_id)) { if (!domEdges[e.from_node_id]) domEdges[e.from_node_id] = []; domEdges[e.from_node_id].push(e); } });
-      const typeColors = { 'module':'#d4915e','controller':'#4a9aea','resolver':'#4a9aea','gateway':'#d4d45e','provider':'#7db87d','service':'#7db87d','model':'#a87dc2','enum':'#a87dc2','repository':'#a87dc2','endpoint':'#6a9ad0','topic':'#d4d45e','event':'#d4d45e','guard':'#4a9aea','interceptor':'#4a9aea','consumer':'#d4d45e','producer':'#d4d45e' };
+      const typeColors = { 'module':'var(--code)','controller':'var(--code)','resolver':'var(--code)','gateway':'var(--code)','provider':'var(--code)','service':'var(--service)','model':'var(--data)','enum':'var(--data)','repository':'var(--data)','endpoint':'var(--contract)','topic':'var(--contract)','event':'var(--contract)','guard':'var(--code)','interceptor':'var(--code)','consumer':'var(--code)','producer':'var(--code)' };
       const roleOrder = ['Module','API','Application','Domain / Data','Contracts','Events','External Dependencies','Other'];
       let html = '<div style="padding:16px;max-width:1000px">';
       roleOrder.forEach(role => {
         const items = groups[role]; if (!items || items.length === 0) return;
         const isExt = role === 'External Dependencies';
-        html += '<div style="margin-bottom:14px"><div style="font-size:9px;color:#4a5a7a;text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:6px">' + role + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
+        html += '<div style="margin-bottom:14px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:6px">' + role + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
         items.forEach(n => {
-          const color = typeColors[n.node_type] || '#6a6a8a';
+          const color = typeColors[n.node_type] || '#b8a898';
           const edges = domEdges[n.node_id] || [];
           const edgeSummary = edges.slice(0, 3).map(e => { const t = nodeById[e.to_node_id]; return t ? '\u2192 ' + t.name : ''; }).filter(Boolean).join(', ');
           const safeName = (n.name || '').replace(/'/g, "\\'");
-          html += '<div style="background:#141430;border:1px solid #2a2a4a;border-left:3px solid ' + color + ';border-radius:6px;padding:8px 12px;min-width:140px;max-width:200px;flex:1;cursor:pointer;transition:all 0.15s;' + (isExt ? 'border-style:dashed;border-left-style:solid;' : '') + '" onmouseover="this.style.borderColor=\'#4a4a7a\';this.style.background=\'#1a1a3a\'" onmouseout="this.style.borderColor=\'#2a2a4a\';this.style.background=\'#141430\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToFocus(' + n.node_id + ',\'' + safeName + '\')"><div style="font-size:10px;color:#c0c0e0;font-weight:500">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:#4a4a6a;text-transform:uppercase;letter-spacing:0.3px">' + n.node_type + '</div>' + (edgeSummary ? '<div style="font-size:8px;color:#3a4a6a;margin-top:3px">' + edgeSummary + '</div>' : '') + (isExt && n._edgeType ? '<div style="font-size:8px;color:#5a4a3a;margin-top:2px">' + n._edgeType + '</div>' : '') + '</div>';
+          html += '<div style="background:var(--card);border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:6px;padding:8px 12px;min-width:140px;max-width:200px;flex:1;cursor:pointer;transition:border-color .15s,background .15s;' + (isExt ? 'border-style:dashed;border-left-style:solid;' : '') + '" onmouseover="this.style.borderColor=\'var(--primary)\';this.style.background=\'var(--bg)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.background=\'var(--card)\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToFocus(' + n.node_id + ',\'' + safeName + '\')"><div style="font-size:10px;color:var(--text);font-weight:500">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.3px">' + n.node_type + '</div>' + (edgeSummary ? '<div style="font-size:8px;color:var(--text-muted);margin-top:3px">' + edgeSummary + '</div>' : '') + (isExt && n._edgeType ? '<div style="font-size:8px;color:var(--warning-text);margin-top:2px">' + n._edgeType + '</div>' : '') + '</div>';
         });
         html += '</div></div>';
       });
@@ -2966,7 +2986,7 @@ function dashboard() {
       if (!nodeId) { this.renderC4(container, allNodes, allEdges); return; }
       const nodeById = {}; allNodes.forEach(n => { nodeById[n.node_id] = n; });
       const centerNode = nodeById[nodeId];
-      if (!centerNode) { container.innerHTML = '<div style="padding:20px;color:#6b6b8a">Node not found</div>'; return; }
+      if (!centerNode) { container.innerHTML = '<div style="padding:20px;color:var(--text-muted)">Node not found</div>'; return; }
       const incoming = [], outgoing = [];
       allEdges.forEach(e => {
         if (e.to_node_id === nodeId && nodeById[e.from_node_id]) incoming.push({ node: nodeById[e.from_node_id], type: e.edge_type });
@@ -2979,19 +2999,19 @@ function dashboard() {
       const other = outgoing.filter(e => !deps.includes(e) && !endpoints.includes(e) && !models.includes(e) && !events.includes(e));
       function renderRing(label, arrow, items) {
         if (items.length === 0) return '';
-        let h = '<div style="margin-bottom:14px"><div style="font-size:9px;color:#4a5a7a;margin-bottom:6px"><span style="color:#3a5a7a">' + arrow + '</span> ' + label + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
-        items.forEach(e => { h += '<div style="background:#141430;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;text-align:center;min-width:110px"><div style="font-size:10px;color:#a0a0c0">' + (e.node.name || e.node.node_key) + '</div><div style="font-size:8px;color:#4a5a7a;margin-top:1px">' + e.type + '</div></div>'; });
+        let h = '<div style="margin-bottom:14px"><div style="font-size:9px;color:var(--text-muted);margin-bottom:6px"><span style="color:var(--text-muted)">' + arrow + '</span> ' + label + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
+        items.forEach(e => { h += '<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 12px;text-align:center;min-width:110px"><div style="font-size:10px;color:var(--text)">' + (e.node.name || e.node.node_key) + '</div><div style="font-size:8px;color:var(--text-muted);margin-top:1px">' + e.type + '</div></div>'; });
         return h + '</div></div>';
       }
       let html = '<div style="padding:16px;max-width:700px;margin:0 auto">';
-      html += '<div style="background:linear-gradient(135deg,#2a3a5f,#1a2d4d);border:2px solid #4a8ad5;border-radius:8px;padding:14px 20px;text-align:center;margin-bottom:20px"><div style="font-size:14px;color:#fff">' + (centerNode.name || centerNode.node_key) + '</div><div style="font-size:9px;color:#5a8abd">' + centerNode.node_type + ' \xb7 ' + (centerNode.domain_key || '') + '</div></div>';
+      html += '<div style="background:linear-gradient(135deg,#fff,#f0e9dd);border:2px solid var(--primary);border-radius:8px;padding:14px 20px;text-align:center;margin-bottom:20px"><div style="font-size:14px;color:var(--text)">' + (centerNode.name || centerNode.node_key) + '</div><div style="font-size:9px;color:var(--text-muted)">' + centerNode.node_type + ' \xb7 ' + (centerNode.domain_key || '') + '</div></div>';
       html += renderRing('Incoming (who calls this)', '\u2190', incoming);
       html += renderRing('Dependencies', '\u2192', deps);
       html += renderRing('Endpoints', '\u2197', endpoints);
       html += renderRing('Data (models)', '\u2193', models);
       html += renderRing('Events', '\u26a1', events);
       if (other.length > 0) html += renderRing('Other', '\xb7', other);
-      html += '<div style="background:#0a0a1a;border:1px solid #1a1a3a;border-radius:6px;padding:10px 14px;margin-top:16px"><div style="font-size:9px;color:#4a5a7a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Evidence</div><div style="font-size:9px;color:#5a6a8a">' + (centerNode.file_path ? '<div><b style="color:#7a8aaa">File:</b> ' + centerNode.file_path + '</div>' : '') + '<div><b style="color:#7a8aaa">Confidence:</b> ' + (centerNode.confidence || 'N/A') + '</div><div><b style="color:#7a8aaa">Status:</b> ' + (centerNode.status || 'active') + '</div></div></div>';
+      html += '<div style="background:var(--card-alt);border:1px solid var(--bg);border-radius:6px;padding:10px 14px;margin-top:16px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Evidence</div><div style="font-size:9px;color:var(--text-secondary)">' + (centerNode.file_path ? '<div><b style="color:var(--text-secondary)">File:</b> ' + centerNode.file_path + '</div>' : '') + '<div><b style="color:var(--text-secondary)">Confidence:</b> ' + (centerNode.confidence || 'N/A') + '</div><div><b style="color:var(--text-secondary)">Status:</b> ' + (centerNode.status || 'active') + '</div></div></div>';
       html += '</div>';
       container.innerHTML = html;
     },
@@ -3650,7 +3670,7 @@ function dashboard() {
       // Booting straight into a view (/graph/c2, #v/…): suppress the default
       // render — the view replaces it in a moment and the swap reads as a flash.
       if (this._bootViewPending && !this.viewActive) {
-        container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">Loading view…</div>';
+        container.innerHTML = '<div class="empty-state">Loading view…</div>';
         return;
       }
       // View mode (Level=C1/C2/C3 or deep-linked spec) — render the view stack
@@ -3664,7 +3684,7 @@ function dashboard() {
           this.syncSidebarToController();
           this.modeController.render();
         } else {
-          container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">Loading...</div>';
+          container.innerHTML = '<div class="empty-state">Loading...</div>';
         }
         return;
       }
@@ -3677,7 +3697,7 @@ function dashboard() {
       container.innerHTML = '';
       const data = this.getFilteredData();
       if (data.nodes.length === 0) {
-        container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">No nodes to display. Adjust filters or import data.</div>';
+        container.innerHTML = '<div class="empty-state">No nodes to display. Adjust filters or import data.</div>';
         return;
       }
       if (this.graphMode === 'tree') {
@@ -4092,7 +4112,7 @@ function dashboard() {
 
       container.innerHTML = '';
       if (config.nodes.length === 0) {
-        container.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text-muted)">No nodes to display. Adjust filters or import data.</div>';
+        container.innerHTML = '<div class="empty-state">No nodes to display. Adjust filters or import data.</div>';
         return null;
       }
 
@@ -5541,7 +5561,7 @@ function dashboard() {
           ? '<ul style="font-size:12px;line-height:1.9;list-style:none">' +
             items.map(it => '<li><strong>' + esc(it.name) + '</strong>' + (it.type ? ' <span style="color:var(--text-muted);font-size:10px">' + esc(it.type) + '</span>' : '') + '</li>').join('') +
             '</ul>'
-          : '<p style="color:var(--text-muted);font-size:12px">Session is empty.</p>') +
+          : '<p class="muted-12">Session is empty.</p>') +
         '</div>';
     },
 
@@ -5900,7 +5920,7 @@ function renderGrowthChart(el, scans, mode) {
     tooltip.innerHTML = `<div class="tt-title">Rev ${d.revision_id}${ctx} \u00b7 ${dateStr}</div>`
       + `<div class="tt-nodes">${d.node_count} nodes</div>`
       + `<div class="tt-edges">${d.edge_count} edges</div>`
-      + `<div style="color:var(--text-muted)">${d.snapshot_kind}</div>`;
+      + `<div class="muted">${d.snapshot_kind}</div>`;
     tooltip.style.display = 'block';
     const rect = el.getBoundingClientRect();
     const cx = event.clientX - rect.left;

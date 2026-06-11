@@ -13,16 +13,20 @@ const LAYOUT = {
   groupPadding: { top: 30, bottom: 15, left: 15, right: 15 },
 };
 
+// Fallbacks mirror the :root layer tokens in index.html — the live values are
+// read from CSS so every surface (sidebar, legend, nodes) shares one palette.
+// Fills derive the light ramp via alpha ('40' suffix at the call sites).
 const LAYER_COLORS = {
-  code: '#4fc3f7',
-  service: '#81c784',
-  contract: '#ffb74d',
-  data: '#ce93d8',
-  flow: '#4dd0e1',
-  ownership: '#a1887f',
-  infra: '#90a4ae',
-  ci: '#fff176',
+  code: '#8b5a2b',
+  service: '#c23030',
+  contract: '#1a7a2e',
+  data: '#6a3d9a',
+  flow: '#b85c2e',
+  ownership: '#c4880a',
+  infra: '#2e5f8a',
+  ci: '#a83262',
 };
+let layerColorCache = null;
 
 export class GraphRenderer {
   constructor(container) {
@@ -32,7 +36,14 @@ export class GraphRenderer {
   }
 
   layerColor(layer) {
-    return LAYER_COLORS[layer] || '#bbb';
+    if (!layerColorCache) {
+      layerColorCache = {};
+      const rootStyle = getComputedStyle(document.documentElement);
+      for (const l of Object.keys(LAYER_COLORS)) {
+        layerColorCache[l] = (rootStyle.getPropertyValue('--' + l) || '').trim() || LAYER_COLORS[l];
+      }
+    }
+    return layerColorCache[layer] || '#b8a898';
   }
 
   render({
@@ -195,9 +206,12 @@ export class GraphRenderer {
       const pad = 80;
       const bx = Math.min(...xs) - pad, by = Math.min(...ys) - pad;
       const bw = Math.max(...xs) - bx + pad * 2, bh = Math.max(...ys) - by + pad * 2;
-      const scale = Math.min(width / bw, height / bh, 1.5);
-      const tx = (width - bw * scale) / 2 - bx * scale;
-      const ty = (height - bh * scale) / 2 - by * scale;
+      // Fit the smaller dimension and pan along the larger one. Fitting both
+      // (min) renders wide graphs as an illegible band; readable beats complete.
+      const scale = Math.min(Math.max(width / bw, height / bh, 0.4), 1.5);
+      const cx = bx + bw / 2, cy = by + bh / 2;
+      const tx = width / 2 - cx * scale;
+      const ty = height / 2 - cy * scale;
       svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
     }
 
