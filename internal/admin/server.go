@@ -294,6 +294,14 @@ func (s *Server) switchTo(projectPath string) error {
 	reg, _ := registry.LoadDefaults()
 	newGraph := graph.New(newStore, reg)
 
+	// Sync-on-open may have replayed merged journal events with placeholder
+	// trust — recompute derived values before serving from this graph.
+	if newStore.JournalSyncApplied() > 0 {
+		if err := newGraph.RecalculateAllTrust(); err != nil {
+			fmt.Fprintf(os.Stderr, "chronicle admin: trust recalculation after journal sync failed: %v\n", err)
+		}
+	}
+
 	// Find manifest: prefer project root, fall back to .depbot/
 	manifestPath := filepath.Join(projectPath, "chronicle.domain.yaml")
 	if _, err := os.Stat(manifestPath); err != nil {

@@ -25,6 +25,19 @@ type Store struct {
 
 	journalActor    string // actor recorded on journal events (see SetJournalActor)
 	suppressJournal bool   // when true, appendEvent is a no-op (replay path)
+
+	// journalSyncApplied is the number of merged journal events applied by the
+	// sync-on-open replay. Trust/confidence are derived values and are NOT
+	// replayed — callers that construct a graph should recompute trust when
+	// this is > 0 (store cannot: graph imports store, not the reverse).
+	journalSyncApplied int
+}
+
+// JournalSyncApplied reports how many merged journal events the sync-on-open
+// replay applied. When > 0, derived trust/confidence must be recomputed
+// (graph.RecalculateAllTrust) — replay sets them to 1.0 placeholders.
+func (s *Store) JournalSyncApplied() int {
+	return s.journalSyncApplied
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -68,6 +81,18 @@ func Open(dbPath string) (*Store, error) {
 	// Drain any events left unflushed by a previous process (crash, kill).
 	if _, err := s.FlushJournal(); err != nil {
 		fmt.Fprintf(os.Stderr, "chronicle: journal flush on open failed: %v\n", err)
+	}
+
+	// Apply journal events this db has not seen yet (e.g. merged in via git
+	// pull). Incremental: the flush above marks self-produced events applied,
+	// so only foreign/merged events replay. The replay path is journal-
+	// suppressed — synced events do not re-journal. Best-effort: a sync
+	// failure must not fail Open.
+	if res, err := s.SyncJournal(); err != nil {
+		fmt.Fprintf(os.Stderr, "chronicle: journal sync on open failed: %v\n", err)
+	} else if res.Applied > 0 {
+		s.journalSyncApplied = res.Applied
+		fmt.Fprintf(os.Stderr, "chronicle: journal sync applied %d merged events\n", res.Applied)
 	}
 
 	return s, nil
@@ -124,7 +149,9 @@ func IsCorruptionError(err error) bool {
 const RecoveryHint = "chronicle.db is corrupted (likely an interrupted WAL checkpoint). " +
 	"Recovery: stop all chronicle processes, delete chronicle.db together with " +
 	"chronicle.db-wal and chronicle.db-shm (deleting the db but keeping -wal/-shm " +
-	"corrupts the next database too), then re-scan or re-import the domain."
+	"corrupts the next database too), then re-scan or re-import the domain. " +
+	"If an event journal exists (.depbot/events/), `chronicle journal rebuild` " +
+	"restores the db from it."
 
 // Exec runs a raw SQL statement. Used for post-resolve fixes and migrations.
 func (s *Store) Exec(query string, args ...any) error {

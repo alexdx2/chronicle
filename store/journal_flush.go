@@ -39,10 +39,24 @@ func sanitizeDomainFile(d string) string {
 // FlushJournal drains unflushed outbox rows into .depbot/events/<domain>.jsonl.
 // Crash-safe: rows are marked flushed only after the file append fsyncs; a
 // crash in between re-appends the same event_id, which replay ignores.
+//
+// Flushed events are also recorded in journal_applied_events: self-produced
+// events are applied by definition (the local db state already reflects the
+// mutation), so a later replay over the same files skips them — that is what
+// makes sync-on-open incremental instead of a full re-apply.
 // Returns the number of events written.
 func (s *Store) FlushJournal() (int, error) {
 	if s.InTx() {
 		return 0, nil // flushing happens outside transactions
+	}
+	// One-time catch-up for dbs flushed before applied-bookkeeping existed:
+	// any flushed row missing from journal_applied_events is backfilled here.
+	// INSERT OR IGNORE makes this idempotent and cheap on converged dbs.
+	if _, err := s.db.Exec(`
+		INSERT OR IGNORE INTO journal_applied_events (event_id, domain_key, lamport, actor, kind, applied_at)
+		SELECT event_id, domain_key, lamport, actor, kind, strftime('%Y-%m-%dT%H:%M:%SZ','now')
+		FROM journal_outbox WHERE flushed_at IS NOT NULL`); err != nil {
+		return 0, fmt.Errorf("FlushJournal applied catch-up: %w", err)
 	}
 	rows, err := s.db.Query(`
 		SELECT o.outbox_id, o.event_id, o.lamport, o.actor, o.ts,
@@ -58,6 +72,10 @@ func (s *Store) FlushJournal() (int, error) {
 	type pending struct {
 		outboxID int64
 		domain   string
+		eventID  string
+		lamport  int64
+		actor    string
+		kind     string
 		line     []byte
 	}
 	var batch []pending
@@ -77,6 +95,7 @@ func (s *Store) FlushJournal() (int, error) {
 			rows.Close()
 			return 0, err
 		}
+		p.eventID, p.lamport, p.actor, p.kind = ev.EventID, ev.Lamport, ev.Actor, ev.Kind
 		p.line = line
 		batch = append(batch, p)
 	}
@@ -110,23 +129,28 @@ func (s *Store) FlushJournal() (int, error) {
 		if err != nil {
 			return written, err
 		}
-		var ids []int64
 		for _, p := range byDomain[d] {
 			if _, err := f.Write(append(p.line, '\n')); err != nil {
 				f.Close()
 				return written, err
 			}
-			ids = append(ids, p.outboxID)
 		}
 		if err := f.Sync(); err != nil {
 			f.Close()
 			return written, err
 		}
 		f.Close()
-		for _, id := range ids {
+		for _, p := range byDomain[d] {
 			if _, err := s.db.Exec(
 				`UPDATE journal_outbox SET flushed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE outbox_id = ?`,
-				id); err != nil {
+				p.outboxID); err != nil {
+				return written, err
+			}
+			// Applied-by-definition: the local db already reflects this mutation.
+			if _, err := s.db.Exec(`
+				INSERT OR IGNORE INTO journal_applied_events (event_id, domain_key, lamport, actor, kind, applied_at)
+				VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
+				p.eventID, p.domain, p.lamport, p.actor, p.kind); err != nil {
 				return written, err
 			}
 			written++

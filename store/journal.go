@@ -66,14 +66,23 @@ func (s *Store) actorOrDefault() string {
 	return host
 }
 
-// nextLamport increments and returns the per-actor lamport counter.
+// nextLamport increments and returns the actor's lamport counter.
 // Increment-and-read is a single atomic statement (RETURNING) so two
 // connections can never observe the same value.
+//
+// Lamport rule: the next tick must exceed EVERYTHING this db has observed,
+// not just this actor's own counter — after a journal merge the MAX-merged
+// floor may live on a different actor row (sync-on-open records it under the
+// default/hostname actor before the CLI sets the git identity, and merged
+// foreign events floor their own actors). The VALUES subquery reads the
+// global max at execution time; that value also wins on conflict (it is
+// always > the actor's own row), giving MAX semantics in one statement.
 func (s *Store) nextLamport(actor string) (int64, error) {
 	var l int64
 	err := s.db.QueryRow(`
-		INSERT INTO journal_state (actor, last_lamport) VALUES (?, 1)
-		ON CONFLICT(actor) DO UPDATE SET last_lamport = last_lamport + 1
+		INSERT INTO journal_state (actor, last_lamport)
+		VALUES (?, 1 + COALESCE((SELECT MAX(last_lamport) FROM journal_state), 0))
+		ON CONFLICT(actor) DO UPDATE SET last_lamport = excluded.last_lamport
 		RETURNING last_lamport`, actor).Scan(&l)
 	if err != nil {
 		return 0, fmt.Errorf("nextLamport: %w", err)

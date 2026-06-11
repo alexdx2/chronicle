@@ -73,6 +73,22 @@ When adding a new MCP tool, you MUST register it in BOTH:
 If you only add to `server.go`, tests pass but the tool won't appear in production.
 If you only add to `middleware.go`, tests won't cover it.
 
+## Event journal
+
+Every graph mutation is recorded as a semantic event in `.depbot/events/<domain>.jsonl` (append-only, git-tracked, `merge=union`). The journal is the source of truth; `chronicle.db` is a derived, reproducible cache.
+
+CLI (`internal/cli/journal.go`):
+- `chronicle journal init` — bootstrap from an existing db (genesis events)
+- `chronicle journal flush` — flush pending outbox events to the jsonl files (`journal status` shows totals)
+- `chronicle journal rebuild` — replay journal → fresh db (carry-over of local state + atomic swap)
+- `chronicle journal verify` — shadow validator: replay into a temp db, diff against the live db
+
+Sync on open: every command applies journal events the db hasn't seen yet, so events merged in via `git pull` materialize automatically.
+
+**Contributor rules:**
+- NEVER mutate `graph_*` tables with raw SQL. Every mutation goes through the instrumented store methods so it journals. Scan-lab runs `journal verify` as a shadow validator — raw-SQL mutations make replay diverge and fail it.
+- Trust/confidence are derived from evidence (asserter-tier caps, verification promotion) and recomputed on read — never journaled. If a choke point forces a status, it must adjust the evidence in the same write so the derived state stays coherent.
+
 ## Build and test
 
 ```bash

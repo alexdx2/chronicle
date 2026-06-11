@@ -49,6 +49,8 @@ chronicle status        — Dashboard URL + graph stats
 - Self-learns: discovers patterns, reports gaps, improves with each scan
 - Admin dashboard with visual graph at `http://localhost:<auto-port>`
 
+The graph is git-native: every mutation is recorded in an append-only event journal (`.depbot/events/<domain>.jsonl`) that you can track in git, and the SQLite db is a derived cache rebuilt from it anytime (`chronicle journal rebuild`). Two teammates' scans merge through a normal git merge — after a pull, the graph syncs automatically on the next command. See the [repository README](https://github.com/alexdx2/chronicle) for the full journal workflow.
+
 ## Links
 
 - [Repository](https://github.com/alexdx2/chronicle)

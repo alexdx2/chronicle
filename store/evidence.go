@@ -202,6 +202,23 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		return 0, fmt.Errorf("AddEvidence insert: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	e.EvidencePolarity, e.Assertion, e.AssertionKind, e.EvidenceStatus = polarity, assertion, assertionKind, status
+	evFields := evidenceEventFields(e)
+	if err := s.appendEvent(journalEvent{
+		DomainKey: domain, RevisionID: e.ValidFromRevisionID,
+		Kind: EvEvidenceAdd, Key: uid, OwnerKey: ownerKey,
+		Fields: evFields,
+	}); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// evidenceEventFields builds the evidence_add journal payload for a row whose
+// polarity/assertion/status are already normalized (shared by AddEvidence and
+// BootstrapJournal — the two emitters must stay byte-identical so replay and
+// bootstrap produce the same rows).
+func evidenceEventFields(e EvidenceRow) map[string]any {
 	evFields := map[string]any{
 		"target_kind":       e.TargetKind,
 		"source_kind":       e.SourceKind,
@@ -213,10 +230,10 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		"extractor_id":      e.ExtractorID,
 		"extractor_version": e.ExtractorVersion,
 		"confidence":        e.Confidence,
-		"polarity":          polarity,
-		"assertion":         assertion,
-		"assertion_kind":    assertionKind,
-		"status":            status,
+		"polarity":          e.EvidencePolarity,
+		"assertion":         e.Assertion,
+		"assertion_kind":    e.AssertionKind,
+		"status":            e.EvidenceStatus,
 	}
 	// Optional columns: omitted when empty/zero to keep journal lines compact.
 	if e.Metadata != "" && e.Metadata != "{}" {
@@ -237,14 +254,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 	if e.ColumnEnd != 0 {
 		evFields["column_end"] = e.ColumnEnd
 	}
-	if err := s.appendEvent(journalEvent{
-		DomainKey: domain, RevisionID: e.ValidFromRevisionID,
-		Kind: EvEvidenceAdd, Key: uid, OwnerKey: ownerKey,
-		Fields: evFields,
-	}); err != nil {
-		return 0, err
-	}
-	return id, nil
+	return evFields
 }
 
 // ListEvidenceByNode returns all evidence rows for the given node.

@@ -17,8 +17,61 @@ func newJournalCmd() *cobra.Command {
 		Use:   "journal",
 		Short: "Manage the event journal (outbox, flush, shadow verify)",
 	}
-	cmd.AddCommand(newJournalStatusCmd(), newJournalFlushCmd(), newJournalVerifyCmd(), newJournalRebuildCmd())
+	cmd.AddCommand(newJournalStatusCmd(), newJournalFlushCmd(), newJournalVerifyCmd(), newJournalRebuildCmd(), newJournalInitCmd())
 	return cmd
+}
+
+func newJournalInitCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Bootstrap the journal from an existing database (genesis events)",
+		Long: `Bootstrap the event journal for a database that predates it.
+
+Exports the current graph state (nodes, edges, evidence, aliases, glossary)
+as genesis events into .depbot/events/<domain>.jsonl, making the journal a
+complete, durable representation of the graph. After init, 'chronicle journal
+verify' must pass and the db can be reconstructed with 'chronicle journal
+rebuild' or by sync-on-open in a fresh clone.
+
+Refuses to run if the journal already contains events — use verify/rebuild.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+
+			g := openGraph()
+			defer g.Store().Close()
+
+			// Normalize derived trust/confidence/status to CURRENT rules before
+			// exporting: verify recomputes them on the replayed db, so a live db
+			// whose derived values predate current rules (old binaries) would
+			// diverge spuriously. Trust updates are not journaled — this does
+			// not violate the empty-journal guard.
+			if err := g.RecalculateAllTrust(); err != nil {
+				return fmt.Errorf("recalculate trust before init: %w", err)
+			}
+
+			total, err := g.Store().BootstrapJournal()
+			if err != nil {
+				return err
+			}
+
+			eventsDir := filepath.Join(g.Store().Dir(), "events")
+			fmt.Printf("journal init: %d genesis event(s) written to %s\n", total, eventsDir)
+			// Per-kind counts: init refuses a non-empty outbox, so every outbox
+			// row at this point is a genesis event (closed kind set below).
+			for _, kind := range []string{
+				store.EvNodeUpsert, store.EvEdgeUpsert, store.EvEvidenceAdd,
+				store.EvAliasAdd, store.EvGlossarySet,
+			} {
+				var n int
+				if err := g.Store().QueryRowScan(
+					fmt.Sprintf(`SELECT COUNT(*) FROM journal_outbox WHERE kind = '%s'`, kind), &n); err == nil && n > 0 {
+					fmt.Printf("  %-16s %d\n", kind, n)
+				}
+			}
+			fmt.Println("hint: track the journal in git — `git add .depbot/events` (and gitignore .depbot/chronicle.db*)")
+			return nil
+		},
+	}
 }
 
 func newJournalStatusCmd() *cobra.Command {
@@ -139,6 +192,14 @@ succeeds (always kept with --keep-backup).`,
 				return fmt.Errorf("recalculate trust on rebuilt db: %w", err)
 			}
 
+			// Open() already auto-syncs the journal into the tmp db, so the
+			// explicit replay above typically applies 0 and skips the rest —
+			// the rebuilt db's applied-event count is the real total.
+			var appliedTotal int
+			if err := rebuilt.QueryRowScan(`SELECT COUNT(*) FROM journal_applied_events`, &appliedTotal); err != nil {
+				appliedTotal = res.Applied + res.Skipped
+			}
+
 			// 3. Carry over non-journaled local state.
 			carried, err := rebuilt.CopyLocalState(live)
 			if err != nil {
@@ -194,7 +255,7 @@ succeeds (always kept with --keep-backup).`,
 			}
 
 			// 6. Summary.
-			fmt.Printf("journal rebuild: OK — %d event(s) applied, %d skipped\n", res.Applied, res.Skipped)
+			fmt.Printf("journal rebuild: OK — %d event(s) applied\n", appliedTotal)
 			tables := make([]string, 0, len(carried))
 			for t := range carried {
 				tables = append(tables, t)

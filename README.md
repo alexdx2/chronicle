@@ -72,15 +72,27 @@ With `--live-check`, Chronicle verifies evidence against source files at query t
 
 This is read-only — the graph is not modified, just annotated with what's drifted. Off by default to avoid filesystem overhead on every query.
 
-### Event journal (experimental, shadow mode)
+### Event journal
 
-Every graph mutation is also recorded as a semantic event in
+Every graph mutation is recorded as a semantic event in
 `.depbot/events/<domain>.jsonl` (append-only, git-friendly, `merge=union`).
-The SQLite db stays the source of truth for now; the journal is validated in
-scan-lab by `chronicle journal verify`, which replays events into a temp db
-and diffs it against the live graph. `chronicle journal rebuild` rebuilds
-`chronicle.db` from the journal (replay + carry-over of non-journaled local
-state + verified atomic swap) — the db is now reproducible from the journal.
+The journal is the durable source of truth — the SQLite db is a queryable
+materialization of it:
+
+- `chronicle journal init` bootstraps the journal for an existing db
+  (exports the current graph as genesis events).
+- `chronicle journal rebuild` reconstructs `chronicle.db` from the journal
+  (replay + carry-over of non-journaled local state + verified atomic swap).
+- Sync on open: every `chronicle` command applies journal events the db has
+  not seen yet — after a `git pull` that merges a teammate's events, the
+  graph materializes automatically.
+- `chronicle journal verify` replays the journal into a temp db and diffs it
+  against the live graph (shadow validation).
+
+Recommended git setup: track `.depbot/events/` and `.depbot/chronicle.domain.yaml`,
+gitignore `.depbot/chronicle.db*` — a fresh clone rebuilds the db from events on
+first command. (This repo's tom-and-jerry fixture db intentionally stays tracked
+for the instant demo.)
 
 ## Commands
 

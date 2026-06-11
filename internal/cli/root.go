@@ -146,7 +146,16 @@ func openGraph() *graph.Graph {
 		}
 	}
 
-	return graph.New(s, reg)
+	g := graph.New(s, reg)
+
+	// Sync-on-open replays merged journal events with placeholder trust —
+	// recompute derived trust/confidence so statuses match a verified rebuild.
+	if s.JournalSyncApplied() > 0 {
+		if err := g.RecalculateAllTrust(); err != nil {
+			fmt.Fprintf(os.Stderr, "chronicle: trust recalculation after journal sync failed: %v\n", err)
+		}
+	}
+	return g
 }
 
 // journalActor returns the configured git identity, or hostname.

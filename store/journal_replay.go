@@ -23,6 +23,22 @@ type replayEvent struct {
 	domain string
 }
 
+// SyncJournal replays Dir()/events into this store if the directory exists.
+// Thanks to applied-event bookkeeping (FlushJournal records self-produced
+// events; ReplayJournal records replayed ones) the replay is incremental:
+// only foreign/merged events actually apply — this is the post-`git pull`
+// sync path. A missing events directory means no journal; zero-cost no-op.
+func (s *Store) SyncJournal() (*ReplayResult, error) {
+	eventsDir := filepath.Join(s.Dir(), "events")
+	if _, err := os.Stat(eventsDir); err != nil {
+		if os.IsNotExist(err) {
+			return &ReplayResult{}, nil
+		}
+		return nil, fmt.Errorf("SyncJournal: %w", err)
+	}
+	return s.ReplayJournal(eventsDir)
+}
+
 // ReplayJournal reads all *.jsonl files in eventsDir, sorts events by
 // (lamport, actor), and applies unseen ones (journal_applied_events dedup).
 // Replay does NOT re-journal: applied mutations bypass appendEvent.
