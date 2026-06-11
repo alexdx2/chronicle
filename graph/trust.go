@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"strings"
+
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -14,36 +16,80 @@ var DerivationConfidence = map[string]float64{
 	"unknown":  0.15,
 }
 
-// Evidence source kinds grouped by quality tier for confidence capping.
+// Asserter tier caps. The asserter (who produced the evidence) determines
+// the maximum confidence a row can unlock — not the source_kind alone.
+const (
+	tierManual     = 0.95 // explicit human assertion
+	tierRuntime    = 0.92 // observed at runtime / from live data
+	tierStructural = 0.85 // deterministic structural extraction (AST, schemas, manifests)
+	tierLLM        = 0.65 // LLM-asserted, unverified
+	tierDerived    = 0.60 // system-derived (resolution, flow derivation, synthetic)
+	tierDefault    = 0.65 // unknown asserter — treated like LLM
+)
+
+// Asserter classification tables.
 var (
-	// Runtime/data evidence: DB queries, HTTP calls, message bus
-	runtimeSourceKinds = map[string]bool{
-		"runtime": true, "prisma": true,
-	}
-	// Code evidence: file-level AST, imports, structure
-	codeSourceKinds = map[string]bool{
-		"file": true, "openapi": true, "graphql": true, "asyncapi": true,
-		"avro": true, "proto": true, "schema_registry": true,
-		"terraform": true, "k8s": true, "git": true, "ci": true,
-	}
 	// Manual/operator evidence: explicit human assertions
 	manualSourceKinds = map[string]bool{
 		"user_feedback": true, "manual": true,
 	}
-	// LLM/weak evidence
-	llmSourceKinds = map[string]bool{
-		"webhook":   true, // convention-based, not structural
-		"synthetic": true, // system-generated placeholder, no source backing
+	// Runtime/data evidence: DB queries, HTTP calls, message bus
+	runtimeSourceKinds = map[string]bool{
+		"runtime": true, "prisma": true,
+	}
+	// Deterministic extractors: AST pass, manifest loader
+	structuralExtractors = map[string]bool{
+		"chronicle-ast": true, "chronicle:manifest": true,
+	}
+	// Source kinds that are structural by nature regardless of extractor:
+	// declarative schemas and infra definitions.
+	structuralSourceKinds = map[string]bool{
+		"openapi": true, "graphql": true, "asyncapi": true,
+		"avro": true, "proto": true, "schema_registry": true,
+		"terraform": true, "k8s": true, "git": true, "ci": true,
+	}
+	// LLM extractors: agent-driven scan passes
+	llmExtractors = map[string]bool{
+		"chronicle-scan": true, "chronicle-auto": true,
+	}
+	// System-derived extractors: resolution and derivation pipelines
+	derivedExtractors = map[string]bool{
+		"chronicle:derive_flows": true, "chronicle:system": true,
 	}
 )
 
-// ConfidenceCap returns the maximum confidence allowed given the evidence source kinds present.
-// Better evidence sources unlock higher caps.
-func ConfidenceCap(evidence []store.EvidenceRow) float64 {
-	hasRuntime := false
-	hasCode := false
-	hasManual := false
+// asserterTier classifies a single evidence row by who asserted it and
+// returns the confidence cap that row can unlock.
+// Note: source_kind "file" alone says nothing about the asserter —
+// LLM evidence is also file-anchored. Classification leans on extractor_id.
+func asserterTier(e store.EvidenceRow) float64 {
+	tier := tierDefault
+	switch {
+	case manualSourceKinds[e.SourceKind] || strings.HasPrefix(e.ExtractorID, "mcp:"):
+		tier = tierManual
+	case runtimeSourceKinds[e.SourceKind]:
+		tier = tierRuntime
+	case structuralExtractors[e.ExtractorID] || structuralSourceKinds[e.SourceKind]:
+		tier = tierStructural
+	case llmExtractors[e.ExtractorID]:
+		tier = tierLLM
+	case strings.HasPrefix(e.ExtractorID, "chronicle:resolve:") ||
+		derivedExtractors[e.ExtractorID] || e.SourceKind == "synthetic":
+		tier = tierDerived
+	}
+	// Verification promotion: a verified row counts as structural evidence,
+	// regardless of who originally asserted it. Never demotes a higher tier.
+	if e.VerificationStatus == "verified" && tier < tierStructural {
+		tier = tierStructural
+	}
+	return tier
+}
 
+// ConfidenceCap returns the maximum confidence allowed given the evidence present.
+// The cap is the best asserter tier among valid/revalidated positive,
+// non-rejected evidence rows. Better asserters unlock higher caps.
+func ConfidenceCap(evidence []store.EvidenceRow) float64 {
+	best := 0.0
 	for _, e := range evidence {
 		if e.EvidencePolarity != "positive" {
 			continue
@@ -51,28 +97,18 @@ func ConfidenceCap(evidence []store.EvidenceRow) float64 {
 		if e.EvidenceStatus != "valid" && e.EvidenceStatus != "revalidated" {
 			continue
 		}
-		if runtimeSourceKinds[e.SourceKind] {
-			hasRuntime = true
+		if e.VerificationStatus == "rejected" {
+			continue
 		}
-		if codeSourceKinds[e.SourceKind] {
-			hasCode = true
-		}
-		if manualSourceKinds[e.SourceKind] && e.EvidencePolarity == "positive" {
-			hasManual = true
+		if t := asserterTier(e); t > best {
+			best = t
 		}
 	}
-
-	switch {
-	case hasManual:
-		return 0.95
-	case hasRuntime:
-		return 0.92
-	case hasCode:
-		return 0.85
-	default:
-		// LLM-only or no evidence — capped low
-		return 0.65
+	if best == 0 {
+		// No qualifying evidence — capped low.
+		return tierDefault
 	}
+	return best
 }
 
 // ConfidenceFromDerivation returns the base confidence for a derivation kind.
@@ -95,13 +131,39 @@ func CombineConfidence(confidences []float64) float64 {
 	return 1 - product
 }
 
+// verifiedConfidenceFloor is the minimum contribution of a mechanically
+// verified evidence row. Verification replaces the asserter's self-reported
+// uncertainty: once an assertion is confirmed against the source, the row is
+// at least as trustworthy as a structural extraction.
+const verifiedConfidenceFloor = tierStructural
+
+// effectiveRowConfidence returns the confidence a single evidence row
+// contributes to positive confidence. Verified rows are floored at the
+// structural tier — a mechanically confirmed assertion is no longer the
+// asserter's uncertainty.
+func effectiveRowConfidence(e store.EvidenceRow) float64 {
+	if e.VerificationStatus == "verified" && e.Confidence < verifiedConfidenceFloor {
+		return verifiedConfidenceFloor
+	}
+	return e.Confidence
+}
+
 // PositiveConfidence computes combined confidence from valid/revalidated positive evidence.
+// Rows whose verification_status is "rejected" do not count as positive evidence.
+// Verified rows contribute at least verifiedConfidenceFloor (see effectiveRowConfidence).
 func PositiveConfidence(evidence []store.EvidenceRow) float64 {
 	var confidences []float64
 	for _, e := range evidence {
-		if e.EvidencePolarity == "positive" && (e.EvidenceStatus == "valid" || e.EvidenceStatus == "revalidated") {
-			confidences = append(confidences, e.Confidence)
+		if e.EvidencePolarity != "positive" {
+			continue
 		}
+		if e.EvidenceStatus != "valid" && e.EvidenceStatus != "revalidated" {
+			continue
+		}
+		if e.VerificationStatus == "rejected" {
+			continue
+		}
+		confidences = append(confidences, effectiveRowConfidence(e))
 	}
 	return CombineConfidence(confidences)
 }

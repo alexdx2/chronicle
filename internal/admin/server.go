@@ -1473,7 +1473,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				"edge_id": virtualEdgeID, "edge_key": key,
 				"from_node_id": cID, "to_node_id": toID,
 				"edge_type": et, "derivation": "rollup",
-				"confidence": 0.9, "active": true,
+				"confidence": 0.9, "trust_score": 0.9, "active": true,
 				"virtual": true, "derived": true,
 			})
 			virtualEdgeID--
@@ -1525,7 +1525,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				edgeList = append(edgeList, map[string]any{
 					"edge_id": e.EdgeID, "edge_key": e.EdgeKey, "from_node_id": e.FromNodeID,
 					"to_node_id": e.ToNodeID, "edge_type": e.EdgeType, "derivation": e.DerivationKind,
-					"confidence": e.Confidence, "active": e.Active,
+					"confidence": e.Confidence, "trust_score": e.TrustScore, "active": e.Active,
 				})
 			}
 		}
@@ -1541,7 +1541,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			edgeList = append(edgeList, map[string]any{
 				"edge_id": e.EdgeID, "edge_key": e.EdgeKey, "from_node_id": e.FromNodeID,
 				"to_node_id": e.ToNodeID, "edge_type": e.EdgeType, "derivation": e.DerivationKind,
-				"confidence": e.Confidence, "active": e.Active,
+				"confidence": e.Confidence, "trust_score": e.TrustScore, "active": e.Active,
 			})
 		}
 	}

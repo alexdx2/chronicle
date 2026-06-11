@@ -176,20 +176,45 @@ func TestConfidenceCap(t *testing.T) {
 		wantCap  float64
 	}{
 		{"no evidence", nil, 0.65},
-		{"LLM-only (webhook source)", []store.EvidenceRow{
-			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "webhook", Confidence: 0.5},
-		}, 0.65},
-		{"code evidence (file source)", []store.EvidenceRow{
-			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", Confidence: 0.9},
-		}, 0.85},
-		{"runtime evidence (prisma)", []store.EvidenceRow{
+		{"manual tier (user_feedback source)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "user_feedback", Confidence: 0.9},
+		}, 0.95},
+		{"manual tier (mcp: extractor prefix)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "mcp:claude", Confidence: 0.9},
+		}, 0.95},
+		{"runtime tier (prisma source)", []store.EvidenceRow{
 			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "prisma", Confidence: 0.95},
 		}, 0.92},
+		{"structural tier (chronicle-ast extractor on file)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-ast", Confidence: 0.9},
+		}, 0.85},
+		{"structural tier (openapi source, any extractor)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "openapi", ExtractorID: "chronicle-scan", Confidence: 0.9},
+		}, 0.85},
+		{"llm tier (chronicle-scan on file — not structural)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-scan", Confidence: 0.9},
+		}, 0.65},
+		{"derived tier (chronicle:resolve: prefix)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle:resolve:endpoint", Confidence: 0.9},
+		}, 0.60},
+		{"derived tier (synthetic source)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "synthetic", Confidence: 0.9},
+		}, 0.60},
+		{"unknown asserter defaults to 0.65 (file source alone is not structural)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "claude-code", Confidence: 0.9},
+		}, 0.65},
+		{"webhook source defaults to 0.65", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "webhook", Confidence: 0.5},
+		}, 0.65},
+		{"best tier wins (llm + structural)", []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-scan", Confidence: 0.6},
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-ast", Confidence: 0.6},
+		}, 0.85},
 		{"stale evidence ignored for cap", []store.EvidenceRow{
-			{EvidencePolarity: "positive", EvidenceStatus: "stale", SourceKind: "file", Confidence: 0.9},
+			{EvidencePolarity: "positive", EvidenceStatus: "stale", SourceKind: "file", ExtractorID: "chronicle-ast", Confidence: 0.9},
 		}, 0.65},
 		{"negative evidence ignored for cap", []store.EvidenceRow{
-			{EvidencePolarity: "negative", EvidenceStatus: "valid", SourceKind: "file", Confidence: 0.9},
+			{EvidencePolarity: "negative", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-ast", Confidence: 0.9},
 		}, 0.65},
 	}
 	for _, tt := range tests {
@@ -200,10 +225,160 @@ func TestConfidenceCap(t *testing.T) {
 	}
 }
 
+func TestVerificationPromotion(t *testing.T) {
+	t.Run("verified LLM row promotes to structural cap", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file",
+				ExtractorID: "chronicle-scan", VerificationStatus: "verified", Confidence: 0.9},
+		}
+		got := ConfidenceCap(evidence)
+		if math.Abs(got-0.85) > 0.001 {
+			t.Errorf("verified LLM cap = %v, want 0.85", got)
+		}
+	})
+
+	t.Run("verified derived row promotes to structural cap", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file",
+				ExtractorID: "chronicle:resolve:endpoint", VerificationStatus: "verified", Confidence: 0.9},
+		}
+		got := ConfidenceCap(evidence)
+		if math.Abs(got-0.85) > 0.001 {
+			t.Errorf("verified derived cap = %v, want 0.85", got)
+		}
+	})
+
+	t.Run("verification never demotes a higher tier", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "user_feedback",
+				VerificationStatus: "verified", Confidence: 0.9},
+		}
+		got := ConfidenceCap(evidence)
+		if math.Abs(got-0.95) > 0.001 {
+			t.Errorf("verified manual cap = %v, want 0.95", got)
+		}
+	})
+}
+
+func TestVerificationConfidenceFloor(t *testing.T) {
+	t.Run("verified low-confidence row floors at structural tier", func(t *testing.T) {
+		// A mechanically confirmed assertion is no longer the asserter's
+		// uncertainty: a verified 0.44 row contributes 0.85, not 0.44.
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file",
+				ExtractorID: "chronicle-scan", VerificationStatus: "verified", Confidence: 0.44},
+		}
+		pos := PositiveConfidence(evidence)
+		if math.Abs(pos-0.85) > 0.001 {
+			t.Errorf("PositiveConfidence(verified 0.44) = %v, want 0.85", pos)
+		}
+		conf, _, trust, _ := ComputeTrust(evidence)
+		if math.Abs(conf-0.85) > 0.001 {
+			t.Errorf("base confidence = %v, want 0.85 (floor meets promoted cap)", conf)
+		}
+		if math.Abs(trust-0.85) > 0.001 {
+			t.Errorf("trust = %v, want 0.85", trust)
+		}
+	})
+
+	t.Run("unverified low-confidence row keeps its own confidence", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file",
+				ExtractorID: "chronicle-scan", Confidence: 0.44},
+		}
+		pos := PositiveConfidence(evidence)
+		if math.Abs(pos-0.44) > 0.001 {
+			t.Errorf("PositiveConfidence(unverified 0.44) = %v, want 0.44", pos)
+		}
+		conf, _, trust, _ := ComputeTrust(evidence)
+		if math.Abs(conf-0.44) > 0.001 {
+			t.Errorf("base confidence = %v, want 0.44", conf)
+		}
+		if math.Abs(trust-0.44) > 0.001 {
+			t.Errorf("trust = %v, want 0.44", trust)
+		}
+	})
+
+	t.Run("verified row above the floor is unchanged", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "user_feedback",
+				VerificationStatus: "verified", Confidence: 0.9},
+		}
+		pos := PositiveConfidence(evidence)
+		if math.Abs(pos-0.9) > 0.001 {
+			t.Errorf("PositiveConfidence(verified 0.9) = %v, want 0.9", pos)
+		}
+	})
+}
+
+func TestRejectionExclusion(t *testing.T) {
+	t.Run("rejected row excluded from cap scan", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			// rejected structural row must not unlock the structural cap
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file",
+				ExtractorID: "chronicle-ast", VerificationStatus: "rejected", Confidence: 0.9},
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file",
+				ExtractorID: "chronicle-scan", Confidence: 0.6},
+		}
+		got := ConfidenceCap(evidence)
+		if math.Abs(got-0.65) > 0.001 {
+			t.Errorf("cap with rejected structural row = %v, want 0.65", got)
+		}
+	})
+
+	t.Run("rejected row excluded from PositiveConfidence", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", VerificationStatus: "rejected", Confidence: 0.9},
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.6},
+		}
+		got := PositiveConfidence(evidence)
+		if math.Abs(got-0.6) > 0.001 {
+			t.Errorf("PositiveConfidence with rejected row = %v, want 0.6", got)
+		}
+	})
+
+	t.Run("all rows rejected gives zero positive confidence", func(t *testing.T) {
+		evidence := []store.EvidenceRow{
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", VerificationStatus: "rejected", Confidence: 0.9},
+		}
+		got := PositiveConfidence(evidence)
+		if got != 0.0 {
+			t.Errorf("PositiveConfidence all rejected = %v, want 0.0", got)
+		}
+	})
+}
+
+func TestCorroborationCrossesLLMCap(t *testing.T) {
+	// Two LLM rows at 0.6 plus one AST row at 0.6:
+	// combined = 1 - (1-0.6)^3 = 0.936, structural tier present → capped at 0.85.
+	evidence := []store.EvidenceRow{
+		{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-scan", Confidence: 0.6},
+		{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-scan", Confidence: 0.6},
+		{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file", ExtractorID: "chronicle-ast", Confidence: 0.6},
+	}
+
+	pos := PositiveConfidence(evidence)
+	if math.Abs(pos-0.936) > 0.001 {
+		t.Fatalf("PositiveConfidence = %v, want 0.936", pos)
+	}
+
+	conf, _, _, _ := ComputeTrust(evidence)
+	if math.Abs(conf-0.85) > 0.001 {
+		t.Errorf("corroborated confidence = %v, want 0.85 (crosses 0.65, capped by structural)", conf)
+	}
+
+	// Without the AST row, the same combined evidence stays at the LLM cap.
+	llmOnly := evidence[:2]
+	conf, _, _, _ = ComputeTrust(llmOnly)
+	if math.Abs(conf-0.65) > 0.001 {
+		t.Errorf("llm-only confidence = %v, want 0.65 (LLM cap)", conf)
+	}
+}
+
 func TestComputeTrust(t *testing.T) {
 	t.Run("healthy edge with code evidence", func(t *testing.T) {
 		evidence := []store.EvidenceRow{
-			{EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.95, SourceKind: "file"},
+			{EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.95, SourceKind: "file", ExtractorID: "chronicle-ast"},
 		}
 		conf, fresh, trust, status := ComputeTrust(evidence)
 		// 0.95 capped at 0.85 (code evidence cap)

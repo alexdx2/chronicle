@@ -47,7 +47,7 @@ func TestTrustLifecycle(t *testing.T) {
 		Evidence: []ImportEvidence{
 			{TargetKind: "edge", EdgeKey: "code:provider:orders:ordersservice->code:provider:orders:paymentsservice:INJECTS",
 				SourceKind: "file", FilePath: "src/orders/orders.service.ts", LineStart: 12,
-				ExtractorID: "claude-code", ExtractorVersion: "1.0"},
+				ExtractorID: "chronicle-ast", ExtractorVersion: "1.0"},
 		},
 	}
 
@@ -96,7 +96,7 @@ func TestTrustLifecycle(t *testing.T) {
 		SourceKind:       "file",
 		FilePath:         "src/orders/orders.service.ts",
 		LineStart:        12,
-		ExtractorID:      "claude-code",
+		ExtractorID:      "chronicle-ast",
 		ExtractorVersion: "1.0",
 		RevisionID:       revID2,
 	}

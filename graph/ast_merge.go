@@ -223,6 +223,13 @@ func factKey(f map[string]any) string {
 // unionFacts merges AST facts with LLM facts, keeping LLM facts on duplicate.
 // Result order: non-duplicate AST facts first, then all LLM facts.
 //
+// Origin tagging (confidence redesign §2): every fact in the merged stream
+// records where it came from so downstream evidence can carry the right
+// extractor identity ("chronicle-ast" vs "chronicle-scan"):
+//   - AST-only fact            → "origin":"ast"
+//   - LLM fact matching an AST fact (factKey dedup) → "origin":"ast+llm"
+//   - pure LLM fact            → untagged (llm is the default)
+//
 // R7d: when an LLM fact wins over a duplicate AST fact, fields that the LLM fact
 // lacks but the AST fact has are copied over. This preserves deterministic fields
 // like "transport" (tagged by AST rules) that LLMs often omit. Without this, an
@@ -242,6 +249,8 @@ func unionFacts(astFacts, llmFacts []map[string]any) []map[string]any {
 			continue
 		}
 		llmF := llmFacts[idx]
+		// The surviving LLM fact is corroborated by AST — mark it.
+		llmF["origin"] = "ast+llm"
 		// Copy fields present in AST but absent in LLM.
 		for _, field := range []string{"transport", "to_type"} {
 			if astVal, ok := astF[field]; ok {
@@ -265,10 +274,22 @@ func unionFacts(astFacts, llmFacts []map[string]any) []map[string]any {
 	}
 	for _, f := range astFacts {
 		if !llmKeys[factKey(f)] {
+			f["origin"] = "ast"
 			result = append(result, f)
 		}
 	}
 	// Append all LLM facts (they always win on overlap, now enriched with AST-only fields).
 	result = append(result, llmFacts...)
 	return result
+}
+
+// factExtractorID maps a fact's origin tag (set by unionFacts) to the evidence
+// extractor identity. Facts the AST merge produced or corroborated ("ast",
+// "ast+llm") are deterministic — their evidence carries "chronicle-ast".
+// Pure-LLM facts (untagged or "llm") keep "chronicle-scan".
+func factExtractorID(fact Fact) string {
+	if strings.Contains(fact.Origin, "ast") {
+		return "chronicle-ast"
+	}
+	return "chronicle-scan"
 }

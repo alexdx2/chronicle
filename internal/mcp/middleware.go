@@ -78,7 +78,7 @@ func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandler
 			dl.LogToolCall(toolName, params, entry.Summary, durationMs, entry.ErrorMessage)
 		}
 
-		// Auto-discovery: after import_all, analyze for low-confidence edges and gaps
+		// Auto-discovery: after import_all, analyze for low-trust edges and gaps
 		if toolName == "chronicle_import_all" && err == nil && entry.ErrorMessage == "" {
 			go autoDiscover(logStore, entry.ResultJSON)
 		}
@@ -87,7 +87,7 @@ func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandler
 	}
 }
 
-// autoDiscover creates discoveries for low-confidence edges and structural gaps after an import.
+// autoDiscover creates discoveries for low-trust edges and structural gaps after an import.
 func autoDiscover(s *store.Store, resultJSON string) {
 	var result map[string]any
 	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
@@ -101,14 +101,21 @@ func autoDiscover(s *store.Store, resultJSON string) {
 	}
 	domain := allNodes[0].DomainKey
 
-	// Check for low-confidence edges
+	// Check for low-trust edges (trust_score = capped confidence × freshness;
+	// below 0.7 means uncorroborated, unverified LLM/derived facts).
+	// Flow-layer edges (TRIGGERS_FLOW/REQUIRES) are excluded: they are derived
+	// by construction (chronicle:derive_flows) and never mechanically
+	// verifiable, so a low trust score there is expected, not actionable.
 	edges, err := s.ListEdges(store.EdgeFilter{})
 	if err != nil {
 		return
 	}
 	lowConfCount := 0
 	for _, e := range edges {
-		if e.Confidence > 0 && e.Confidence < 0.7 && e.Active {
+		if e.EdgeType == "TRIGGERS_FLOW" || e.EdgeType == "REQUIRES" {
+			continue
+		}
+		if e.TrustScore > 0 && e.TrustScore < 0.7 && e.Active {
 			lowConfCount++
 		}
 	}
@@ -116,8 +123,8 @@ func autoDiscover(s *store.Store, resultJSON string) {
 		s.AddDiscovery(store.Discovery{
 			DomainKey:   domain,
 			Category:    "missing_edge",
-			Title:       fmt.Sprintf("%d low-confidence edges detected", lowConfCount),
-			Description: fmt.Sprintf("Found %d edges with confidence below 0.7 after import. These relationships may need verification or additional evidence.", lowConfCount),
+			Title:       fmt.Sprintf("%d low-trust edges detected", lowConfCount),
+			Description: fmt.Sprintf("Found %d edges with trust score below 0.7 after import. These relationships are unverified LLM/derived facts — they need verification or corroborating evidence.", lowConfCount),
 			Source:      "system",
 			Confidence:  0.3,
 		})

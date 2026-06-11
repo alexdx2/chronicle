@@ -28,6 +28,7 @@ type Fact struct {
 	Target     string   `json:"target,omitempty"`      // URL or target identifier
 	Transport  string   `json:"transport,omitempty"`   // transport mechanism: "queue", "local", "kafka", etc.
 	Confidence float64  `json:"confidence,omitempty"`  // agent confidence [0,1]
+	Origin     string   `json:"origin,omitempty"`      // fact provenance: "ast", "ast+llm", or "" (llm default) — set by unionFacts
 	Note       string   `json:"note,omitempty"`        // agent uncertainty/note
 	Reason     string   `json:"reason,omitempty"`      // reason for relationship (e.g. parent container justification)
 	// Flow-specific fields
@@ -152,7 +153,11 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
 		for _, ev := range evidence {
 			var assertion map[string]any
 			if json.Unmarshal([]byte(ev.Assertion), &assertion) == nil {
-				if sub, ok := assertion["substring"].(string); ok {
+				// "url" carries the full resolved URL; "substring" is only the
+				// path since assertions assert source-literal text.
+				if u, ok := assertion["url"].(string); ok && u != "" {
+					targetURL = u
+				} else if sub, ok := assertion["substring"].(string); ok {
 					targetURL = sub
 				}
 			}
@@ -466,6 +471,9 @@ func (g *Graph) collectKnownEntities(allFiles []fileFacts) map[string]bool {
 
 func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath string, fact Fact, _ map[string]bool) (createdCounts, *UnresolvedRef, error) {
 	var counts createdCounts
+	// Evidence extractor identity follows the fact's provenance: AST-derived or
+	// AST-corroborated facts emit "chronicle-ast", pure-LLM facts "chronicle-scan".
+	extractorID := factExtractorID(fact)
 
 	switch fact.Kind {
 	case "import":
@@ -574,7 +582,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			TargetKind:       "edge",
 			SourceKind:       "file",
 			FilePath:         filePath,
-			ExtractorID:      "chronicle-scan",
+			ExtractorID:      extractorID,
 			ExtractorVersion: "1.0",
 			Confidence:       confidence,
 			RevisionID:       revisionID,
@@ -612,7 +620,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
 			AssertionKind: assertionKind, Assertion: assertion,
 		})
@@ -672,16 +680,26 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 
-		// Evidence: text_contains assertion for the URL. Method is kept so the
-		// external-endpoint post-pass can rebuild the endpoint key.
+		// Evidence: text_contains assertion for the call. Assert the URL *path*,
+		// not the resolved URL — source builds URLs from env vars / template
+		// literals (`${JERRY_API_URL}/jerry/status`), so the full URL never
+		// appears literally and would be rejected at creation-time verification.
+		// The full URL is kept in "url" (read by FindUnmatchedHTTPCalls) and
+		// method is kept so the external-endpoint post-pass can rebuild the
+		// endpoint key.
+		assertSubstring := fact.Target
+		if p := extractPathFromURL(fact.Target); p != "" {
+			assertSubstring = p
+		}
 		assertion, _ := json.Marshal(map[string]any{
-			"substring": fact.Target,
+			"substring": assertSubstring,
+			"url":       fact.Target,
 			"context":   "fetch",
 			"method":    fact.Method,
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.85, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
@@ -705,7 +723,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				}
 				if _, err := g.AddEdgeEvidence(callEpEdgeKey, validate.EvidenceInput{
 					TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-					ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+					ExtractorID: extractorID, ExtractorVersion: "1.0",
 					Confidence: 0.80, RevisionID: revisionID,
 					AssertionKind: "text_contains", Assertion: string(assertion),
 				}); err != nil {
@@ -737,7 +755,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// Only add evidence to existing edge — don't create edges from call facts alone
 			_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.80, RevisionID: revisionID,
 				AssertionKind: "call_expression", Assertion: string(assertion),
 			})
@@ -769,7 +787,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
 			if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.90, RevisionID: revisionID,
 				AssertionKind: "text_contains", Assertion: string(assertion),
 			}); err != nil {
@@ -825,7 +843,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				assertion, _ := json.Marshal(map[string]any{"substring": toName})
 				if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 					TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-					ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+					ExtractorID: extractorID, ExtractorVersion: "1.0",
 					Confidence: 0.9, RevisionID: revisionID,
 					AssertionKind: "text_contains", Assertion: string(assertion),
 				}); err != nil {
@@ -864,7 +882,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{"substring": toName})
 		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		}); err != nil {
@@ -903,7 +921,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
 		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		}); err != nil {
@@ -937,7 +955,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{"substring": fact.Target})
 		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.85, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		}); err != nil {
@@ -1004,7 +1022,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
 			AssertionKind: "module_provides", Assertion: string(assertion),
 		})
@@ -1049,7 +1067,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
 			AssertionKind: "constructor_injection", Assertion: string(assertion),
 		})
@@ -1069,7 +1087,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		nodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.90, RevisionID: revisionID,
 			AssertionKind: "decorator", Assertion: string(assertion),
 		})
@@ -1110,7 +1128,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
@@ -1147,7 +1165,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
@@ -1200,7 +1218,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.90, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
@@ -1211,14 +1229,27 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		nodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
 		modelID := g.ensureNodeID(domainKey, revisionID, nodeKey, fact.To, "")
 
-		assertion, _ := json.Marshal(map[string]any{
-			"model": fact.To,
-		})
+		// prisma_model assertions only verify against Prisma schema syntax
+		// (`model X { ... }`). Models can also be defined in EF DbContexts,
+		// entity classes, etc. — for those, assert the model name as literal
+		// text so creation-time verification matches the actual source.
+		assertionKind := "prisma_model"
+		var assertion []byte
+		if strings.HasSuffix(filePath, ".prisma") {
+			assertion, _ = json.Marshal(map[string]any{
+				"model": fact.To,
+			})
+		} else {
+			assertionKind = "text_contains"
+			assertion, _ = json.Marshal(map[string]any{
+				"substring": fact.To,
+			})
+		}
 		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
-			AssertionKind: "prisma_model", Assertion: string(assertion),
+			AssertionKind: assertionKind, Assertion: string(assertion),
 		})
 		counts.nodes++
 		counts.evidence++
@@ -1235,7 +1266,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{"enum": fact.To})
 		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
 			AssertionKind: "schema_enum", Assertion: string(assertion),
 		})
@@ -1277,7 +1308,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
 		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		}); err != nil {
@@ -1314,7 +1345,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		_, _ = g.AddNodeEvidence(flowKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.85, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
@@ -1345,7 +1376,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			triggerAssertion, _ := json.Marshal(map[string]any{"substring": triggerPath})
 			if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.85, RevisionID: revisionID,
 				AssertionKind: "text_contains", Assertion: string(triggerAssertion),
 			}); err != nil {
@@ -1377,7 +1408,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			})
 			_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-				ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.80, RevisionID: revisionID,
 				AssertionKind: "text_contains", Assertion: string(reqAssertion),
 			})
@@ -1480,7 +1511,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: "chronicle-scan", ExtractorVersion: "1.0",
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
 			AssertionKind: "parent_declaration", Assertion: string(assertion),
 		})

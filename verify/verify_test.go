@@ -326,6 +326,101 @@ func TestTextVerifier_Missing(t *testing.T) {
 	}
 }
 
+func TestTextVerifier_CaseInsensitiveFallback(t *testing.T) {
+	// Prisma client accessors are camelCase: the canonical model name
+	// "BattleEvent" appears as "battleEvent" in source.
+	content := []byte(`export class ArenaService {
+  record() {
+    return this.prisma.battleEvent.create({});
+  }
+}
+`)
+
+	v := &TextVerifier{}
+	assertion := json.RawMessage(`{"substring": "BattleEvent"}`)
+
+	result, err := v.Verify(content, assertion, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "valid" {
+		t.Errorf("expected valid via case-insensitive fallback, got %s: %s", result.Status, result.Reason)
+	}
+	if result.Confidence >= 0.60 {
+		t.Errorf("fallback confidence must be below exact-match 0.60, got %f", result.Confidence)
+	}
+}
+
+func TestTextVerifier_RouteSegmentsFallback(t *testing.T) {
+	// NestJS declares routes piecewise: @Controller('arena') + @Post('attack').
+	// The canonical path "/arena/attack" never appears literally.
+	content := []byte(`@Controller('arena')
+export class ArenaController {
+  @Post('attack')
+  attack() {}
+}
+`)
+
+	v := &TextVerifier{}
+	assertion := json.RawMessage(`{"substring": "/arena/attack"}`)
+
+	result, err := v.Verify(content, assertion, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "valid" {
+		t.Errorf("expected valid via segment fallback, got %s: %s", result.Status, result.Reason)
+	}
+	if result.Confidence >= 0.60 {
+		t.Errorf("segment-fallback confidence must be below exact-match 0.60, got %f", result.Confidence)
+	}
+}
+
+func TestTextVerifier_RouteSegmentsSkipParams(t *testing.T) {
+	// C# attribute routing: [Route("api/[controller]")] + [HttpGet("{fighterId}/history")].
+	// Template tokens and route params must not block the match.
+	content := []byte(`[Route("api/[controller]")]
+public class ScoreController : ControllerBase
+{
+    [HttpGet("{fighterId}/history")]
+    public Task GetBattleHistory(string fighterId) {}
+}
+`)
+
+	v := &TextVerifier{}
+	assertion := json.RawMessage(`{"substring": "/api/score/{fighterId}/history"}`)
+
+	result, err := v.Verify(content, assertion, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "valid" {
+		t.Errorf("expected valid via segment fallback, got %s: %s", result.Status, result.Reason)
+	}
+}
+
+func TestTextVerifier_RouteSegmentsMissing(t *testing.T) {
+	// A genuinely absent route stays missing — segment fallback requires
+	// every concrete segment to appear.
+	content := []byte(`@Controller('arena')
+export class ArenaController {
+  @Post('attack')
+  attack() {}
+}
+`)
+
+	v := &TextVerifier{}
+	assertion := json.RawMessage(`{"substring": "/arena/teleport"}`)
+
+	result, err := v.Verify(content, assertion, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "missing" {
+		t.Errorf("expected missing for absent route, got %s: %s", result.Status, result.Reason)
+	}
+}
+
 func TestRegistry_Dispatch(t *testing.T) {
 	reg := DefaultRegistry()
 

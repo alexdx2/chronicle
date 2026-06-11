@@ -184,6 +184,74 @@ func TestQueryPathNoPubSubForNonTopic(t *testing.T) {
 	}
 }
 
+// TestQueryPathRanksByTrustScore: two parallel A→D paths whose edges carry the
+// SAME raw confidence but different derived trust_score (e.g. one route is
+// AST-verified, the other is LLM-only unverified). Path scoring must read
+// trust_score, so the higher-trust route ranks first.
+func TestQueryPathRanksByTrustScore(t *testing.T) {
+	g := setupGraph(t)
+	s := g.Store()
+	revID, _ := s.CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:controller:orders:src", Layer: "code", NodeType: "controller", DomainKey: "orders", Name: "Src"}, revID)
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:provider:orders:hightrust", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "HighTrust"}, revID)
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:provider:orders:lowtrust", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "LowTrust"}, revID)
+	g.UpsertNode(validate.NodeInput{NodeKey: "code:provider:orders:dst", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Dst"}, revID)
+
+	mkEdge := func(from, to string) int64 {
+		t.Helper()
+		id, err := g.UpsertEdge(validate.EdgeInput{FromNodeKey: from, ToNodeKey: to, EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"}, revID)
+		if err != nil {
+			t.Fatalf("UpsertEdge %s->%s: %v", from, to, err)
+		}
+		return id
+	}
+	hi1 := mkEdge("code:controller:orders:src", "code:provider:orders:hightrust")
+	hi2 := mkEdge("code:provider:orders:hightrust", "code:provider:orders:dst")
+	lo1 := mkEdge("code:controller:orders:src", "code:provider:orders:lowtrust")
+	lo2 := mkEdge("code:provider:orders:lowtrust", "code:provider:orders:dst")
+
+	// Same raw confidence (0.8) everywhere; trust differs:
+	// verified/AST route → 0.85, LLM-only unverified route → 0.60.
+	for _, id := range []int64{hi1, hi2} {
+		if err := s.UpdateEdgeTrust(id, 0.8, 1.0, 0.85, "active"); err != nil {
+			t.Fatalf("UpdateEdgeTrust: %v", err)
+		}
+	}
+	for _, id := range []int64{lo1, lo2} {
+		if err := s.UpdateEdgeTrust(id, 0.8, 1.0, 0.60, "active"); err != nil {
+			t.Fatalf("UpdateEdgeTrust: %v", err)
+		}
+	}
+
+	result, err := g.QueryPath("code:controller:orders:src", "code:provider:orders:dst", PathOptions{MaxDepth: 4, TopK: 5, Mode: "directed"})
+	if err != nil {
+		t.Fatalf("QueryPath: %v", err)
+	}
+	if len(result.Paths) != 2 {
+		t.Fatalf("paths = %d, want 2", len(result.Paths))
+	}
+	first := result.Paths[0]
+	wantVia := "code:provider:orders:hightrust"
+	via := ""
+	for _, n := range first.Nodes {
+		if n == "code:provider:orders:hightrust" || n == "code:provider:orders:lowtrust" {
+			via = n
+		}
+	}
+	if via != wantVia {
+		t.Errorf("top path goes via %q, want %q (higher trust must rank first)", via, wantVia)
+	}
+	if first.PathScore <= result.Paths[1].PathScore {
+		t.Errorf("top path_score = %v, want > second path_score %v", first.PathScore, result.Paths[1].PathScore)
+	}
+	// Score must reflect trust (0.85² × 0.95), not raw confidence (0.8² × 0.95).
+	wantScore := 0.85 * 0.85 * 0.95
+	if diff := first.PathScore - wantScore; diff > 0.001 || diff < -0.001 {
+		t.Errorf("top path_score = %v, want ~%v (trust-based)", first.PathScore, wantScore)
+	}
+}
+
 func TestQueryPathDerivationFilter(t *testing.T) {
 	g := seedPathGraph(t)
 	// hard-only: no path A->D because CALLS_SERVICE is linked

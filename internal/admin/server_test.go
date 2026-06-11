@@ -79,6 +79,62 @@ func TestHandleGraph(t *testing.T) {
 	}
 }
 
+func TestHandleGraphEmitsTrustScore(t *testing.T) {
+	srv := setupTestServer(t)
+	rev, _ := srv.store.CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+	idA, _ := srv.store.UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:orders:a", Layer: "code", NodeType: "provider",
+		DomainKey: "orders", Name: "AService", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.75,
+	})
+	idB, _ := srv.store.UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:orders:b", Layer: "code", NodeType: "provider",
+		DomainKey: "orders", Name: "BService", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.75,
+	})
+	srv.store.UpsertEdge(store.EdgeRow{
+		EdgeKey:    "code:provider:orders:a->code:provider:orders:b:INJECTS",
+		FromNodeID: idA, ToNodeID: idB, EdgeType: "INJECTS", DerivationKind: "hard",
+		Active: true, LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.65,
+	})
+
+	req := httptest.NewRequest("GET", "/api/graph?domain=orders", nil)
+	w := httptest.NewRecorder()
+	srv.handleGraph(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp struct {
+		Nodes []map[string]any `json:"nodes"`
+		Edges []map[string]any `json:"edges"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Nodes) == 0 || len(resp.Edges) == 0 {
+		t.Fatalf("expected nodes and edges, got %d nodes %d edges", len(resp.Nodes), len(resp.Edges))
+	}
+	for _, n := range resp.Nodes {
+		ts, ok := n["trust_score"]
+		if !ok {
+			t.Fatalf("node %v missing trust_score", n["node_key"])
+		}
+		if n["node_key"] == "code:provider:orders:a" && ts != 0.75 {
+			t.Errorf("node trust_score = %v, want 0.75", ts)
+		}
+	}
+	for _, e := range resp.Edges {
+		ts, ok := e["trust_score"]
+		if !ok {
+			t.Fatalf("edge %v missing trust_score", e["edge_key"])
+		}
+		if e["edge_type"] == "INJECTS" && ts != 0.65 {
+			t.Errorf("edge trust_score = %v, want 0.65", ts)
+		}
+	}
+}
+
 func TestHandleLowConfidence(t *testing.T) {
 	srv := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/low-confidence", nil)
@@ -86,6 +142,56 @@ func TestHandleLowConfidence(t *testing.T) {
 	srv.handleLowConfidence(w, req)
 	if w.Code != 200 {
 		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
+func TestHandleLowConfidenceFiltersByTrustScore(t *testing.T) {
+	srv := setupTestServer(t)
+	rev, _ := srv.store.CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+	idA, _ := srv.store.UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:orders:a", Layer: "code", NodeType: "provider",
+		DomainKey: "orders", Name: "AService", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.9,
+	})
+	idB, _ := srv.store.UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:orders:b", Layer: "code", NodeType: "provider",
+		DomainKey: "orders", Name: "BService", Status: "active",
+		LastSeenRevisionID: rev, Confidence: 0.9, Freshness: 1.0, TrustScore: 0.9,
+	})
+	// Low trust, high confidence — must be reported.
+	srv.store.UpsertEdge(store.EdgeRow{
+		EdgeKey:    "code:provider:orders:a->code:provider:orders:b:INJECTS",
+		FromNodeID: idA, ToNodeID: idB, EdgeType: "INJECTS", DerivationKind: "hard",
+		Active: true, LastSeenRevisionID: rev, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.5,
+	})
+	// High trust, low confidence — must NOT be reported (filter is on trust score).
+	srv.store.UpsertEdge(store.EdgeRow{
+		EdgeKey:    "code:provider:orders:b->code:provider:orders:a:CALLS_SERVICE",
+		FromNodeID: idB, ToNodeID: idA, EdgeType: "CALLS_SERVICE", DerivationKind: "soft",
+		Active: true, LastSeenRevisionID: rev, Confidence: 0.5, Freshness: 1.0, TrustScore: 0.95,
+	})
+
+	req := httptest.NewRequest("GET", "/api/low-confidence", nil)
+	w := httptest.NewRecorder()
+	srv.handleLowConfidence(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var result []map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("count = %d, want 1 (only the low-trust edge): %v", len(result), result)
+	}
+	if result[0]["edge_type"] != "INJECTS" {
+		t.Errorf("edge_type = %v, want INJECTS", result[0]["edge_type"])
+	}
+	if result[0]["trust_score"] != 0.5 {
+		t.Errorf("trust_score = %v, want 0.5", result[0]["trust_score"])
+	}
+	if result[0]["confidence"] != 0.95 {
+		t.Errorf("confidence = %v, want 0.95", result[0]["confidence"])
 	}
 }
 

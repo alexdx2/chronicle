@@ -38,9 +38,11 @@ export function filterGraph(store, config) {
     nodes = nodes.filter(n => config.focusNodeIds.has(n.node_id));
   }
 
-  // 6. Confidence
+  // 6. Confidence slider — compares against the derived trust score
+  // (capped confidence × freshness); falls back to raw confidence when the
+  // API payload predates trust_score.
   if (minConfidence > 0) {
-    nodes = nodes.filter(n => (n.confidence || 1) >= minConfidence);
+    nodes = nodes.filter(n => ((n.trust_score ?? n.confidence) || 1) >= minConfidence);
   }
 
   // 7. Edges

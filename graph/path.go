@@ -50,7 +50,7 @@ type bfsState struct {
 	nodeKey     string
 	pathNodes   []string // node keys in order
 	pathEdges   []PathEdge
-	pathConfs   []float64 // per-edge confidence values
+	pathConfs   []float64 // per-edge trust scores
 	visited     map[int64]bool
 }
 
@@ -188,8 +188,8 @@ func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult,
 				edgeTo = neighborKey
 			}
 
-			// Confidence (default 1.0 if zero).
-			conf := e.Confidence
+			// Trust score (derived: capped confidence × freshness; default 1.0 if zero).
+			conf := e.TrustScore
 			if conf <= 0 {
 				conf = 1.0
 			}
