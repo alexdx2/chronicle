@@ -200,6 +200,8 @@ export class GraphRenderer {
       g.attr('transform', event.transform);
     });
     svg.call(zoom);
+    this._zoom = zoom;
+    this._viewport = { width, height };
 
     if (simNodes.length > 0) {
       const xs = simNodes.map(n => n.x), ys = simNodes.map(n => n.y);
@@ -347,6 +349,16 @@ export class GraphRenderer {
       self.highlightNode(d.id);
     });
 
+    nodeG.on('mouseenter', (event, d) => {
+      self._showTooltip(event, d);
+      self._emphasizeEdges(d.id, true);
+    });
+    nodeG.on('mousemove', (event) => self._moveTooltip(event));
+    nodeG.on('mouseleave', (event, d) => {
+      self._hideTooltip();
+      self._emphasizeEdges(d.id, false);
+    });
+
     nodeG.on('dblclick', (event, d) => {
       event.stopPropagation();
       if (callbacks.onDblClick) callbacks.onDblClick(d);
@@ -392,12 +404,15 @@ export class GraphRenderer {
       if (String(e.target.id || e.target) === id) connected.add(String(e.source.id || e.source));
     });
 
-    this._nodeG.attr('opacity', d => connected.has(String(d.id)) ? 1 : 0.15);
+    this._nodeG.attr('opacity', d => connected.has(String(d.id)) ? 1 : 0.2);
     this._edgeG.attr('opacity', e => {
       const eid = String(e.source.id || e.source);
       const tid = String(e.target.id || e.target);
-      return (eid === id || tid === id) ? 1 : 0.05;
+      return (eid === id || tid === id) ? 1 : 0.08;
     });
+    // Bring the selected neighborhood into view — a highlight the user
+    // can't see (neighbors offscreen) reads as "everything went grey".
+    this._zoomToIds(connected, id);
   }
 
   clearHighlight() {
@@ -407,7 +422,110 @@ export class GraphRenderer {
     this._edgeG.attr('opacity', 0.7);
   }
 
+  // Search hook: emphasize matching nodes and bring them into view.
+  // Returns the number of matches (0 = nothing found, caller may hint).
+  focusMatches(query) {
+    if (!this._svg || !this._nodeG) return 0;
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) { this.clearHighlight(); return 0; }
+    const ids = new Set();
+    this._nodeG.each(d => {
+      const hay = ((d.name || '') + ' ' + (d.node_key || '')).toLowerCase();
+      if (hay.includes(q)) ids.add(String(d.id));
+    });
+    if (ids.size === 0) return 0;
+    this._nodeG.attr('opacity', d => ids.has(String(d.id)) ? 1 : 0.2);
+    this._edgeG.attr('opacity', e => {
+      const eid = String(e.source.id || e.source);
+      const tid = String(e.target.id || e.target);
+      return (ids.has(eid) && ids.has(tid)) ? 0.9 : 0.08;
+    });
+    this._zoomToIds(ids);
+    return ids.size;
+  }
+
+  _zoomToIds(ids, centerId) {
+    if (!this._zoom || !this._nodeG || !this._viewport) return;
+    const pts = [];
+    this._nodeG.each(d => { if (ids.has(String(d.id))) pts.push(d); });
+    if (pts.length === 0) return;
+    const pad = 90;
+    const xs = pts.map(n => n.x), ys = pts.map(n => n.y);
+    const bx = Math.min(...xs) - pad, by = Math.min(...ys) - pad;
+    const bw = Math.max(...xs) - bx + pad * 2, bh = Math.max(...ys) - by + pad * 2;
+    const { width, height } = this._viewport;
+    let scale = Math.min(width / bw, height / bh, 1.2);
+    let cx = bx + bw / 2, cy = by + bh / 2;
+    // Fitting a neighborhood that spans the whole layout would zoom back out
+    // to illegible scale. Stay readable instead and center on the subject —
+    // far neighbors are reachable by pan, near ones are visible right away.
+    const MIN_READABLE = 0.45;
+    if (scale < MIN_READABLE) {
+      scale = MIN_READABLE;
+      const center = centerId && pts.find(d => String(d.id) === String(centerId));
+      if (center) { cx = center.x; cy = center.y; }
+    }
+    this._svg.transition().duration(350).call(
+      this._zoom.transform,
+      d3.zoomIdentity.translate(width / 2 - cx * scale, height / 2 - cy * scale).scale(scale)
+    );
+  }
+
+  _emphasizeEdges(nodeId, on) {
+    if (!this._edgeG) return;
+    const id = String(nodeId);
+    const touches = e =>
+      String(e.source.id || e.source) === id || String(e.target.id || e.target) === id;
+    this._edgeG.selectAll('.edge-path')
+      .attr('stroke-width', function() {
+        const e = d3.select(this.parentNode).datum();
+        return (on && touches(e)) ? 2.5 : 1.5;
+      });
+  }
+
+  _tooltipEl() {
+    let el = document.getElementById('__node_tooltip');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = '__node_tooltip';
+      el.className = 'node-hover-tooltip';
+      el.style.display = 'none';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  _showTooltip(event, d) {
+    const el = this._tooltipEl();
+    const esc = t => String(t || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    el.innerHTML =
+      '<div class="nht-name">' + esc(d.name || d.node_key) + '</div>' +
+      '<div class="nht-type">' + esc(d.node_type || '') + (d.layer ? ' · ' + esc(d.layer) : '') + '</div>' +
+      (d.file_path ? '<div class="nht-type" style="font-family:var(--font-mono)">' + esc(d.file_path) + '</div>' : '') +
+      '<div class="nht-hint">click — select · double-click — drill</div>';
+    el.style.display = 'block';
+    this._moveTooltip(event);
+  }
+
+  _moveTooltip(event) {
+    const el = this._tooltipEl();
+    if (el.style.display === 'none') return;
+    const pad = 14;
+    let x = event.clientX + pad, y = event.clientY + pad;
+    const r = el.getBoundingClientRect();
+    if (x + r.width > innerWidth - 8) x = event.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = event.clientY - r.height - pad;
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+  }
+
+  _hideTooltip() {
+    const el = document.getElementById('__node_tooltip');
+    if (el) el.style.display = 'none';
+  }
+
   destroy() {
+    this._hideTooltip();
     if (this._container) this._container.innerHTML = '';
     this._svg = null;
     this._currentEdges = null;

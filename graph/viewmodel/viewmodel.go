@@ -76,6 +76,7 @@ func ownershipMap(nodes []store.NodeRow) map[int64]*store.NodeRow {
 	}
 	svcDirs := make([]svcEntry, 0, len(services))
 	svcByID := make(map[int64]*store.NodeRow, len(services))
+	svcByName := make(map[string]*store.NodeRow, len(services))
 	for i := range services {
 		fp := services[i].FilePath
 		if fp != "" {
@@ -86,6 +87,9 @@ func ownershipMap(nodes []store.NodeRow) map[int64]*store.NodeRow {
 			svcDirs = append(svcDirs, svcEntry{dir: dir, row: &services[i]})
 		}
 		svcByID[services[i].NodeID] = &services[i]
+		if name := services[i].Name; name != "" {
+			svcByName[name] = &services[i]
+		}
 	}
 
 	for i := range nodes {
@@ -113,6 +117,17 @@ func ownershipMap(nodes []store.NodeRow) map[int64]*store.NodeRow {
 				if len(se.dir) > bestLen {
 					bestLen = len(se.dir)
 					bestSvc = se.row
+				}
+			}
+		}
+		if bestSvc == nil {
+			// Fallback for services imported without file_path: the common
+			// repo convention names the service after its top-level dir
+			// ("arena-api/src/…" → service "arena-api").
+			for _, seg := range strings.Split(fp, "/") {
+				if svc, ok := svcByName[seg]; ok {
+					bestSvc = svc
+					break
 				}
 			}
 		}

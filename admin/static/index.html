@@ -154,6 +154,10 @@ button,input,select,textarea{font-family:inherit}
 .graph-toolbar .mode-btn{padding:4px 12px;border:none;background:transparent;font-size:12px;cursor:pointer;transition:background .15s,color .15s}
 .graph-toolbar .mode-btn.active{background:var(--primary);color:#fff}
 .graph-toolbar .mode-btn.btn-with-ico{display:inline-flex;align-items:center;gap:5px}
+.tb-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:120;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(59,47,32,.12);min-width:170px;padding:4px;display:flex;flex-direction:column}
+.tb-menu button{border:none;background:none;text-align:left;padding:7px 10px;font-size:12px;font-family:inherit;color:var(--text);cursor:pointer;border-radius:5px;display:flex;flex-direction:column;gap:1px}
+.tb-menu button:hover{background:var(--primary-light)}
+.tb-menu button .tbm-hint{font-size:9px;color:var(--text-muted)}
 .btn-ico{width:15px;height:15px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 /* View-mode breadcrumb */
 .crumb-row{display:flex;align-items:center;gap:4px;font-size:12px;padding:5px 12px;background:var(--card);border-bottom:1px solid var(--border);flex-wrap:wrap}
@@ -411,7 +415,7 @@ button,input,select,textarea{font-family:inherit}
   <!-- SECTION:project_switcher:end -->
   <div class="tab-bar">
     <!-- TAB_BTN:overview:start --><button class="tab-btn" :class="{active: tab==='overview'}" @click="tab='overview';history.pushState(null,'','/')">Overview</button><!-- TAB_BTN:overview:end -->
-    <!-- TAB_BTN:graph:start --><button class="tab-btn" data-testid="graph-tab" :class="{active: tab==='graph'}" @click="tab='graph';history.pushState(null,'','/graph/'+graphMode); if(!loaded.graph){loading.graph=true;fetchGraphData().then(async ()=>{loading.graph=false;loaded.graph=true;await initGraphControllers();$nextTick(()=>renderGraph())})}else{$nextTick(()=>renderGraph())}">Graph</button><!-- TAB_BTN:graph:end -->
+    <!-- TAB_BTN:graph:start --><button class="tab-btn" data-testid="graph-tab" :class="{active: tab==='graph'}" @click="openGraphTab()">Graph</button><!-- TAB_BTN:graph:end -->
     <!-- TAB_BTN:language:start --><button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button><!-- TAB_BTN:language:end -->
     <!-- TAB_BTN:settings:start --><button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button><!-- TAB_BTN:settings:end -->
     <!-- SLOT:EXTRA_TABS -->
@@ -750,23 +754,46 @@ button,input,select,textarea{font-family:inherit}
 <div class="container graph-bleed" x-show="tab==='graph'" x-cloak>
   <div class="graph-container">
     <div class="graph-toolbar" style="flex-wrap:wrap;gap:6px">
-      <!-- View toggle -->
-      <div class="mode-toggle">
-        <button class="mode-btn" :class="{active:graphMode==='explore'}" @click="leaveViewMode();graphMode='explore';if(modeController){modeController.setMode('explore')}else{renderGraph()};history.pushState(null,'','/graph/explore')">Explore</button>
-        <button class="mode-btn" :class="{active:!viewActive && graphMode==='tree'}" @click="leaveViewMode();graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree</button>
+      <!-- Zoom axis: big picture → everything. C1/C2/C3 presets renamed to
+           what they show; "Everything" is the classic full /api/graph. -->
+      <div class="mode-toggle" data-testid="view-bar">
+        <button class="mode-btn" :class="{active:viewActive && viewLevel==='c1'}" @click="enterViewLevel('c1')"
+                title="Big picture — the system, external partners, infrastructure">System</button>
+        <button class="mode-btn" :class="{active:viewActive && viewLevel==='c2'}" @click="enterViewLevel('c2')"
+                title="Service map — which services exist and who talks to whom">Services</button>
+        <button class="mode-btn" :class="{active:viewActive && viewLevel==='c3'}" @click="enterViewLevel('c3')"
+                title="Inside the services — modules, providers, endpoints">Components</button>
+        <button class="mode-btn" :class="{active:!viewActive && graphMode==='explore'}" @click="exitViewMode()"
+                title="The raw graph — every node and every edge">Everything</button>
       </div>
 
-      <!-- Unified view bar (Tree + Explore only): All = classic /api/graph,
-           the rest = server view-algebra presets via POST /api/view.
-           Picking a level from Tree switches to Explore explicitly. -->
-      <template x-if="graphMode==='tree' || graphMode==='explore'">
-        <div class="mode-toggle" data-testid="view-bar">
-          <button class="mode-btn" :class="{active:!viewActive}" @click="exitViewMode()">All</button>
-          <template x-for="lv in [['c1','C1'],['c2','C2'],['c3','C3'],['data','Data'],['api','API'],['services','Services'],['flows','Flows']]" :key="lv[0]">
-            <button class="mode-btn" :class="{active:viewActive && viewLevel===lv[0]}" @click="enterViewLevel(lv[0])" x-text="lv[1]"></button>
-          </template>
+      <!-- Thematic lenses: same graph, one concern at a time -->
+      <div style="position:relative" @click.outside="lensOpen=false">
+        <div class="mode-toggle">
+          <button class="mode-btn" data-testid="lens-menu"
+                  :class="{active: viewActive && ['data','api','services','flows'].includes(viewLevel)}"
+                  @click="lensOpen=!lensOpen">
+            <span x-text="(viewActive && {data:'Lens: Data',api:'Lens: API',services:'Lens: Internals',flows:'Lens: Flows'}[viewLevel]) || 'Lens'"></span> ▾
+          </button>
         </div>
-      </template>
+        <div class="tb-menu" x-show="lensOpen" x-cloak>
+          <button @click="lensOpen=false;enterViewLevel('data')">Data models<span class="tbm-hint">entities, enums and how they relate</span></button>
+          <button @click="lensOpen=false;enterViewLevel('api')">API surface<span class="tbm-hint">every endpoint, grouped by service</span></button>
+          <button @click="lensOpen=false;enterViewLevel('services')">Service internals<span class="tbm-hint">services with their code, collapsed</span></button>
+          <button @click="lensOpen=false;enterViewLevel('flows')">Flows<span class="tbm-hint">business use cases — drill into one</span></button>
+        </div>
+      </div>
+
+      <!-- Overflow: rarely-needed views -->
+      <div style="position:relative" @click.outside="overflowOpen=false">
+        <div class="mode-toggle">
+          <button class="mode-btn" :class="{active:graphMode==='tree' && !viewActive}"
+                  @click="overflowOpen=!overflowOpen" aria-label="More view options" title="More views">⋯</button>
+        </div>
+        <div class="tb-menu" x-show="overflowOpen" x-cloak>
+          <button @click="overflowOpen=false;leaveViewMode();graphMode='tree';history.pushState(null,'','/graph/tree');renderGraph()">Tree list<span class="tbm-hint">flat node list grouped by layer</span></button>
+        </div>
+      </div>
       <!-- Repo filter (Tree + Explore only) -->
       <template x-if="!viewActive && (graphMode==='tree' || graphMode==='explore') && allRepos.length > 1">
         <div class="row-4">
@@ -858,7 +885,8 @@ button,input,select,textarea{font-family:inherit}
             <button data-testid="new-canvas" @click="newCanvas()" title="Start an empty Custom view"
                     style="border:1px solid var(--border);background:var(--bg);border-radius:4px;cursor:pointer;font-size:10px;padding:2px 8px;color:var(--primary)">+ New canvas</button>
           </div>
-          <input type="text" placeholder="Search nodes..." x-model="paletteSearch">
+          <input type="text" placeholder="Search nodes… (Enter — focus on canvas)" x-model="paletteSearch"
+                 @keydown.enter="canvasSearch()" @keydown.escape="paletteSearch='';canvasSearch()">
           <div style="flex:1;overflow-y:auto">
             <template x-for="group in getPaletteGroups()" :key="group.key">
               <div style="margin-bottom:4px">
@@ -970,22 +998,57 @@ button,input,select,textarea{font-family:inherit}
             </label>
           </div>
 
-          <!-- Layers (All/Explore mode only — client-side layerFilters).
-               In view mode the Node Types tristate section below carries the
-               layer masters; states always derive from the ACTIVE spec. -->
+          <!-- Layers & types (Explore): ONE taxonomy. The layer checkbox is
+               the master switch; expand a layer to fine-tune its node types
+               (● show · ◐ collapse · ○ hide). In view mode the tristate
+               section below plays this role, driven by the active spec. -->
           <div class="group" data-testid="filter-layers" x-show="!viewActive">
             <h4 @click="collapsedFilterSections.layers = !collapsedFilterSections.layers">
-              <span>Layers</span>
+              <span>Layers &amp; Types
+                <button data-testid="type-glossary-toggle" @click.stop="typeGlossaryOpen = !typeGlossaryOpen"
+                        title="What do these types mean?"
+                        style="border:1px solid var(--border);border-radius:50%;width:14px;height:14px;line-height:1;font-size:9px;padding:0;margin-left:4px;background:transparent;color:var(--text-muted);cursor:pointer">?</button>
+              </span>
               <span class="chevron" x-text="collapsedFilterSections.layers ? '▶' : '▼'"></span>
             </h4>
+            <div x-show="typeGlossaryOpen" data-testid="type-glossary"
+                 style="margin:4px 0 6px;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);max-height:180px;overflow-y:auto">
+              <template x-for="entry in typeGlossaryEntries()" :key="entry[0]">
+                <div style="font-size:9px;line-height:1.5;display:flex;gap:4px">
+                  <span style="font-weight:600;white-space:nowrap" x-text="entry[0]"></span>
+                  <span class="muted" x-text="'— ' + entry[1]"></span>
+                </div>
+              </template>
+            </div>
             <div x-show="!collapsedFilterSections.layers">
               <template x-for="l in allLayers" :key="l">
-                <label>
-                  <input type="checkbox"
-                         :checked="layerFilters.includes(l)"
-                         @change="toggleLayer(l); renderGraph()">
-                  <span :style="'color:'+layerColor(l)" x-text="l"></span>
-                </label>
+                <div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <label style="flex:1;display:flex;align-items:center;gap:5px;padding:2px 0;cursor:pointer">
+                      <input type="checkbox"
+                             :checked="layerFilters.includes(l)"
+                             @change="toggleLayer(l); renderGraph()">
+                      <span :style="'color:'+layerColor(l)" x-text="l"></span>
+                      <span x-show="layerTypesTouched(l)" title="some node types of this layer are filtered" style="font-size:9px;color:var(--warning-text)">◐</span>
+                    </label>
+                    <span class="chevron" style="cursor:pointer;font-size:8px;color:var(--text-muted);padding:2px 4px"
+                          :title="(expandedTypeLayers[l] ? 'Hide' : 'Show') + ' node types of ' + l"
+                          @click="expandedTypeLayers[l]=!expandedTypeLayers[l]"
+                          x-text="expandedTypeLayers[l] ? '▼' : '▶'"></span>
+                  </div>
+                  <template x-if="expandedTypeLayers[l]">
+                    <div style="padding-left:16px">
+                      <template x-for="nt in getNodeTypesForLayer(l)" :key="nt">
+                        <div class="filter-tri" :title="nodeTypeDescriptions[nt] || nt" @click="cycleNodeTypeFilter(nt);renderGraph()">
+                          <span class="filter-tri-icon"
+                                :class="{'show': (nodeTypeFilter[nt]||'show')==='show', 'collapse': nodeTypeFilter[nt]==='collapse', 'hide': nodeTypeFilter[nt]==='hide'}"
+                                x-text="(nodeTypeFilter[nt]||'show')==='show'?'●':nodeTypeFilter[nt]==='collapse'?'◐':'○'"></span>
+                          <span :style="'color:'+layerColor(l)" x-text="nt"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
               </template>
             </div>
           </div>
@@ -1033,7 +1096,7 @@ button,input,select,textarea{font-family:inherit}
           <template x-if="viewActive">
             <div class="group" data-testid="filter-view-types">
               <h4 @click="collapsedFilterSections.viewTypes = !collapsedFilterSections.viewTypes">
-                <span>Node Types
+                <span>Layers &amp; Types
                   <button data-testid="type-glossary-toggle" @click.stop="typeGlossaryOpen = !typeGlossaryOpen"
                           title="What do these types mean?"
                           style="border:1px solid var(--border);border-radius:50%;width:14px;height:14px;line-height:1;font-size:9px;padding:0;margin-left:4px;background:transparent;color:var(--text-muted);cursor:pointer">?</button>
@@ -1094,42 +1157,6 @@ button,input,select,textarea{font-family:inherit}
                 <option value="node_type">Node Type</option>
                 <option value="repo_name">Repository</option>
               </select>
-            </div>
-          </div>
-
-          <!-- Node types by layer -->
-          <div class="group" x-show="!viewActive">
-            <h4 @click="collapsedFilterSections.nodeTypes = !collapsedFilterSections.nodeTypes">
-              <span>Node Types
-                <button data-testid="type-glossary-toggle" @click.stop="typeGlossaryOpen = !typeGlossaryOpen"
-                        title="What do these types mean?"
-                        style="border:1px solid var(--border);border-radius:50%;width:14px;height:14px;line-height:1;font-size:9px;padding:0;margin-left:4px;background:transparent;color:var(--text-muted);cursor:pointer">?</button>
-              </span>
-              <span class="chevron" x-text="collapsedFilterSections.nodeTypes ? '▶' : '▼'"></span>
-            </h4>
-            <div x-show="typeGlossaryOpen" data-testid="type-glossary"
-                 style="margin:4px 0 6px;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg);max-height:180px;overflow-y:auto">
-              <template x-for="entry in typeGlossaryEntries()" :key="entry[0]">
-                <div style="font-size:9px;line-height:1.5;display:flex;gap:4px">
-                  <span style="font-weight:600;white-space:nowrap" x-text="entry[0]"></span>
-                  <span class="muted" x-text="'— ' + entry[1]"></span>
-                </div>
-              </template>
-            </div>
-            <div x-show="!collapsedFilterSections.nodeTypes">
-              <template x-for="layer in allLayers" :key="layer">
-                <div>
-                  <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
-                  <template x-for="nt in getNodeTypesForLayer(layer)" :key="nt">
-                    <div class="filter-tri" :title="nodeTypeDescriptions[nt] || nt" @click="cycleNodeTypeFilter(nt);renderGraph()">
-                      <span class="filter-tri-icon"
-                            :class="{'show': (nodeTypeFilter[nt]||'show')==='show', 'collapse': nodeTypeFilter[nt]==='collapse', 'hide': nodeTypeFilter[nt]==='hide'}"
-                            x-text="(nodeTypeFilter[nt]||'show')==='show'?'●':nodeTypeFilter[nt]==='collapse'?'◐':'○'"></span>
-                      <span :style="'color:'+layerColor(layer)" x-text="nt"></span>
-                    </div>
-                  </template>
-                </div>
-              </template>
             </div>
           </div>
 
@@ -1901,6 +1928,9 @@ function dashboard() {
     _viewRenderer: null,    // fallback GraphRenderer if graphController is unavailable
     selectedNode: null,
     evidenceExpanded: false,
+    lensOpen: false,
+    overflowOpen: false,
+    expandedTypeLayers: {},
     nodeEvidence: null,
     _focusNodeIds: null,
     _focusPrimaryIds: null,
@@ -2033,6 +2063,12 @@ function dashboard() {
         this._bootViewPending = true; // no default-render flash: wait for the view
       } else if (path === '/graph' || path.startsWith('/graph')) {
         this.tab = 'graph';
+        if (path === '/graph') {
+          // Bare /graph: open on the C2 services map — a readable system
+          // overview first; Everything/levels are one click away.
+          this._initViewLevel = 'c2';
+          this._bootViewPending = true;
+        }
       } else if (path === '/language') {
         this.tab = 'language';
       } else if (path === '/settings') {
@@ -2665,6 +2701,40 @@ function dashboard() {
         return d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
              + ' ' + d.toLocaleDateString('en-US', {month:'short',day:'numeric'});
       } catch(e) { return ts; }
+    },
+
+    // Graph tab entry. First visit lands on the C2 services overview —
+    // hide the 121-node everything-graph behind an explicit choice.
+    async openGraphTab() {
+      this.tab = 'graph';
+      const firstVisit = !this.loaded.graph && !this.viewActive;
+      history.pushState(null, '', firstVisit ? '/graph/c2' : '/graph/' + this.graphMode);
+      if (!this.loaded.graph) {
+        this.loading.graph = true;
+        if (firstVisit) this._bootViewPending = true;
+        await this.fetchGraphData();
+        this.loading.graph = false;
+        this.loaded.graph = true;
+        await this.initGraphControllers();
+        if (firstVisit) { await this.enterViewLevel('c2'); return; }
+      }
+      this.$nextTick(() => this.renderGraph());
+    },
+
+    // Palette search → canvas: emphasize matches and bring them into view.
+    canvasSearch() {
+      const r = (this.viewActive && this._viewRenderer) ? this._viewRenderer
+        : (this.modeController && this.modeController.renderer);
+      if (!r || !r.focusMatches) return;
+      const n = r.focusMatches(this.paletteSearch);
+      this.autoFilteredNotice = this.paletteSearch
+        ? (n > 0 ? n + ' match' + (n === 1 ? '' : 'es') + ' for "' + this.paletteSearch + '" — Esc to clear'
+                 : 'No canvas matches for "' + this.paletteSearch + '"')
+        : '';
+    },
+
+    layerTypesTouched(layer) {
+      return (this.getNodeTypesForLayer(layer) || []).some(nt => (this.nodeTypeFilter[nt] || 'show') !== 'show');
     },
 
     layerColor(layer) {
