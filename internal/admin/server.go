@@ -19,8 +19,9 @@ import (
 	dashboard "github.com/alexdx2/chronicle-core/admin"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
-	"github.com/alexdx2/chronicle-core/manifest"
+	"github.com/alexdx2/chronicle-core/internal/diagrams"
 	"github.com/alexdx2/chronicle-core/internal/mcp"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
@@ -48,7 +49,6 @@ func portFromPath(dir string) int {
 	h.Write([]byte(abs))
 	return 4200 + int(h.Sum32()%800)
 }
-
 
 type DiagramNode struct {
 	Key       string            `json:"key"`
@@ -249,7 +249,6 @@ func NewServerWithSlots(g *graph.Graph, s *store.Store, port int, manifestPath s
 		diagrams:      make(map[string]*DiagramSession),
 		dashboardHTML: dashboard.RenderDashboard(slots),
 	}
-	srv.loadDiagramSessions()
 	g.SetEventEmitter(&hubEmitter{hub: srv.hub})
 	return srv
 }
@@ -268,36 +267,15 @@ func (s *Server) HandleDiagramForTest(w http.ResponseWriter, r *http.Request) {
 	s.handleDiagram(w, r)
 }
 
-// loadDiagramSessions restores diagram sessions from SQLite on startup.
-func (s *Server) loadDiagramSessions() {
-	sessions, err := s.getStore().ListDiagramSessions()
-	if err != nil {
-		return
-	}
-	for _, row := range sessions {
-		_, dataJSON, err := s.getStore().GetDiagramSession(row["session_id"])
-		if err != nil {
-			continue
-		}
-		var session DiagramSession
-		if err := json.Unmarshal([]byte(dataJSON), &session); err != nil {
-			continue
-		}
-		session.ID = row["session_id"]
-		if session.Annotations == nil {
-			session.Annotations = make(map[string]DiagramNote)
-		}
-		s.diagrams[session.ID] = &session
-	}
-}
-
-// persistDiagramSession saves a diagram session to SQLite.
+// persistDiagramSession mirrors a session into the in-process registry.
+// Sessions are session-scoped by design: nothing is written to SQLite, so a
+// server restart starts with an empty Live Session tab.
 func (s *Server) persistDiagramSession(session *DiagramSession) {
 	data, err := json.Marshal(session)
 	if err != nil {
 		return
 	}
-	s.getStore().SaveDiagramSession(session.ID, session.Title, string(data))
+	diagrams.Default.Save(session.ID, session.Title, string(data))
 }
 
 // switchTo swaps the server's backing store/graph to a different project.
@@ -686,7 +664,7 @@ func (s *Server) handleLowConfidence(w http.ResponseWriter, r *http.Request) {
 	}
 	var result []map[string]any
 	for _, e := range edges {
-		if e.Confidence < threshold && e.Active {
+		if e.TrustScore < threshold && e.Active {
 			fromName, toName := "", ""
 			if n, _ := s.getStore().GetNodeByID(e.FromNodeID); n != nil {
 				fromName = n.Name
@@ -697,6 +675,7 @@ func (s *Server) handleLowConfidence(w http.ResponseWriter, r *http.Request) {
 			result = append(result, map[string]any{
 				"edge_key": e.EdgeKey, "from_name": fromName, "to_name": toName,
 				"edge_type": e.EdgeType, "derivation": e.DerivationKind, "confidence": e.Confidence,
+				"trust_score": e.TrustScore,
 			})
 		}
 	}
@@ -764,12 +743,18 @@ func buildHierarchy(nodeList []map[string]any, edgeList []map[string]any) map[st
 	// 1. Real CONTAINS edges from DB
 	for _, e := range edgeList {
 		et, _ := e["edge_type"].(string)
-		if et != "CONTAINS" { continue }
+		if et != "CONTAINS" {
+			continue
+		}
 		deriv, _ := e["derivation"].(string)
-		if deriv == "rollup" || deriv == "virtual" { continue }
+		if deriv == "rollup" || deriv == "virtual" {
+			continue
+		}
 		fromID := fmt.Sprintf("%v", e["from_node_id"])
 		toID := fmt.Sprintf("%v", e["to_node_id"])
-		if placed[toID] { continue }
+		if placed[toID] {
+			continue
+		}
 		placed[toID] = true
 		links = append(links, hlink{
 			ParentID: fromID, ChildID: toID,
@@ -781,18 +766,28 @@ func buildHierarchy(nodeList []map[string]any, edgeList []map[string]any) map[st
 	containerByDomain := map[string]string{}
 	for _, n := range nodeList {
 		nt, _ := n["node_type"].(string)
-		if nt != "container" { continue }
+		if nt != "container" {
+			continue
+		}
 		dk, _ := n["domain_key"].(string)
-		if dk != "" { containerByDomain[dk] = fmt.Sprintf("%v", n["node_id"]) }
+		if dk != "" {
+			containerByDomain[dk] = fmt.Sprintf("%v", n["node_id"])
+		}
 	}
 	for _, n := range nodeList {
 		id := fmt.Sprintf("%v", n["node_id"])
-		if placed[id] { continue }
+		if placed[id] {
+			continue
+		}
 		nt, _ := n["node_type"].(string)
-		if nt != "service" && nt != "external_system" { continue }
+		if nt != "service" && nt != "external_system" {
+			continue
+		}
 		dk, _ := n["domain_key"].(string)
 		cID, ok := containerByDomain[dk]
-		if !ok { continue }
+		if !ok {
+			continue
+		}
 		placed[id] = true
 		links = append(links, hlink{
 			ParentID: cID, ChildID: id,
@@ -804,15 +799,21 @@ func buildHierarchy(nodeList []map[string]any, edgeList []map[string]any) map[st
 	serviceByDomain := map[string][]map[string]any{}
 	for _, n := range nodeList {
 		nt, _ := n["node_type"].(string)
-		if nt != "service" { continue }
+		if nt != "service" {
+			continue
+		}
 		dk, _ := n["domain_key"].(string)
 		serviceByDomain[dk] = append(serviceByDomain[dk], n)
 	}
 	for _, n := range nodeList {
 		id := fmt.Sprintf("%v", n["node_id"])
-		if placed[id] { continue }
+		if placed[id] {
+			continue
+		}
 		nt, _ := n["node_type"].(string)
-		if nt != "module" { continue }
+		if nt != "module" {
+			continue
+		}
 		dk, _ := n["domain_key"].(string)
 		name, _ := n["name"].(string)
 		modPrefix := strings.TrimSuffix(name, ".module")
@@ -833,9 +834,13 @@ func buildHierarchy(nodeList []map[string]any, edgeList []map[string]any) map[st
 	// 4. controller/provider → endpoint from EXPOSES_ENDPOINT edges
 	for _, e := range edgeList {
 		et, _ := e["edge_type"].(string)
-		if et != "EXPOSES_ENDPOINT" { continue }
+		if et != "EXPOSES_ENDPOINT" {
+			continue
+		}
 		toID := fmt.Sprintf("%v", e["to_node_id"])
-		if placed[toID] { continue }
+		if placed[toID] {
+			continue
+		}
 		fromID := fmt.Sprintf("%v", e["from_node_id"])
 		placed[toID] = true
 		links = append(links, hlink{
@@ -848,14 +853,20 @@ func buildHierarchy(nodeList []map[string]any, edgeList []map[string]any) map[st
 	topicPublishers := map[string][]string{}
 	for _, e := range edgeList {
 		et, _ := e["edge_type"].(string)
-		if et != "PUBLISHES_TOPIC" { continue }
+		if et != "PUBLISHES_TOPIC" {
+			continue
+		}
 		toID := fmt.Sprintf("%v", e["to_node_id"])
 		fromID := fmt.Sprintf("%v", e["from_node_id"])
 		topicPublishers[toID] = append(topicPublishers[toID], fromID)
 	}
 	for topicID, publishers := range topicPublishers {
-		if placed[topicID] { continue }
-		if len(publishers) != 1 { continue }
+		if placed[topicID] {
+			continue
+		}
+		if len(publishers) != 1 {
+			continue
+		}
 		placed[topicID] = true
 		links = append(links, hlink{
 			ParentID: publishers[0], ChildID: topicID,
@@ -902,7 +913,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			"node_id": n.NodeID, "node_key": n.NodeKey, "layer": n.Layer,
 			"node_type": n.NodeType, "domain_key": n.DomainKey, "name": n.Name,
 			"repo_name": n.RepoName, "file_path": n.FilePath, "status": n.Status,
-			"confidence": n.Confidence,
+			"confidence": n.Confidence, "trust_score": n.TrustScore,
 		})
 	}
 
@@ -917,13 +928,18 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		domainStats := map[string]struct{ nodes, endpoints, modules, models int }{}
 		for _, n := range nodes {
 			dk := n.DomainKey
-			if dk == "" { continue }
+			if dk == "" {
+				continue
+			}
 			st := domainStats[dk]
 			st.nodes++
 			switch n.NodeType {
-			case "endpoint": st.endpoints++
-			case "module", "controller", "provider": st.modules++
-			case "model", "enum": st.models++
+			case "endpoint":
+				st.endpoints++
+			case "module", "controller", "provider":
+				st.modules++
+			case "model", "enum":
+				st.models++
 			}
 			domainStats[dk] = st
 		}
@@ -932,19 +948,27 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		// Manifest may say "tom-and-jerry" but graph uses "tomandjerry".
 		manifestToGraphDK := map[string]string{}
 		graphDomainKeys := map[string]bool{}
-		for _, n := range nodes { if n.DomainKey != "" { graphDomainKeys[n.DomainKey] = true } }
+		for _, n := range nodes {
+			if n.DomainKey != "" {
+				graphDomainKeys[n.DomainKey] = true
+			}
+		}
 		for _, d := range m.Domains {
 			if graphDomainKeys[d.Name] {
 				manifestToGraphDK[d.Name] = d.Name
 			} else if len(graphDomainKeys) == 1 {
 				// Single domain in graph — map manifest domain to it
-				for dk := range graphDomainKeys { manifestToGraphDK[d.Name] = dk }
+				for dk := range graphDomainKeys {
+					manifestToGraphDK[d.Name] = dk
+				}
 			}
 		}
 
 		for _, d := range m.Domains {
 			graphDK := manifestToGraphDK[d.Name]
-			if graphDK == "" { graphDK = d.Name }
+			if graphDK == "" {
+				graphDK = d.Name
+			}
 			st := domainStats[graphDK]
 			desc := d.Description
 			if desc == "" {
@@ -955,7 +979,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				"layer": "service", "node_type": "container",
 				"domain_key": graphDK, "name": d.Name,
 				"repo_name": "", "file_path": "", "status": "active",
-				"confidence": 1.0, "description": desc,
+				"confidence": 1.0, "trust_score": 1.0, "description": desc,
 			})
 			nodeIDSet[virtualID] = true
 			containerIDs[graphDK] = virtualID
@@ -964,36 +988,48 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 
 		// Ensure all graph domain_keys have a container mapping
 		for dk := range graphDomainKeys {
-			if _, ok := containerIDs[dk]; ok { continue }
+			if _, ok := containerIDs[dk]; ok {
+				continue
+			}
 			if len(containerIDs) == 1 {
-				for _, cID := range containerIDs { containerIDs[dk] = cID }
+				for _, cID := range containerIDs {
+					containerIDs[dk] = cID
+				}
 			}
 		}
 
 		// Virtual edges: container→module CONTAINS + cross-domain
 		var edgeList []map[string]any
 		for _, n := range nodes {
-			if n.NodeType != "module" { continue }
+			if n.NodeType != "module" {
+				continue
+			}
 			cID, ok := containerIDs[n.DomainKey]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			edgeList = append(edgeList, map[string]any{
 				"edge_id": virtualEdgeID, "edge_key": "service:container:" + n.DomainKey + "->" + n.NodeKey + ":CONTAINS",
 				"from_node_id": cID, "to_node_id": n.NodeID,
 				"edge_type": "CONTAINS", "derivation": "virtual",
-				"confidence": 1.0, "active": true,
+				"confidence": 1.0, "trust_score": 1.0, "active": true,
 			})
 			virtualEdgeID--
 		}
 
 		// Cross-domain edges between containers (from real graph edges)
 		nodeDomain := map[int64]string{}
-		for _, n := range nodes { nodeDomain[n.NodeID] = n.DomainKey }
+		for _, n := range nodes {
+			nodeDomain[n.NodeID] = n.DomainKey
+		}
 		domainEdgeTypes := map[string]map[string]bool{}
 		for _, e := range edges {
 			fromDK, toDK := nodeDomain[e.FromNodeID], nodeDomain[e.ToNodeID]
 			if fromDK != "" && toDK != "" && fromDK != toDK {
 				key := fromDK + "→" + toDK
-				if domainEdgeTypes[key] == nil { domainEdgeTypes[key] = map[string]bool{} }
+				if domainEdgeTypes[key] == nil {
+					domainEdgeTypes[key] = map[string]bool{}
+				}
 				domainEdgeTypes[key][e.EdgeType] = true
 			}
 		}
@@ -1001,17 +1037,22 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			parts := strings.SplitN(key, "→", 2)
 			fromCID, ok1 := containerIDs[parts[0]]
 			toCID, ok2 := containerIDs[parts[1]]
-			if !ok1 || !ok2 { continue }
+			if !ok1 || !ok2 {
+				continue
+			}
 			et := "DEPENDS_ON"
 			for _, t := range []string{"CALLS_SERVICE", "CALLS_ENDPOINT", "PUBLISHES_TOPIC", "CONSUMES_TOPIC"} {
-				if types[t] { et = t; break }
+				if types[t] {
+					et = t
+					break
+				}
 			}
 			edgeList = append(edgeList, map[string]any{
-				"edge_id": virtualEdgeID,
-				"edge_key": "service:container:" + parts[0] + "->service:container:" + parts[1] + ":" + et,
+				"edge_id":      virtualEdgeID,
+				"edge_key":     "service:container:" + parts[0] + "->service:container:" + parts[1] + ":" + et,
 				"from_node_id": fromCID, "to_node_id": toCID,
 				"edge_type": et, "derivation": "hard",
-				"confidence": 1.0, "active": true,
+				"confidence": 1.0, "trust_score": 1.0, "active": true,
 			})
 			virtualEdgeID--
 		}
@@ -1032,17 +1073,21 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, infra := range m.Infrastructure {
 			infraID, ok := infraIDs[infra.InfraNodeKey()]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			for dk := range backendDomains {
 				cID, ok2 := containerIDs[dk]
-				if !ok2 { continue }
+				if !ok2 {
+					continue
+				}
 				et := "USES_INFRA"
 				edgeList = append(edgeList, map[string]any{
-					"edge_id": virtualEdgeID,
-					"edge_key": "service:container:" + dk + "->" + infra.InfraNodeKey() + ":" + et,
+					"edge_id":      virtualEdgeID,
+					"edge_key":     "service:container:" + dk + "->" + infra.InfraNodeKey() + ":" + et,
 					"from_node_id": cID, "to_node_id": infraID,
 					"edge_type": et, "derivation": "hard",
-					"confidence": 1.0, "active": true,
+					"confidence": 1.0, "trust_score": 1.0, "active": true,
 				})
 				virtualEdgeID--
 			}
@@ -1059,14 +1104,16 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		if primaryBackend != 0 {
 			for dk := range containerIDs {
-				if backendDomains[dk] { continue }
+				if backendDomains[dk] {
+					continue
+				}
 				fromCID := containerIDs[dk]
 				edgeList = append(edgeList, map[string]any{
-					"edge_id": virtualEdgeID,
-					"edge_key": "service:container:" + dk + "->service:container:api:CALLS_ENDPOINT",
+					"edge_id":      virtualEdgeID,
+					"edge_key":     "service:container:" + dk + "->service:container:api:CALLS_ENDPOINT",
 					"from_node_id": fromCID, "to_node_id": primaryBackend,
 					"edge_type": "CALLS_ENDPOINT", "derivation": "hard",
-					"confidence": 0.8, "active": true,
+					"confidence": 0.8, "trust_score": 0.8, "active": true,
 				})
 				virtualEdgeID--
 			}
@@ -1080,7 +1127,9 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 
 		// Build ownership map: nodeID → service nodeID (via CONTAINS chain)
 		nodeByID := map[int64]store.NodeRow{}
-		for _, n := range nodes { nodeByID[n.NodeID] = n }
+		for _, n := range nodes {
+			nodeByID[n.NodeID] = n
+		}
 
 		// CONTAINS: module→controller/provider. Service→module doesn't exist in DB,
 		// so we match module to service by domain_key + name convention.
@@ -1092,7 +1141,9 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, n := range nodes {
-			if n.NodeType != "module" { continue }
+			if n.NodeType != "module" {
+				continue
+			}
 			// Match module to service: arena.module → arena-api, tom.module → tom-api
 			modPrefix := strings.TrimSuffix(n.Name, ".module")
 			for _, svc := range serviceByDomain[n.DomainKey] {
@@ -1107,11 +1158,17 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		// Code node → owning service (via CONTAINS to module, then module→service)
 		codeToService := map[int64]int64{}
 		for _, e := range edges {
-			if e.EdgeType != "CONTAINS" { continue }
+			if e.EdgeType != "CONTAINS" {
+				continue
+			}
 			parentNode := nodeByID[e.FromNodeID]
-			if parentNode.NodeType != "module" { continue }
+			if parentNode.NodeType != "module" {
+				continue
+			}
 			svcID, ok := moduleToService[e.FromNodeID]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			codeToService[e.ToNodeID] = svcID
 			codeToService[e.FromNodeID] = svcID // module itself belongs to service
 		}
@@ -1121,11 +1178,17 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		nameToService := map[string]int64{}
 		for id, svcID := range codeToService {
 			n := nodeByID[id]
-			if n.Name != "" { nameToService[n.Name] = svcID }
+			if n.Name != "" {
+				nameToService[n.Name] = svcID
+			}
 		}
 		for _, n := range nodes {
-			if n.Layer != "code" { continue }
-			if _, ok := codeToService[n.NodeID]; ok { continue }
+			if n.Layer != "code" {
+				continue
+			}
+			if _, ok := codeToService[n.NodeID]; ok {
+				continue
+			}
 			if svcID, ok := nameToService[n.Name]; ok {
 				codeToService[n.NodeID] = svcID
 			}
@@ -1133,10 +1196,16 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 
 		// Fallback 2: orphan code nodes — match by name prefix to service name.
 		for _, n := range nodes {
-			if n.Layer != "code" { continue }
-			if _, ok := codeToService[n.NodeID]; ok { continue }
+			if n.Layer != "code" {
+				continue
+			}
+			if _, ok := codeToService[n.NodeID]; ok {
+				continue
+			}
 			svcs := serviceByDomain[n.DomainKey]
-			if len(svcs) == 0 { continue }
+			if len(svcs) == 0 {
+				continue
+			}
 			if len(svcs) == 1 {
 				codeToService[n.NodeID] = svcs[0].NodeID
 				continue
@@ -1156,7 +1225,9 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		for changed := true; changed; {
 			changed = false
 			for _, e := range edges {
-				if e.EdgeType != "INJECTS" { continue }
+				if e.EdgeType != "INJECTS" {
+					continue
+				}
 				_, fromMapped := codeToService[e.FromNodeID]
 				_, toMapped := codeToService[e.ToNodeID]
 				if fromMapped && !toMapped {
@@ -1186,9 +1257,13 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			"CALLS_SERVICE": true,
 		}
 		for _, e := range edges {
-			if !rollupEdgeTypes[e.EdgeType] { continue }
+			if !rollupEdgeTypes[e.EdgeType] {
+				continue
+			}
 			fromSvc, fromHas := codeToService[e.FromNodeID]
-			if !fromHas { continue }
+			if !fromHas {
+				continue
+			}
 
 			var toID int64
 			var toNode store.NodeRow
@@ -1205,10 +1280,14 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 					toID = e.ToNodeID
 				} else if svcID, ok := serviceByName[toNode.Name]; ok {
 					// Provider shadows a service name (e.g. provider "jerry-api" → service "jerry-api")
-					if fromSvc == svcID { continue } // skip internal
+					if fromSvc == svcID {
+						continue
+					} // skip internal
 					toID = svcID
 				} else if toSvc, ok := codeToService[e.ToNodeID]; ok {
-					if fromSvc == toSvc { continue } // skip internal
+					if fromSvc == toSvc {
+						continue
+					} // skip internal
 					toID = toSvc
 				} else {
 					continue
@@ -1217,17 +1296,21 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			if fromSvc == toID { continue } // skip self-loops
+			if fromSvc == toID {
+				continue
+			} // skip self-loops
 			key := fmt.Sprintf("%d->%d:%s", fromSvc, toID, e.EdgeType)
-			if rollupSeen[key] { continue }
+			if rollupSeen[key] {
+				continue
+			}
 			rollupSeen[key] = true
 
 			edgeList = append(edgeList, map[string]any{
-				"edge_id": virtualEdgeID,
-				"edge_key": key,
+				"edge_id":      virtualEdgeID,
+				"edge_key":     key,
 				"from_node_id": fromSvc, "to_node_id": toID,
 				"edge_type": e.EdgeType, "derivation": "rollup",
-				"confidence": e.Confidence, "active": true,
+				"confidence": e.Confidence, "trust_score": e.TrustScore, "active": true,
 				"virtual": true, "derived": true,
 			})
 			virtualEdgeID--
@@ -1238,9 +1321,13 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		// Creates module→endpoint, module→topic, module→model edges.
 		codeToModule := map[int64]int64{}
 		for _, e := range edges {
-			if e.EdgeType != "CONTAINS" { continue }
+			if e.EdgeType != "CONTAINS" {
+				continue
+			}
 			parentNode := nodeByID[e.FromNodeID]
-			if parentNode.NodeType != "module" { continue }
+			if parentNode.NodeType != "module" {
+				continue
+			}
 			codeToModule[e.ToNodeID] = e.FromNodeID
 		}
 
@@ -1250,22 +1337,30 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			"USES_MODEL": true, "DEFINES_MODEL": true,
 		}
 		for _, e := range edges {
-			if !moduleRollupTypes[e.EdgeType] { continue }
+			if !moduleRollupTypes[e.EdgeType] {
+				continue
+			}
 			fromMod, fromHas := codeToModule[e.FromNodeID]
-			if !fromHas { continue }
+			if !fromHas {
+				continue
+			}
 
 			toID := e.ToNodeID
-			if fromMod == toID { continue }
+			if fromMod == toID {
+				continue
+			}
 			key := fmt.Sprintf("%d->%d:%s", fromMod, toID, e.EdgeType)
-			if rollupSeen[key] { continue }
+			if rollupSeen[key] {
+				continue
+			}
 			rollupSeen[key] = true
 
 			edgeList = append(edgeList, map[string]any{
-				"edge_id": virtualEdgeID,
-				"edge_key": key,
+				"edge_id":      virtualEdgeID,
+				"edge_key":     key,
 				"from_node_id": fromMod, "to_node_id": toID,
 				"edge_type": e.EdgeType, "derivation": "rollup",
-				"confidence": e.Confidence, "active": true,
+				"confidence": e.Confidence, "trust_score": e.TrustScore, "active": true,
 				"virtual": true, "derived": true,
 			})
 			virtualEdgeID--
@@ -1274,25 +1369,33 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		// Service→infra rollup: if a domain's code uses infra, its services should connect
 		infraNodes := map[int64]bool{}
 		for _, n := range nodes {
-			if n.Layer == "infra" { infraNodes[n.NodeID] = true }
+			if n.Layer == "infra" {
+				infraNodes[n.NodeID] = true
+			}
 		}
 		// For each service, check if any code in that service connects to infra
 		svcInfraEdges := map[string]bool{}
 		for codeID, svcID := range codeToService {
 			neighbors := map[int64]bool{}
 			for _, e := range edges {
-				if e.FromNodeID == codeID && infraNodes[e.ToNodeID] { neighbors[e.ToNodeID] = true }
-				if e.ToNodeID == codeID && infraNodes[e.FromNodeID] { neighbors[e.FromNodeID] = true }
+				if e.FromNodeID == codeID && infraNodes[e.ToNodeID] {
+					neighbors[e.ToNodeID] = true
+				}
+				if e.ToNodeID == codeID && infraNodes[e.FromNodeID] {
+					neighbors[e.FromNodeID] = true
+				}
 			}
 			for infraID := range neighbors {
 				key := fmt.Sprintf("%d->%d:USES_INFRA", svcID, infraID)
-				if svcInfraEdges[key] || rollupSeen[key] { continue }
+				if svcInfraEdges[key] || rollupSeen[key] {
+					continue
+				}
 				svcInfraEdges[key] = true
 				edgeList = append(edgeList, map[string]any{
 					"edge_id": virtualEdgeID, "edge_key": key,
 					"from_node_id": svcID, "to_node_id": infraID,
 					"edge_type": "USES_INFRA", "derivation": "rollup",
-					"confidence": 0.9, "active": true,
+					"confidence": 0.9, "trust_score": 0.9, "active": true,
 					"virtual": true, "derived": true,
 				})
 				virtualEdgeID--
@@ -1301,17 +1404,21 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		// Also: all backend services use shared infra from manifest
 		for _, infra := range m.Infrastructure {
 			infraID, ok := infraIDs[infra.InfraNodeKey()]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			for dk := range backendDomains {
 				for _, svc := range serviceByDomain[dk] {
 					key := fmt.Sprintf("%d->%d:USES_INFRA", svc.NodeID, infraID)
-					if svcInfraEdges[key] || rollupSeen[key] { continue }
+					if svcInfraEdges[key] || rollupSeen[key] {
+						continue
+					}
 					svcInfraEdges[key] = true
 					edgeList = append(edgeList, map[string]any{
 						"edge_id": virtualEdgeID, "edge_key": key,
 						"from_node_id": svc.NodeID, "to_node_id": infraID,
 						"edge_type": "USES_INFRA", "derivation": "rollup",
-						"confidence": 0.8, "active": true,
+						"confidence": 0.8, "trust_score": 0.8, "active": true,
 						"virtual": true, "derived": true,
 					})
 					virtualEdgeID--
@@ -1342,15 +1449,25 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		for _, e := range edgeList {
 			fromID, _ := e["from_node_id"].(int64)
 			toID, _ := e["to_node_id"].(int64)
-			if fromID == 0 || toID == 0 { continue }
+			if fromID == 0 || toID == 0 {
+				continue
+			}
 			cID, fromIsService := serviceToContainer[fromID]
-			if !fromIsService { continue }
-			if cID == toID { continue } // skip self-loops
+			if !fromIsService {
+				continue
+			}
+			if cID == toID {
+				continue
+			} // skip self-loops
 			toNode := nodeByID[toID]
-			if toNode.NodeType != "external_system" { continue }
+			if toNode.NodeType != "external_system" {
+				continue
+			}
 			et := "CALLS_SERVICE"
 			key := fmt.Sprintf("%d->%d:%s", cID, toID, et)
-			if containerRollupSeen[key] { continue }
+			if containerRollupSeen[key] {
+				continue
+			}
 			containerRollupSeen[key] = true
 			edgeList = append(edgeList, map[string]any{
 				"edge_id": virtualEdgeID, "edge_key": key,
@@ -1363,9 +1480,13 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		// Also check raw edges: code→external_system (for C1 container→external)
 		for _, e := range edges {
-			if e.EdgeType != "CALLS_SERVICE" { continue }
+			if e.EdgeType != "CALLS_SERVICE" {
+				continue
+			}
 			toNode := nodeByID[e.ToNodeID]
-			if toNode.NodeType != "external_system" { continue }
+			if toNode.NodeType != "external_system" {
+				continue
+			}
 			fromNode := nodeByID[e.FromNodeID]
 			// Find container by service mapping or direct domain
 			var cID int64
@@ -1379,16 +1500,20 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 					cID = c
 				}
 			}
-			if cID == 0 { continue }
+			if cID == 0 {
+				continue
+			}
 			et := "CALLS_SERVICE"
 			key := fmt.Sprintf("%d->%d:%s", cID, e.ToNodeID, et)
-			if containerRollupSeen[key] { continue }
+			if containerRollupSeen[key] {
+				continue
+			}
 			containerRollupSeen[key] = true
 			edgeList = append(edgeList, map[string]any{
 				"edge_id": virtualEdgeID, "edge_key": key,
 				"from_node_id": cID, "to_node_id": e.ToNodeID,
 				"edge_type": et, "derivation": "rollup",
-				"confidence": e.Confidence, "active": true,
+				"confidence": e.Confidence, "trust_score": e.TrustScore, "active": true,
 				"virtual": true, "derived": true,
 			})
 			virtualEdgeID--
@@ -1929,30 +2054,25 @@ func diagramSessionCounts(dataJSON string) (kind string, nodeCount, edgeCount in
 	return d.Kind, len(d.Nodes), len(d.Edges)
 }
 
-// handleDiagramList reads sessions from the store (source of truth) so that
-// sessions saved directly via SaveDiagramSession (e.g. by the MCP
-// chronicle_diagram_build tool) are visible without an admin restart.
+// handleDiagramList reads sessions from the in-process registry (source of
+// truth) so sessions saved by the MCP chronicle_diagram_build tool are
+// visible immediately. The registry is per-run: restart = empty list.
 func (s *Server) handleDiagramList(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.getStore().ListDiagramSessions()
-	if err != nil {
-		httpError(w, err, 500)
-		return
-	}
+	rows := diagrams.Default.List()
 	sessions := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		id := row["session_id"]
-		_, dataJSON, err := s.getStore().GetDiagramSession(id)
-		if err != nil {
+		_, dataJSON, ok := diagrams.Default.Get(row.ID)
+		if !ok {
 			continue
 		}
 		kind, nodeCount, edgeCount := diagramSessionCounts(dataJSON)
 		sessions = append(sessions, map[string]any{
-			"id":         id,
-			"title":      row["title"],
+			"id":         row.ID,
+			"title":      row.Title,
 			"kind":       kind,
 			"node_count": nodeCount,
 			"edge_count": edgeCount,
-			"created_at": row["created_at"],
+			"created_at": row.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	httpJSON(w, map[string]any{"sessions": sessions})
@@ -1962,24 +2082,19 @@ func (s *Server) handleDiagramDelete(w http.ResponseWriter, r *http.Request, id 
 	s.mu.Lock()
 	delete(s.diagrams, id)
 	s.mu.Unlock()
-	s.getStore().DeleteDiagramSession(id)
+	diagrams.Default.Delete(id)
 	httpJSON(w, map[string]any{"deleted": id})
 }
 
 func (s *Server) handleDiagramLatest(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	var latest *DiagramSession
-	for _, session := range s.diagrams {
-		if latest == nil || session.UpdatedAt > latest.UpdatedAt {
-			latest = session
-		}
-	}
-	s.mu.RUnlock()
-	if latest == nil {
-		http.Error(w, "no diagrams", 404)
+	// The registry holds every session (admin-built ones are mirrored into it,
+	// MCP-built ones land there directly), so it is the single source here.
+	if dataJSON, ok := diagrams.Default.Latest(); ok && dataJSON != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(dataJSON))
 		return
 	}
-	httpJSON(w, latest)
+	http.Error(w, "no diagrams", 404)
 }
 
 func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id string) {
@@ -1990,16 +2105,15 @@ func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id str
 		httpJSON(w, session)
 		return
 	}
-	// Fall back to the store: sessions saved directly via SaveDiagramSession
-	// (e.g. viewmodel sessions from the MCP diagram tool) are served raw.
-	if _, dataJSON, err := s.getStore().GetDiagramSession(id); err == nil && dataJSON != "" {
+	// Fall back to the registry: sessions saved by the MCP diagram tool
+	// (viewmodel sessions) are served raw.
+	if _, dataJSON, ok := diagrams.Default.Get(id); ok && dataJSON != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(dataJSON))
 		return
 	}
 	http.Error(w, "session not found", 404)
 }
-
 
 func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 	nodeKey := r.URL.Query().Get("node_key")

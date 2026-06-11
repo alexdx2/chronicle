@@ -107,10 +107,13 @@ func PresetSpec(level, domain, target string) ViewSpec {
 		}
 	case "impact":
 		return ViewSpec{
-			Scope:    ScopeSpec{Domain: domain, Nodes: []string{target}},
-			Expand:   &ExpandSpec{Direction: "in", Depth: DepthUnbounded},
-			Group:    GroupSpec{By: "service"},
-			Collapse: true,
+			Scope:  ScopeSpec{Domain: domain, Nodes: []string{target}},
+			Expand: &ExpandSpec{Direction: "in", Depth: DepthUnbounded},
+			Group:  GroupSpec{By: "service"},
+			// Expanded by default: the whole point of impact is WHICH
+			// components break — collapsing them into service boxes hides
+			// the answer behind a far-away checkbox.
+			Collapse: false,
 			Layout:   LayoutSpec{Preset: "impact"},
 		}
 	default: // "c2"

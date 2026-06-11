@@ -650,6 +650,16 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return ""
 	}
 
+	// Subjects of expand-driven views (the deps/impact root, path endpoints)
+	// must stay visible in collapsed views — answering "deps of X" with a
+	// service box that swallows X reads as the wrong answer.
+	focusFree := make(map[int64]bool)
+	if spec.Expand != nil {
+		for id := range seeds {
+			focusFree[id] = true
+		}
+	}
+
 	memberGroup := make(map[int64]string) // regular in-view nodes → group key ("" = free-standing)
 	for id := range inView {
 		n := nodeByID[id]
@@ -660,7 +670,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		// Pinned members stay free-standing in collapsed views: their group
 		// renders as a collapsed card, so nesting the pin inside would turn
 		// the card into a frame and dangle the group-keyed edges.
-		if pinned[id] && spec.Collapse {
+		if (pinned[id] || focusFree[id]) && spec.Collapse {
 			g = ""
 		}
 		memberGroup[id] = g
@@ -705,8 +715,8 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// grouped members and for group nodes themselves, node key otherwise.
 	repKey := func(id int64) string {
 		n := nodeByID[id]
-		if pinned[id] {
-			return n.NodeKey // pinned nodes always render themselves
+		if pinned[id] || focusFree[id] {
+			return n.NodeKey // pinned/focus nodes always render themselves
 		}
 		if structuralKind(n) == "group" {
 			return n.NodeKey

@@ -62,8 +62,9 @@ function presetSpec(level, domain, target) {
       return { scope: { domain, nodes: [target] }, expand: { direction: 'out', depth: 99 },
                group: { by: 'service' }, collapse: true, layout: { preset: 'deps' } };
     case 'impact':
+      // Expanded by default — impact must show WHICH components break.
       return { scope: { domain, nodes: [target] }, expand: { direction: 'in', depth: 99 },
-               group: { by: 'service' }, collapse: true, layout: { preset: 'impact' } };
+               group: { by: 'service' }, collapse: false, layout: { preset: 'impact' } };
     // Lens presets (view bar) — mirror graph/viewmodel/presets.go
     case 'data':
       return { scope: { domain }, filter: { layers: ['data'] },
@@ -237,6 +238,7 @@ function adaptView(view, baseLookup) {
       collapsed_from: e.collapsed_from || [],
       derivation: 'view',
       confidence: 1,
+      trust_score: 1,
       _kind: e.kind,
       _label: e.label || '',
     };

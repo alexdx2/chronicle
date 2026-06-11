@@ -9,6 +9,7 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/alexdx2/chronicle-core/internal/diagrams"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 	"github.com/alexdx2/chronicle-core/store"
@@ -131,10 +132,10 @@ func TestDiagramBuild_NodeKeys_ViewmodelSession(t *testing.T) {
 		t.Errorf("missing = %v, want empty array", out["missing"])
 	}
 
-	// --- Persisted session ---
-	title, dataJSON, err := st.GetDiagramSession(sessionID)
-	if err != nil {
-		t.Fatalf("GetDiagramSession: %v", err)
+	// --- Session in the in-process registry (not persisted to SQLite) ---
+	title, dataJSON, ok := diagrams.Default.Get(sessionID)
+	if !ok {
+		t.Fatalf("session %s not in registry", sessionID)
 	}
 	if title != "Tom & Jerry Selection" {
 		t.Errorf("stored title = %q", title)
@@ -213,9 +214,9 @@ func TestDiagramBuild_ViewSpec_Session(t *testing.T) {
 		t.Errorf("edge_count = %d, want 1", ec)
 	}
 
-	_, dataJSON, err := g.Store().GetDiagramSession(sessionID)
-	if err != nil {
-		t.Fatalf("GetDiagramSession: %v", err)
+	_, dataJSON, ok := diagrams.Default.Get(sessionID)
+	if !ok {
+		t.Fatalf("session %s not in registry", sessionID)
 	}
 	var session map[string]any
 	if err := json.Unmarshal([]byte(dataJSON), &session); err != nil {
@@ -335,9 +336,9 @@ func TestDiagramBuild_LegacyNodes_LegacySession(t *testing.T) {
 		t.Errorf("edge_count = %d, want 1", ec)
 	}
 
-	_, dataJSON, err := g.Store().GetDiagramSession(sessionID)
-	if err != nil {
-		t.Fatalf("GetDiagramSession: %v", err)
+	_, dataJSON, ok := diagrams.Default.Get(sessionID)
+	if !ok {
+		t.Fatalf("session %s not in registry", sessionID)
 	}
 	var session map[string]any
 	if err := json.Unmarshal([]byte(dataJSON), &session); err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
+	"github.com/alexdx2/chronicle-core/internal/diagrams"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
@@ -129,6 +130,17 @@ func boolParam(args map[string]any, key string) bool {
 	return v
 }
 
+// manualEvidenceConfidence returns the confidence for the manual evidence row
+// auto-created on node/edge upsert. The caller's confidence input expresses
+// itself through evidence (trust is derived from evidence, not column writes);
+// absent or zero falls back to 0.9.
+func manualEvidenceConfidence(c float64) float64 {
+	if c <= 0 {
+		return 0.9
+	}
+	return c
+}
+
 func jsonResult(v any) *mcp.CallToolResult {
 	data, _ := json.Marshal(v)
 	return mcp.NewToolResultText(string(data))
@@ -141,7 +153,6 @@ func resolveKey(g *graph.Graph, raw string) (string, error) {
 	}
 	return g.ResolveNodeKey(raw)
 }
-
 
 func errorResult(err error) *mcp.CallToolResult {
 	if store.IsCorruptionError(err) {
@@ -242,6 +253,7 @@ func nodeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("revision_id is required")), nil
 		}
 
+		confidence := float64Param(args, "confidence")
 		input := validate.NodeInput{
 			NodeKey:    strParam(args, "node_key"),
 			Layer:      strParam(args, "layer"),
@@ -251,7 +263,7 @@ func nodeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 			RepoName:   strParam(args, "repo_name"),
 			FilePath:   strParam(args, "file_path"),
 			Metadata:   strParam(args, "metadata"),
-			Confidence: float64Param(args, "confidence"),
+			Confidence: confidence,
 		}
 
 		id, err := g.UpsertNode(input, revisionID)
@@ -263,6 +275,9 @@ func nodeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 		// Fetch by ID — the node_key may have been auto-generated or normalized.
 		// Evidence failures surface as tool errors: the evidence write journals
 		// an event, and a silently dropped event corrupts replay.
+		// The caller's confidence expresses itself through this evidence row —
+		// the direct column write above is a transient seed that the recompute
+		// (inside AddNodeEvidence) overwrites.
 		if node, nerr := g.Store().GetNodeByID(id); nerr == nil {
 			if _, err := g.AddNodeEvidence(node.NodeKey, validate.EvidenceInput{
 				TargetKind:       "node",
@@ -271,7 +286,7 @@ func nodeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 				ExtractorID:      "mcp:node_upsert",
 				ExtractorVersion: "1.0",
 				AssertionKind:    "manual_assertion",
-				Confidence:       0.9,
+				Confidence:       manualEvidenceConfidence(confidence),
 				RevisionID:       revisionID,
 			}); err != nil {
 				return errorResult(fmt.Errorf("node upserted (id=%d) but evidence write failed: %w", id, err)), nil
@@ -399,6 +414,7 @@ func edgeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 			toLayer = toNode.Layer
 		}
 
+		confidence := float64Param(args, "confidence")
 		input := validate.EdgeInput{
 			EdgeKey:        strParam(args, "edge_key"),
 			FromNodeKey:    fromNodeKey,
@@ -408,7 +424,7 @@ func edgeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 			FromLayer:      fromLayer,
 			ToLayer:        toLayer,
 			Metadata:       strParam(args, "metadata"),
-			Confidence:     float64Param(args, "confidence"),
+			Confidence:     confidence,
 		}
 
 		id, err := g.UpsertEdge(input, revisionID)
@@ -418,6 +434,9 @@ func edgeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 		// Evidence-first: a manual upsert is itself an assertion by the operator.
 		// Evidence failures surface as tool errors (journal integrity).
+		// The caller's confidence expresses itself through this evidence row —
+		// the direct column write above is a transient seed that the recompute
+		// (inside AddEdgeEvidence) overwrites.
 		edgeKey := input.EdgeKey
 		if edgeKey == "" {
 			edgeKey = validate.BuildEdgeKey(fromNodeKey, toNodeKey, input.EdgeType)
@@ -429,7 +448,7 @@ func edgeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
 			ExtractorID:      "mcp:edge_upsert",
 			ExtractorVersion: "1.0",
 			AssertionKind:    "manual_assertion",
-			Confidence:       0.9,
+			Confidence:       manualEvidenceConfidence(confidence),
 			RevisionID:       revisionID,
 		}); err != nil {
 			return errorResult(fmt.Errorf("edge upserted (id=%d) but evidence write failed: %w", id, err)), nil
@@ -1934,10 +1953,10 @@ func saveCustomPackHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(map[string]any{
-			"status":  "saved",
-			"id":      id,
-			"path":    g.Store().PacksDir(),
-			"hint":    "Pack saved to .depbot/packs/. Add '" + id + "' to manifest tech list to load it during scans.",
+			"status": "saved",
+			"id":     id,
+			"path":   g.Store().PacksDir(),
+			"hint":   "Pack saved to .depbot/packs/. Add '" + id + "' to manifest tech list to load it during scans.",
 		}), nil
 	}
 }
@@ -2154,12 +2173,12 @@ func checkGitFreshness(lastSHA string) map[string]any {
 	}
 
 	return map[string]any{
-		"status":        "stale",
+		"status":         "stale",
 		"commits_behind": count,
-		"files_changed": fileCount,
-		"last_scan_sha": lastSHA[:min(len(lastSHA), 7)],
-		"current_head":  currentSHA[:7],
-		"suggestion":    "Run chronicle update to rescan " + count + " commits (" + fmt.Sprintf("%d", fileCount) + " files changed).",
+		"files_changed":  fileCount,
+		"last_scan_sha":  lastSHA[:min(len(lastSHA), 7)],
+		"current_head":   currentSHA[:7],
+		"suggestion":     "Run chronicle update to rescan " + count + " commits (" + fmt.Sprintf("%d", fileCount) + " files changed).",
 	}
 }
 
@@ -2693,9 +2712,9 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(fmt.Errorf("marshal session: %w", err)), nil
 		}
-		if err := g.Store().SaveDiagramSession(sessionID, title, string(data)); err != nil {
-			return errorResult(fmt.Errorf("save diagram session: %w", err)), nil
-		}
+		// Session-scoped on purpose: diagrams live in the process registry,
+		// not SQLite — a server restart clears the Live Session tab.
+		diagrams.Default.Save(sessionID, title, string(data))
 
 		return jsonResult(map[string]any{
 			"session_id": sessionID,

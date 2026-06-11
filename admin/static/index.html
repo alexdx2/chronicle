@@ -666,8 +666,8 @@ button,input,select,textarea{font-family:inherit}
               <span x-text="e.from_name || '?'"></span>
               <span x-text="e.to_name || '?'"></span>
               <span>
-                <span class="conf-bar"><span class="conf-fill" :style="{width:(e.confidence*100)+'%',background: e.confidence < 0.5 ? 'var(--error)' : 'var(--warning)'}"></span></span>
-                <span style="font-size:11px;color:var(--text-muted);margin-left:4px" x-text="(e.confidence*100).toFixed(0)+'%'"></span>
+                <span class="conf-bar"><span class="conf-fill" :style="{width:((e.trust_score ?? e.confidence)*100)+'%',background: (e.trust_score ?? e.confidence) < 0.5 ? 'var(--error)' : 'var(--warning)'}"></span></span>
+                <span style="font-size:11px;color:var(--text-muted);margin-left:4px" x-text="((e.trust_score ?? e.confidence)*100).toFixed(0)+'%'"></span>
               </span>
             </div>
           </template>
@@ -811,7 +811,7 @@ button,input,select,textarea{font-family:inherit}
         <button class="crumb" @click="exitViewMode()">All</button>
         <template x-for="(entry, i) in viewStack" :key="i">
           <span style="display:flex;align-items:center;gap:4px">
-            <span class="crumb-sep">/</span>
+            <span class="crumb-sep">›</span>
             <button class="crumb" :class="{active: i === viewStack.length - 1}" @click="popViewTo(i)">
               <span x-text="entry.title"></span>
               <template x-if="entry.spec && entry.spec.pin && entry.spec.pin.length">
@@ -819,6 +819,11 @@ button,input,select,textarea{font-family:inherit}
               </template>
             </button>
           </span>
+        </template>
+        <template x-if="viewStack.length > 1">
+          <span class="muted" style="font-size:10px;margin-left:6px;cursor:help"
+                title="Each step is an independent query over the WHOLE graph — results are not scoped to the previous view. The trail is navigation history; click any step to go back.">
+            each step queries the full graph</span>
         </template>
         <template x-if="viewLoading">
           <span style="color:var(--text-muted);font-size:10px;margin-left:8px">Building view…</span>
@@ -867,9 +872,15 @@ button,input,select,textarea{font-family:inherit}
                     <template x-for="n in group.nodes" :key="n.node_id">
                       <div class="ws-item"
                            :style="'border-left:3px solid '+layerColor(n.layer)"
+                           :title="(n.file_path || n.node_key) + (n.domain_key ? '\n' + n.domain_key : '')"
                            draggable="true"
                            @dragstart="$event.dataTransfer.setData('text/plain', String(n.node_key)); $event.dataTransfer.effectAllowed='copy'">
-                        <span x-text="n.name" :style="'color:'+layerColor(n.layer)+';flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'"></span>
+                        <span :style="'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'">
+                          <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
+                          <template x-if="group.dups && group.dups[n.name] > 1">
+                            <span style="font-size:8px;color:var(--text-muted)" x-text="' · ' + (n.domain_key || n.repo_name || '')"></span>
+                          </template>
+                        </span>
                         <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
                         <button @click.stop="addPaletteNode(n.node_key)" title="Add to custom view"
                                 style="border:1px solid var(--border);background:var(--bg);border-radius:3px;cursor:pointer;font-size:11px;line-height:1;padding:1px 5px;color:var(--primary);flex-shrink:0">+</button>
@@ -1226,6 +1237,11 @@ button,input,select,textarea{font-family:inherit}
         <div data-testid="node-type-description" style="font-size:10px;color:var(--text-muted);padding:1px 0 5px"
              x-text="nodeTypeDescriptions[selectedNode.node_type]"></div>
       </template>
+      <!-- Where this node lives in the codebase -->
+      <template x-if="selectedNode && selectedNode.file_path">
+        <div data-testid="node-file-path" style="font-size:10px;color:var(--text-secondary);font-family:var(--font-mono);padding:1px 0 5px;user-select:all"
+             x-text="selectedNode.file_path"></div>
+      </template>
       <!-- Group stats (synthesized boxes, e.g. the C1 system box) -->
       <template x-if="selectedNode && selectedNode._vgroup && selectedNode._stats">
         <div data-testid="group-stats" style="display:flex;gap:14px;flex-wrap:wrap;font-size:10px;color:var(--text-secondary);padding:2px 0 6px">
@@ -1295,11 +1311,11 @@ button,input,select,textarea{font-family:inherit}
             <div>
               <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px">
                 <span class="muted">Confidence</span>
-                <strong x-text="Math.round((selectedNode?.confidence||0)*100)+'%'"
-                        :style="{color: (selectedNode?.confidence||0)>=0.85?'#2d6a30':(selectedNode?.confidence||0)>=0.65?'#b8963e':'#c25757'}"></strong>
+                <strong x-text="Math.round(((selectedNode?.trust_score ?? selectedNode?.confidence)||0)*100)+'%'"
+                        :style="{color: ((selectedNode?.trust_score ?? selectedNode?.confidence)||0)>=0.85?'#2d6a30':((selectedNode?.trust_score ?? selectedNode?.confidence)||0)>=0.65?'#b8963e':'#c25757'}"></strong>
               </div>
               <div style="height:3px;background:#e8e0d4;border-radius:2px;overflow:hidden;margin-bottom:6px">
-                <div :style="'width:'+Math.round((selectedNode?.confidence||0)*100)+'%;height:100%;border-radius:2px;background:'+((selectedNode?.confidence||0)>=0.85?'#2d6a30':(selectedNode?.confidence||0)>=0.65?'#b8963e':'#c25757')"></div>
+                <div :style="'width:'+Math.round(((selectedNode?.trust_score ?? selectedNode?.confidence)||0)*100)+'%;height:100%;border-radius:2px;background:'+(((selectedNode?.trust_score ?? selectedNode?.confidence)||0)>=0.85?'#2d6a30':((selectedNode?.trust_score ?? selectedNode?.confidence)||0)>=0.65?'#b8963e':'#c25757')"></div>
               </div>
               <div style="display:flex;flex-wrap:wrap;gap:3px">
                 <template x-for="badge in (() => {
@@ -1313,11 +1329,30 @@ button,input,select,textarea{font-family:inherit}
                   <span :style="'font-size:8px;padding:1px 5px;border-radius:6px;font-weight:500;background:'+badge.b+';color:'+badge.c" x-text="badge.l"></span>
                 </template>
               </div>
-              <div style="font-size:9px;color:var(--text-muted);margin-top:4px" x-text="nodeEvidence.total_evidence+' evidence'"></div>
+              <div style="font-size:9px;color:var(--text-muted);margin-top:4px;cursor:pointer" @click="evidenceExpanded=!evidenceExpanded">
+                <span x-text="nodeEvidence.total_evidence+' evidence'"></span>
+                <span x-text="evidenceExpanded ? ' ▾' : ' ▸'"></span>
+              </div>
+              <template x-if="evidenceExpanded">
+                <div style="margin-top:4px;max-height:120px;overflow-y:auto">
+                  <template x-for="(ev,i) in [...(nodeEvidence.node_evidence||[]),...(nodeEvidence.edge_evidence||[])].slice(0,12)" :key="i">
+                    <div style="font-size:9px;padding:1px 0;border-bottom:1px solid var(--card-alt)">
+                      <span class="muted" x-text="ev.assertion_kind"></span>
+                      <template x-if="ev.file_path">
+                        <div style="font-family:var(--font-mono);color:var(--text-secondary);user-select:all"
+                             x-text="ev.file_path + (ev.line_start ? ':'+ev.line_start : '')"></div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
             </div>
           </template>
-          <template x-if="!nodeEvidence || nodeEvidence.total_evidence === 0">
-            <div class="muted-note">loading...</div>
+          <template x-if="nodeEvidence && nodeEvidence.total_evidence === 0">
+            <div class="muted-note">no evidence recorded</div>
+          </template>
+          <template x-if="!nodeEvidence">
+            <div class="muted-note">loading…</div>
           </template>
         </div>
       </div>
@@ -1865,6 +1900,7 @@ function dashboard() {
     viewSessionId: null,    // diagram session id when opened via #c4/s/<id>
     _viewRenderer: null,    // fallback GraphRenderer if graphController is unavailable
     selectedNode: null,
+    evidenceExpanded: false,
     nodeEvidence: null,
     _focusNodeIds: null,
     _focusPrimaryIds: null,
@@ -3011,7 +3047,7 @@ function dashboard() {
       html += renderRing('Data (models)', '\u2193', models);
       html += renderRing('Events', '\u26a1', events);
       if (other.length > 0) html += renderRing('Other', '\xb7', other);
-      html += '<div style="background:var(--card-alt);border:1px solid var(--bg);border-radius:6px;padding:10px 14px;margin-top:16px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Evidence</div><div style="font-size:9px;color:var(--text-secondary)">' + (centerNode.file_path ? '<div><b style="color:var(--text-secondary)">File:</b> ' + centerNode.file_path + '</div>' : '') + '<div><b style="color:var(--text-secondary)">Confidence:</b> ' + (centerNode.confidence || 'N/A') + '</div><div><b style="color:var(--text-secondary)">Status:</b> ' + (centerNode.status || 'active') + '</div></div></div>';
+      html += '<div style="background:var(--card-alt);border:1px solid var(--bg);border-radius:6px;padding:10px 14px;margin-top:16px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Evidence</div><div style="font-size:9px;color:var(--text-secondary)">' + (centerNode.file_path ? '<div><b style="color:var(--text-secondary)">File:</b> ' + centerNode.file_path + '</div>' : '') + '<div><b style="color:var(--text-secondary)">Confidence:</b> ' + ((centerNode.trust_score ?? centerNode.confidence) || 'N/A') + '</div><div><b style="color:var(--text-secondary)">Status:</b> ' + (centerNode.status || 'active') + '</div></div></div>';
       html += '</div>';
       container.innerHTML = html;
     },
@@ -3127,9 +3163,10 @@ function dashboard() {
       if (this._focusNodeIds && this._focusNodeIds.size > 0) {
         nodes = nodes.filter(n => this._focusNodeIds.has(n.node_id));
       }
-      // Confidence filter
+      // Confidence filter — compares against derived trust_score (falls back
+      // to raw confidence for payloads that predate trust_score)
       if (this.minConfidence > 0) {
-        nodes = nodes.filter(n => (n.confidence || 1) >= this.minConfidence);
+        nodes = nodes.filter(n => ((n.trust_score ?? n.confidence) || 1) >= this.minConfidence);
       }
 
       // Edge type filters
@@ -3217,7 +3254,7 @@ function dashboard() {
           const cur = queue.shift();
           const outgoing = outgoingFromCollapsible[cur.nodeId] || [];
           for (const { to_id, edge } of outgoing) {
-            const conf = Math.min(cur.minConf, edge.confidence || 1);
+            const conf = Math.min(cur.minConf, (edge.trust_score ?? edge.confidence) || 1);
             if (visibleIds.has(to_id)) {
               reachableVisible.push({ to_id, viaNames: cur.viaNames, confidence: conf });
             } else if (collapsibleIds.has(to_id) && !visited.has(to_id)) {
@@ -3233,7 +3270,7 @@ function dashboard() {
             if (inc.from_id === reach.to_id) continue;
             const key = inc.from_id + '->' + reach.to_id;
             if (directEdgeKeys.has(key)) continue;
-            const conf = Math.min(inc.edge.confidence || 1, reach.confidence);
+            const conf = Math.min((inc.edge.trust_score ?? inc.edge.confidence) || 1, reach.confidence);
             if (!transitiveMap[key] || conf > transitiveMap[key].confidence) {
               transitiveMap[key] = { viaNames: reach.viaNames, confidence: conf };
             }
@@ -3294,6 +3331,12 @@ function dashboard() {
       const allEdges = this.graphData.edges || [];
       const nodeById = {};
       allNodes.forEach(n => { nodeById[n.node_id] = n; });
+      // Renderer/view nodes may carry node_id as a string (or a synthetic
+      // copy); resolve to the canonical graph node so the strict id
+      // comparisons below actually match edges.
+      const canonical = nodeById[node.node_id] ||
+        (node.node_key && allNodes.find(n => n.node_key === node.node_key));
+      if (canonical) node = canonical;
 
       // Find parent via CONTAINS (who contains this node?)
       const parentEdge = allEdges.find(e => e.to_node_id === node.node_id && e.edge_type === 'CONTAINS');
@@ -3333,7 +3376,7 @@ function dashboard() {
       allEdges.filter(e => e.from_node_id === node.node_id && !skipTypes.includes(e.edge_type)).forEach(e => {
         const target = nodeById[e.to_node_id];
         if (!target) return;
-        const entry = { name: target.name, node_key: target.node_key, node_type: target.node_type, layer: target.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.confidence };
+        const entry = { name: target.name, node_key: target.node_key, node_type: target.node_type, layer: target.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.trust_score ?? e.confidence };
         if (siblingIds.has(e.to_node_id)) {
           internal.push(entry);
         } else {
@@ -3345,7 +3388,7 @@ function dashboard() {
       allEdges.filter(e => e.to_node_id === node.node_id && !skipTypes.includes(e.edge_type)).forEach(e => {
         const source = nodeById[e.from_node_id];
         if (!source) return;
-        const entry = { name: source.name, node_key: source.node_key, node_type: source.node_type, layer: source.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.confidence };
+        const entry = { name: source.name, node_key: source.node_key, node_type: source.node_type, layer: source.layer, edge_type: e.edge_type, derivation: e.derivation || e.derivation_kind, confidence: e.trust_score ?? e.confidence };
         if (siblingIds.has(e.from_node_id)) {
           internal.push(entry);
         } else {
@@ -5122,6 +5165,12 @@ function dashboard() {
         const key = svc || '_shared';
         if (!groups[key]) groups[key] = { key, label: svc || 'shared', nodes: [] };
         groups[key].nodes.push(n);
+      });
+      // Mark name collisions inside a group so the row can disambiguate
+      Object.values(groups).forEach(g => {
+        const seen = {};
+        g.nodes.forEach(n => { seen[n.name] = (seen[n.name] || 0) + 1; });
+        g.dups = seen;
       });
       Object.values(groups).forEach(g => g.nodes.sort((a, b) => {
         const la = (a.layer in layerOrder) ? layerOrder[a.layer] : 9;
