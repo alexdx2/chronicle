@@ -66,7 +66,7 @@ func (g *Graph) Subgraph(rootKey string, opts SubgraphOptions) (*SubgraphResult,
 		return nil, fmt.Errorf("node %q not found — use chronicle_node_search to find the key", rootKey)
 	}
 
-	res := &SubgraphResult{Root: rootKey}
+	res := &SubgraphResult{Root: rootKey, Nodes: []SubgraphNode{}, Edges: []SubgraphEdge{}}
 	visited := map[int64]bool{root.NodeID: true}
 	res.Nodes = append(res.Nodes, toSubgraphNode(*root, 0))
 	frontier := []store.NodeRow{*root}

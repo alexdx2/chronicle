@@ -46,6 +46,8 @@ func NewRootCmd() *cobra.Command {
 		newSnapshotCmd(),
 		newImportCmd(),
 		newQueryCmd(),
+		newSearchCmd(),
+		newSubgraphCmd(),
 		newValidateCmd(),
 		newMCPCmd(),
 		newImpactCmd(),

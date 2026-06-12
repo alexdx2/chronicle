@@ -51,6 +51,8 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(importExtractionsTool(), importExtractionsHandler(g))
 	s.AddTool(resolveExtractionsTool(), resolveExtractionsHandler(g))
 	s.AddTool(importAllTool(), importAllHandler(g))
+	s.AddTool(nodeSearchTool(), nodeSearchHandler(g))
+	s.AddTool(subgraphTool(), subgraphHandler(g))
 	s.AddTool(queryDepsTool(), queryDepsHandler(g))
 	s.AddTool(queryReverseDepsTool(), queryReverseDepsHandler(g))
 	s.AddTool(queryStatsTool(), queryStatsHandler(g))
