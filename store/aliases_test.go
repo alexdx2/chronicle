@@ -92,6 +92,39 @@ func TestAliasCRUD(t *testing.T) {
 	}
 }
 
+func TestListAliasesAll(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	revID := createTestRevision(t, s)
+	nodeID := createTestNode(t, s, revID)
+
+	if _, err := s.AddAlias(AliasRow{NodeID: nodeID, Alias: "OrderController", AliasKind: "class_name", Confidence: 0.9}); err != nil {
+		t.Fatalf("AddAlias: %v", err)
+	}
+	if _, err := s.AddAlias(AliasRow{NodeID: nodeID, Alias: "orders-api", AliasKind: "dns", Confidence: 0.8}); err != nil {
+		t.Fatalf("AddAlias: %v", err)
+	}
+
+	all, err := s.ListAliasesAll()
+	if err != nil {
+		t.Fatalf("ListAliasesAll: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 aliases, got %d", len(all))
+	}
+	if all[0].NodeID != nodeID || all[1].NodeID != nodeID {
+		t.Errorf("expected both aliases on node %d, got %+v", nodeID, all)
+	}
+	if all[0].NormalizedAlias != "ordercontroller" {
+		t.Errorf("expected first alias 'ordercontroller' (alias_id order), got %q", all[0].NormalizedAlias)
+	}
+}
+
 func createTestRevision(t *testing.T, s *Store) int64 {
 	t.Helper()
 	res, err := s.db.Exec(`INSERT INTO graph_revisions (domain_key, git_after_sha, trigger_kind, mode) VALUES ('test', 'abc123', 'manual', 'full')`)

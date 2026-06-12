@@ -76,6 +76,20 @@ func (s *Store) ListAliasesByNode(nodeID int64) ([]AliasRow, error) {
 	return scanAliases(rows)
 }
 
+// ListAliasesAll returns every alias row, ordered by alias_id for determinism.
+// Used by graph.NodeSearch to build the in-memory name index in one query.
+func (s *Store) ListAliasesAll() ([]AliasRow, error) {
+	rows, err := s.db.Query(`
+		SELECT alias_id, node_id, alias, normalized_alias, alias_kind, confidence
+		FROM node_aliases ORDER BY alias_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("ListAliasesAll: %w", err)
+	}
+	defer rows.Close()
+	return scanAliases(rows)
+}
+
 // ListAliasesByNormalized returns aliases matching a normalized value and kind.
 func (s *Store) ListAliasesByNormalized(normalized, kind string) ([]AliasRow, error) {
 	rows, err := s.db.Query(`
