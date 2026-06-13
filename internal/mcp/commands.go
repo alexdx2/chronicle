@@ -3,9 +3,14 @@ package mcp
 // Command definitions for user-facing slash commands.
 // These are returned by chronicle_extraction_guide and documented in CLAUDE.md.
 
+import "github.com/alexdx2/chronicle-core/graph/prompts"
+
 func init() {
 	// Inject dynamically-built checkpoint flow + MCP preflight into scan command
 	CommandInstructions["scan"] = buildScanCommand()
+	// The querying guide is authored as an embedded pack so it stays close to
+	// the tools it teaches and can be reused by the dashboard / hooks.
+	CommandInstructions["query"] = prompts.Querying
 }
 
 var UserCommands = map[string]string{
@@ -13,6 +18,7 @@ var UserCommands = map[string]string{
 	"data":     "Analyze data models only — Prisma/TypeORM schemas, relations, enums",
 	"language": "Define or update domain language glossary, check for violations",
 	"impact":   "Analyze impact of a specific change — 'what breaks if I change X?'",
+	"query":    "How to answer a codebase question via the graph — resolve names with node_search, then deps/path/impact/subgraph",
 	"deps":     "Show dependencies of a node — 'what does X depend on?'",
 	"path":     "Find path between two nodes — 'how does A connect to B?'",
 	"flows":    "Analyze business use cases — what the system does, end-to-end processes",

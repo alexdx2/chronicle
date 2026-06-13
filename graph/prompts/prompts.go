@@ -50,6 +50,9 @@ var TechKafka string
 //go:embed pack_authoring_guide.md
 var PackAuthoringGuide string
 
+//go:embed querying.md
+var Querying string
+
 //go:embed registry.yaml
 var registryYAML string
 

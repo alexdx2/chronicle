@@ -2463,8 +2463,8 @@ func mcpIdentityHandler() server.ToolHandlerFunc {
 
 func commandTool() mcp.Tool {
 	return mcp.NewTool("chronicle_command",
-		mcp.WithDescription("Execute a Chronicle command. Available commands: scan, data, language, impact, deps, path, services, status, version, help. The user may type '/chronicle-scan' or 'chronicle scan' — call this tool with the command name."),
-		mcp.WithString("command", mcp.Required(), mcp.Description("Command name: scan, data, language, impact, deps, path, services, status, version, help")),
+		mcp.WithDescription("Execute a Chronicle command. Available commands: scan, query, data, language, impact, deps, path, services, status, version, help. The user may type '/chronicle-scan' or 'chronicle scan' — call this tool with the command name."),
+		mcp.WithString("command", mcp.Required(), mcp.Description("Command name: scan, query, data, language, impact, deps, path, services, status, version, help")),
 	)
 }
 
