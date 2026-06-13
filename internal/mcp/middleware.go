@@ -420,6 +420,7 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(importAllTool(), importAllHandler(g))
 	add(nodeSearchTool(), nodeSearchHandler(g))
 	add(subgraphTool(), subgraphHandler(g))
+	add(insightsTool(), insightsHandler(g))
 	add(queryDepsTool(), queryDepsHandler(g))
 	add(queryReverseDepsTool(), queryReverseDepsHandler(g))
 	add(queryStatsTool(), queryStatsHandler(g))

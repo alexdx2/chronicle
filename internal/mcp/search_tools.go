@@ -72,3 +72,24 @@ func subgraphHandler(g *graph.Graph) server.ToolHandlerFunc {
 		return jsonResult(result), nil
 	}
 }
+
+// ---------------------------------------------------------------------------
+// chronicle_insights
+// ---------------------------------------------------------------------------
+
+func insightsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_insights",
+		mcp.WithDescription("Deterministic, trust-aware summary of the graph: hubs (most-connected nodes), suspicious cross-domain edges (least-supported boundary crossings), verification targets (high-impact low-trust edges to confirm with evidence_verify), structural gaps (services without endpoints, endpoints without flows, unresolved externals), and suggested follow-up queries. Returns markdown. Run after a scan to see what's central and what to check."),
+		mcp.WithString("domain", mcp.Description("Limit to one domain key (default: all domains)")),
+	)
+}
+
+func insightsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		res, err := g.Insights(strParam(req.GetArguments(), "domain"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return mcp.NewToolResultText(res.Markdown()), nil
+	}
+}
