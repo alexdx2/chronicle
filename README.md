@@ -99,12 +99,17 @@ for the instant demo.)
 | Command | What it does |
 |---------|-------------|
 | `chronicle scan` | Build the project graph |
-| `chronicle update` | Refresh after code changes |
+| `chronicle search X` | Find a node by name (deterministic lexical match) |
+| `chronicle refresh` | Re-verify evidence on git-changed files since the last scan — zero-token, no LLM |
 | `chronicle status` | Check graph health |
 | `chronicle impact X` | What may break if X changes |
 | `chronicle deps X` | What X depends on |
+| `chronicle subgraph X` | The neighborhood around X in one call (trust-truncated) |
 | `chronicle path A B` | How A connects to B |
 | `chronicle diagram` | Live architecture diagram in browser |
+| `chronicle hook install` | Nudge your AI agent to query the graph before grepping |
+
+New MCP tools for agents: `chronicle_node_search` (resolve a name to a node key), `chronicle_subgraph` (one-call neighborhood), and `chronicle_insights` (hubs, low-trust edges to verify, structural gaps).
 
 ## Dashboard
 

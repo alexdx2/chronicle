@@ -2,7 +2,7 @@
 // Used by: CLI, MCP server, npm package (synced by CI), debug logger, git tags.
 package version
 
-const Version = "0.12.0"
+const Version = "0.13.0"
 
 // BuildHash is set at compile time via -ldflags.
 // Install with: go install -ldflags "-X github.com/alexdx2/chronicle-core/version.BuildHash=$(git rev-parse --short HEAD)" ./cmd/chronicle/
