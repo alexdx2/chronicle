@@ -66,15 +66,14 @@ jobs:
           path: dist/
 
   build-darwin:
+    # Both arches build on the Apple-Silicon runner: arm64 native, amd64
+    # cross-compiled via clang -arch x86_64. Avoids the scarce/deprecated
+    # macos-13 Intel runner that left release builds queued indefinitely.
+    runs-on: macos-latest
     if: startsWith(github.ref, 'refs/tags/')
     strategy:
       matrix:
-        include:
-          - runner: macos-13
-            goarch: amd64
-          - runner: macos-latest
-            goarch: arm64
-    runs-on: ${{ matrix.runner }}
+        goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -83,8 +82,11 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
-          CGO_ENABLED=1 GOOS=darwin GOARCH=${{ matrix.goarch }} \
-            go build -ldflags '-s -w' -o dist/chronicle-darwin-${{ matrix.goarch }} ./cmd/chronicle
+          export CGO_ENABLED=1 GOOS=darwin GOARCH=${{ matrix.goarch }}
+          if [ "${{ matrix.goarch }}" = "amd64" ]; then
+            export CC="clang -arch x86_64"
+          fi
+          go build -ldflags '-s -w' -o dist/chronicle-darwin-${{ matrix.goarch }} ./cmd/chronicle
       - uses: actions/upload-artifact@v4
         with:
           name: binaries-darwin-${{ matrix.goarch }}
