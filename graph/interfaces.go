@@ -1,5 +1,7 @@
 package graph
 
+import "github.com/alexdx2/chronicle-core/store"
+
 // GraphQuerier is the primary query interface. OSS provides a single-repo
 // implementation (Graph). Enterprise provides a federated implementation.
 type GraphQuerier interface {
@@ -8,6 +10,12 @@ type GraphQuerier interface {
 	QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult, error)
 	QueryImpact(nodeKey string, opts ImpactOptions) (*ImpactResult, error)
 	QueryStats(domainKey string) (*Stats, error)
+
+	// Retrieval primitives (single-repo on Graph; cross-repo on FederatedGraph).
+	// The agent composes these — no natural-language understanding lives here.
+	NodeSearch(q string, f store.NodeFilter, limit int) ([]SearchResult, error)
+	Subgraph(rootKey string, opts SubgraphOptions) (*SubgraphResult, error)
+	Insights(domainKey string) (*InsightsResult, error)
 }
 
 // GraphDiscoverer finds .depbot/ directories and returns openable graph targets.

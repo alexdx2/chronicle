@@ -21,6 +21,7 @@ type SearchResult struct {
 	Status    string  `json:"status"`
 	MatchKind string  `json:"match_kind"` // exact_name|exact_alias|glossary|prefix|substring|path
 	Score     float64 `json:"score"`
+	Repo      string  `json:"repo,omitempty"` // set by federation; empty for single-repo
 }
 
 // Match tiers per query term. The binding constraint (lowest tier across terms)
