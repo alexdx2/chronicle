@@ -336,31 +336,18 @@ func (s *Server) getStore() *store.Store {
 // Supports both "domain: xxx" and "domains: [{key: xxx}]" formats.
 // Returns empty string if not found — no fallbacks.
 func (s *Server) domainFromManifest() string {
-	data, err := os.ReadFile(s.manifestPath)
-	if err != nil {
+	// Parse the manifest properly. The previous line-scanner grabbed the
+	// first "key:" line in the file — which in a services: section is a
+	// SERVICE key (e.g. "arena-api"), not a domain. Every consumer then
+	// scoped queries to a domain that owns zero nodes (blank dashboards).
+	m, err := manifest.LoadFile(s.manifestPath)
+	if err != nil || len(m.Domains) == 0 {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "domain:") && !strings.HasPrefix(line, "domains:") {
-			val := strings.TrimSpace(strings.TrimPrefix(line, "domain:"))
-			val = strings.Trim(val, "\"'")
-			if val != "" {
-				return val
-			}
-		}
-		if strings.HasPrefix(line, "key:") || strings.HasPrefix(line, "- key:") {
-			val := line
-			val = strings.TrimPrefix(val, "- ")
-			val = strings.TrimPrefix(val, "key:")
-			val = strings.TrimSpace(val)
-			val = strings.Trim(val, "\"'")
-			if val != "" {
-				return val
-			}
-		}
+	if key := m.Domains[0].Key; key != "" {
+		return key
 	}
-	return ""
+	return m.Domains[0].Name
 }
 
 func (s *Server) getDomain(r *http.Request) string {

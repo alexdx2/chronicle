@@ -4765,8 +4765,16 @@ function dashboard() {
 
     // /api/view requires scope.domain — resolve it once.
     async ensureViewDomain() {
-      if (this.viewDomain) return this.viewDomain;
-      if (this.domain) { this.viewDomain = this.domain; return this.viewDomain; }
+      // Deep links and /api/info can hand us a domain that owns zero nodes
+      // (stale link, mis-resolved manifest). Trust a cached/declared domain
+      // only if the loaded graph actually has nodes in it — otherwise
+      // re-resolve from the graph's real domains.
+      const known = (this.graphData.nodes || []).length
+        ? new Set(this.graphData.nodes.map(n => n.domain_key).filter(Boolean))
+        : null;
+      const valid = d => !!d && (!known || known.has(d));
+      if (valid(this.viewDomain)) return this.viewDomain;
+      if (valid(this.domain)) { this.viewDomain = this.domain; return this.viewDomain; }
       try {
         const r = await fetch('/api/graph/domains');
         if (r.ok) {
@@ -4988,6 +4996,29 @@ function dashboard() {
       const renderer = await this._getViewRenderer();
       if (!renderer) return;
       const adapted = ViewAdapter.adaptView(top.view, this.edgeCategoryLookup);
+      // Empty view: explain WHY instead of a silently blank canvas. The most
+      // common cause is a scope.domain that owns no nodes (stale deep link,
+      // mis-resolved default domain) — name it and offer the way out.
+      if ((adapted.nodes || []).length === 0) {
+        const container = document.getElementById('graph-canvas');
+        if (container) {
+          const esc = t => String(t || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+          const scopeDomain = (top.spec && top.spec.scope && top.spec.scope.domain) || '';
+          const missing = (top.view && top.view.missing) || [];
+          const knownDomains = [...new Set((this.graphData.nodes || []).map(n => n.domain_key).filter(Boolean))];
+          let html = '<div style="padding:60px;text-align:center;color:var(--text-muted);max-width:520px;margin:0 auto">';
+          html += '<div style="font-size:14px;color:var(--text-secondary);margin-bottom:8px">Nothing matched this view</div>';
+          if (scopeDomain) html += '<div style="font-size:12px">Scope: domain <code style="background:var(--card-alt);padding:1px 5px;border-radius:3px">' + esc(scopeDomain) + '</code>' + (knownDomains.length && !knownDomains.includes(scopeDomain) ? ' — the graph has no nodes in this domain' : '') + '</div>';
+          if (knownDomains.length && scopeDomain && !knownDomains.includes(scopeDomain)) {
+            html += '<div style="font-size:12px;margin-top:6px">Domains in this graph: ' + knownDomains.map(esc).join(', ') + '</div>';
+          }
+          if (missing.length) html += '<div style="font-size:11px;margin-top:6px">⚠ unresolved pins: <span style="font-family:var(--font-mono)">' + missing.map(esc).join(', ') + '</span></div>';
+          html += '<div style="font-size:11px;margin-top:12px">Pick a level above (System · Services · Components) to rebuild this view for the current graph, or <button class="btn-outline-xs" style="vertical-align:baseline" onclick="document.querySelector(\'[x-data]\').__x.$data.exitViewMode()">show everything</button></div>';
+          html += '</div>';
+          container.innerHTML = html;
+        }
+        return;
+      }
       const lookup = Object.assign({}, this.edgeCategoryLookup, adapted.lookupOverlay);
       // "Hide CONTAINS/OWNS" applies to hierarchy-ish edges when a view
       // carries any (rare — collapsed views fold them into groups).
@@ -5180,7 +5211,7 @@ function dashboard() {
     // whole-domain fallback). Drops then extend the selection as usual.
     async newCanvas() {
       await this.ensureGraphReady();
-      const domain = this.viewDomain || await this.ensureViewDomain();
+      const domain = await this.ensureViewDomain();
       if (this.graphMode === 'tree') {
         this.graphMode = 'explore';
         if (this.modeController) this.modeController._mode = 'explore';
@@ -5279,7 +5310,7 @@ function dashboard() {
     // In All mode (no spec) the first add starts a Custom view.
     async addPaletteNode(key) {
       if (!key || !String(key).includes(':')) return;
-      const domain = this.viewDomain || await this.ensureViewDomain();
+      const domain = await this.ensureViewDomain();
       const top = this._customTop();
       if (top) {
         if ((top.spec.scope.nodes || []).includes(key)) return;
@@ -5363,7 +5394,7 @@ function dashboard() {
       if (!this.selectedNode || !this.selectedNode.node_key) return;
       const key = this.selectedNode.node_key;
       const name = this.selectedNode.name || ViewAdapter.shortName(key);
-      const domain = this.viewDomain || await this.ensureViewDomain();
+      const domain = await this.ensureViewDomain();
       if (kind === 'path') {
         this.viewPathArmFrom = key;
         this.selectedNode = null;
