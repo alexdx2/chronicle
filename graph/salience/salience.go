@@ -111,7 +111,72 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		d.Trace = append(d.Trace, "promotion:skipped(no boundary crossing)")
 	}
 
+	// Layer 5: noise demotion (generated/test/vendor). Symmetric to promotion.
+	if in.NoiseClass != "" && in.NoiseClass != "none" {
+		d.NoiseClass = in.NoiseClass
+		d.Tier = TierDetail
+		d.RenderMode = RenderHidden
+		d.Trace = append(d.Trace, "noise:"+in.NoiseClass+" -> tier=detail mode=hidden")
+	} else {
+		d.Trace = append(d.Trace, "noise:none")
+	}
+
+	// Layer 6: user override — last word.
+	pinned := false
+	if in.UserOverride != nil {
+		if in.UserOverride.Tier != nil {
+			d.Tier = *in.UserOverride.Tier
+			d.Trace = append(d.Trace, "user_override:tier="+string(*in.UserOverride.Tier))
+		}
+		if in.UserOverride.RenderMode != nil {
+			d.RenderMode = *in.UserOverride.RenderMode
+			pinned = true
+			d.Trace = append(d.Trace, "user_override:mode="+string(*in.UserOverride.RenderMode))
+		}
+	} else {
+		d.Trace = append(d.Trace, "user_override:none")
+	}
+
+	// Layer 7: reconcile tier -> render_mode floor, unless pinned.
+	if !pinned {
+		floor := floorMode(d.Tier)
+		if renderRank(floor) > renderRank(d.RenderMode) {
+			d.Trace = append(d.Trace, fmt.Sprintf("reconcile:floor %s->%s for tier=%s", d.RenderMode, floor, d.Tier))
+			d.RenderMode = floor
+		}
+	}
+
 	return d
+}
+
+// floorMode is the minimum render_mode implied by a tier.
+func floorMode(t Tier) RenderMode {
+	switch t {
+	case TierPrimary:
+		return RenderBox
+	case TierSecondary:
+		return RenderCollapsedGroup
+	default:
+		return RenderHidden
+	}
+}
+
+// renderRank orders render modes from least to most visible for floor comparison.
+func renderRank(m RenderMode) int {
+	switch m {
+	case RenderBox:
+		return 5
+	case RenderCollapsedGroup:
+		return 4
+	case RenderExpandableDetail:
+		return 3
+	case RenderAttachedDetail:
+		return 2
+	case RenderBadge:
+		return 1
+	default: // hidden
+		return 0
+	}
 }
 
 // applyKey merges the "default" rule then the level-specific rule for a policy

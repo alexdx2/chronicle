@@ -74,3 +74,30 @@ func TestResolve_PromotionCappedByMaxTier(t *testing.T) {
 		t.Fatalf("request_dto capped at secondary: got %s trace=%v", d.Tier, d.Trace)
 	}
 }
+
+func TestResolve_NoiseDemotes(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Level: "default", NoiseClass: "generated"})
+	if d.Tier != TierDetail || d.RenderMode != RenderHidden {
+		t.Fatalf("noise should demote: got tier=%s mode=%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+}
+func TestResolve_UserOverrideWins(t *testing.T) {
+	box := RenderBox
+	d := Resolve(basePolicy(), Input{NodeType: "dto", Layer: "data", Role: "request_dto", Level: "default", UserOverride: &Override{RenderMode: &box}})
+	if d.RenderMode != RenderBox {
+		t.Fatalf("user override should win: got mode=%s trace=%v", d.RenderMode, d.Trace)
+	}
+}
+func TestResolve_ReconcileFloorsRenderMode(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "model", Layer: "data", Role: "entity", Level: "default", BoundaryCrossing: true})
+	if d.Tier != TierPrimary || d.RenderMode != RenderBox {
+		t.Fatalf("reconcile: got tier=%s mode=%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+}
+func TestResolve_ReconcileDoesNotOverridePinnedMode(t *testing.T) {
+	badge := RenderBadge
+	d := Resolve(basePolicy(), Input{NodeType: "model", Layer: "data", Role: "entity", Level: "default", BoundaryCrossing: true, UserOverride: &Override{RenderMode: &badge}})
+	if d.RenderMode != RenderBadge {
+		t.Fatalf("pinned mode must survive reconcile: got %s", d.RenderMode)
+	}
+}
