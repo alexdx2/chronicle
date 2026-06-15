@@ -93,6 +93,24 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		}
 	}
 
+	// Layer 4: bounded topology promotion. Only if the role allows it.
+	if in.BoundaryCrossing && d.Promotable {
+		target := TierPrimary
+		if d.MaxTier != "" && tierRank(d.MaxTier) < tierRank(target) {
+			target = d.MaxTier
+		}
+		if tierRank(target) > tierRank(d.Tier) {
+			d.Tier = target
+			d.Trace = append(d.Trace, fmt.Sprintf("promotion:boundary -> tier=%s (cap=%q)", target, d.MaxTier))
+		} else {
+			d.Trace = append(d.Trace, "promotion:noop(already >= target)")
+		}
+	} else if in.BoundaryCrossing {
+		d.Trace = append(d.Trace, "promotion:skipped(not promotable)")
+	} else {
+		d.Trace = append(d.Trace, "promotion:skipped(no boundary crossing)")
+	}
+
 	return d
 }
 

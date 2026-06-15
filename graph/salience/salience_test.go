@@ -55,3 +55,22 @@ func TestResolve_UnknownRoleIgnored(t *testing.T) {
 		t.Fatalf("unknown role: got tier=%s mode=%s", d.Tier, d.RenderMode)
 	}
 }
+
+func TestResolve_PromotionRespectsPromotable(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "model", Layer: "data", Role: "entity", Level: "default", BoundaryCrossing: true})
+	if d.Tier != TierPrimary {
+		t.Fatalf("promotable entity should reach primary: got %s trace=%v", d.Tier, d.Trace)
+	}
+}
+func TestResolve_PromotionBlockedForNonPromotable(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "symbol", Layer: "code", Role: "helper", Level: "default", BoundaryCrossing: true})
+	if d.Tier != TierDetail {
+		t.Fatalf("helper must stay detail: got %s trace=%v", d.Tier, d.Trace)
+	}
+}
+func TestResolve_PromotionCappedByMaxTier(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "dto", Layer: "data", Role: "request_dto", Level: "default", BoundaryCrossing: true})
+	if d.Tier != TierSecondary {
+		t.Fatalf("request_dto capped at secondary: got %s trace=%v", d.Tier, d.Trace)
+	}
+}
