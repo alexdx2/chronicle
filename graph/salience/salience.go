@@ -93,7 +93,8 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		}
 	}
 
-	// Layer 4: bounded topology promotion. Only if the role allows it.
+	// (A future lens override layer slots between role and promotion; v1 no-op.)
+	// Layer 3: bounded topology promotion. Only if the role allows it.
 	if in.BoundaryCrossing && d.Promotable {
 		target := TierPrimary
 		if d.MaxTier != "" && tierRank(d.MaxTier) < tierRank(target) {
@@ -111,17 +112,23 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		d.Trace = append(d.Trace, "promotion:skipped(no boundary crossing)")
 	}
 
-	// Layer 5: noise demotion (generated/test/vendor). Symmetric to promotion.
-	if in.NoiseClass != "" && in.NoiseClass != "none" {
-		d.NoiseClass = in.NoiseClass
+	// Layer 4: noise demotion (generated/test/vendor). Symmetric to promotion.
+	// NoiseClass may be supplied explicitly by a caller (downstream plan), or
+	// inferred here when the node's role is listed in the policy's noise_roles.
+	noiseClass := in.NoiseClass
+	if noiseClass == "" && in.Role != "" && in.Role != "unknown" && p.IsNoiseRole(in.Role) {
+		noiseClass = in.Role
+	}
+	if noiseClass != "" && noiseClass != "none" {
+		d.NoiseClass = noiseClass
 		d.Tier = TierDetail
 		d.RenderMode = RenderHidden
-		d.Trace = append(d.Trace, "noise:"+in.NoiseClass+" -> tier=detail mode=hidden")
+		d.Trace = append(d.Trace, "noise:"+noiseClass+" -> tier=detail mode=hidden")
 	} else {
 		d.Trace = append(d.Trace, "noise:none")
 	}
 
-	// Layer 6: user override — last word.
+	// Layer 5: user override — last word.
 	pinned := false
 	if in.UserOverride != nil {
 		if in.UserOverride.Tier != nil {
@@ -137,7 +144,7 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		d.Trace = append(d.Trace, "user_override:none")
 	}
 
-	// Layer 7: reconcile tier -> render_mode floor, unless pinned.
+	// Layer 6: reconcile tier -> render_mode floor, unless pinned.
 	if !pinned {
 		floor := floorMode(d.Tier)
 		if renderRank(floor) > renderRank(d.RenderMode) {

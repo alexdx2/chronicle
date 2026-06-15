@@ -13,11 +13,13 @@ func basePolicy() *registry.SaliencePolicy {
 			"type:contract.endpoint": {"default": {Tier: "primary", RenderMode: "box"}},
 			"role:entity":            {"default": {Tier: "primary", RenderMode: "box"}},
 			"role:request_dto":       {"default": {Tier: "detail", RenderMode: "hidden"}, "focus": {RenderMode: "attached_detail"}},
+			"role:aggregate":         {"default": {Tier: "secondary", RenderMode: "collapsed_group"}},
 		},
 		Roles: map[string]registry.RoleRule{
 			"entity":      {Promotable: true},
 			"request_dto": {Promotable: true, MaxTier: "secondary"},
 			"helper":      {Promotable: false},
+			"aggregate":   {Promotable: true},
 		},
 		NoiseRoles: []string{"generated", "test_fixture"},
 	}
@@ -99,6 +101,35 @@ func TestResolve_ReconcileDoesNotOverridePinnedMode(t *testing.T) {
 	d := Resolve(basePolicy(), Input{NodeType: "model", Layer: "data", Role: "entity", Level: "default", BoundaryCrossing: true, UserOverride: &Override{RenderMode: &badge}})
 	if d.RenderMode != RenderBadge {
 		t.Fatalf("pinned mode must survive reconcile: got %s", d.RenderMode)
+	}
+}
+
+func TestResolve_NoiseByRoleFromPolicy(t *testing.T) {
+	// No explicit NoiseClass, but role "generated" IS in the policy's noise_roles.
+	// It must be demoted to detail/hidden even though the base type is primary.
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Role: "generated", Level: "default"})
+	if d.Tier != TierDetail || d.RenderMode != RenderHidden {
+		t.Fatalf("policy noise role should demote: got tier=%s mode=%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+	if d.NoiseClass != "generated" {
+		t.Fatalf("NoiseClass should record the role: got %q", d.NoiseClass)
+	}
+}
+
+func TestResolve_PromotionRaisesBelowPrimary(t *testing.T) {
+	// aggregate base tier is secondary. Without boundary crossing it stays secondary;
+	// with boundary crossing (and promotable, no cap) it must be raised to primary.
+	noBoundary := Resolve(basePolicy(), Input{NodeType: "model", Layer: "data", Role: "aggregate", Level: "default"})
+	if noBoundary.Tier != TierSecondary {
+		t.Fatalf("aggregate without boundary should stay secondary: got %s trace=%v", noBoundary.Tier, noBoundary.Trace)
+	}
+	promoted := Resolve(basePolicy(), Input{NodeType: "model", Layer: "data", Role: "aggregate", Level: "default", BoundaryCrossing: true})
+	if promoted.Tier != TierPrimary {
+		t.Fatalf("aggregate with boundary should be promoted to primary: got %s trace=%v", promoted.Tier, promoted.Trace)
+	}
+	// And render_mode must be reconciled up to box (floor for primary).
+	if promoted.RenderMode != RenderBox {
+		t.Fatalf("promoted aggregate render_mode should floor to box: got %s", promoted.RenderMode)
 	}
 }
 
