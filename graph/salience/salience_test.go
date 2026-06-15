@@ -157,3 +157,36 @@ func TestResolve_DefaultPolicy_DtoHiddenInC3_DetailInFocus(t *testing.T) {
 		t.Fatalf("generated dto must not be promoted to box; trace=%v", d.Trace)
 	}
 }
+
+func TestResolve_DefaultPolicy_FlowsShown(t *testing.T) {
+	r, err := registry.LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	p := r.SaliencePolicy()
+	// use_case is a real flow node type in the registry; it must be a box, not hidden.
+	for _, nt := range []string{"flow", "use_case", "usecase"} {
+		d := Resolve(p, Input{NodeType: nt, Layer: "flow", Level: "default"})
+		if d.RenderMode != RenderBox {
+			t.Fatalf("flow type %q should be box, got %s trace=%v", nt, d.RenderMode, d.Trace)
+		}
+	}
+}
+
+func TestResolve_DefaultPolicy_ProviderLevelAware(t *testing.T) {
+	r, err := registry.LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	p := r.SaliencePolicy()
+	// At service-level views (default/c2) a provider is collapsed.
+	d := Resolve(p, Input{NodeType: "provider", Layer: "code", Level: "default"})
+	if d.RenderMode != RenderCollapsedGroup {
+		t.Fatalf("provider at default should collapse, got %s trace=%v", d.RenderMode, d.Trace)
+	}
+	// Inside a single-service component view (c3) it becomes a first-class box.
+	d = Resolve(p, Input{NodeType: "provider", Layer: "code", Level: "c3"})
+	if d.RenderMode != RenderBox || d.Tier != TierPrimary {
+		t.Fatalf("provider at c3 should be primary/box, got %s/%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+}

@@ -282,10 +282,15 @@ salience:
     "type:data.model":           { default: { tier: secondary, render_mode: collapsed_group } }
     "type:data.entity":          { default: { tier: primary, render_mode: box } }
     "type:flow.flow":            { default: { tier: primary, render_mode: box } }
+    "type:flow.use_case":        { default: { tier: primary, render_mode: box } }
+    "type:flow.usecase":         { default: { tier: primary, render_mode: box } }
+    "type:flow.flow_step":       { default: { tier: secondary, render_mode: collapsed_group } }
     # --- structural containers (collapsed) ---
     "type:code.module":          { default: { tier: secondary, render_mode: collapsed_group } }
     "type:code.controller":      { default: { tier: primary, render_mode: box } }
-    "type:code.provider":        { default: { tier: secondary, render_mode: collapsed_group } }
+    # provider: collapsed at service-level views (c2), but a first-class component
+    # box inside a single-service component view (c3).
+    "type:code.provider":        { default: { tier: secondary, render_mode: collapsed_group }, c3: { tier: primary, render_mode: box } }
     # --- detail / scaffolding (hidden by default) ---
     "type:data.dto":             { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
     "type:data.field":           { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
