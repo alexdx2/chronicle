@@ -101,3 +101,28 @@ func TestResolve_ReconcileDoesNotOverridePinnedMode(t *testing.T) {
 		t.Fatalf("pinned mode must survive reconcile: got %s", d.RenderMode)
 	}
 }
+
+func TestResolve_DefaultPolicy_DtoHiddenInC3_DetailInFocus(t *testing.T) {
+	r, err := registry.LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	p := r.SaliencePolicy()
+
+	d := Resolve(p, Input{NodeType: "dto", Layer: "data", Role: "request_dto", Level: "default"})
+	if d.RenderMode != RenderHidden {
+		t.Fatalf("dto in default: want hidden got %s trace=%v", d.RenderMode, d.Trace)
+	}
+	d = Resolve(p, Input{NodeType: "dto", Layer: "data", Role: "request_dto", Level: "focus"})
+	if d.RenderMode != RenderAttachedDetail {
+		t.Fatalf("dto in focus: want attached_detail got %s trace=%v", d.RenderMode, d.Trace)
+	}
+	d = Resolve(p, Input{NodeType: "endpoint", Layer: "contract", Level: "default"})
+	if d.RenderMode != RenderBox || d.Tier != TierPrimary {
+		t.Fatalf("endpoint: want primary/box got %s/%s", d.Tier, d.RenderMode)
+	}
+	d = Resolve(p, Input{NodeType: "dto", Layer: "data", Role: "generated", Level: "default", BoundaryCrossing: true})
+	if d.RenderMode == RenderBox {
+		t.Fatalf("generated dto must not be promoted to box; trace=%v", d.Trace)
+	}
+}
