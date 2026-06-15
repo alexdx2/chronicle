@@ -45,6 +45,7 @@ type RegistryFile struct {
 	NodeStatuses       []string               `yaml:"node_statuses" json:"node_statuses"`
 	TriggerKinds       []string               `yaml:"trigger_kinds" json:"trigger_kinds"`
 	TraversalPolicyDef *TraversalPolicyDef    `yaml:"traversal_policy" json:"traversal_policy"`
+	Salience           *SaliencePolicy        `yaml:"salience" json:"salience,omitempty"`
 }
 
 type Registry struct {
@@ -56,6 +57,7 @@ type Registry struct {
 	statuses        map[string]bool
 	triggers        map[string]bool
 	traversalPolicy *TraversalPolicy
+	salience        *SaliencePolicy
 }
 
 func LoadFile(path string) (*Registry, error) {
@@ -111,6 +113,12 @@ func Load(data []byte) (*Registry, error) {
 		policy.noReverseImpact = toSet(f.TraversalPolicyDef.NoReverseImpact)
 	}
 	r.traversalPolicy = policy
+
+	if f.Salience != nil {
+		r.salience = f.Salience
+	} else {
+		r.salience = &SaliencePolicy{}
+	}
 
 	return r, nil
 }
