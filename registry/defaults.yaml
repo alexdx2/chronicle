@@ -271,3 +271,43 @@ traversal_policy:
     - PUBLISHES_TOPIC
     - TRIGGERS_ANALYSIS
     - EMITS_AFTER
+
+salience:
+  render_policy:
+    # --- primary architectural types (always drawn) ---
+    "type:service.service":      { default: { tier: primary, render_mode: box } }
+    "type:service.external_system": { default: { tier: primary, render_mode: box } }
+    "type:contract.endpoint":    { default: { tier: primary, render_mode: box } }
+    "type:contract.topic":       { default: { tier: primary, render_mode: box } }
+    "type:data.model":           { default: { tier: secondary, render_mode: collapsed_group } }
+    "type:data.entity":          { default: { tier: primary, render_mode: box } }
+    "type:flow.flow":            { default: { tier: primary, render_mode: box } }
+    # --- structural containers (collapsed) ---
+    "type:code.module":          { default: { tier: secondary, render_mode: collapsed_group } }
+    "type:code.controller":      { default: { tier: primary, render_mode: box } }
+    "type:code.provider":        { default: { tier: secondary, render_mode: collapsed_group } }
+    # --- detail / scaffolding (hidden by default) ---
+    "type:data.dto":             { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
+    "type:data.field":           { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
+    "type:data.enum":            { default: { tier: detail, render_mode: badge } }
+    "type:code.symbol":          { default: { tier: detail, render_mode: hidden } }
+    "type:code.interface":       { default: { tier: detail, render_mode: hidden } }
+    # --- role overrides ---
+    "role:entity":               { default: { tier: primary, render_mode: box } }
+    "role:aggregate":            { default: { tier: primary, render_mode: box } }
+    "role:port":                 { default: { tier: primary, render_mode: box } }
+    "role:helper":               { default: { render_mode: hidden } }
+    "role:request_dto":          { default: { tier: detail, render_mode: hidden }, focus: { render_mode: attached_detail } }
+    "role:response_dto":         { default: { tier: detail, render_mode: hidden }, focus: { render_mode: attached_detail } }
+  roles:
+    entity:       { promotable: true }
+    aggregate:    { promotable: true }
+    port:         { promotable: true }
+    repository:   { promotable: true }
+    request_dto:  { promotable: true, max_tier: secondary }
+    response_dto: { promotable: true, max_tier: secondary }
+    mapper:       { promotable: true, max_tier: secondary }
+    helper:       { promotable: false }
+    generated:    { promotable: false }
+    test_fixture: { promotable: false }
+  noise_roles: [generated, test_fixture]
