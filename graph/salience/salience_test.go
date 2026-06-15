@@ -36,3 +36,22 @@ func TestResolve_UnknownType_DefaultsDetailHidden(t *testing.T) {
 		t.Fatalf("unknown: got tier=%s mode=%s", d.Tier, d.RenderMode)
 	}
 }
+
+func TestResolve_RoleRefinesType(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "model", Layer: "data", Role: "entity", Level: "default"})
+	if d.Tier != TierPrimary || d.RenderMode != RenderBox {
+		t.Fatalf("entity role: got tier=%s mode=%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+}
+func TestResolve_LevelOverride(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "dto", Layer: "data", Role: "request_dto", Level: "focus"})
+	if d.RenderMode != RenderAttachedDetail {
+		t.Fatalf("focus request_dto: got mode=%s trace=%v", d.RenderMode, d.Trace)
+	}
+}
+func TestResolve_UnknownRoleIgnored(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "dto", Layer: "data", Role: "unknown", Level: "default"})
+	if d.Tier != TierDetail || d.RenderMode != RenderHidden {
+		t.Fatalf("unknown role: got tier=%s mode=%s", d.Tier, d.RenderMode)
+	}
+}

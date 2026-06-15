@@ -82,6 +82,17 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	// Layer 1: base policy by type.
 	applyKey(p, &d, typeKey(in.Layer, in.NodeType), in.Level)
 
+	// Layer 2: role override (winning_role). "unknown"/"" => skip.
+	if in.Role != "" && in.Role != "unknown" {
+		applyKey(p, &d, roleKey(in.Role), in.Level)
+		// Caps come from the roles: section (single source of truth).
+		if rr, ok := p.Role(in.Role); ok {
+			d.Promotable = rr.Promotable
+			d.MaxTier = Tier(rr.MaxTier)
+			d.Trace = append(d.Trace, fmt.Sprintf("role:%s -> promotable=%v max_tier=%q", in.Role, rr.Promotable, rr.MaxTier))
+		}
+	}
+
 	return d
 }
 
