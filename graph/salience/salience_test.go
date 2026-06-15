@@ -1,0 +1,38 @@
+package salience
+
+import (
+	"testing"
+
+	"github.com/alexdx2/chronicle-core/registry"
+)
+
+func basePolicy() *registry.SaliencePolicy {
+	return &registry.SaliencePolicy{
+		RenderPolicy: map[string]map[string]registry.RenderRule{
+			"type:data.dto":          {"default": {Tier: "detail", RenderMode: "hidden"}, "focus": {RenderMode: "expandable_detail"}},
+			"type:contract.endpoint": {"default": {Tier: "primary", RenderMode: "box"}},
+			"role:entity":            {"default": {Tier: "primary", RenderMode: "box"}},
+			"role:request_dto":       {"default": {Tier: "detail", RenderMode: "hidden"}, "focus": {RenderMode: "attached_detail"}},
+		},
+		Roles: map[string]registry.RoleRule{
+			"entity":      {Promotable: true},
+			"request_dto": {Promotable: true, MaxTier: "secondary"},
+			"helper":      {Promotable: false},
+		},
+		NoiseRoles: []string{"generated", "test_fixture"},
+	}
+}
+
+func TestResolve_BaseTypeOnly(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Level: "default"})
+	if d.Tier != TierPrimary || d.RenderMode != RenderBox {
+		t.Fatalf("endpoint: got tier=%s mode=%s", d.Tier, d.RenderMode)
+	}
+}
+
+func TestResolve_UnknownType_DefaultsDetailHidden(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "mystery", Layer: "code", Level: "default"})
+	if d.Tier != TierDetail || d.RenderMode != RenderHidden {
+		t.Fatalf("unknown: got tier=%s mode=%s", d.Tier, d.RenderMode)
+	}
+}
