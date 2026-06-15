@@ -32,3 +32,23 @@ func TestBuildC3_SalienceAnnotatesComponents(t *testing.T) {
 		t.Error("expected at least one provider component at c3 level")
 	}
 }
+
+// BuildC2 annotates service containers with salience (uniformly box/primary at c2).
+func TestBuildC2_SalienceAnnotatesServices(t *testing.T) {
+	st := openLiveDBCopy(t)
+	c2, err := BuildC2(st, "tom-and-jerry")
+	if err != nil {
+		t.Fatalf("BuildC2: %v", err)
+	}
+	if len(c2.Services) == 0 {
+		t.Fatal("expected services")
+	}
+	for _, s := range c2.Services {
+		if s.RenderMode != "box" {
+			t.Errorf("service %s: render_mode=%q want box", s.Key, s.RenderMode)
+		}
+		if s.Tier != "primary" {
+			t.Errorf("service %s: tier=%q want primary", s.Key, s.Tier)
+		}
+	}
+}
