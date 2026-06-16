@@ -101,3 +101,49 @@ func TestLoadDefaults_HasSaliencePolicy(t *testing.T) {
 		t.Fatalf("field should default to hidden: %+v ok=%v", rule, ok)
 	}
 }
+
+func TestSaliencePolicy_KnownRoles(t *testing.T) {
+	p := &SaliencePolicy{
+		RenderPolicy: map[string]map[string]RenderRule{
+			"type:data.dto": {"default": {RenderMode: "hidden"}},
+			"role:entity":   {"default": {Tier: "primary"}},
+			"role:port":     {"default": {Tier: "primary"}},
+		},
+		Roles:      map[string]RoleRule{"request_dto": {Promotable: true}, "entity": {Promotable: true}},
+		NoiseRoles: []string{"generated"},
+	}
+	got := p.KnownRoles()
+	// union of role: render keys + Roles keys + noise roles + "unknown", sorted, deduped
+	want := map[string]bool{"entity": true, "port": true, "request_dto": true, "generated": true, "unknown": true}
+	if len(got) != len(want) {
+		t.Fatalf("KnownRoles=%v want keys %v", got, want)
+	}
+	for _, r := range got {
+		if !want[r] {
+			t.Errorf("unexpected role %q", r)
+		}
+	}
+	// must be sorted
+	for i := 1; i < len(got); i++ {
+		if got[i-1] > got[i] {
+			t.Fatalf("not sorted: %v", got)
+		}
+	}
+}
+
+func TestLoadDefaults_KnownRolesNonEmpty(t *testing.T) {
+	r, _ := LoadDefaults()
+	roles := r.SaliencePolicy().KnownRoles()
+	if len(roles) < 5 {
+		t.Fatalf("expected several default roles, got %v", roles)
+	}
+	found := map[string]bool{}
+	for _, x := range roles {
+		found[x] = true
+	}
+	for _, must := range []string{"entity", "request_dto", "helper", "unknown"} {
+		if !found[must] {
+			t.Errorf("default roles missing %q (got %v)", must, roles)
+		}
+	}
+}

@@ -78,6 +78,11 @@ func ExtractionGuide(technology string) string {
 			},
 		},
 
+		"node_role_classification": map[string]string{
+			"how":      "Set node metadata to {\"role\":\"<role>\",\"role_confidence\":0-1,\"role_reason\":\"<evidence>\"}. Pick role from chronicle_schema field salience_roles (closed vocab). Drives diagram salience (box vs hidden vs badge).",
+			"boundary": "CLASSIFY role only — never decide visibility (no should_show); a deterministic renderer does that. role_confidence is YOUR extractor confidence, not system trust. No fit → role \"unknown\" + proposed_role via chronicle_report_discovery (don't invent roles inline).",
+		},
+
 		"layer_guide": map[string]string{
 			"data":     "Persistent data structures. Look for: schema definitions, model declarations, entity classes, migration files. NOT DTOs, NOT request/response types — only what's stored.",
 			"code":     "Code components that implement logic. Look for: anything with constructor injection, anything that processes requests, anything that orchestrates business logic. The key signal is DEPENDENCIES — what does this class need to work?",

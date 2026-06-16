@@ -1,5 +1,10 @@
 package registry
 
+import (
+	"sort"
+	"strings"
+)
+
 // RenderRule is one (level-scoped) salience override for a policy key.
 // Empty fields mean "this layer does not touch that field".
 type RenderRule struct {
@@ -55,6 +60,34 @@ func (p *SaliencePolicy) IsNoiseRole(role string) bool {
 		}
 	}
 	return false
+}
+
+// KnownRoles returns the closed vocabulary of semantic roles the policy knows:
+// the union of role: render-policy keys, the roles: caps section, and noise_roles,
+// plus the sentinel "unknown". Sorted and deduped. This is the list the scan
+// agent must classify into (surfaced via chronicle_schema).
+func (p *SaliencePolicy) KnownRoles() []string {
+	if p == nil {
+		return []string{"unknown"}
+	}
+	set := map[string]bool{"unknown": true}
+	for key := range p.RenderPolicy {
+		if strings.HasPrefix(key, "role:") {
+			set[strings.TrimPrefix(key, "role:")] = true
+		}
+	}
+	for r := range p.Roles {
+		set[r] = true
+	}
+	for _, r := range p.NoiseRoles {
+		set[r] = true
+	}
+	out := make([]string, 0, len(set))
+	for r := range set {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SaliencePolicy returns the registry's salience policy (never nil).
