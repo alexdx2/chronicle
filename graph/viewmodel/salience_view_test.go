@@ -111,3 +111,26 @@ func TestBuildC3_RolesDriveBuckets(t *testing.T) {
 		t.Errorf("HiddenCount=%d want >=2 (dto + helper)", c3.HiddenCount)
 	}
 }
+
+// BuildView (the dashboard's data path) annotates each VNode with salience so
+// the frontend can render by render_mode.
+func TestBuildPresetC3_VNodesCarrySalience(t *testing.T) {
+	st := openLiveDBCopy(t)
+	view, err := BuildPreset(st, "c3", "tom-and-jerry", "arena-api")
+	if err != nil {
+		t.Fatalf("BuildPreset(c3): %v", err)
+	}
+	annotated := 0
+	for _, n := range view.Nodes {
+		if n.Boundary {
+			continue // boundary targets are intentionally not salience-annotated
+		}
+		if n.RenderMode == "" || n.Tier == "" {
+			t.Errorf("vnode %s missing salience (tier=%q mode=%q)", n.Key, n.Tier, n.RenderMode)
+		}
+		annotated++
+	}
+	if annotated == 0 {
+		t.Fatal("no in-view nodes to annotate")
+	}
+}

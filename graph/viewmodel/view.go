@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/graph/salience"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -55,6 +56,12 @@ type VNode struct {
 	// (e.g. "GET /api/score") so the flows LIST view stays meaningful
 	// without materializing the trigger endpoints as nodes.
 	Detail string `json:"detail,omitempty"`
+	// Tier and RenderMode are view-specific salience annotations (registry-
+	// driven, resolved at the view's preset level). RenderMode is the UI source
+	// of truth (box|collapsed_group|badge|attached_detail|expandable_detail|
+	// hidden); Tier is diagnostic. Renderers style/hide nodes accordingly.
+	Tier       string `json:"tier,omitempty"`
+	RenderMode string `json:"render_mode,omitempty"`
 	// Boundary marks a materialized 1-hop boundary target of a
 	// service-scoped view (C3): the node sits OUTSIDE the scope but is
 	// included so in-view components whose only edges cross the boundary
@@ -1092,11 +1099,19 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	}
 	sort.Slice(view.Groups, func(i, j int) bool { return view.Groups[i].Key < view.Groups[j].Key })
 
+	salPol := saliencePolicyFor(st)
+	salLevel := spec.Layout.Preset
 	for id, g := range memberGroup {
 		if spec.Collapse && g != "" {
 			continue // grouped members fold into their VGroup
 		}
 		n := nodeByID[id]
+		sal := salience.Resolve(salPol, salience.Input{
+			NodeType: n.NodeType,
+			Layer:    n.Layer,
+			Role:     nodeRole(n),
+			Level:    salLevel,
+		})
 		view.Nodes = append(view.Nodes, VNode{
 			Key:        n.NodeKey,
 			Name:       n.Name,
@@ -1106,6 +1121,8 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			Endpoints:  endpointPills[id],
 			UsesModels: modelPills[id],
 			Detail:     flowTrigger[id],
+			Tier:       string(sal.Tier),
+			RenderMode: string(sal.RenderMode),
 		})
 	}
 	// Materialized boundary targets (service-scoped views): free-standing,
