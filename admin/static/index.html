@@ -998,6 +998,16 @@ button,input,select,textarea{font-family:inherit}
             </label>
           </div>
 
+          <!-- Salience: low-importance nodes (DTOs, helpers, fields) are hidden
+               by default per the registry render policy. Reveal them here. -->
+          <div class="group" data-testid="filter-salience" x-show="viewActive">
+            <label style="cursor:pointer" title="Show nodes hidden by diagram salience (render_mode=hidden): DTOs, helpers, fields, etc.">
+              <input type="checkbox" data-testid="show-hidden-salience" :checked="showHiddenSalience"
+                     @change="showHiddenSalience = $event.target.checked; renderViewMode()">
+              <span>Show hidden<span x-show="!showHiddenSalience && _salienceHiddenCount" x-text="' (+' + _salienceHiddenCount + ')'" style="color:var(--text-muted)"></span></span>
+            </label>
+          </div>
+
           <!-- Layers & types (Explore): ONE taxonomy. The layer checkbox is
                the master switch; expand a layer to fine-tune its node types
                (● show · ◐ collapse · ○ hide). In view mode the tristate
@@ -1984,6 +1994,8 @@ function dashboard() {
     editingCategory: null,    // category name being edited, or null
     editCategoryData: null,   // temp copy of the category being edited
     showEdgeLabels: true,     // global toggle for short labels
+    showHiddenSalience: false, // reveal render_mode==hidden nodes (DTOs/helpers) in view mode
+    _salienceHiddenCount: 0,   // count of nodes hidden by salience in the last view render
     hiddenDomains: [],        // string[] of domain_key values
     minConfidence: 0,
     // Three-state filter per node_type: 'show' | 'collapse' | 'hide'
@@ -5019,6 +5031,22 @@ function dashboard() {
         }
         return;
       }
+      // View-specific salience: hide render_mode==='hidden' nodes (e.g. DTOs,
+      // helpers) by default; the "Show hidden" toggle reveals them. Drop edges
+      // touching hidden nodes so nothing dangles. Renderer-agnostic (operates
+      // on the adapted payload before render).
+      let salienceHidden = 0;
+      if (!this.showHiddenSalience) {
+        const hiddenKeys = new Set((adapted.nodes || []).filter(n => n._renderMode === 'hidden').map(n => n.node_key));
+        salienceHidden = hiddenKeys.size;
+        if (hiddenKeys.size) {
+          adapted.nodes = adapted.nodes.filter(n => n._renderMode !== 'hidden');
+          adapted.edges = (adapted.edges || []).filter(e =>
+            !hiddenKeys.has(e.from_node_key) && !hiddenKeys.has(e.to_node_key) &&
+            !hiddenKeys.has(e.from_node_id) && !hiddenKeys.has(e.to_node_id));
+        }
+      }
+      this._salienceHiddenCount = salienceHidden;
       const lookup = Object.assign({}, this.edgeCategoryLookup, adapted.lookupOverlay);
       // "Hide CONTAINS/OWNS" applies to hierarchy-ish edges when a view
       // carries any (rare — collapsed views fold them into groups).
@@ -5059,7 +5087,8 @@ function dashboard() {
         title: top.title || (top.view && top.view.title) || '',
         spec: top.spec,
         stack: this.viewStack.map(v => v.title || (v.spec && v.spec.layout && v.spec.layout.preset) || '?'),
-        nodes: adapted.nodes.map(n => ({ key: n.node_key, name: n.name, type: n.node_type, layer: n.layer, group: n._group || null, boundary: !!n._isRef, detail: n._subtitle || '' })),
+        salience_hidden_count: this._salienceHiddenCount || 0,
+        nodes: adapted.nodes.map(n => ({ key: n.node_key, name: n.name, type: n.node_type, layer: n.layer, group: n._group || null, boundary: !!n._isRef, detail: n._subtitle || '', render_mode: n._renderMode || '', tier: n._tier || '' })),
         edges: edges.map(e => ({ from: e.from_node_key || e.from_node_id, to: e.to_node_key || e.to_node_id, kind: e._kind || e.edge_type, weight: e._weight || 1, label: e._label || '' })),
         groups: (adapted.groups && adapted.groups.field) ? [...new Set(adapted.nodes.map(n => n._group).filter(Boolean))] : [],
         // Collapsed VGroups rendered as cards (C2 services, C1 system box,
