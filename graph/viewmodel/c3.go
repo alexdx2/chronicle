@@ -232,6 +232,9 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 		case salience.RenderHidden:
 			hiddenCount++
 		}
+		// collapsed_group (modules/models) is represented elsewhere (Modules /
+		// uses_models); badge/attached_detail do not occur for owned code nodes
+		// at the c3 level under default policy.
 	}
 	sortComponents(components)
 
