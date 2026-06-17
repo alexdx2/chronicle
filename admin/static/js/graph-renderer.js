@@ -286,10 +286,14 @@ export class GraphRenderer {
       .attr('transform', d => `translate(${d.x},${d.y})`)
       .style('cursor', 'pointer');
 
+    // Salience tier → resting opacity: primary full, secondary slightly muted,
+    // detail clearly recessed. Gives a visual importance hierarchy without
+    // hiding anything. (Undefined tier — Explore/raw graph — reads as primary.)
+    const tierOpacity = d => d._tier === 'secondary' ? 0.85 : (d._tier === 'detail' ? 0.6 : 1);
     nodeG.attr('opacity', d => {
       // Ref nodes (external references in Explore) are always dimmed
       if (d._isRef) return 0.4;
-      if (!marks.manual || marks.manual.size === 0) return 1;
+      if (!marks.manual || marks.manual.size === 0) return tierOpacity(d);
       if (marks.manual.has(d.id)) return 1;
       if (marks.path && marks.path.has(d.id)) return 0.9;
       if (marks.neighbor && marks.neighbor.has(d.id)) return 0.5;
@@ -311,7 +315,10 @@ export class GraphRenderer {
       .attr('rx', 6).attr('ry', 6)
       .attr('fill', d => self.layerColor(d.layer) + '40')
       .attr('stroke', d => self.layerColor(d.layer))
-      .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : 1.5);
+      // Primary salience gets a heavier border; collapsed/badge nodes get a
+      // dashed border to read as "folded / secondary form".
+      .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : (d._tier === 'primary' ? 2 : 1.2))
+      .attr('stroke-dasharray', d => (d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null);
 
     nodeG.append('text')
       .attr('text-anchor', 'middle').attr('dy', -2)
