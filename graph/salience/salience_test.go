@@ -190,3 +190,24 @@ func TestResolve_DefaultPolicy_ProviderLevelAware(t *testing.T) {
 		t.Fatalf("provider at c3 should be primary/box, got %s/%s trace=%v", d.Tier, d.RenderMode, d.Trace)
 	}
 }
+
+func TestResolve_DataLensPromotesModels(t *testing.T) {
+	r, err := registry.LoadDefaults()
+	if err != nil { t.Fatalf("LoadDefaults: %v", err) }
+	p := r.SaliencePolicy()
+	// In C2/C3 a model is collapsed background...
+	d := Resolve(p, Input{NodeType: "model", Layer: "data", Level: "c3"})
+	if d.RenderMode != RenderCollapsedGroup {
+		t.Fatalf("model at c3: want collapsed_group, got %s", d.RenderMode)
+	}
+	// ...but in the Data lens the model is the subject → a primary box.
+	d = Resolve(p, Input{NodeType: "model", Layer: "data", Level: "data"})
+	if d.RenderMode != RenderBox || d.Tier != TierPrimary {
+		t.Fatalf("model in data lens: want primary/box, got %s/%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+	// enum: badge by default, but a labeled box in the data lens.
+	d = Resolve(p, Input{NodeType: "enum", Layer: "data", Level: "data"})
+	if d.RenderMode != RenderBox {
+		t.Fatalf("enum in data lens: want box, got %s", d.RenderMode)
+	}
+}

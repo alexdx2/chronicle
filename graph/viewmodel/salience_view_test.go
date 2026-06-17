@@ -189,3 +189,26 @@ func TestBuildC3_RoleEvidenceResolvesWinner(t *testing.T) {
 		t.Fatalf("entity-role (evidence winner) symbol should be a box; got render_mode=%q, components=%v", found, c3.Components)
 	}
 }
+
+// Lens-specific salience: the Data lens promotes models to primary boxes, whereas
+// the same models are collapsed background in C2/C3. Proves the lens dimension
+// works via the existing data preset (layout.preset reaches salience as level).
+func TestBuildPresetData_LensPromotesModels(t *testing.T) {
+	st := openLiveDBCopy(t)
+	view, err := BuildPreset(st, "data", "tom-and-jerry", "")
+	if err != nil {
+		t.Fatalf("BuildPreset(data): %v", err)
+	}
+	models := 0
+	for _, n := range view.Nodes {
+		if n.Type == "model" {
+			models++
+			if n.RenderMode != "box" || n.Tier != "primary" {
+				t.Errorf("model %s in data lens: want primary/box, got %s/%s", n.Key, n.Tier, n.RenderMode)
+			}
+		}
+	}
+	if models == 0 {
+		t.Fatal("expected model nodes in the data lens")
+	}
+}

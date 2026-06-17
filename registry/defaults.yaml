@@ -280,7 +280,8 @@ salience:
     "type:service.external_system": { default: { tier: primary, render_mode: box } }
     "type:contract.endpoint":    { default: { tier: primary, render_mode: box } }
     "type:contract.topic":       { default: { tier: primary, render_mode: box } }
-    "type:data.model":           { default: { tier: secondary, render_mode: collapsed_group } }
+    # model: collapsed background in C2/C3, but the SUBJECT (primary box) in the data lens.
+    "type:data.model":           { default: { tier: secondary, render_mode: collapsed_group }, data: { tier: primary, render_mode: box } }
     "type:data.entity":          { default: { tier: primary, render_mode: box } }
     "type:flow.flow":            { default: { tier: primary, render_mode: box } }
     "type:flow.use_case":        { default: { tier: primary, render_mode: box } }
@@ -295,7 +296,7 @@ salience:
     # --- detail / scaffolding (hidden by default) ---
     "type:data.dto":             { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
     "type:data.field":           { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
-    "type:data.enum":            { default: { tier: detail, render_mode: badge } }
+    "type:data.enum":            { default: { tier: detail, render_mode: badge }, data: { tier: secondary, render_mode: box } }
     "type:code.symbol":          { default: { tier: detail, render_mode: hidden } }
     "type:code.interface":       { default: { tier: detail, render_mode: hidden } }
     # --- role overrides ---
