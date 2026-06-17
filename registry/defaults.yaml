@@ -238,6 +238,7 @@ source_kinds:
   - user_feedback
   - manual
   - synthetic
+  - role_classification
 
 node_statuses:
   - active

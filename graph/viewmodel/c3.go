@@ -205,6 +205,7 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 	// list). Owned nodes that resolve to "hidden" are counted for transparency;
 	// collapsed/badge nodes (e.g. models) are represented elsewhere (uses_models).
 	pol := saliencePolicyFor(st)
+	roleByNode := resolveRolesByNode(st)
 	var components []Component
 	hiddenCount := 0
 	for i := range nodes {
@@ -215,7 +216,7 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 		sal := salience.Resolve(pol, salience.Input{
 			NodeType: n.NodeType,
 			Layer:    n.Layer,
-			Role:     nodeRole(n),
+			Role:     effectiveRole(n, roleByNode),
 			Level:    "c3",
 		})
 		switch sal.RenderMode {

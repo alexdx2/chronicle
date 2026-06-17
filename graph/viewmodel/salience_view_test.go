@@ -134,3 +134,58 @@ func TestBuildPresetC3_VNodesCarrySalience(t *testing.T) {
 		t.Fatal("no in-view nodes to annotate")
 	}
 }
+
+// Role-as-evidence: conflicting role_classification evidence rows resolve to the
+// highest-confidence winner, which drives C3 salience — even with NO role in the
+// node's metadata. Proves the evidence-backed winning_role path end-to-end.
+func TestBuildC3_RoleEvidenceResolvesWinner(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	mkNode := func(key, layer, ntype, name, file string) int64 {
+		id, err := st.UpsertNode(store.NodeRow{
+			NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d",
+			Name: name, FilePath: file, Status: "active",
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+		})
+		if err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+		return id
+	}
+	mkNode("service:service:d:app", "service", "service", "app", "app/main.ts")
+	symID := mkNode("code:symbol:d:order", "code", "symbol", "OrderEntity", "app/order.ts")
+
+	// Distinct file_path per claim so AddEvidence keeps them as two separate
+	// claims (it dedups by target/node/source/repo/file) — mirrors two extractors.
+	addRole := func(role string, conf float64, file string) {
+		if _, err := st.AddEvidence(store.EvidenceRow{
+			TargetKind: "node", NodeID: symID, SourceKind: "role_classification",
+			FilePath: file, ExtractorID: "test", ExtractorVersion: "1",
+			Confidence: conf, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			Assertion: `{"role":"` + role + `","role_reason":"test"}`, AssertionKind: "semantic_role",
+		}); err != nil {
+			t.Fatalf("add role %s: %v", role, err)
+		}
+	}
+	// Two conflicting claims: helper (0.6) and entity (0.9). entity must win.
+	addRole("helper", 0.6, "app/order.ts")
+	addRole("entity", 0.9, "app/order_alt.ts")
+
+	c3, err := BuildC3(st, "d", "app")
+	if err != nil {
+		t.Fatalf("BuildC3: %v", err)
+	}
+	var found string
+	for _, c := range c3.Components {
+		if c.Name == "OrderEntity" {
+			found = c.RenderMode
+		}
+	}
+	if found != "box" {
+		t.Fatalf("entity-role (evidence winner) symbol should be a box; got render_mode=%q, components=%v", found, c3.Components)
+	}
+}

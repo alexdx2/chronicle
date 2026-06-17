@@ -1101,6 +1101,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 
 	salPol := saliencePolicyFor(st)
 	salLevel := spec.Layout.Preset
+	roleByNode := resolveRolesByNode(st)
 	for id, g := range memberGroup {
 		if spec.Collapse && g != "" {
 			continue // grouped members fold into their VGroup
@@ -1109,7 +1110,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		sal := salience.Resolve(salPol, salience.Input{
 			NodeType: n.NodeType,
 			Layer:    n.Layer,
-			Role:     nodeRole(n),
+			Role:     effectiveRole(n, roleByNode),
 			Level:    salLevel,
 		})
 		view.Nodes = append(view.Nodes, VNode{

@@ -268,6 +268,16 @@ func (s *Store) ListEvidenceByEdge(edgeID int64) ([]EvidenceRow, error) {
 }
 
 func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
+	return s.queryEvidence(col+" = ?", id)
+}
+
+// ListEvidenceBySourceKind returns all evidence rows with the given source_kind
+// (across all nodes/edges). Used e.g. to batch-load role_classification claims.
+func (s *Store) ListEvidenceBySourceKind(sourceKind string) ([]EvidenceRow, error) {
+	return s.queryEvidence("source_kind = ?", sourceKind)
+}
+
+func (s *Store) queryEvidence(where string, arg any) ([]EvidenceRow, error) {
 	q := `
 		SELECT evidence_id, target_kind,
 		       COALESCE(node_id,0), COALESCE(edge_id,0),
@@ -287,10 +297,10 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 		       COALESCE(verification_status,'unverified'), COALESCE(verification_reason,''),
 		       metadata
 		FROM graph_evidence
-		WHERE ` + col + ` = ?
+		WHERE ` + where + `
 		ORDER BY evidence_id
 	`
-	rows, err := s.db.Query(q, id)
+	rows, err := s.db.Query(q, arg)
 	if err != nil {
 		return nil, fmt.Errorf("listEvidence: %w", err)
 	}
