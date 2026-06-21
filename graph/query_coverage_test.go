@@ -99,3 +99,56 @@ func TestScanReviewCandidates(t *testing.T) {
 		t.Fatalf("ScanReviewCandidates: %v", err)
 	}
 }
+
+func TestScanCheckoutPathHelpers(t *testing.T) {
+	if ProjectRoot() == "" {
+		t.Error("ProjectRoot empty")
+	}
+	if got := OutboxArtifactPath("/out", "src/a/b.ts"); got != "/out/src__a__b.ts.json" {
+		t.Errorf("OutboxArtifactPath: %q", got)
+	}
+}
+
+func TestBuildDependencyAssertion(t *testing.T) {
+	kind, js := buildDependencyAssertion("package.json", Fact{To: "lodash"})
+	if kind != "manifest_dependency" || js == "" {
+		t.Errorf("json dep: kind=%q js=%q", kind, js)
+	}
+	kind, js = buildDependencyAssertion("a.ts", Fact{To: "@app/x", Symbols: []string{"X"}})
+	if kind != "import_specifier" || js == "" {
+		t.Errorf("ts dep: kind=%q js=%q", kind, js)
+	}
+	kind, _ = buildDependencyAssertion("conf.yaml", Fact{To: "svc"})
+	if kind == "" {
+		t.Errorf("yaml dep: kind=%q", kind)
+	}
+}
+
+func TestRecalculateAllTrust(t *testing.T) {
+	g, _ := newSeededGraph(t)
+	if err := g.RecalculateAllTrust(); err != nil {
+		t.Fatalf("RecalculateAllTrust: %v", err)
+	}
+}
+
+func TestCountStaleEvidenceForFile(t *testing.T) {
+	_, st := newSeededGraph(t)
+	// No stale evidence yet → 0, and the call must not panic.
+	if n := countStaleEvidenceForFile(st, "svc/a.ts"); n != 0 {
+		t.Errorf("expected 0 stale evidence, got %d", n)
+	}
+}
+
+func TestSaveFileExtractionVariants(t *testing.T) {
+	g, st := newSeededGraph(t)
+	rev, err := st.CreateRevision("d", "", "after", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.SaveFileExtraction(rev, "d", "src/a.ts", "extracted", "controller", "{}", ""); err != nil {
+		t.Fatalf("SaveFileExtraction: %v", err)
+	}
+	if _, err := g.SaveFileExtractionWithVote(rev, "d", "src/b.ts", "extracted", "provider", "{}", "", "reviewer", "g1", 0); err != nil {
+		t.Fatalf("SaveFileExtractionWithVote: %v", err)
+	}
+}
