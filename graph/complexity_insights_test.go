@@ -381,3 +381,69 @@ func TestInsightsHotPathTargets(t *testing.T) {
 		}
 	}
 }
+
+// TestComputeASTComplexityWritesHeuristicEvidence proves the heuristic signals
+// (cognitive + smells) are stamped with metric_sources=heuristic and emitted as a
+// SEPARATE complexity-smells evidence row at heuristic confidence (never the 1.0
+// reserved for exact counts), verified by recompute at creation.
+func TestComputeASTComplexityWritesHeuristicEvidence(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	tsPath := writeTempTS(t, `
+class Svc {
+  scan(items, ids) {
+    for (const id of ids) {
+      const hit = items.find(x => x.id === id);
+    }
+  }
+}
+`)
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: "code:provider:orders:svc", Layer: "code", NodeType: "provider",
+		DomainKey: "orders", Name: "Svc", FilePath: tsPath,
+	}, revID); err != nil {
+		t.Fatalf("UpsertNode: %v", err)
+	}
+
+	if err := g.ComputeASTComplexity(revID); err != nil {
+		t.Fatalf("ComputeASTComplexity: %v", err)
+	}
+
+	n, err := g.store.GetNodeByKey("code:provider:orders:svc")
+	if err != nil {
+		t.Fatalf("GetNodeByKey: %v", err)
+	}
+	for _, want := range []string{`"linear_scan_in_loop"`, `"cognitive":"heuristic"`, `"smells":"heuristic"`} {
+		if !strings.Contains(n.Metadata, want) {
+			t.Errorf("metadata missing %s: %q", want, n.Metadata)
+		}
+	}
+
+	nodeID, _ := g.store.GetNodeIDByKey("code:provider:orders:svc")
+	evs, err := g.store.ListEvidenceByNode(nodeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	smellRows := 0
+	for _, e := range evs {
+		if e.ExtractorID == "complexity-smells" {
+			smellRows++
+			if e.SourceKind != "ast" {
+				t.Errorf("smells row source_kind = %q, want ast", e.SourceKind)
+			}
+			if e.Confidence >= 1.0 {
+				t.Errorf("heuristic smells confidence = %v, want < 1.0", e.Confidence)
+			}
+			if !strings.Contains(e.Metadata, `"metric_type":"heuristic"`) {
+				t.Errorf("smells row metadata should mark metric_type heuristic: %q", e.Metadata)
+			}
+			if e.VerificationStatus != "verified" {
+				t.Errorf("smells row verification_status = %q, want verified", e.VerificationStatus)
+			}
+		}
+	}
+	if smellRows != 1 {
+		t.Fatalf("want exactly 1 complexity-smells evidence row, got %d", smellRows)
+	}
+}

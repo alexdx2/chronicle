@@ -88,6 +88,7 @@ func DefaultRegistry() *Registry {
 	r.Register(&YAMLVerifier{})
 	r.Register(&PrismaSchemaVerifier{})
 	r.Register(&ComplexityVerifier{})
+	r.Register(&ComplexitySmellsVerifier{})
 	r.Register(&TextVerifier{})
 	return r
 }

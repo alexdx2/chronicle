@@ -68,6 +68,30 @@ func (g *Graph) ComputeASTComplexity(revisionID int64) error {
 		}); err != nil {
 			return fmt.Errorf("ComputeASTComplexity evidence %s: %w", n.NodeKey, err)
 		}
+
+		// Heuristic signals (cognitive + smells) ride a SEPARATE evidence row at
+		// heuristic confidence — never conflated with the exact counts above.
+		smellsJSON, err := json.Marshal(agg.Smells)
+		if err != nil || agg.Smells == nil {
+			smellsJSON = []byte("[]")
+		}
+		smellAssertion := fmt.Sprintf(`{"cognitive":%d,"smells":%s}`, agg.Cognitive, smellsJSON)
+		if _, err := g.AddNodeEvidence(n.NodeKey, validate.EvidenceInput{
+			SourceKind:       "ast",
+			FilePath:         n.FilePath,
+			LineStart:        agg.StartLine,
+			LineEnd:          agg.EndLine,
+			ExtractorID:      "complexity-smells",
+			ExtractorVersion: "1",
+			ASTRule:          "complexity/v1",
+			Confidence:       0.6,
+			RevisionID:       revisionID,
+			Assertion:        smellAssertion,
+			AssertionKind:    "complexity_smells",
+			Metadata:         `{"metric_type":"heuristic"}`,
+		}); err != nil {
+			return fmt.Errorf("ComputeASTComplexity smells evidence %s: %w", n.NodeKey, err)
+		}
 	}
 	return nil
 }
@@ -89,6 +113,12 @@ func mergeASTComplexity(metadata string, a ast.AggregatedComplexity) (string, er
 	cx["cyclomatic"] = a.Cyclomatic
 	cx["loop_count"] = a.LoopCount
 	cx["loop_depth"] = a.LoopDepth
+	cx["cognitive"] = a.Cognitive
+	smells := a.Smells
+	if smells == nil {
+		smells = []string{}
+	}
+	cx["smells"] = smells
 	ms, _ := cx["metric_sources"].(map[string]any)
 	if ms == nil {
 		ms = map[string]any{}
@@ -96,6 +126,8 @@ func mergeASTComplexity(metadata string, a ast.AggregatedComplexity) (string, er
 	ms["cyclomatic"] = "ast"
 	ms["loop_count"] = "ast"
 	ms["loop_depth"] = "ast"
+	ms["cognitive"] = "heuristic"
+	ms["smells"] = "heuristic"
 	cx["metric_sources"] = ms
 	root["complexity"] = cx
 	b, err := json.Marshal(root)

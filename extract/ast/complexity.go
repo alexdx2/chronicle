@@ -98,15 +98,22 @@ type AggregatedComplexity struct {
 	Cyclomatic int
 	LoopCount  int
 	LoopDepth  int
+	Cognitive  int      // max method's cognitive complexity (heuristic)
+	Smells     []string // deduped union of method smells, canonical order (heuristic)
 	StartLine  int
 	EndLine    int
 	Present    bool // false when the file has no measurable functions/methods
 }
 
+// canonicalSmells is the fixed output order for aggregated smell tags.
+var canonicalSmells = []string{"unguarded_recursion", "linear_scan_in_loop", "alloc_in_loop"}
+
 // AggregateComplexity folds per-function metrics into one class-level value (max
-// of each metric; line span = min start … max end across functions).
+// of each numeric metric; smells = deduped union; line span = min start … max
+// end across functions).
 func AggregateComplexity(fns []FunctionComplexity) AggregatedComplexity {
 	var out AggregatedComplexity
+	smellSet := map[string]bool{}
 	for _, f := range fns {
 		out.Present = true
 		if f.Cyclomatic > out.Cyclomatic {
@@ -118,11 +125,22 @@ func AggregateComplexity(fns []FunctionComplexity) AggregatedComplexity {
 		if f.LoopDepth > out.LoopDepth {
 			out.LoopDepth = f.LoopDepth
 		}
+		if f.Cognitive > out.Cognitive {
+			out.Cognitive = f.Cognitive
+		}
+		for _, s := range f.Smells {
+			smellSet[s] = true
+		}
 		if out.StartLine == 0 || f.StartLine < out.StartLine {
 			out.StartLine = f.StartLine
 		}
 		if f.EndLine > out.EndLine {
 			out.EndLine = f.EndLine
+		}
+	}
+	for _, s := range canonicalSmells {
+		if smellSet[s] {
+			out.Smells = append(out.Smells, s)
 		}
 	}
 	return out

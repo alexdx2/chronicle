@@ -210,3 +210,35 @@ function clean(items) {
 		t.Errorf("clean code must have no smells, got %v", byName["clean"].Smells)
 	}
 }
+
+// TestAggregateComplexity_CognitiveAndSmells proves the per-file fold carries the
+// heuristic signals: cognitive is the max method, smells are the deduped union in
+// canonical order.
+func TestAggregateComplexity_CognitiveAndSmells(t *testing.T) {
+	src := []byte(`
+function a(items) {
+  for (const i of items) { const o = new Thing(i); }
+}
+function b(n) {
+  return b(n - 1);
+}
+function c(items, ids) {
+  for (const id of ids) { const hit = items.find(x => x.id === id); }
+}
+`)
+	agg := AggregateComplexity(ExtractComplexity(src))
+	if agg.Cognitive < 1 {
+		t.Errorf("aggregate cognitive should be the max method's, got %d", agg.Cognitive)
+	}
+	for _, want := range []string{"unguarded_recursion", "linear_scan_in_loop", "alloc_in_loop"} {
+		if !hasSmell(agg.Smells, want) {
+			t.Errorf("aggregate smells should union %q, got %v", want, agg.Smells)
+		}
+	}
+	// canonical order: unguarded_recursion, linear_scan_in_loop, alloc_in_loop
+	if len(agg.Smells) == 3 {
+		if agg.Smells[0] != "unguarded_recursion" || agg.Smells[2] != "alloc_in_loop" {
+			t.Errorf("smells not in canonical order: %v", agg.Smells)
+		}
+	}
+}
