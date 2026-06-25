@@ -15,6 +15,34 @@ type FunctionComplexity struct {
 	Cyclomatic int    `json:"cyclomatic"`
 	LoopCount  int    `json:"loop_count"`
 	LoopDepth  int    `json:"loop_depth"`
+	// Cognitive is nesting-weighted complexity: each control-flow structure costs
+	// 1 + its current nesting depth, so deeply nested logic is penalized more than
+	// flat logic with the same cyclomatic count. It is a designed heuristic metric.
+	Cognitive int `json:"cognitive"`
+	// Smells are heuristic code-smell tags (e.g. unguarded_recursion,
+	// linear_scan_in_loop, alloc_in_loop). Lower-confidence signals than the exact
+	// counts — interpretation, not a count — but still mechanically reproducible.
+	Smells []string `json:"smells,omitempty"`
+}
+
+// cogNestingKinds are the structures that both add to cognitive complexity and
+// increase the nesting penalty for everything inside them.
+var cogNestingKinds = map[string]bool{
+	"if_statement":       true,
+	"for_statement":      true,
+	"for_in_statement":   true,
+	"while_statement":    true,
+	"do_statement":       true,
+	"switch_statement":   true,
+	"catch_clause":       true,
+	"ternary_expression": true,
+}
+
+// scanMethods are array-search methods that turn a surrounding loop into a likely
+// O(n²) linear scan.
+var scanMethods = map[string]bool{
+	"find": true, "findIndex": true, "indexOf": true,
+	"lastIndexOf": true, "includes": true, "some": true,
 }
 
 // functionBoundaryKinds delimit a nested function scope. A function's own
@@ -117,7 +145,9 @@ func ExtractComplexity(fileContent []byte) []FunctionComplexity {
 
 	var out []FunctionComplexity
 	for _, fn := range fns {
-		out = append(out, functionMetrics(fn, fileContent))
+		fc := functionMetrics(fn, fileContent)
+		fc.Smells = functionSmells(fn, fileContent, fc.Cyclomatic)
+		out = append(out, fc)
 	}
 	return out
 }
@@ -145,8 +175,8 @@ func functionMetrics(fn *sitter.Node, src []byte) FunctionComplexity {
 		Cyclomatic: 1,
 	}
 
-	var walk func(n *sitter.Node, loopDepth int)
-	walk = func(n *sitter.Node, loopDepth int) {
+	var walk func(n *sitter.Node, loopDepth, cogNesting int)
+	walk = func(n *sitter.Node, loopDepth, cogNesting int) {
 		for i := uint(0); i < n.ChildCount(); i++ {
 			c := n.Child(i)
 			if c == nil {
@@ -162,20 +192,136 @@ func functionMetrics(fn *sitter.Node, src []byte) FunctionComplexity {
 			}
 			if kind == "binary_expression" && isShortCircuit(c, src) {
 				fc.Cyclomatic++
+				fc.Cognitive++ // a boolean operator adds a path, no nesting penalty
+			}
+			childLoop := loopDepth
+			if loopKinds[kind] {
+				fc.LoopCount++
+				childLoop = loopDepth + 1
+				if childLoop > fc.LoopDepth {
+					fc.LoopDepth = childLoop
+				}
+			}
+			childCog := cogNesting
+			if cogNestingKinds[kind] {
+				fc.Cognitive += 1 + cogNesting
+				childCog = cogNesting + 1
+			}
+			walk(c, childLoop, childCog)
+		}
+	}
+	walk(fn, 0, 0)
+	return fc
+}
+
+// functionSmells returns the heuristic smell tags for a function, in a fixed
+// order for determinism. cyclomatic is passed in to detect unguarded recursion
+// (a self-call with no decision points has no base case).
+func functionSmells(fn *sitter.Node, src []byte, cyclomatic int) []string {
+	var smells []string
+	if isRecursive(fn, src) && cyclomatic == 1 {
+		smells = append(smells, "unguarded_recursion")
+	}
+	scan, alloc := loopBodyHazards(fn, src)
+	if scan {
+		smells = append(smells, "linear_scan_in_loop")
+	}
+	if alloc {
+		smells = append(smells, "alloc_in_loop")
+	}
+	return smells
+}
+
+// isRecursive reports whether the function calls itself by name (free call
+// `name(...)` or method call `this.name(...)` / `x.name(...)`), not descending
+// into nested function scopes.
+func isRecursive(fn *sitter.Node, src []byte) bool {
+	name := functionName(fn, src)
+	if name == "" {
+		return false
+	}
+	found := false
+	var walk func(n *sitter.Node)
+	walk = func(n *sitter.Node) {
+		for i := uint(0); i < n.ChildCount(); i++ {
+			c := n.Child(i)
+			if c == nil {
+				continue
+			}
+			if functionBoundaryKinds[c.Kind()] {
+				continue
+			}
+			if c.Kind() == "call_expression" && callsName(c, src, name) {
+				found = true
+			}
+			walk(c)
+		}
+	}
+	walk(fn)
+	return found
+}
+
+// callsName reports whether a call_expression invokes the given name, either as
+// a free function or as the property of a member expression.
+func callsName(call *sitter.Node, src []byte, name string) bool {
+	fnNode := call.ChildByFieldName("function")
+	if fnNode == nil {
+		return false
+	}
+	switch fnNode.Kind() {
+	case "identifier":
+		return fnNode.Utf8Text(src) == name
+	case "member_expression":
+		if prop := fnNode.ChildByFieldName("property"); prop != nil {
+			return prop.Utf8Text(src) == name
+		}
+	}
+	return false
+}
+
+// loopBodyHazards walks the function and reports whether, inside any loop body, a
+// scan-method call (linear scan) or a `new` allocation occurs. Nested function
+// scopes are not descended into.
+func loopBodyHazards(fn *sitter.Node, src []byte) (scan, alloc bool) {
+	var walk func(n *sitter.Node, loopDepth int)
+	walk = func(n *sitter.Node, loopDepth int) {
+		for i := uint(0); i < n.ChildCount(); i++ {
+			c := n.Child(i)
+			if c == nil {
+				continue
+			}
+			kind := c.Kind()
+			if functionBoundaryKinds[kind] {
+				continue
 			}
 			childDepth := loopDepth
 			if loopKinds[kind] {
-				fc.LoopCount++
 				childDepth = loopDepth + 1
-				if childDepth > fc.LoopDepth {
-					fc.LoopDepth = childDepth
+			}
+			if loopDepth > 0 {
+				if kind == "new_expression" {
+					alloc = true
+				}
+				if kind == "call_expression" && callsScanMethod(c, src) {
+					scan = true
 				}
 			}
 			walk(c, childDepth)
 		}
 	}
 	walk(fn, 0)
-	return fc
+	return scan, alloc
+}
+
+// callsScanMethod reports whether a call_expression is a member call to an
+// array-search method (find/indexOf/includes/...).
+func callsScanMethod(call *sitter.Node, src []byte) bool {
+	fnNode := call.ChildByFieldName("function")
+	if fnNode == nil || fnNode.Kind() != "member_expression" {
+		return false
+	}
+	prop := fnNode.ChildByFieldName("property")
+	return prop != nil && scanMethods[prop.Utf8Text(src)]
 }
 
 // isShortCircuit reports whether a binary_expression uses a short-circuit

@@ -110,3 +110,103 @@ class Svc {
 		t.Errorf("handle loop_depth = %d, want 0", h.LoopDepth)
 	}
 }
+
+// hasSmell reports whether a smell tag is present.
+func hasSmell(smells []string, name string) bool {
+	for _, s := range smells {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
+// TestExtractComplexity_Cognitive pins the nesting-weighted cognitive complexity:
+// each control-flow structure costs 1 + its current nesting depth, so deeply
+// nested logic is penalized more than flat logic with the same cyclomatic count.
+func TestExtractComplexity_Cognitive(t *testing.T) {
+	src := []byte(`
+function nested(items) {
+  for (const i of items) {
+    if (i > 0) {
+      while (i > 0) {
+        doThing();
+      }
+    }
+  }
+}
+
+function flat(a, b, c) {
+  if (a) { doThing(); }
+  if (b) { doThing(); }
+  if (c) { doThing(); }
+}
+`)
+	byName := map[string]FunctionComplexity{}
+	for _, fc := range ExtractComplexity(src) {
+		byName[fc.Name] = fc
+	}
+
+	// for(+1+0) -> if(+1+1) -> while(+1+2) = 1+2+3 = 6
+	if got := byName["nested"].Cognitive; got != 6 {
+		t.Errorf("nested cognitive = %d, want 6", got)
+	}
+	// three flat ifs: each +1+0 = 3 (same as nested's cyclomatic-ish count, but
+	// cognitive stays low precisely because they are NOT nested).
+	if got := byName["flat"].Cognitive; got != 3 {
+		t.Errorf("flat cognitive = %d, want 3", got)
+	}
+}
+
+// TestExtractComplexity_Smells pins the heuristic smell detectors and proves they
+// don't fire on clean code.
+func TestExtractComplexity_Smells(t *testing.T) {
+	src := []byte(`
+function loop(n) {
+  return loop(n - 1);
+}
+
+function fact(n) {
+  if (n <= 1) return 1;
+  return n * fact(n - 1);
+}
+
+function scan(items, ids) {
+  for (const id of ids) {
+    const hit = items.find(x => x.id === id);
+  }
+}
+
+function alloc(items) {
+  for (const i of items) {
+    const o = new Thing(i);
+  }
+}
+
+function clean(items) {
+  const hit = items.find(x => x.id === 1);
+  const o = new Thing();
+  for (const i of items) { doThing(i); }
+}
+`)
+	byName := map[string]FunctionComplexity{}
+	for _, fc := range ExtractComplexity(src) {
+		byName[fc.Name] = fc
+	}
+
+	if !hasSmell(byName["loop"].Smells, "unguarded_recursion") {
+		t.Errorf("loop should be flagged unguarded_recursion, got %v", byName["loop"].Smells)
+	}
+	if hasSmell(byName["fact"].Smells, "unguarded_recursion") {
+		t.Errorf("fact has a base case (if) — must NOT be unguarded_recursion, got %v", byName["fact"].Smells)
+	}
+	if !hasSmell(byName["scan"].Smells, "linear_scan_in_loop") {
+		t.Errorf("scan should be flagged linear_scan_in_loop, got %v", byName["scan"].Smells)
+	}
+	if !hasSmell(byName["alloc"].Smells, "alloc_in_loop") {
+		t.Errorf("alloc should be flagged alloc_in_loop, got %v", byName["alloc"].Smells)
+	}
+	if len(byName["clean"].Smells) != 0 {
+		t.Errorf("clean code must have no smells, got %v", byName["clean"].Smells)
+	}
+}
