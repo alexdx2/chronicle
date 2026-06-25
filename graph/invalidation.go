@@ -267,6 +267,12 @@ func (g *Graph) finalizeIncrementalScanInTx(domainKey string, revisionID int64) 
 		})
 	}
 
+	// Derive complexity / hot-path metrics from the now-settled call graph.
+	// Best-effort: a complexity bug must not fail an otherwise-clean scan.
+	if err := g.ComputeGraphComplexity(revisionID); err != nil {
+		g.noteEvidenceErr(err)
+	}
+
 	// Compute scan status
 	switch {
 	case result.Obligations.Open == 0 && len(result.NeedsReviewEdges) == 0 && len(result.RejectedEvidence) == 0:

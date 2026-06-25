@@ -132,6 +132,42 @@ func TestComputeGraphComplexityWritesMetricsAndEvidence(t *testing.T) {
 	}
 }
 
+// TestFinalizeRunsComplexityPass proves the complexity pass is wired into scan
+// finalize (runs automatically, not only via explicit call).
+func TestFinalizeRunsComplexityPass(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+	for _, n := range []validate.NodeInput{
+		{NodeKey: "code:provider:orders:a", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "A",
+			Metadata: `{"complexity":{"loop_depth":1,"metric_sources":{"loop_depth":"ast"}}}`},
+		{NodeKey: "code:provider:orders:b", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "B",
+			Metadata: `{"complexity":{"loop_depth":1,"metric_sources":{"loop_depth":"ast"}}}`},
+	} {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode: %v", err)
+		}
+	}
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: "code:provider:orders:a", ToNodeKey: "code:provider:orders:b",
+		EdgeType: "CALLS_SYMBOL", DerivationKind: "hard", FromLayer: "code", ToLayer: "code",
+	}, revID); err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	if _, err := g.FinalizeIncrementalScan("orders", revID); err != nil {
+		t.Fatalf("FinalizeIncrementalScan: %v", err)
+	}
+
+	na, err := g.store.GetNodeByKey("code:provider:orders:a")
+	if err != nil {
+		t.Fatalf("GetNodeByKey: %v", err)
+	}
+	m, ok := complexityFromMetadata(na.Metadata)
+	if !ok || m.TransitiveLoopDepth != 2 {
+		t.Fatalf("finalize should have derived transitive_loop_depth=2, got ok=%v %+v", ok, m)
+	}
+}
+
 // TestInsightsHotPathTargets proves a complex, highly-connected, TRUSTED function
 // (invisible to verification targets because its edges are high-trust) surfaces in
 // the new hot-path section with a reason tag.
