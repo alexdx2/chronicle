@@ -60,6 +60,46 @@ var decisionKinds = map[string]bool{
 	"switch_case":        true,
 }
 
+// AggregatedComplexity folds a file's per-function metrics to one class/unit
+// level value. Chronicle's callable nodes are class-level, so per-method metrics
+// are combined with MAX: the result represents "the gnarliest single method in
+// this unit". Max also keeps LoopDepth equal to the deepest loop nest anywhere
+// in the unit — exactly what graph-level transitive propagation should consume.
+// Sharing this fold between the writer and the verifier guarantees they agree.
+type AggregatedComplexity struct {
+	Cyclomatic int
+	LoopCount  int
+	LoopDepth  int
+	StartLine  int
+	EndLine    int
+	Present    bool // false when the file has no measurable functions/methods
+}
+
+// AggregateComplexity folds per-function metrics into one class-level value (max
+// of each metric; line span = min start … max end across functions).
+func AggregateComplexity(fns []FunctionComplexity) AggregatedComplexity {
+	var out AggregatedComplexity
+	for _, f := range fns {
+		out.Present = true
+		if f.Cyclomatic > out.Cyclomatic {
+			out.Cyclomatic = f.Cyclomatic
+		}
+		if f.LoopCount > out.LoopCount {
+			out.LoopCount = f.LoopCount
+		}
+		if f.LoopDepth > out.LoopDepth {
+			out.LoopDepth = f.LoopDepth
+		}
+		if out.StartLine == 0 || f.StartLine < out.StartLine {
+			out.StartLine = f.StartLine
+		}
+		if f.EndLine > out.EndLine {
+			out.EndLine = f.EndLine
+		}
+	}
+	return out
+}
+
 // ExtractComplexity computes exact per-function complexity metrics from
 // TypeScript source. One entry is returned per named function/method.
 func ExtractComplexity(fileContent []byte) []FunctionComplexity {

@@ -86,6 +86,11 @@ class OrderService {
 			if e.Confidence != 1.0 {
 				t.Errorf("exact AST evidence confidence = %v, want 1.0", e.Confidence)
 			}
+			// The complexity verifier recomputes from source at creation, so the
+			// row is verified (not merely asserted).
+			if e.VerificationStatus != "verified" {
+				t.Errorf("AST evidence verification_status = %q, want verified", e.VerificationStatus)
+			}
 		}
 	}
 	if astRows != 1 {

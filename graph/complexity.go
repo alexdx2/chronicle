@@ -35,8 +35,8 @@ func (g *Graph) ComputeASTComplexity(revisionID int64) error {
 		if content == nil {
 			continue // unreadable from any base — skip, do not fabricate coverage
 		}
-		agg := aggregateASTComplexity(ast.ExtractComplexity(content))
-		if !agg.present {
+		agg := ast.AggregateComplexity(ast.ExtractComplexity(content))
+		if !agg.Present {
 			continue // no measurable functions/methods in this file
 		}
 		nodeID, err := g.store.GetNodeIDByKey(n.NodeKey)
@@ -72,49 +72,10 @@ func (g *Graph) ComputeASTComplexity(revisionID int64) error {
 	return nil
 }
 
-// astComplexity is the per-node (class-level) aggregate of exact Tier-A metrics.
-// Chronicle's callable nodes are class/unit-level, so per-method metrics are
-// folded with MAX: the stored signal is "the gnarliest single method in this
-// unit". Max also keeps loop_depth equal to the deepest loop nest anywhere in the
-// unit, which is exactly what the Tier-B pass should propagate transitively.
-type astComplexity struct {
-	Cyclomatic int
-	LoopCount  int
-	LoopDepth  int
-	StartLine  int
-	EndLine    int
-	present    bool
-}
-
-// aggregateASTComplexity folds per-function metrics into one class-level value
-// (max of each metric; line span = min start … max end across functions).
-func aggregateASTComplexity(fns []ast.FunctionComplexity) astComplexity {
-	var out astComplexity
-	for _, f := range fns {
-		out.present = true
-		if f.Cyclomatic > out.Cyclomatic {
-			out.Cyclomatic = f.Cyclomatic
-		}
-		if f.LoopCount > out.LoopCount {
-			out.LoopCount = f.LoopCount
-		}
-		if f.LoopDepth > out.LoopDepth {
-			out.LoopDepth = f.LoopDepth
-		}
-		if out.StartLine == 0 || f.StartLine < out.StartLine {
-			out.StartLine = f.StartLine
-		}
-		if f.EndLine > out.EndLine {
-			out.EndLine = f.EndLine
-		}
-	}
-	return out
-}
-
 // mergeASTComplexity folds the exact Tier-A metrics into a node's existing
 // Metadata JSON, preserving any other keys, and tags metric_sources as "ast" for
 // each exact metric. Deterministic output (Go marshals map keys sorted).
-func mergeASTComplexity(metadata string, a astComplexity) (string, error) {
+func mergeASTComplexity(metadata string, a ast.AggregatedComplexity) (string, error) {
 	root := map[string]any{}
 	if metadata != "" && metadata != "{}" {
 		if err := json.Unmarshal([]byte(metadata), &root); err != nil {

@@ -87,6 +87,7 @@ func DefaultRegistry() *Registry {
 	r.Register(&TSDecoratorVerifier{})
 	r.Register(&YAMLVerifier{})
 	r.Register(&PrismaSchemaVerifier{})
+	r.Register(&ComplexityVerifier{})
 	r.Register(&TextVerifier{})
 	return r
 }
