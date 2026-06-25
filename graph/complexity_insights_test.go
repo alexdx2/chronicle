@@ -1,11 +1,165 @@
 package graph
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/validate"
 )
+
+// writeTempTS writes TS source to a temp file and returns its absolute path.
+func writeTempTS(t *testing.T, src string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "svc.ts")
+	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+		t.Fatalf("write temp ts: %v", err)
+	}
+	return p
+}
+
+// TestComputeASTComplexityWritesMetricsAndEvidence proves the Tier-A pass reads
+// the node's source file, stamps exact metrics (cyclomatic/loop_count/loop_depth)
+// into Metadata with metric_sources=ast, and emits one complexity-ast evidence
+// row carrying file_path + line span + confidence 1.0 — idempotently.
+func TestComputeASTComplexityWritesMetricsAndEvidence(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	tsPath := writeTempTS(t, `
+class OrderService {
+  process(items: number[]) {
+    for (const i of items) {
+      while (i > 0) {
+        if (i % 2 === 0) { doThing(); }
+      }
+    }
+  }
+}
+`)
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: "code:provider:orders:order-service", Layer: "code", NodeType: "provider",
+		DomainKey: "orders", Name: "OrderService", FilePath: tsPath,
+	}, revID); err != nil {
+		t.Fatalf("UpsertNode: %v", err)
+	}
+
+	if err := g.ComputeASTComplexity(revID); err != nil {
+		t.Fatalf("ComputeASTComplexity: %v", err)
+	}
+
+	n, err := g.store.GetNodeByKey("code:provider:orders:order-service")
+	if err != nil {
+		t.Fatalf("GetNodeByKey: %v", err)
+	}
+	m, ok := complexityFromMetadata(n.Metadata)
+	if !ok {
+		t.Fatalf("node has no complexity metadata: %q", n.Metadata)
+	}
+	// process(): for-of + while + if = 3 decisions -> cyclomatic 4; 2 loops; depth 2.
+	if m.Cyclomatic != 4 {
+		t.Errorf("cyclomatic = %d, want 4", m.Cyclomatic)
+	}
+	if m.LoopCount != 2 {
+		t.Errorf("loop_count = %d, want 2", m.LoopCount)
+	}
+	if m.LoopDepth != 2 {
+		t.Errorf("loop_depth = %d, want 2", m.LoopDepth)
+	}
+	if !strings.Contains(n.Metadata, `"loop_depth":"ast"`) {
+		t.Errorf("metric_sources should mark loop_depth as ast: %q", n.Metadata)
+	}
+
+	nodeID, _ := g.store.GetNodeIDByKey("code:provider:orders:order-service")
+	evs, err := g.store.ListEvidenceByNode(nodeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	astRows := 0
+	for _, e := range evs {
+		if e.ExtractorID == "complexity-ast" && e.SourceKind == "ast" {
+			astRows++
+			if e.FilePath != tsPath {
+				t.Errorf("evidence file_path = %q, want %q", e.FilePath, tsPath)
+			}
+			if e.Confidence != 1.0 {
+				t.Errorf("exact AST evidence confidence = %v, want 1.0", e.Confidence)
+			}
+		}
+	}
+	if astRows != 1 {
+		t.Fatalf("want exactly 1 complexity-ast evidence row, got %d", astRows)
+	}
+
+	// Idempotent: re-run must not duplicate the row.
+	if err := g.ComputeASTComplexity(revID); err != nil {
+		t.Fatalf("ComputeASTComplexity (2nd): %v", err)
+	}
+	evs2, _ := g.store.ListEvidenceByNode(nodeID)
+	rows2 := 0
+	for _, e := range evs2 {
+		if e.ExtractorID == "complexity-ast" && e.SourceKind == "ast" {
+			rows2++
+		}
+	}
+	if rows2 != 1 {
+		t.Fatalf("re-run duplicated AST evidence: got %d rows", rows2)
+	}
+}
+
+// TestFinalizeASTThenGraphChain proves the end-to-end real-scan flow: Tier-A
+// metrics are extracted from source files (NOT pre-seeded in metadata), then the
+// Tier-B graph pass propagates the AST-derived loop_depth across a CALLS_SYMBOL
+// edge — closing the gap where transitive_loop_depth was always 0 on live scans.
+func TestFinalizeASTThenGraphChain(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	// Upstream caller: no loops of its own.
+	callerPath := writeTempTS(t, `
+class Caller {
+  run(svc) { return svc.work(); }
+}
+`)
+	// Downstream callee: a single loop (loop_depth 1) — discovered from source.
+	calleePath := writeTempTS(t, `
+class Worker {
+  work(items) { for (const i of items) { doThing(); } }
+}
+`)
+	for _, n := range []validate.NodeInput{
+		{NodeKey: "code:provider:orders:caller", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Caller", FilePath: callerPath},
+		{NodeKey: "code:provider:orders:worker", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Worker", FilePath: calleePath},
+	} {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode: %v", err)
+		}
+	}
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: "code:provider:orders:caller", ToNodeKey: "code:provider:orders:worker",
+		EdgeType: "CALLS_SYMBOL", DerivationKind: "hard", FromLayer: "code", ToLayer: "code",
+	}, revID); err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	if _, err := g.FinalizeIncrementalScan("orders", revID); err != nil {
+		t.Fatalf("FinalizeIncrementalScan: %v", err)
+	}
+
+	caller, err := g.store.GetNodeByKey("code:provider:orders:caller")
+	if err != nil {
+		t.Fatalf("GetNodeByKey caller: %v", err)
+	}
+	m, ok := complexityFromMetadata(caller.Metadata)
+	if !ok {
+		t.Fatalf("caller has no complexity metadata: %q", caller.Metadata)
+	}
+	// caller's own loop_depth is 0, callee's is 1 -> transitive_loop_depth 1.
+	if m.TransitiveLoopDepth != 1 {
+		t.Fatalf("caller transitive_loop_depth = %d, want 1 (AST-seeded then graph-propagated)", m.TransitiveLoopDepth)
+	}
+}
 
 // TestInsightsVerificationWeightedByComplexity proves a higher-complexity source
 // outranks a lower-complexity one even when degree and trust are equal and the

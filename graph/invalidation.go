@@ -267,8 +267,13 @@ func (g *Graph) finalizeIncrementalScanInTx(domainKey string, revisionID int64) 
 		})
 	}
 
-	// Derive complexity / hot-path metrics from the now-settled call graph.
+	// Derive complexity / hot-path metrics. Tier-A (exact, from source files)
+	// runs first so the AST-derived loop_depth is available to seed Tier-B's
+	// transitive propagation along the now-settled call graph.
 	// Best-effort: a complexity bug must not fail an otherwise-clean scan.
+	if err := g.ComputeASTComplexity(revisionID); err != nil {
+		g.noteEvidenceErr(err)
+	}
 	if err := g.ComputeGraphComplexity(revisionID); err != nil {
 		g.noteEvidenceErr(err)
 	}
