@@ -53,6 +53,11 @@ type EdgeInsight struct {
 	EdgeType string  `json:"type"`
 	Trust    float64 `json:"trust_score"`
 	Reason   string  `json:"reason"`
+	// Score is the verification priority (higher = check first), stamped at
+	// construction so a federated aggregator can rank by the same
+	// complexity-aware value rather than re-deriving or discarding it. Zero for
+	// insights that aren't priority-ranked (e.g. suspicious/cross-repo edges).
+	Score float64 `json:"score,omitempty"`
 }
 
 type GapInsight struct {
@@ -129,9 +134,11 @@ func (g *Graph) Insights(domainKey string) (*InsightsResult, error) {
 		// weighted by the source function's complexity.
 		if e.TrustScore < lowTrustThreshold {
 			cx := nodeComplexityNorm(nodeByKey, from)
+			score := float64(degree[from]) * (1 - e.TrustScore) * (1 + cx)
 			res.VerificationTargets = append(res.VerificationTargets, EdgeInsight{
 				EdgeKey: e.EdgeKey, From: from, To: to, EdgeType: e.EdgeType,
 				Trust:  e.TrustScore,
+				Score:  score,
 				Reason: fmt.Sprintf("trust %.2f, source degree %d, src cx=%.2f — verify with evidence_verify", e.TrustScore, degree[from], cx),
 			})
 		}
@@ -168,15 +175,11 @@ func (g *Graph) Insights(domainKey string) (*InsightsResult, error) {
 		res.SuspiciousEdges = res.SuspiciousEdges[:suspiciousLimit]
 	}
 
-	// Verification targets: highest impact (degree) × lowest trust × source
-	// complexity first.
+	// Verification targets: highest priority score (impact × lowest trust ×
+	// source complexity) first — the score is stamped at construction.
 	sort.Slice(res.VerificationTargets, func(i, j int) bool {
-		di := degree[res.VerificationTargets[i].From]
-		dj := degree[res.VerificationTargets[j].From]
-		si := float64(di) * (1 - res.VerificationTargets[i].Trust) * (1 + nodeComplexityNorm(nodeByKey, res.VerificationTargets[i].From))
-		sj := float64(dj) * (1 - res.VerificationTargets[j].Trust) * (1 + nodeComplexityNorm(nodeByKey, res.VerificationTargets[j].From))
-		if si != sj {
-			return si > sj
+		if res.VerificationTargets[i].Score != res.VerificationTargets[j].Score {
+			return res.VerificationTargets[i].Score > res.VerificationTargets[j].Score
 		}
 		return res.VerificationTargets[i].EdgeKey < res.VerificationTargets[j].EdgeKey
 	})

@@ -211,6 +211,12 @@ func TestInsightsVerificationWeightedByComplexity(t *testing.T) {
 	if !strings.Contains(ins.VerificationTargets[0].Reason, "src cx=") {
 		t.Fatalf("reason should expose source complexity, got %q", ins.VerificationTargets[0].Reason)
 	}
+	// The priority score is stamped on the insight so a federated view can rank
+	// by the same complexity-aware value instead of re-deriving (or losing) it.
+	if !(ins.VerificationTargets[0].Score > ins.VerificationTargets[1].Score) {
+		t.Fatalf("complex source should carry a higher priority score: %v vs %v",
+			ins.VerificationTargets[0].Score, ins.VerificationTargets[1].Score)
+	}
 }
 
 // TestComputeGraphComplexityWritesMetricsAndEvidence proves the keystone graph
