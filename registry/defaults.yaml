@@ -239,6 +239,8 @@ source_kinds:
   - manual
   - synthetic
   - role_classification
+  - ast
+  - graph
 
 node_statuses:
   - active

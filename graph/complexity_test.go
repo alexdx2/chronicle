@@ -6,6 +6,32 @@ import (
 	"testing"
 )
 
+func TestMergeGraphComplexity(t *testing.T) {
+	in := `{"complexity":{"cyclomatic":5,"loop_count":1,"loop_depth":2,"metric_sources":{"cyclomatic":"ast","loop_count":"ast","loop_depth":"ast"}},"other":"keep"}`
+	out, err := mergeGraphComplexity(in, graphComplexity{Recursive: true, TransitiveLoopDepth: 3})
+	if err != nil {
+		t.Fatalf("mergeGraphComplexity: %v", err)
+	}
+	// Tier-A metrics preserved, graph metrics set.
+	m, ok := complexityFromMetadata(out)
+	if !ok {
+		t.Fatalf("complexity block missing in %q", out)
+	}
+	if m.Cyclomatic != 5 || m.LoopDepth != 2 {
+		t.Fatalf("Tier-A metrics not preserved: %+v", m)
+	}
+	if !m.Recursive || m.TransitiveLoopDepth != 3 {
+		t.Fatalf("graph metrics not set: %+v", m)
+	}
+	// Unrelated keys preserved; metric_sources tagged graph for derived metrics.
+	if !strings.Contains(out, `"other":"keep"`) {
+		t.Fatalf("unrelated key dropped: %q", out)
+	}
+	if !strings.Contains(out, `"transitive_loop_depth":"graph"`) {
+		t.Fatalf("metric_sources not tagged for derived metrics: %q", out)
+	}
+}
+
 func TestHotPathReason(t *testing.T) {
 	// Stale wins over every other factor.
 	if got := hotPathReason(ComplexityMetrics{Recursive: true, TransitiveLoopDepth: 9}, 0.1, 5); !strings.Contains(got, "stale") {

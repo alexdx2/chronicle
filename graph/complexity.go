@@ -2,8 +2,93 @@ package graph
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
+
+	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 )
+
+// callSymbolEdgeType is the edge Chronicle uses for direct function/method calls
+// (the substrate for Tier-B complexity propagation).
+const callSymbolEdgeType = "CALLS_SYMBOL"
+
+// ComputeGraphComplexity runs the Tier-B pass over the live call graph: it reads
+// each node's Tier-A loop_depth from Metadata, derives recursive +
+// transitive_loop_depth by propagating along CALLS_SYMBOL edges, folds the result
+// back into node Metadata, and emits one graph-derived evidence row per node.
+// Non-TS coverage guard: nodes are processed only when they participate in
+// CALLS_SYMBOL edges, so a metric is never emitted where no call graph exists.
+func (g *Graph) ComputeGraphComplexity(revisionID int64) error {
+	active := true
+	edges, err := g.store.ListEdges(store.EdgeFilter{EdgeType: callSymbolEdgeType, Active: &active})
+	if err != nil {
+		return fmt.Errorf("ComputeGraphComplexity edges: %w", err)
+	}
+	if len(edges) == 0 {
+		return nil // no call graph -> no derived metrics
+	}
+
+	nodes, err := g.store.ListNodes(store.NodeFilter{})
+	if err != nil {
+		return fmt.Errorf("ComputeGraphComplexity nodes: %w", err)
+	}
+	metaByKey := map[string]string{}
+	loopDepth := map[string]int{}
+	for _, n := range nodes {
+		metaByKey[n.NodeKey] = n.Metadata
+		if m, ok := complexityFromMetadata(n.Metadata); ok {
+			loopDepth[n.NodeKey] = m.LoopDepth
+		}
+	}
+
+	calls := make([]callEdge, 0, len(edges))
+	inGraph := map[string]bool{}
+	for _, e := range edges {
+		calls = append(calls, callEdge{From: e.FromNodeKey, To: e.ToNodeKey, Confidence: e.Confidence})
+		inGraph[e.FromNodeKey] = true
+		inGraph[e.ToNodeKey] = true
+	}
+	result := computeGraphComplexity(loopDepth, calls)
+
+	keys := make([]string, 0, len(result))
+	for k := range result {
+		if inGraph[k] {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		gc := result[k]
+		nodeID, err := g.store.GetNodeIDByKey(k)
+		if err != nil {
+			continue // edge endpoint without a resolved node (e.g. external) — skip
+		}
+		merged, err := mergeGraphComplexity(metaByKey[k], gc)
+		if err != nil {
+			return fmt.Errorf("ComputeGraphComplexity merge %s: %w", k, err)
+		}
+		if err := g.store.UpdateNodeMetadata(nodeID, merged); err != nil {
+			return fmt.Errorf("ComputeGraphComplexity metadata %s: %w", k, err)
+		}
+		assertion := fmt.Sprintf(`{"recursive":%t,"transitive_loop_depth":%d}`, gc.Recursive, gc.TransitiveLoopDepth)
+		if _, err := g.AddNodeEvidence(k, validate.EvidenceInput{
+			SourceKind:       "graph",
+			ExtractorID:      "complexity-graph",
+			ExtractorVersion: "1",
+			ASTRule:          "complexity/v1",
+			Confidence:       gc.BindingConfidence,
+			RevisionID:       revisionID,
+			Assertion:        assertion,
+			AssertionKind:    "complexity",
+			Metadata:         `{"metric_type":"derived"}`,
+		}); err != nil {
+			return fmt.Errorf("ComputeGraphComplexity evidence %s: %w", k, err)
+		}
+	}
+	return nil
+}
 
 // complexityFromMetadata extracts the v1 complexity block from a node's Metadata
 // JSON. Returns ok=false when the node has no `complexity` key (no fabricated
@@ -235,6 +320,38 @@ func tarjanSCC(nodes []string, adj map[string][]callEdge) map[string]int {
 	}
 	_ = unvisited
 	return comp
+}
+
+// mergeGraphComplexity folds the Tier-B derived metrics (recursive,
+// transitive_loop_depth) into a node's existing Metadata JSON, preserving any
+// Tier-A metrics and unrelated keys, and tagging metric_sources as "graph" for
+// the derived metrics. Deterministic output (Go marshals map keys sorted).
+func mergeGraphComplexity(metadata string, gc graphComplexity) (string, error) {
+	root := map[string]any{}
+	if metadata != "" && metadata != "{}" {
+		if err := json.Unmarshal([]byte(metadata), &root); err != nil {
+			return "", err
+		}
+	}
+	cx, _ := root["complexity"].(map[string]any)
+	if cx == nil {
+		cx = map[string]any{}
+	}
+	cx["recursive"] = gc.Recursive
+	cx["transitive_loop_depth"] = gc.TransitiveLoopDepth
+	ms, _ := cx["metric_sources"].(map[string]any)
+	if ms == nil {
+		ms = map[string]any{}
+	}
+	ms["recursive"] = "graph"
+	ms["transitive_loop_depth"] = "graph"
+	cx["metric_sources"] = ms
+	root["complexity"] = cx
+	b, err := json.Marshal(root)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // ComplexityMetrics is the v1 evidence-backed complexity signal stamped on

@@ -54,6 +54,84 @@ func TestInsightsVerificationWeightedByComplexity(t *testing.T) {
 	}
 }
 
+// TestComputeGraphComplexityWritesMetricsAndEvidence proves the keystone graph
+// pass writes derived metrics into node Metadata (preserving Tier-A) and emits a
+// graph-derived evidence row.
+func TestComputeGraphComplexityWritesMetricsAndEvidence(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	nodes := []validate.NodeInput{
+		{NodeKey: "code:provider:orders:a", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "A",
+			Metadata: `{"complexity":{"cyclomatic":3,"loop_count":1,"loop_depth":1,"metric_sources":{"loop_depth":"ast"}}}`},
+		{NodeKey: "code:provider:orders:b", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "B",
+			Metadata: `{"complexity":{"cyclomatic":2,"loop_count":1,"loop_depth":1,"metric_sources":{"loop_depth":"ast"}}}`},
+	}
+	for _, n := range nodes {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode %s: %v", n.Name, err)
+		}
+	}
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: "code:provider:orders:a", ToNodeKey: "code:provider:orders:b",
+		EdgeType: "CALLS_SYMBOL", DerivationKind: "hard", FromLayer: "code", ToLayer: "code",
+	}, revID); err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	if err := g.ComputeGraphComplexity(revID); err != nil {
+		t.Fatalf("ComputeGraphComplexity: %v", err)
+	}
+
+	na, err := g.store.GetNodeByKey("code:provider:orders:a")
+	if err != nil {
+		t.Fatalf("GetNodeByKey A: %v", err)
+	}
+	m, ok := complexityFromMetadata(na.Metadata)
+	if !ok {
+		t.Fatalf("A has no complexity metadata: %q", na.Metadata)
+	}
+	if m.TransitiveLoopDepth != 2 {
+		t.Fatalf("A transitive_loop_depth = %d, want 2", m.TransitiveLoopDepth)
+	}
+	if m.Cyclomatic != 3 {
+		t.Fatalf("A cyclomatic should be preserved (3), got %d", m.Cyclomatic)
+	}
+	if m.Recursive {
+		t.Fatalf("A should not be recursive")
+	}
+
+	aID, _ := g.store.GetNodeIDByKey("code:provider:orders:a")
+	evs, err := g.store.ListEvidenceByNode(aID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	graphRows := 0
+	for _, e := range evs {
+		if e.ExtractorID == "complexity-graph" && e.SourceKind == "graph" {
+			graphRows++
+		}
+	}
+	if graphRows != 1 {
+		t.Fatalf("want exactly 1 complexity-graph evidence row on A, got %d", graphRows)
+	}
+
+	// Idempotent: a second pass must not duplicate the evidence row.
+	if err := g.ComputeGraphComplexity(revID); err != nil {
+		t.Fatalf("ComputeGraphComplexity (2nd): %v", err)
+	}
+	evs2, _ := g.store.ListEvidenceByNode(aID)
+	graphRows2 := 0
+	for _, e := range evs2 {
+		if e.ExtractorID == "complexity-graph" && e.SourceKind == "graph" {
+			graphRows2++
+		}
+	}
+	if graphRows2 != 1 {
+		t.Fatalf("re-run must not duplicate evidence: got %d complexity-graph rows", graphRows2)
+	}
+}
+
 // TestInsightsHotPathTargets proves a complex, highly-connected, TRUSTED function
 // (invisible to verification targets because its edges are high-trust) surfaces in
 // the new hot-path section with a reason tag.
