@@ -447,3 +447,48 @@ class Svc {
 		t.Fatalf("want exactly 1 complexity-smells evidence row, got %d", smellRows)
 	}
 }
+
+// TestInsightsHotPathSurfacesSmells proves heuristic signals flow into insights:
+// a high-cognitive, smell-bearing node outranks an otherwise-equal plain node
+// (cognitive folds into the complexity norm) and its hot-path reason names the
+// smell.
+func TestInsightsHotPathSurfacesSmells(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	nodes := []validate.NodeInput{
+		{NodeKey: "code:provider:orders:plain", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Plain",
+			Metadata: `{"complexity":{"cyclomatic":1}}`},
+		{NodeKey: "code:provider:orders:smelly", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Smelly",
+			Metadata: `{"complexity":{"cyclomatic":1,"cognitive":12,"smells":["unguarded_recursion"]}}`},
+		{NodeKey: "code:provider:orders:t1", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "T1"},
+		{NodeKey: "code:provider:orders:t2", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "T2"},
+	}
+	for _, n := range nodes {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode %s: %v", n.Name, err)
+		}
+	}
+	for _, e := range []validate.EdgeInput{
+		{FromNodeKey: "code:provider:orders:plain", ToNodeKey: "code:provider:orders:t1", EdgeType: "CALLS_SYMBOL", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+		{FromNodeKey: "code:provider:orders:smelly", ToNodeKey: "code:provider:orders:t2", EdgeType: "CALLS_SYMBOL", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+	} {
+		if _, err := g.UpsertEdge(e, revID); err != nil {
+			t.Fatalf("UpsertEdge: %v", err)
+		}
+	}
+
+	ins, err := g.Insights("")
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if len(ins.HotPathTargets) == 0 {
+		t.Fatalf("expected hot-path targets")
+	}
+	if ins.HotPathTargets[0].NodeKey != "code:provider:orders:smelly" {
+		t.Fatalf("smell+cognitive node should outrank the plain one, got top=%q", ins.HotPathTargets[0].NodeKey)
+	}
+	if !strings.Contains(ins.HotPathTargets[0].Reason, "unguarded_recursion") {
+		t.Fatalf("hot-path reason should name the smell, got %q", ins.HotPathTargets[0].Reason)
+	}
+}

@@ -235,6 +235,9 @@ func computeHotPathTargets(nodes []store.NodeRow, degree map[string]int) []NodeI
 // (precedence 1) is added once per-node evidence counts are plumbed; until then the
 // remaining factors apply in order: stale, recursive / high transitive depth, connected.
 func hotPathReason(m ComplexityMetrics, freshness float64, degree int) string {
+	if len(m.Smells) > 0 {
+		return fmt.Sprintf("complex + smell: %s", strings.Join(m.Smells, ", "))
+	}
 	if freshness < staleFreshnessThreshold {
 		return fmt.Sprintf("complex + stale (freshness %.2f)", freshness)
 	}

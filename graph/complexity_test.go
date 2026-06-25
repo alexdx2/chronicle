@@ -117,23 +117,30 @@ func TestComputeGraphComplexity(t *testing.T) {
 }
 
 func TestNormComplexity(t *testing.T) {
+	// New 4-term formula: 0.4·tld/5 + 0.25·cyc/20 + 0.2·cog/15 + 0.15·smells/3.
 	cases := []struct {
-		name     string
-		tld, cyc int
-		want     float64
+		name                 string
+		tld, cyc, cog, smell int
+		want                 float64
 	}{
-		{"zero metrics give zero", 0, 0, 0},
-		{"full at caps", 5, 20, 1.0},
-		{"over caps clamps to 1", 10, 40, 1.0},
-		{"graph term only", 5, 0, 0.6},
-		{"ast term only", 0, 20, 0.4},
-		{"mixed partial", 2, 10, 0.44},
+		{"zero metrics give zero", 0, 0, 0, 0, 0},
+		{"all four at caps -> 1", 5, 20, 15, 3, 1.0},
+		{"over caps clamps to 1", 10, 40, 30, 6, 1.0},
+		{"graph term only", 5, 0, 0, 0, 0.4},
+		{"cyclomatic term only", 0, 20, 0, 0, 0.25},
+		{"cognitive term only", 0, 0, 15, 0, 0.2},
+		{"smells term only", 0, 0, 0, 3, 0.15},
+		{"mixed partial", 2, 10, 0, 0, 0.285},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := normComplexity(ComplexityMetrics{TransitiveLoopDepth: c.tld, Cyclomatic: c.cyc})
+			smells := make([]string, c.smell)
+			got := normComplexity(ComplexityMetrics{
+				TransitiveLoopDepth: c.tld, Cyclomatic: c.cyc, Cognitive: c.cog, Smells: smells,
+			})
 			if math.Abs(got-c.want) > 1e-9 {
-				t.Fatalf("normComplexity(tld=%d,cyc=%d) = %v, want %v", c.tld, c.cyc, got, c.want)
+				t.Fatalf("normComplexity(tld=%d,cyc=%d,cog=%d,smells=%d) = %v, want %v",
+					c.tld, c.cyc, c.cog, c.smell, got, c.want)
 			}
 		})
 	}

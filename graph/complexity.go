@@ -484,30 +484,31 @@ func mergeGraphComplexity(metadata string, gc graphComplexity) (string, error) {
 // come from the Tier-B graph pass over CALLS edges. Missing metrics are left at
 // their zero value and treated as "absent" by consumers.
 type ComplexityMetrics struct {
-	Cyclomatic          int  `json:"cyclomatic"`
-	LoopCount           int  `json:"loop_count"`
-	LoopDepth           int  `json:"loop_depth"`
-	Recursive           bool `json:"recursive"`
-	TransitiveLoopDepth int  `json:"transitive_loop_depth"`
+	Cyclomatic          int      `json:"cyclomatic"`
+	LoopCount           int      `json:"loop_count"`
+	LoopDepth           int      `json:"loop_depth"`
+	Recursive           bool     `json:"recursive"`
+	TransitiveLoopDepth int      `json:"transitive_loop_depth"`
+	Cognitive           int      `json:"cognitive"`
+	Smells              []string `json:"smells,omitempty"`
 }
 
-// normComplexity maps a node's complexity to [0,1] for insights ranking. The
-// graph-derived term (transitive_loop_depth) is weighted higher because it is
-// present for most nodes; an absent metric contributes 0 to its term.
+// normComplexity maps a node's complexity to [0,1] for insights ranking, folding
+// every available signal: graph-derived transitive depth, cyclomatic and
+// cognitive counts, and a bump per heuristic smell. An absent metric contributes
+// 0 to its term, so nodes without a given signal are never penalized for it.
 //
-//	normComplexity = min(1, 0.6·min(1, tld/5) + 0.4·min(1, cyclomatic/20))
+//	normComplexity = min(1, 0.4·tld/5 + 0.25·cyc/20 + 0.2·cog/15 + 0.15·smells/3)
 func normComplexity(m ComplexityMetrics) float64 {
-	tldTerm := float64(m.TransitiveLoopDepth) / 5.0
-	if tldTerm > 1 {
-		tldTerm = 1
+	clamp := func(v float64) float64 {
+		if v > 1 {
+			return 1
+		}
+		return v
 	}
-	cycTerm := float64(m.Cyclomatic) / 20.0
-	if cycTerm > 1 {
-		cycTerm = 1
-	}
-	v := 0.6*tldTerm + 0.4*cycTerm
-	if v > 1 {
-		v = 1
-	}
-	return v
+	tldTerm := clamp(float64(m.TransitiveLoopDepth) / 5.0)
+	cycTerm := clamp(float64(m.Cyclomatic) / 20.0)
+	cogTerm := clamp(float64(m.Cognitive) / 15.0)
+	smellTerm := clamp(float64(len(m.Smells)) / 3.0)
+	return clamp(0.4*tldTerm + 0.25*cycTerm + 0.2*cogTerm + 0.15*smellTerm)
 }
