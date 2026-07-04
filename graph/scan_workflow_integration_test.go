@@ -244,9 +244,10 @@ func TestScanWorkflowFullCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanNextAction (post-finalize): %v", err)
 	}
-	// No active run anymore, so it should suggest starting a new scan
-	if action.Action != "start_scan" {
-		t.Fatalf("expected action=start_scan after finalized run, got %s", action.Action)
+	// The run completed: the workflow must say so explicitly (returning
+	// start_scan here made agents begin a second scan of a finished domain).
+	if action.Action != "scan_complete" || !action.Done {
+		t.Fatalf("expected action=scan_complete done=true after finalized run, got %s done=%v", action.Action, action.Done)
 	}
 	t.Log("DONE: Full scan workflow cycle completed successfully")
 }
