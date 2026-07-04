@@ -426,6 +426,50 @@ func TestBuildC3_RoleEvidenceResolvesWinner(t *testing.T) {
 	}
 }
 
+// NodeSalience batch-resolves salience for out-of-package consumers (pro wiki,
+// exporters) with the same inputs the view builders use.
+func TestNodeSalience_Batch(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	mk := func(key, layer, ntype, name, file, meta string) {
+		if _, err := st.UpsertNode(store.NodeRow{
+			NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d",
+			Name: name, FilePath: file, Status: "active",
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: meta,
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+	}
+	mk("service:service:d:app", "service", "service", "app", "app/main.ts", "{}")
+	mk("code:controller:d:ctl", "code", "controller", "Ctl", "app/a.controller.ts", "{}")
+	mk("code:symbol:d:dto", "code", "symbol", "XDto", "app/x.dto.ts", `{"role":"request_dto","role_confidence":0.9}`)
+
+	nodes, err := st.ListNodes(store.NodeFilter{Domain: "d"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	sal := NodeSalience(st, nodes, "c3")
+	byKey := map[string]string{}
+	for _, n := range nodes {
+		if d, ok := sal[n.NodeID]; ok {
+			byKey[n.NodeKey] = string(d.RenderMode)
+		}
+	}
+	if byKey["code:controller:d:ctl"] != "box" {
+		t.Errorf("controller at c3: want box got %q", byKey["code:controller:d:ctl"])
+	}
+	if byKey["code:symbol:d:dto"] != "hidden" {
+		t.Errorf("request_dto symbol at c3: want hidden got %q", byKey["code:symbol:d:dto"])
+	}
+	if byKey["service:service:d:app"] != "box" {
+		t.Errorf("service: want box got %q", byKey["service:service:d:app"])
+	}
+}
+
 // ExplainSalience surfaces the resolve trace on demand — the "why is this node
 // hidden" answer the spec promises, without embedding traces in every payload.
 func TestExplainSalience(t *testing.T) {

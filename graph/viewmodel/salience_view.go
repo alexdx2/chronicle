@@ -170,6 +170,44 @@ func effectiveRoleClaim(n *store.NodeRow, roleByNode map[int64]salience.RoleClai
 	return nodeRoleClaim(n)
 }
 
+// NodeSalience batch-resolves diagram salience for a set of nodes at a level,
+// using the same inputs the view builders use: the project-aware policy
+// (chronicle.types.yaml merged over defaults), evidence-backed winning roles,
+// deterministic path noise, and boundary crossings over the active graph.
+// Keyed by NodeID. Exported for out-of-package consumers (pro wiki, exporters)
+// so they don't re-hardcode type lists — the exact anti-pattern salience
+// replaced.
+func NodeSalience(st *store.Store, nodes []store.NodeRow, level string) map[int64]salience.Decision {
+	pol := saliencePolicyFor(st)
+	roleByNode := resolveRolesByNode(st)
+
+	allNodes, err := st.ListNodes(store.NodeFilter{})
+	if err != nil {
+		return map[int64]salience.Decision{}
+	}
+	allEdges, err := st.ListEdges(store.EdgeFilter{})
+	if err != nil {
+		return map[int64]salience.Decision{}
+	}
+	crossing := boundaryCrossings(activeEdges(allEdges), ownershipMap(activeOnly(allNodes)))
+
+	out := make(map[int64]salience.Decision, len(nodes))
+	for i := range nodes {
+		n := &nodes[i]
+		role, roleConf := effectiveRoleClaim(n, roleByNode)
+		out[n.NodeID] = salience.Resolve(pol, salience.Input{
+			NodeType:         n.NodeType,
+			Layer:            n.Layer,
+			Role:             role,
+			RoleConfidence:   roleConf,
+			Level:            level,
+			NoiseClass:       salience.NoiseClassForPath(pol, n.FilePath),
+			BoundaryCrossing: crossing[n.NodeID],
+		})
+	}
+	return out
+}
+
 // SalienceExplanation is the on-demand "why does this node render like that"
 // answer: the resolved decision plus every input that produced it and the
 // layer-by-layer trace.
