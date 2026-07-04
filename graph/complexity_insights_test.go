@@ -492,3 +492,50 @@ func TestInsightsHotPathSurfacesSmells(t *testing.T) {
 		t.Fatalf("hot-path reason should name the smell, got %q", ins.HotPathTargets[0].Reason)
 	}
 }
+
+// TestInsightsHotPathWeighsChurn proves git churn feeds the hot-path ranking
+// (churn x complexity = the classic hotspot formula) and the reason names it.
+func TestInsightsHotPathWeighsChurn(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	// Same complexity and degree; only churn differs.
+	nodes := []validate.NodeInput{
+		{NodeKey: "code:provider:orders:calm", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Calm",
+			Metadata: `{"complexity":{"cyclomatic":10}}`},
+		{NodeKey: "code:provider:orders:hotchurn", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "HotChurn",
+			Metadata: `{"complexity":{"cyclomatic":10},"churn":{"commits":15,"window_days":180}}`},
+		{NodeKey: "code:provider:orders:u1", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "U1"},
+		{NodeKey: "code:provider:orders:u2", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "U2"},
+	}
+	for _, n := range nodes {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode: %v", err)
+		}
+	}
+	for _, e := range []validate.EdgeInput{
+		{FromNodeKey: "code:provider:orders:calm", ToNodeKey: "code:provider:orders:u1", EdgeType: "CALLS_SYMBOL", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+		{FromNodeKey: "code:provider:orders:hotchurn", ToNodeKey: "code:provider:orders:u2", EdgeType: "CALLS_SYMBOL", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+	} {
+		if _, err := g.UpsertEdge(e, revID); err != nil {
+			t.Fatalf("UpsertEdge: %v", err)
+		}
+	}
+
+	ins, err := g.Insights("")
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if len(ins.HotPathTargets) < 2 {
+		t.Fatalf("want both complex nodes in hot-path, got %d", len(ins.HotPathTargets))
+	}
+	if ins.HotPathTargets[0].NodeKey != "code:provider:orders:hotchurn" {
+		t.Fatalf("high-churn node should rank first, got %q", ins.HotPathTargets[0].NodeKey)
+	}
+	if ins.HotPathTargets[0].Churn != 15 {
+		t.Fatalf("NodeInsight.Churn = %d, want 15", ins.HotPathTargets[0].Churn)
+	}
+	if !strings.Contains(ins.HotPathTargets[0].Reason, "churn") {
+		t.Fatalf("reason should name churn, got %q", ins.HotPathTargets[0].Reason)
+	}
+}

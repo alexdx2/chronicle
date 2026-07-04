@@ -34,6 +34,7 @@ type NodeInsight struct {
 	Degree     int     `json:"degree"`
 	Trust      float64 `json:"trust_score"`
 	Complexity float64 `json:"complexity"`
+	Churn      int     `json:"churn,omitempty"` // commits touching the node's file in the git window
 	HotScore   float64 `json:"hot_score"`
 	Reason     string  `json:"reason"`
 }
@@ -75,6 +76,7 @@ const (
 	lowTrustThreshold       = 0.7
 	staleFreshnessThreshold = 0.5
 	highTransitiveDepth     = 3
+	highChurnThreshold      = 10 // commits in the churn window that flag "high churn"
 )
 
 // Insights computes the report for one domain (empty = all domains).
@@ -212,11 +214,16 @@ func computeHotPathTargets(nodes []store.NodeRow, degree map[string]int) []NodeI
 			continue
 		}
 		deg := degree[n.NodeKey]
-		hot := cx * float64(deg) * (1 + (1 - n.Freshness))
+		churn := churnFromMetadata(n.Metadata)
+		// churn × complexity is the classic hotspot formula: change frequency
+		// multiplies the risk a complex unit carries. Capped so churn scales
+		// the score by at most 2×.
+		churnFactor := 1 + minF(1, float64(churn)/float64(highChurnThreshold))
+		hot := cx * float64(deg) * (1 + (1 - n.Freshness)) * churnFactor
 		out = append(out, NodeInsight{
 			NodeKey: n.NodeKey, Name: n.Name, Layer: n.Layer, Degree: deg,
-			Trust: n.TrustScore, Complexity: cx, HotScore: hot,
-			Reason: hotPathReason(m, n.Freshness, deg),
+			Trust: n.TrustScore, Complexity: cx, Churn: churn, HotScore: hot,
+			Reason: hotPathReason(m, n.Freshness, deg, churn),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -234,9 +241,12 @@ func computeHotPathTargets(nodes []store.NodeRow, degree map[string]int) []NodeI
 // hotPathReason tags the dominant factor by fixed precedence. Low-evidence-coverage
 // (precedence 1) is added once per-node evidence counts are plumbed; until then the
 // remaining factors apply in order: stale, recursive / high transitive depth, connected.
-func hotPathReason(m ComplexityMetrics, freshness float64, degree int) string {
+func hotPathReason(m ComplexityMetrics, freshness float64, degree int, churn int) string {
 	if len(m.Smells) > 0 {
 		return fmt.Sprintf("complex + smell: %s", strings.Join(m.Smells, ", "))
+	}
+	if churn >= highChurnThreshold {
+		return fmt.Sprintf("complex + high churn (%d commits in %dd)", churn, churnWindowDays)
 	}
 	if freshness < staleFreshnessThreshold {
 		return fmt.Sprintf("complex + stale (freshness %.2f)", freshness)
@@ -245,6 +255,14 @@ func hotPathReason(m ComplexityMetrics, freshness float64, degree int) string {
 		return fmt.Sprintf("complex: recursive=%v, transitive_loop_depth=%d", m.Recursive, m.TransitiveLoopDepth)
 	}
 	return fmt.Sprintf("complex + highly connected (degree %d)", degree)
+}
+
+// minF is a float64 min helper for score clamps.
+func minF(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // nodeComplexityNorm returns the [0,1] complexity weight for a node, or 0 when

@@ -212,6 +212,16 @@ edge_types:
   READS_OUTPUT:
     from_layers: [infra]
     to_layers: [infra]
+  # Analytical signal: files that change together in git history (hidden
+  # coupling imports/calls don't show). Excluded from default impact traversal
+  # via structural policy below.
+  CHANGES_WITH:
+    from_layers: [code]
+    to_layers: [code]
+  # Analytical signal: near-duplicate code units (MinHash similarity).
+  SIMILAR_TO:
+    from_layers: [code]
+    to_layers: [code]
 
 derivation_kinds:
   - hard
@@ -269,6 +279,9 @@ traversal_policy:
     - PART_OF_FLOW
     - BUILDS_ARTIFACT
     - DEPLOYS_RESOURCE
+    # Analytical (not dependency) edges: must not inflate impact blast radius.
+    - CHANGES_WITH
+    - SIMILAR_TO
   no_reverse_impact:
     - EXPOSES_ENDPOINT
     - PUBLISHES_TOPIC

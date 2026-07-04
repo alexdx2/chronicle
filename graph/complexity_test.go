@@ -33,20 +33,28 @@ func TestMergeGraphComplexity(t *testing.T) {
 }
 
 func TestHotPathReason(t *testing.T) {
-	// Stale wins over every other factor.
-	if got := hotPathReason(ComplexityMetrics{Recursive: true, TransitiveLoopDepth: 9}, 0.1, 5); !strings.Contains(got, "stale") {
+	// Smell wins over everything.
+	if got := hotPathReason(ComplexityMetrics{Smells: []string{"alloc_in_loop"}, Recursive: true}, 0.1, 5, 99); !strings.Contains(got, "alloc_in_loop") {
+		t.Fatalf("smell should win, got %q", got)
+	}
+	// High churn wins over stale and structure.
+	if got := hotPathReason(ComplexityMetrics{Recursive: true}, 0.1, 5, 15); !strings.Contains(got, "churn") {
+		t.Fatalf("churn should win over stale, got %q", got)
+	}
+	// Stale wins over structural factors when churn is low.
+	if got := hotPathReason(ComplexityMetrics{Recursive: true, TransitiveLoopDepth: 9}, 0.1, 5, 0); !strings.Contains(got, "stale") {
 		t.Fatalf("stale should win, got %q", got)
 	}
 	// Fresh + recursive -> recursive tag.
-	if got := hotPathReason(ComplexityMetrics{Recursive: true}, 1.0, 5); !strings.Contains(got, "recursive=true") {
+	if got := hotPathReason(ComplexityMetrics{Recursive: true}, 1.0, 5, 0); !strings.Contains(got, "recursive=true") {
 		t.Fatalf("recursive tag expected, got %q", got)
 	}
 	// Fresh + high transitive depth (no recursion) -> transitive tag.
-	if got := hotPathReason(ComplexityMetrics{TransitiveLoopDepth: 4}, 1.0, 5); !strings.Contains(got, "transitive_loop_depth=4") {
+	if got := hotPathReason(ComplexityMetrics{TransitiveLoopDepth: 4}, 1.0, 5, 0); !strings.Contains(got, "transitive_loop_depth=4") {
 		t.Fatalf("transitive tag expected, got %q", got)
 	}
 	// Fresh, no structural recursion/depth -> highly-connected fallback.
-	if got := hotPathReason(ComplexityMetrics{Cyclomatic: 25}, 1.0, 7); !strings.Contains(got, "highly connected") {
+	if got := hotPathReason(ComplexityMetrics{Cyclomatic: 25}, 1.0, 7, 0); !strings.Contains(got, "highly connected") {
 		t.Fatalf("connected fallback expected, got %q", got)
 	}
 }

@@ -277,6 +277,10 @@ func (g *Graph) finalizeIncrementalScanInTx(domainKey string, revisionID int64) 
 	if err := g.ComputeGraphComplexity(revisionID); err != nil {
 		g.noteEvidenceErr(err)
 	}
+	// Git history signals: per-node churn + CHANGES_WITH co-change coupling.
+	if err := g.ComputeGitSignals(revisionID); err != nil {
+		g.noteEvidenceErr(err)
+	}
 
 	// Compute scan status
 	switch {
