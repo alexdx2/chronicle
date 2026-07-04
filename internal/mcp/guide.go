@@ -50,7 +50,7 @@ func ExtractionGuide(technology string) string {
 			"principle": "You are looking for ARCHITECTURAL FACTS, not code patterns. Don't search for specific decorators or syntax — understand what the code DOES and extract the relationships.",
 
 			"what_to_extract": map[string]string{
-				"boundaries":    "What are the separately deployable units? (services, apps, packages, containers). Each → service layer node.",
+				"boundaries":    "What are the separately deployable units? (services, apps, packages, containers). Each → service layer node with file_path = its root manifest (path ownership drives C3/wiki scoping).",
 				"data_models":   "What are the persistent data structures? (database models, schemas, entities). Each → data layer node. FK/relations → REFERENCES_MODEL edges.",
 				"code_units":    "What are the key code components? (modules, controllers, services, resolvers, handlers, gateways). Each → code layer node.",
 				"contracts":     "What does this system expose to the outside? (HTTP endpoints, GraphQL operations, WebSocket events, message queue topics, gRPC methods). Each → contract layer node.",
