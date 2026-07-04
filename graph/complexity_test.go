@@ -33,28 +33,36 @@ func TestMergeGraphComplexity(t *testing.T) {
 }
 
 func TestHotPathReason(t *testing.T) {
-	// Smell wins over everything.
-	if got := hotPathReason(ComplexityMetrics{Smells: []string{"alloc_in_loop"}, Recursive: true}, 0.1, 5, 99); !strings.Contains(got, "alloc_in_loop") {
-		t.Fatalf("smell should win, got %q", got)
+	// Untested (when actually examined) wins over everything.
+	if got := hotPathReason(ComplexityMetrics{Smells: []string{"alloc_in_loop"}}, 0.1, 5, 99, true, false); !strings.Contains(got, "untested") {
+		t.Fatalf("untested should win, got %q", got)
+	}
+	// A covered node must never be called untested; smell comes next.
+	if got := hotPathReason(ComplexityMetrics{Smells: []string{"alloc_in_loop"}, Recursive: true}, 0.1, 5, 99, true, true); !strings.Contains(got, "alloc_in_loop") {
+		t.Fatalf("smell should win for covered node, got %q", got)
+	}
+	// Unexamined node (test pass never looked): no untested claim, smell wins.
+	if got := hotPathReason(ComplexityMetrics{Smells: []string{"alloc_in_loop"}, Recursive: true}, 0.1, 5, 99, false, false); !strings.Contains(got, "alloc_in_loop") {
+		t.Fatalf("smell should win when tests unexamined, got %q", got)
 	}
 	// High churn wins over stale and structure.
-	if got := hotPathReason(ComplexityMetrics{Recursive: true}, 0.1, 5, 15); !strings.Contains(got, "churn") {
+	if got := hotPathReason(ComplexityMetrics{Recursive: true}, 0.1, 5, 15, false, false); !strings.Contains(got, "churn") {
 		t.Fatalf("churn should win over stale, got %q", got)
 	}
 	// Stale wins over structural factors when churn is low.
-	if got := hotPathReason(ComplexityMetrics{Recursive: true, TransitiveLoopDepth: 9}, 0.1, 5, 0); !strings.Contains(got, "stale") {
+	if got := hotPathReason(ComplexityMetrics{Recursive: true, TransitiveLoopDepth: 9}, 0.1, 5, 0, false, false); !strings.Contains(got, "stale") {
 		t.Fatalf("stale should win, got %q", got)
 	}
 	// Fresh + recursive -> recursive tag.
-	if got := hotPathReason(ComplexityMetrics{Recursive: true}, 1.0, 5, 0); !strings.Contains(got, "recursive=true") {
+	if got := hotPathReason(ComplexityMetrics{Recursive: true}, 1.0, 5, 0, false, false); !strings.Contains(got, "recursive=true") {
 		t.Fatalf("recursive tag expected, got %q", got)
 	}
 	// Fresh + high transitive depth (no recursion) -> transitive tag.
-	if got := hotPathReason(ComplexityMetrics{TransitiveLoopDepth: 4}, 1.0, 5, 0); !strings.Contains(got, "transitive_loop_depth=4") {
+	if got := hotPathReason(ComplexityMetrics{TransitiveLoopDepth: 4}, 1.0, 5, 0, false, false); !strings.Contains(got, "transitive_loop_depth=4") {
 		t.Fatalf("transitive tag expected, got %q", got)
 	}
 	// Fresh, no structural recursion/depth -> highly-connected fallback.
-	if got := hotPathReason(ComplexityMetrics{Cyclomatic: 25}, 1.0, 7, 0); !strings.Contains(got, "highly connected") {
+	if got := hotPathReason(ComplexityMetrics{Cyclomatic: 25}, 1.0, 7, 0, false, false); !strings.Contains(got, "highly connected") {
 		t.Fatalf("connected fallback expected, got %q", got)
 	}
 }

@@ -281,6 +281,10 @@ func (g *Graph) finalizeIncrementalScanInTx(domainKey string, revisionID int64) 
 	if err := g.ComputeGitSignals(revisionID); err != nil {
 		g.noteEvidenceErr(err)
 	}
+	// Test coverage linkage (naming convention) — feeds "complex + untested".
+	if err := g.ComputeTestSignals(revisionID); err != nil {
+		g.noteEvidenceErr(err)
+	}
 
 	// Compute scan status
 	switch {

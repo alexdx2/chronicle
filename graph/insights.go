@@ -219,11 +219,18 @@ func computeHotPathTargets(nodes []store.NodeRow, degree map[string]int) []NodeI
 		// multiplies the risk a complex unit carries. Capped so churn scales
 		// the score by at most 2×.
 		churnFactor := 1 + minF(1, float64(churn)/float64(highChurnThreshold))
-		hot := cx * float64(deg) * (1 + (1 - n.Freshness)) * churnFactor
+		// A complex unit the test pass examined and found uncovered is riskier
+		// than an identical covered one. Only applies when we actually looked.
+		looked, tested := testSignalFromMetadata(n.Metadata)
+		untestedFactor := 1.0
+		if looked && !tested {
+			untestedFactor = 1.5
+		}
+		hot := cx * float64(deg) * (1 + (1 - n.Freshness)) * churnFactor * untestedFactor
 		out = append(out, NodeInsight{
 			NodeKey: n.NodeKey, Name: n.Name, Layer: n.Layer, Degree: deg,
 			Trust: n.TrustScore, Complexity: cx, Churn: churn, HotScore: hot,
-			Reason: hotPathReason(m, n.Freshness, deg, churn),
+			Reason: hotPathReason(m, n.Freshness, deg, churn, looked, tested),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -241,7 +248,10 @@ func computeHotPathTargets(nodes []store.NodeRow, degree map[string]int) []NodeI
 // hotPathReason tags the dominant factor by fixed precedence. Low-evidence-coverage
 // (precedence 1) is added once per-node evidence counts are plumbed; until then the
 // remaining factors apply in order: stale, recursive / high transitive depth, connected.
-func hotPathReason(m ComplexityMetrics, freshness float64, degree int, churn int) string {
+func hotPathReason(m ComplexityMetrics, freshness float64, degree int, churn int, testLooked, tested bool) string {
+	if testLooked && !tested {
+		return "complex + untested (no test file found)"
+	}
 	if len(m.Smells) > 0 {
 		return fmt.Sprintf("complex + smell: %s", strings.Join(m.Smells, ", "))
 	}
