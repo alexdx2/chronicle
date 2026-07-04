@@ -14,7 +14,15 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-const serverInstructions = `Chronicle is a knowledge graph for codebases. The graph is the source of truth.
+// serverInstructions is sent in the MCP initialize response. Codex and other
+// clients following OpenAI's guidance weight the first 512 characters when
+// deciding how to use a server — the entry point and the pipeline-tool warning
+// must stay inside that window.
+const serverInstructions = `Chronicle is an evidence-backed knowledge graph of this codebase (services, endpoints, models, dependencies). The graph is the source of truth.
+
+START HERE: call chronicle_command(command="help") to list workflows, then chronicle_command(command="<name>") and follow the returned instructions exactly. Do NOT call scan-pipeline tools (chronicle_scan_*, chronicle_import_*, chronicle_commit_scan_outbox, chronicle_resolve_extractions, chronicle_revision_create) outside those instructions — calling them cold corrupts scan state.
+
+QUERY TOOLS (safe to call directly, anytime): chronicle_node_search, chronicle_query_deps, chronicle_query_reverse_deps, chronicle_impact, chronicle_query_path, chronicle_subgraph, chronicle_insights, chronicle_query_stats, chronicle_admin_url.
 
 CORE PRINCIPLE: The graph represents real architecture extracted from code.
 If something is wrong in the graph — fix the graph (import correct nodes/edges), not just the visualization.
@@ -395,7 +403,10 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	if GetDebugLogger() != nil {
 		instructions += "\n\n" + debugInstructions
 	}
-	serverOpts := []server.ServerOption{server.WithInstructions(instructions)}
+	serverOpts := []server.ServerOption{
+		server.WithInstructions(instructions),
+		server.WithHooks(clientDetectionHooks()),
+	}
 	s := server.NewMCPServer("chronicle", version.Version, serverOpts...)
 
 	add := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {

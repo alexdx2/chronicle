@@ -78,7 +78,7 @@ func Identity() MCPIdentity {
 			"mcp_identity_tool":                hasCapability(caps, "mcp_identity_v1"),
 		},
 		Verify: fmt.Sprintf(
-			"Before scan: call chronicle_mcp_identity. Expect release_codename=%q fingerprint=%q. If mismatch, rebuild MCP (go install -ldflags \"-X github.com/alexdx2/chronicle-core/version.BuildHash=$(git rev-parse --short HEAD)\" ./cmd/chronicle/...) and restart the MCP server in Cursor.",
+			"Before scan: call chronicle_mcp_identity. Expect release_codename=%q fingerprint=%q. If mismatch, rebuild MCP (go install -ldflags \"-X github.com/alexdx2/chronicle-core/version.BuildHash=$(git rev-parse --short HEAD)\" ./cmd/chronicle/...) and restart the MCP server in your client.",
 			ReleaseCodename, fp,
 		),
 	}
@@ -109,7 +109,7 @@ func ScanPreflightBlock() string {
   2. Show the user the banner line verbatim
   3. Confirm release_codename=%q AND fingerprint=%q
   4. Confirm scan_contract keys are all true (especially phase1_review, graph_hygiene, checkout_returns_items_path)
-  5. If ANY mismatch → STOP the scan. Tell user MCP is stale — rebuild chronicle MCP and restart Cursor, then retry.
+  5. If ANY mismatch → STOP the scan. Tell user MCP is stale — rebuild chronicle MCP and restart their MCP client, then retry.
 
 `, id.ReleaseCodename, id.Fingerprint)
 }

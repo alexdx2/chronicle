@@ -12,13 +12,19 @@ import (
 //   - "checkpoint" — presents options, waits for user choice
 //   - "action"     — orchestrator executes automatically
 //   - "agents"     — orchestrator spawns subagents, runs AfterAgents when done
+//
+// SoloInstruction is the no-subagent variant of Instruction, served to clients
+// without a Task tool (Codex, Cursor, ...): the same artifact-pool mechanics,
+// but the agent reads files and writes outbox artifacts itself. Stages whose
+// Instruction is already client-neutral leave it empty.
 type ScanStage struct {
-	ID          string
-	Name        string
-	Type        string // "checkpoint", "action", "agents"
-	Instruction string
-	AgentModel  string // for "agents": role hint — "fast" or "strong" (orchestrator picks actual model)
-	AfterAgents string // for "agents": orchestrator steps after agents finish
+	ID              string
+	Name            string
+	Type            string // "checkpoint", "action", "agents"
+	Instruction     string
+	SoloInstruction string // no-subagent variant; empty = Instruction works for both
+	AgentModel      string // for "agents": role hint — "fast" or "strong" (orchestrator picks actual model)
+	AfterAgents     string // for "agents": orchestrator steps after agents finish
 }
 
 // AgentRole describes the capability needed, not a specific model.
@@ -120,6 +126,14 @@ var scanStages = []ScanStage{
        The pack is saved to .depbot/packs/<tech-name>.md
     5. Reports the pack ID
   Skip this step if no packs are missing.`,
+		SoloInstruction: `For each confirmed MISSING pack, author it yourself:
+    1. Call chronicle_get_instruction_pack(id="guide/pack_authoring")
+    2. Read 3-5 representative project files
+    3. Write a pack with a "## Match" section + pattern→fact mappings
+    4. Call chronicle_save_custom_pack(id="<tech-name>", content=<pack>)
+       The pack is saved to .depbot/packs/<tech-name>.md
+    5. Note the pack ID
+  Skip this step if no packs are missing.`,
 		AfterAgents: `Add created pack IDs to tech list in the manifest.`,
 	},
 
@@ -139,6 +153,17 @@ var scanStages = []ScanStage{
   Each touch = one independent read of the same file; multiple touches merge at resolve.
   Show estimated file reads (files × touches). Recommend one option with a short reason.
   If the user names a custom count (e.g. "5 touches cheap"), honor it.
+  Ask ONE question, then stop.`,
+		SoloInstruction: `Present scan profiles — you choose layout. Artifact-pool, solo mode.
+
+  In solo mode YOU read every file yourself; multiple touches mean re-reading
+  the same file multiple times and merging at resolve.
+
+  A. Fast — 1 touch ← RECOMMENDED (solo re-reads rarely add signal)
+  C. Voting — 3 touches (only if the user wants extra redundancy)
+
+  Show estimated file reads (files × touches). Recommend A with a short reason.
+  If the user names a custom count, honor it.
   Ask ONE question, then stop.`,
 	},
 
@@ -203,6 +228,34 @@ var scanStages = []ScanStage{
   If subagents fail: read files yourself, write outbox JSON, then commit_scan_outbox.
   If MCP stops responding: STOP and tell the user to restart.
   Do NOT use chronicle_import_all during scans.`,
+		SoloInstruction: `SOLO EXTRACTION — you are the sole extractor. No other agents are involved.
+
+  ATOMIC WAVE CONTRACT (no new claims until the wave is committed):
+    1. Call chronicle_scan_pool_status(domain)
+    2. If wave_complete=true AND claimable_now=0 AND in_progress=0: EXIT LOOP
+    3. If in_progress>0 and oldest_in_progress_sec > claim_ttl_minutes*60: call chronicle_scan_mark_failed on stuck IDs OR wait 10s
+    4. Call chronicle_scan_checkout_batch(domain, limit=10) ONCE for this wave
+       Response is file-backed: read items_path (not inline items). Read fact_schema from fact_schema_path.
+    5. For EACH item in the batch:
+       - Read the source file at file_path
+       - Extract facts per fact_schema.md
+       - If deterministic_candidates_path is set, read candidates and merge into facts (accept high-confidence hints)
+       - Write ONE JSON artifact to outbox_dir:
+           { file_path, status, from_type, facts: [...], obligation_id, revision_id, domain,
+             vote_group, vote_index }
+         facts MUST be a JSON array (per fact_schema.md), NOT a quoted string.
+         Filename: path/with/slashes → path__with__slashes.json (append .vN before .json when vote_index>1)
+    6. Call chronicle_commit_scan_outbox(domain, revision_id) — single-writer commit
+    7. Verify wave_complete=true in chronicle_scan_pool_status before starting the next wave
+    8. Go to step 1
+
+  Fact kinds that build the graph backbone:
+  - "provides" from @Module files (from_type="module")
+  - "parent" when ownership is clear
+  - "declares_service" for service entry points
+
+  If MCP stops responding: STOP and tell the user to restart.
+  Do NOT use chronicle_import_all during scans.`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id, allow_degraded=true) if pool shows failed>0
      else chronicle_resolve_extractions(domain, revision_id)
   b. Call chronicle_scan_next_file — if checkpoint phase1_review, show quality_warnings + review_candidates
@@ -252,6 +305,13 @@ var scanStages = []ScanStage{
     2. Spawn strong-model subagents with flow fact_schema + files_to_read
     3. commit_scan_outbox after each wave
     4. Repeat until no trace_flow obligations remain`,
+		SoloInstruction: `scan_next_file returned "trace_flow" with flow_context.
+  Solo flow tracing — you trace each flow yourself:
+    1. chronicle_scan_checkout_batch(domain, obligation_type="trace_flow")
+    2. For each item: read the files in files_to_read, trace the flow end-to-end,
+       write the outbox JSON artifact per the flow fact_schema
+    3. commit_scan_outbox after each wave
+    4. Repeat until no trace_flow obligations remain`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)
   b. Call chronicle_scan_next_file(domain) — should return done=true
   c. Finalize the graph:
@@ -262,11 +322,7 @@ var scanStages = []ScanStage{
 	},
 }
 
-// BuildScanStagesInstruction assembles the complete scan pipeline instruction.
-func BuildScanStagesInstruction() string {
-	var parts []string
-
-	parts = append(parts, `INTERACTION RULES:
+const stagesInteractionRules = `INTERACTION RULES:
   - Present choices as compact A/B/C/D cards when applicable; layout is up to you.
   - ALWAYS recommend one option with a concrete reason.
   - After user makes a choice, proceed immediately. NEVER ask "Continue?" or "A) Continue B) Change".
@@ -279,37 +335,78 @@ CRITICAL — ONE CHECKPOINT PER MESSAGE:
   - Do NOT mention, preview, or show any later checkpoints.
   - Do NOT combine checkpoint 1 + 2, or 2 + 3, etc.
   - Wait for the user to respond before moving to the next stage.
-  - The user must never see two "CHECKPOINT" headers in a single message.
+  - The user must never see two "CHECKPOINT" headers in a single message.`
+
+// BuildScanStagesInstruction assembles the orchestrator (subagent) scan
+// pipeline instruction — the default for clients with a Task tool.
+func BuildScanStagesInstruction() string {
+	return buildStagesInstruction(false)
+}
+
+// BuildSoloScanStagesInstruction assembles the solo scan pipeline instruction
+// for clients without subagents (Codex, Cursor, ...): identical pool
+// mechanics and checkpoints, but the agent extracts everything itself.
+func BuildSoloScanStagesInstruction() string {
+	return buildStagesInstruction(true)
+}
+
+func buildStagesInstruction(solo bool) string {
+	var parts []string
+
+	if solo {
+		parts = append(parts, stagesInteractionRules+`
+
+ARTIFACT POOL PATTERN — SOLO MODE (you are the sole extractor):
+  1. YOU call Chronicle MCP (checkout_batch, commit_scan_outbox, pool_status)
+     AND read the source files AND write the JSON artifacts yourself
+  2. Artifacts go to .depbot/scan-outbox/{revision_id}/
+  3. One atomic wave: checkout → extract → commit → verify wave_complete before next wave
+  4. When ready_to_resolve=true: run the "AFTER EXTRACTION" steps`)
+	} else {
+		parts = append(parts, stagesInteractionRules+`
 
 ARTIFACT POOL PATTERN — default for ALL agent stages:
   1. Orchestrator ONLY calls Chronicle MCP (checkout_batch, commit_scan_outbox, pool_status)
   2. Subagents read source files and write JSON to .depbot/scan-outbox/{revision_id}/
   3. One atomic wave: checkout → extract → commit → verify wave_complete before next wave
   4. When ready_to_resolve=true: run the "AFTER AGENTS" steps`)
+	}
 
 	stepNum := 0
 	checkpointNum := 0
 
 	for _, stage := range scanStages {
-		var section string
+		instruction := stage.Instruction
+		if solo && stage.SoloInstruction != "" {
+			instruction = stage.SoloInstruction
+		}
 
+		var section string
 		switch stage.Type {
 		case "checkpoint":
 			checkpointNum++
 			section = fmt.Sprintf("── CHECKPOINT %d: %s ──\n  %s\n  ⛔ STOP HERE. Show ONLY this checkpoint. Ask ONE question. Do NOT show anything below this line until the user responds.",
-				checkpointNum, stage.Name, stage.Instruction)
+				checkpointNum, stage.Name, instruction)
 
 		case "action":
-			section = fmt.Sprintf("── %s ──\n  %s", stage.Name, stage.Instruction)
+			section = fmt.Sprintf("── %s ──\n  %s", stage.Name, instruction)
 
 		case "agents":
 			stepNum++
-			roleDesc := expandRole(stage.AgentModel)
-			section = fmt.Sprintf("STEP %d — %s (%s):\n  %s",
-				stepNum, stage.Name, roleDesc, stage.Instruction)
-			if stage.AfterAgents != "" {
-				section += fmt.Sprintf("\n\n  ⚠️ AFTER ALL AGENTS FINISH — orchestrator does this:\n  %s",
-					stage.AfterAgents)
+			if solo {
+				section = fmt.Sprintf("STEP %d — %s (solo — you do the extraction):\n  %s",
+					stepNum, stage.Name, instruction)
+				if stage.AfterAgents != "" {
+					section += fmt.Sprintf("\n\n  ⚠️ AFTER EXTRACTION — do this:\n  %s",
+						stage.AfterAgents)
+				}
+			} else {
+				section = fmt.Sprintf("STEP %d — %s (%s):\n  %s",
+					stepNum, stage.Name, expandRole(stage.AgentModel), instruction)
+				if stage.AfterAgents != "" {
+					section += fmt.Sprintf("\n\n  ⚠️ AFTER ALL AGENTS FINISH — orchestrator does this:\n  %s",
+						stage.AfterAgents)
+				}
 			}
 		}
 
@@ -364,6 +461,13 @@ func buildScanCommand() string {
 	s := CommandInstructions["scan"]
 	s = strings.Replace(s, "__MCP_PREFLIGHT__", version.ScanPreflightBlock(), 1)
 	s = strings.Replace(s, "__STAGES__", BuildScanStagesInstruction(), 1)
+	return s
+}
+
+func buildSoloScanCommand() string {
+	s := soloScanCommandTemplate
+	s = strings.Replace(s, "__MCP_PREFLIGHT__", version.ScanPreflightBlock(), 1)
+	s = strings.Replace(s, "__STAGES__", BuildSoloScanStagesInstruction(), 1)
 	return s
 }
 

@@ -15,7 +15,7 @@ func SetGuideStore(s *store.Store) { customGuideStore = s }
 
 // INVARIANT: This guide MUST NEVER enumerate full edge types or layer constraints.
 // Only illustrative examples are allowed. Schema is the single source of truth.
-// If you need to list valid types, tell Claude to call chronicle_schema().
+// If you need to list valid types, tell the agent to call chronicle_schema().
 
 // ExtractionGuide returns the universal extraction methodology.
 // The technology parameter is DEPRECATED and ignored — always returns the full guide.

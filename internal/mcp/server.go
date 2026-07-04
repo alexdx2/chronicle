@@ -33,7 +33,8 @@ func SetLiveCheck(v bool)      { liveCheckEnabled = v }
 
 // NewServer creates a new MCP server exposing all graph operations as tools.
 func NewServer(g *graph.Graph) *server.MCPServer {
-	s := server.NewMCPServer("chronicle", version.Version)
+	s := server.NewMCPServer("chronicle", version.Version,
+		server.WithHooks(clientDetectionHooks()))
 
 	s.AddTool(revisionCreateTool(), revisionCreateHandler(g))
 	s.AddTool(nodeUpsertTool(), nodeUpsertHandler(g))
@@ -591,7 +592,7 @@ func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func evidenceVerifyTool() mcp.Tool {
 	return mcp.NewTool("chronicle_evidence_verify",
-		mcp.WithDescription("Mechanically verify stale evidence in a file using native parsers and tree-sitter. Checks whether evidence assertions still hold without needing Claude to re-read the file. Auto-repairs moved locators. Returns per-evidence results. Call this on files returned by invalidate_changed before deciding whether to re-read them."),
+		mcp.WithDescription("Mechanically verify stale evidence in a file using native parsers and tree-sitter. Checks whether evidence assertions still hold without the agent re-reading the file. Auto-repairs moved locators. Returns per-evidence results. Call this on files returned by invalidate_changed before deciding whether to re-read them."),
 		mcp.WithString("file_path", mcp.Required(), mcp.Description("File path to verify evidence for")),
 		mcp.WithNumber("revision_id", mcp.Description("Current revision ID (for tracking)")),
 		mcp.WithString("domain", mcp.Description("Domain key")),
@@ -1508,7 +1509,7 @@ func staleMarkHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func invalidateChangedTool() mcp.Tool {
 	return mcp.NewTool("chronicle_invalidate_changed",
-		mcp.WithDescription("Mark evidence from changed files as stale, auto-verify assertions using native parsers and tree-sitter, and recalculate trust scores. Returns auto_verified results (what was mechanically confirmed) and needs_claude (files requiring Claude to re-read). Most evidence is re-verified without Claude intervention."),
+		mcp.WithDescription("Mark evidence from changed files as stale, auto-verify assertions using native parsers and tree-sitter, and recalculate trust scores. Returns auto_verified results (what was mechanically confirmed) and needs_claude (files the agent must re-read). Most evidence is re-verified mechanically, without agent intervention."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("changed_files", mcp.Required(), mcp.Description("JSON array of changed file paths")),
@@ -1550,7 +1551,7 @@ func invalidateChangedHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func finalizeIncrementalScanTool() mcp.Tool {
 	return mcp.NewTool("chronicle_finalize_incremental_scan",
-		mcp.WithDescription("Complete an incremental scan. Returns scan_status (clean/review_required/incomplete), revalidated/stale/contradicted counts, needs_review_edges (edges that lost all evidence), rejected_evidence (assertions that failed verification — Claude hallucinations), uncovered_files, and obligation summary. If scan_status is not 'clean', Claude must resolve the listed issues."),
+		mcp.WithDescription("Complete an incremental scan. Returns scan_status (clean/review_required/incomplete), revalidated/stale/contradicted counts, needs_review_edges (edges that lost all evidence), rejected_evidence (assertions that failed verification — extractor hallucinations), uncovered_files, and obligation summary. If scan_status is not 'clean', the agent must resolve the listed issues."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 	)
@@ -2192,7 +2193,7 @@ func checkGitFreshness(lastSHA string) map[string]any {
 
 func saveManifestTool() mcp.Tool {
 	return mcp.NewTool("chronicle_save_manifest",
-		mcp.WithDescription("Save the domain manifest (chronicle.domain.yaml). Use after auto-discovering the project structure — identify repos, tech stack, and domain name, then save. Claude should auto-discover and never ask the user to manually edit this file."),
+		mcp.WithDescription("Save the domain manifest (chronicle.domain.yaml). Use after auto-discovering the project structure — identify repos, tech stack, and domain name, then save. Auto-discover the structure; never ask the user to manually edit this file."),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Full YAML content for chronicle.domain.yaml")),
 	)
 }
@@ -2455,7 +2456,9 @@ func mcpIdentityTool() mcp.Tool {
 func mcpIdentityHandler() server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		version.StampBuildTime()
-		return jsonResult(version.IdentityMap()), nil
+		payload := version.IdentityMap()
+		payload["connected_client"] = ConnectedClient()
+		return jsonResult(payload), nil
 	}
 }
 
@@ -2488,6 +2491,11 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 			if custom, err := customGuideStore.GetSetting("prompt_" + cmd); err == nil && custom != "" {
 				instructions = custom
 			}
+		}
+		if instructions == "" && cmd == "scan" && !clientSupportsSubagents() {
+			// No Task tool on this client (Codex, Cursor, ...) — serve the
+			// solo workflow: same pool mechanics, agent extracts itself.
+			instructions = soloScanCommand()
 		}
 		if instructions == "" {
 			var ok bool

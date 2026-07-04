@@ -8,10 +8,42 @@ import "github.com/alexdx2/chronicle-core/graph/prompts"
 func init() {
 	// Inject dynamically-built checkpoint flow + MCP preflight into scan command
 	CommandInstructions["scan"] = buildScanCommand()
+	soloScanInstructions = buildSoloScanCommand()
 	// The querying guide is authored as an embedded pack so it stays close to
 	// the tools it teaches and can be reused by the dashboard / hooks.
 	CommandInstructions["query"] = prompts.Querying
 }
+
+// soloScanInstructions is the scan command variant for clients without
+// subagents (Codex, Cursor, ...). commandHandler serves it when the connected
+// client can't spawn parallel agents; CommandInstructions["scan"] stays the
+// orchestrator flow.
+var soloScanInstructions string
+
+func soloScanCommand() string { return soloScanInstructions }
+
+const soloScanCommandTemplate = `Scan this project using the artifact-pool workflow in SOLO mode — you are the only agent; no subagents are involved.
+
+__MCP_PREFLIGHT__
+
+CRITICAL RULES (artifact-pool, solo):
+  ❌ NEVER call chronicle_import_all during a scan
+  ❌ NEVER start a new wave before commit_scan_outbox completes the current wave
+  ❌ NEVER skip checkpoints — STOP and wait at each one
+  ❌ NEVER save the manifest without user approval
+  ❌ NEVER guess the domain — use domain_key from checkout batches
+  ✅ YOU are the sole extractor: scan_pool_status → scan_checkout_batch → read files → write outbox JSON artifacts → commit_scan_outbox → repeat
+  ✅ Artifacts go to .depbot/scan-outbox/{revision_id}/ only
+  ✅ Use chronicle_resolve_extractions(allow_degraded=true) only when pool shows stuck/failed obligations with extractions present
+  ✅ When votes_needed>1, artifacts must include vote_group and vote_index from checkout_batch
+
+CRITICAL — CONTAINS edges (structural backbone):
+  ✅ Every module MUST have CONTAINS edges to its controllers and providers
+  ✅ CONTAINS edges link: repository→module, module→controller, module→provider
+  ✅ These come from "provides" facts emitted by @Module files with from_type="module"
+  ❌ A graph with no CONTAINS edges is broken — emit "provides" for every controller/provider in every @Module
+
+__STAGES__`
 
 var UserCommands = map[string]string{
 	"scan":     "Full project scan — discover structure, extract all layers, import graph, define domain language",
@@ -135,7 +167,7 @@ __STAGES__`,
 2. Show the user the "banner" line verbatim
 3. Verify release_codename and fingerprint match the expected release in how_to_verify
 4. Verify all scan_contract values are true
-5. If stale → STOP. Tell user to rebuild chronicle MCP and restart Cursor`,
+5. If stale → STOP. Tell user to rebuild chronicle MCP and restart their MCP client`,
 
 	"status": `Graph status:
 1. Call chronicle_scan_status

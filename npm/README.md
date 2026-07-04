@@ -4,7 +4,7 @@
 
 # Chronicle MCP — Knowledge Graph
 
-Self-learning code analysis tool for Claude Code. Builds a knowledge graph of your codebase — data models, services, endpoints, dependencies — and answers questions like "what breaks if I change X?"
+Self-learning code analysis tool for coding agents (Claude Code, Codex CLI, ...). Builds a knowledge graph of your codebase — data models, services, endpoints, dependencies — and answers questions like "what breaks if I change X?"
 
 ## Install
 
@@ -14,7 +14,11 @@ npm install -g @alexdx/chronicle-mcp
 
 ## Setup with Claude Code
 
-Add to your Claude Code MCP config (`~/.claude.json`):
+```bash
+claude mcp add chronicle -- chronicle mcp serve
+```
+
+Or add to your Claude Code MCP config (`~/.claude.json`):
 
 ```json
 {
@@ -26,6 +30,29 @@ Add to your Claude Code MCP config (`~/.claude.json`):
   }
 }
 ```
+
+## Setup with Codex CLI
+
+```bash
+chronicle setup codex
+```
+
+This registers the server in `~/.codex/config.toml`, writes usage guidance to
+`~/.codex/AGENTS.md` (and to the project's `AGENTS.md` when run inside a project),
+and installs `/chronicle-scan`, `/chronicle-impact`, ... custom prompts.
+Equivalent manual config:
+
+```toml
+[mcp_servers.chronicle]
+command = "chronicle"
+args = ["mcp", "serve"]
+startup_timeout_sec = 30   # journal sync on open can exceed Codex's 10s default
+tool_timeout_sec = 180     # resolve/commit on large graphs can exceed the 60s default
+```
+
+Chronicle detects the connected client: Claude Code gets the parallel (subagent)
+scan workflow; clients without subagents (Codex, Cursor) automatically get a
+single-agent workflow. Query tools work identically everywhere.
 
 ## Usage
 

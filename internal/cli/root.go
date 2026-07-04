@@ -56,6 +56,7 @@ func NewRootCmd() *cobra.Command {
 		newAdminCmd(),
 		newAliasCmd(),
 		newJournalCmd(),
+		newSetupCmd(),
 	)
 
 	return root
@@ -221,4 +222,9 @@ The admin dashboard shows the graph visually — get the URL via chronicle_comma
 `
 		os.WriteFile(claudeMD, []byte(content), 0644)
 	}
+
+	// AGENTS.md — same guidance for agents that don't read CLAUDE.md
+	// (Codex, OpenCode, Gemini CLI, ...). Marker-wrapped upsert: creates the
+	// file if missing, refreshes only the chronicle section otherwise.
+	upsertMarkedSection("AGENTS.md", projectAgentsSection())
 }

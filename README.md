@@ -35,6 +35,20 @@ chronicle scan
 
 Chronicle will ask you to confirm the scope before scanning anything.
 
+### Other agents (Codex CLI, ...)
+
+```bash
+chronicle setup codex
+```
+
+This registers the MCP server in `~/.codex/config.toml` (with raised startup/tool
+timeouts), writes usage guidance to `~/.codex/AGENTS.md`, and installs
+`/chronicle-scan`, `/chronicle-impact`, ... custom prompts. Chronicle also
+maintains a marker-wrapped section in each project's `AGENTS.md`, so any
+AGENTS.md-reading agent (Codex, OpenCode, Gemini CLI) discovers the graph tools.
+Chronicle detects the connected client: Claude Code runs the parallel (subagent)
+scan workflow, clients without subagents get a single-agent workflow automatically.
+
 ## How the brain works
 
 Chronicle stores architecture as a graph of relationships:

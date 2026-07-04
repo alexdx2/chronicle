@@ -1,6 +1,7 @@
 package version
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -49,4 +50,15 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// Identity text is shown across MCP clients (Claude Code, Codex, Cursor, ...);
+// remediation hints must not assume a specific client.
+func TestIdentityStrings_ClientNeutral(t *testing.T) {
+	if strings.Contains(Identity().Verify, "Cursor") {
+		t.Errorf("Identity().Verify mentions Cursor; use client-neutral wording:\n%s", Identity().Verify)
+	}
+	if strings.Contains(ScanPreflightBlock(), "Cursor") {
+		t.Errorf("ScanPreflightBlock mentions Cursor; use client-neutral wording:\n%s", ScanPreflightBlock())
+	}
 }
