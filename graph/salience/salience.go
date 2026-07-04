@@ -78,6 +78,24 @@ type Input struct {
 func typeKey(layer, nodeType string) string { return "type:" + layer + "." + nodeType }
 func roleKey(role string) string            { return "role:" + role }
 
+// ParseTier validates a tier string against the closed vocabulary.
+func ParseTier(s string) (Tier, bool) {
+	switch Tier(s) {
+	case TierPrimary, TierSecondary, TierDetail:
+		return Tier(s), true
+	}
+	return "", false
+}
+
+// ParseRenderMode validates a render_mode string against the closed vocabulary.
+func ParseRenderMode(s string) (RenderMode, bool) {
+	switch RenderMode(s) {
+	case RenderBox, RenderCollapsedGroup, RenderBadge, RenderAttachedDetail, RenderExpandableDetail, RenderHidden:
+		return RenderMode(s), true
+	}
+	return "", false
+}
+
 // Resolve runs the ordered override chain and returns the final Decision.
 func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	// Start: safe default (lowest bucket, hidden).

@@ -16,6 +16,17 @@ type ViewSpec struct {
 	// connections (edges to in-view nodes plus 1-hop out-of-view neighbors
 	// materialized as dimmed Boundary nodes).
 	Pin []string `json:"pin,omitempty"`
+	// SalienceOverrides pins per-node salience (keyed by node key) — the
+	// user's last word in the resolve chain. Session/ViewSpec-scoped by
+	// design: user decisions do not pollute the graph.
+	SalienceOverrides map[string]SalienceOverrideSpec `json:"salience_overrides,omitempty"`
+}
+
+// SalienceOverrideSpec pins a node's tier and/or render_mode. Values follow
+// the closed salience vocabularies; empty fields are left to policy.
+type SalienceOverrideSpec struct {
+	Tier       string `json:"tier,omitempty"`
+	RenderMode string `json:"render_mode,omitempty"`
 }
 
 // ScopeSpec selects the seed set of nodes. Domain is always required in V1;

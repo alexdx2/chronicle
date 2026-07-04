@@ -206,6 +206,7 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 	// collapsed/badge nodes (e.g. models) are represented elsewhere (uses_models).
 	pol := saliencePolicyFor(st)
 	roleByNode := resolveRolesByNode(st)
+	crossing := boundaryCrossings(edges, owned)
 	var components []Component
 	hiddenCount := 0
 	for i := range nodes {
@@ -215,12 +216,13 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 		}
 		role, roleConf := effectiveRoleClaim(n, roleByNode)
 		sal := salience.Resolve(pol, salience.Input{
-			NodeType:       n.NodeType,
-			Layer:          n.Layer,
-			Role:           role,
-			RoleConfidence: roleConf,
-			Level:          "c3",
-			NoiseClass:     salience.NoiseClassForPath(pol, n.FilePath),
+			NodeType:         n.NodeType,
+			Layer:            n.Layer,
+			Role:             role,
+			RoleConfidence:   roleConf,
+			Level:            "c3",
+			NoiseClass:       salience.NoiseClassForPath(pol, n.FilePath),
+			BoundaryCrossing: crossing[n.NodeID],
 		})
 		switch sal.RenderMode {
 		case salience.RenderBox:

@@ -2,6 +2,7 @@ package viewmodel
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -104,6 +105,58 @@ func parseRoleClaim(assertion, metadata string) (string, string) {
 		return role, reason
 	}
 	return "", ""
+}
+
+// boundaryCrossings returns the IDs of nodes with an active edge to a code
+// node owned by a DIFFERENT service — the deterministic topology signal for
+// bounded salience promotion (spec §4.1). Degree is measured in the supplied
+// (view-scoped) edge set, so a globally popular node does not surface in
+// every view (spec open question #2: degree in the view subgraph).
+func boundaryCrossings(edges []store.EdgeRow, owned map[int64]*store.NodeRow) map[int64]bool {
+	out := make(map[int64]bool)
+	for i := range edges {
+		e := &edges[i]
+		f, t := owned[e.FromNodeID], owned[e.ToNodeID]
+		if f == nil || t == nil || f.NodeID == t.NodeID {
+			continue
+		}
+		out[e.FromNodeID] = true
+		out[e.ToNodeID] = true
+	}
+	return out
+}
+
+// salienceOverride converts a validated ViewSpec override into the engine's
+// Override. Callers must have validated the values (validateSalienceOverrides).
+func salienceOverride(ov SalienceOverrideSpec) *salience.Override {
+	var out salience.Override
+	if t, ok := salience.ParseTier(ov.Tier); ok {
+		out.Tier = &t
+	}
+	if m, ok := salience.ParseRenderMode(ov.RenderMode); ok {
+		out.RenderMode = &m
+	}
+	if out.Tier == nil && out.RenderMode == nil {
+		return nil
+	}
+	return &out
+}
+
+// validateSalienceOverrides enforces the closed vocabularies on user overrides.
+func validateSalienceOverrides(specs map[string]SalienceOverrideSpec) error {
+	for key, ov := range specs {
+		if ov.Tier != "" {
+			if _, ok := salience.ParseTier(ov.Tier); !ok {
+				return fmt.Errorf("salience_overrides[%s]: invalid tier %q (want primary|secondary|detail)", key, ov.Tier)
+			}
+		}
+		if ov.RenderMode != "" {
+			if _, ok := salience.ParseRenderMode(ov.RenderMode); !ok {
+				return fmt.Errorf("salience_overrides[%s]: invalid render_mode %q", key, ov.RenderMode)
+			}
+		}
+	}
+	return nil
 }
 
 // effectiveRoleClaim returns the node's role and claim confidence, preferring

@@ -191,6 +191,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	if domain == "" {
 		return nil, fmt.Errorf("view spec: scope.domain is required in V1")
 	}
+	if err := validateSalienceOverrides(spec.SalienceOverrides); err != nil {
+		return nil, fmt.Errorf("view spec: %w", err)
+	}
 	pathMode := false
 	if spec.Expand != nil {
 		switch spec.Expand.Mode {
@@ -1102,19 +1105,26 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	salPol := saliencePolicyFor(st)
 	salLevel := spec.Layout.Preset
 	roleByNode := resolveRolesByNode(st)
+	crossing := boundaryCrossings(domEdges, owned)
 	for id, g := range memberGroup {
 		if spec.Collapse && g != "" {
 			continue // grouped members fold into their VGroup
 		}
 		n := nodeByID[id]
 		role, roleConf := effectiveRoleClaim(n, roleByNode)
+		var userOv *salience.Override
+		if ov, ok := spec.SalienceOverrides[n.NodeKey]; ok {
+			userOv = salienceOverride(ov)
+		}
 		sal := salience.Resolve(salPol, salience.Input{
-			NodeType:       n.NodeType,
-			Layer:          n.Layer,
-			Role:           role,
-			RoleConfidence: roleConf,
-			Level:          salLevel,
-			NoiseClass:     salience.NoiseClassForPath(salPol, n.FilePath),
+			NodeType:         n.NodeType,
+			Layer:            n.Layer,
+			Role:             role,
+			RoleConfidence:   roleConf,
+			Level:            salLevel,
+			NoiseClass:       salience.NoiseClassForPath(salPol, n.FilePath),
+			BoundaryCrossing: crossing[n.NodeID],
+			UserOverride:     userOv,
 		})
 		view.Nodes = append(view.Nodes, VNode{
 			Key:        n.NodeKey,

@@ -194,6 +194,109 @@ func TestBuildC3_PathNoiseDemotes(t *testing.T) {
 	}
 }
 
+// Bounded topology promotion, wired: a promotable-role node referenced from
+// code owned by ANOTHER service crosses the boundary and surfaces as a box;
+// its twin without cross-service edges stays hidden. Resolves spec open
+// question #2 as degree-in-the-view-subgraph.
+func TestBuildC3_BoundaryCrossingPromotes(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	mk := func(key, layer, ntype, name, file, meta string) int64 {
+		id, err := st.UpsertNode(store.NodeRow{
+			NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d",
+			Name: name, FilePath: file, Status: "active",
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: meta,
+		})
+		if err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+		return id
+	}
+	mk("service:service:d:app", "service", "service", "app", "app/main.ts", "{}")
+	mk("service:service:d:other", "service", "service", "other", "other/main.ts", "{}")
+	// Two repository-role symbols in app: hidden by type, promotable by role.
+	sharedID := mk("code:symbol:d:shared", "code", "symbol", "SharedRepo", "app/shared.repo.ts", `{"role":"repository"}`)
+	mk("code:symbol:d:local", "code", "symbol", "LocalRepo", "app/local.repo.ts", `{"role":"repository"}`)
+	// A controller in the OTHER service injects the shared repo.
+	octlID := mk("code:controller:d:octl", "code", "controller", "OtherCtl", "other/x.controller.ts", "{}")
+	if _, err := st.UpsertEdge(store.EdgeRow{
+		EdgeKey:    "code:controller:d:octl->code:symbol:d:shared:INJECTS",
+		FromNodeID: octlID, ToNodeID: sharedID, EdgeType: "INJECTS", DerivationKind: "hard",
+		Active: true, Metadata: "{}",
+		FromNodeKey: "code:controller:d:octl", ToNodeKey: "code:symbol:d:shared",
+	}); err != nil {
+		t.Fatalf("edge: %v", err)
+	}
+
+	c3, err := BuildC3(st, "d", "app")
+	if err != nil {
+		t.Fatalf("BuildC3: %v", err)
+	}
+	boxes := map[string]bool{}
+	for _, c := range c3.Components {
+		boxes[c.Name] = true
+	}
+	if !boxes["SharedRepo"] {
+		t.Errorf("boundary-crossing repository must be promoted to a box (components=%v)", boxes)
+	}
+	if boxes["LocalRepo"] {
+		t.Errorf("local repository without cross-service edges must stay hidden")
+	}
+}
+
+// ViewSpec-level salience overrides: the user's last word, session-scoped
+// (spec open question #3 resolved: overrides live in the ViewSpec, not the DB).
+func TestBuildView_SalienceOverridePins(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	mk := func(key, layer, ntype, name, file string) {
+		if _, err := st.UpsertNode(store.NodeRow{
+			NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d",
+			Name: name, FilePath: file, Status: "active",
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+	}
+	mk("service:service:d:app", "service", "service", "app", "app/main.ts")
+	mk("data:dto:d:x", "data", "dto", "XDto", "app/x.dto.ts")
+
+	spec := ViewSpec{
+		Scope: ScopeSpec{Domain: "d"},
+		Group: GroupSpec{By: "none"},
+		SalienceOverrides: map[string]SalienceOverrideSpec{
+			"data:dto:d:x": {RenderMode: "box"},
+		},
+	}
+	view, err := BuildView(st, spec)
+	if err != nil {
+		t.Fatalf("BuildView: %v", err)
+	}
+	var got string
+	for _, n := range view.Nodes {
+		if n.Key == "data:dto:d:x" {
+			got = n.RenderMode
+		}
+	}
+	if got != "box" {
+		t.Errorf("salience override must pin dto to box, got %q", got)
+	}
+
+	// Closed vocab holds for overrides too.
+	spec.SalienceOverrides["data:dto:d:x"] = SalienceOverrideSpec{RenderMode: "boxx"}
+	if _, err := BuildView(st, spec); err == nil {
+		t.Error("invalid override render_mode must fail BuildView")
+	}
+}
+
 // BuildView (the dashboard's data path) annotates each VNode with salience so
 // the frontend can render by render_mode.
 func TestBuildPresetC3_VNodesCarrySalience(t *testing.T) {
