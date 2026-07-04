@@ -117,11 +117,7 @@ func Load(data []byte) (*Registry, error) {
 	if err := f.Salience.Validate(); err != nil {
 		return nil, fmt.Errorf("registry validation: %w", err)
 	}
-	if f.Salience != nil {
-		r.salience = f.Salience
-	} else {
-		r.salience = &SaliencePolicy{}
-	}
+	r.salience = mergeSalience(defaultSaliencePolicy(), f.Salience)
 
 	return r, nil
 }

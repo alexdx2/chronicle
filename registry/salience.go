@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Closed vocabularies (spec principle 4). Typos in a user chronicle.types.yaml
@@ -136,5 +139,58 @@ func (r *Registry) SaliencePolicy() *SaliencePolicy {
 		return &SaliencePolicy{}
 	}
 	return r.salience
+}
+
+var (
+	defaultSalienceOnce sync.Once
+	defaultSalienceVal  *SaliencePolicy
+)
+
+// defaultSaliencePolicy parses the built-in defaults.yaml salience section
+// once. Parsed directly (not via Load) to avoid recursion with Load's merge.
+func defaultSaliencePolicy() *SaliencePolicy {
+	defaultSalienceOnce.Do(func() {
+		var f RegistryFile
+		if err := yaml.Unmarshal(DefaultRegistryYAML, &f); err != nil || f.Salience == nil {
+			defaultSalienceVal = &SaliencePolicy{}
+			return
+		}
+		defaultSalienceVal = f.Salience
+	})
+	return defaultSalienceVal
+}
+
+// mergeSalience overlays user onto base at per-key granularity and returns a
+// new policy (neither input is mutated). A user chronicle.types.yaml therefore
+// only overrides the entries it names; everything else keeps the defaults —
+// a types-only project file no longer wipes out salience entirely.
+// render_policy: a user key replaces that key's whole level-map.
+// roles: per role name. noise_roles: replaced only when explicitly set.
+func mergeSalience(base, user *SaliencePolicy) *SaliencePolicy {
+	out := &SaliencePolicy{
+		RenderPolicy: make(map[string]map[string]RenderRule),
+		Roles:        make(map[string]RoleRule),
+	}
+	if base != nil {
+		for k, v := range base.RenderPolicy {
+			out.RenderPolicy[k] = v
+		}
+		for k, v := range base.Roles {
+			out.Roles[k] = v
+		}
+		out.NoiseRoles = append([]string(nil), base.NoiseRoles...)
+	}
+	if user != nil {
+		for k, v := range user.RenderPolicy {
+			out.RenderPolicy[k] = v
+		}
+		for k, v := range user.Roles {
+			out.Roles[k] = v
+		}
+		if user.NoiseRoles != nil {
+			out.NoiseRoles = append([]string(nil), user.NoiseRoles...)
+		}
+	}
+	return out
 }
 

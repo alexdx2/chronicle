@@ -68,7 +68,10 @@ salience:
 	}
 }
 
-func TestLoad_NoSalienceSection_ReturnsEmptyPolicy(t *testing.T) {
+func TestLoad_NoSalienceSection_FallsBackToDefaultSalience(t *testing.T) {
+	// A project chronicle.types.yaml that customizes types but has no
+	// salience: section must inherit the built-in salience defaults —
+	// otherwise every diagram collapses to hidden (real regression).
 	yaml := []byte(`
 version: "1"
 layers: [data]
@@ -83,8 +86,77 @@ node_types:
 	if p == nil {
 		t.Fatal("SaliencePolicy() must be non-nil even when absent")
 	}
-	if _, ok := p.Rule("type:data.dto", "default"); ok {
-		t.Fatal("no rules expected")
+	if rule, ok := p.Rule("type:contract.endpoint", "default"); !ok || rule.Tier != "primary" {
+		t.Fatalf("endpoint must inherit default salience: %+v ok=%v", rule, ok)
+	}
+	if !p.IsNoiseRole("generated") {
+		t.Fatal("default noise_roles must be inherited")
+	}
+}
+
+func TestLoad_PartialSalience_MergesOverDefaults(t *testing.T) {
+	yaml := []byte(`
+version: "1"
+layers: [data]
+node_types:
+  data: [dto]
+salience:
+  render_policy:
+    "type:data.dto": { default: { tier: secondary, render_mode: badge } }
+  roles:
+    helper: { promotable: true }
+`)
+	r, err := Load(yaml)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	p := r.SaliencePolicy()
+	// User entry wins for its key.
+	if rule, ok := p.Rule("type:data.dto", "default"); !ok || rule.RenderMode != "badge" || rule.Tier != "secondary" {
+		t.Fatalf("user dto rule must win: %+v ok=%v", rule, ok)
+	}
+	// User key replaces the WHOLE level-map for that key: the default
+	// focus-level dto rule is gone (predictable per-key granularity).
+	if _, ok := p.Rule("type:data.dto", "focus"); ok {
+		t.Fatal("user key must replace the whole level-map for that key")
+	}
+	// Untouched default keys survive.
+	if rule, ok := p.Rule("type:contract.endpoint", "default"); !ok || rule.Tier != "primary" {
+		t.Fatalf("default endpoint rule must survive merge: %+v ok=%v", rule, ok)
+	}
+	// User role overrides that role; default roles survive.
+	if rr, ok := p.Role("helper"); !ok || !rr.Promotable {
+		t.Fatalf("user helper role must win: %+v ok=%v", rr, ok)
+	}
+	if rr, ok := p.Role("entity"); !ok || !rr.Promotable {
+		t.Fatalf("default entity role must survive: %+v ok=%v", rr, ok)
+	}
+	// noise_roles not set by user -> defaults inherited.
+	if !p.IsNoiseRole("test_fixture") {
+		t.Fatal("default noise_roles must be inherited when user omits them")
+	}
+}
+
+func TestLoad_MergeDoesNotMutateDefaults(t *testing.T) {
+	yaml := []byte(`
+version: "1"
+layers: [data]
+node_types:
+  data: [dto]
+salience:
+  render_policy:
+    "type:contract.endpoint": { default: { tier: detail, render_mode: hidden } }
+`)
+	if _, err := Load(yaml); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// A later independent load of the defaults must be unaffected.
+	r2, err := LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	if rule, ok := r2.SaliencePolicy().Rule("type:contract.endpoint", "default"); !ok || rule.Tier != "primary" {
+		t.Fatalf("defaults were mutated by a prior merge: %+v ok=%v", rule, ok)
 	}
 }
 
