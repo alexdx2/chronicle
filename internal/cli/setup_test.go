@@ -121,6 +121,9 @@ func TestUpsertCodexMCPConfig_CreatesConfigWhenMissing(t *testing.T) {
 		`command = "/usr/local/bin/chronicle"`,
 		`args = ["mcp", "serve"]`,
 		"startup_timeout_sec",
+		// Without auto-approval Codex cancels every MCP call in non-interactive
+		// runs ("user cancelled MCP tool call") — field-tested 2026-07-04.
+		`default_tools_approval_mode = "approve"`,
 		codexSentinelStart,
 		codexSentinelEnd,
 	} {

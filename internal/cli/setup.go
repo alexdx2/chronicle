@@ -146,12 +146,16 @@ func upsertMarkedSection(path, content string) (bool, error) {
 // startup_timeout_sec is raised above Codex's 10s default because Chronicle
 // replays pending journal events on open; tool_timeout_sec above the 60s
 // default because resolve/commit calls on large graphs can exceed it.
+// default_tools_approval_mode: without it Codex cancels every MCP call in
+// non-interactive runs ("user cancelled MCP tool call"). Graph mutations are
+// recoverable via the journal, so auto-approval is acceptable.
 func codexServerBlock(binaryPath string) string {
 	return fmt.Sprintf(`[mcp_servers.chronicle]
 command = %q
 args = ["mcp", "serve"]
 startup_timeout_sec = 30
 tool_timeout_sec = 180
+default_tools_approval_mode = "approve"
 `, binaryPath)
 }
 
