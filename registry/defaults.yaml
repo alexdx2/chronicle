@@ -293,14 +293,16 @@ salience:
     # --- primary architectural types (always drawn) ---
     "type:service.service":      { default: { tier: primary, render_mode: box } }
     "type:service.external_system": { default: { tier: primary, render_mode: box } }
-    "type:contract.endpoint":    { default: { tier: primary, render_mode: box } }
+    # endpoint/flow: boxes at component altitude, badges at container altitude
+    # (C2 shows them as counts/pills on services, not as separate boxes).
+    "type:contract.endpoint":    { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
     "type:contract.topic":       { default: { tier: primary, render_mode: box } }
     # model: collapsed background in C2/C3, but the SUBJECT (primary box) in the data lens.
     "type:data.model":           { default: { tier: secondary, render_mode: collapsed_group }, data: { tier: primary, render_mode: box } }
     "type:data.entity":          { default: { tier: primary, render_mode: box } }
-    "type:flow.flow":            { default: { tier: primary, render_mode: box } }
-    "type:flow.use_case":        { default: { tier: primary, render_mode: box } }
-    "type:flow.usecase":         { default: { tier: primary, render_mode: box } }
+    "type:flow.flow":            { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
+    "type:flow.use_case":        { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
+    "type:flow.usecase":         { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
     "type:flow.flow_step":       { default: { tier: secondary, render_mode: collapsed_group } }
     # --- structural containers (collapsed) ---
     "type:code.module":          { default: { tier: secondary, render_mode: collapsed_group } }

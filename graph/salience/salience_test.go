@@ -264,6 +264,36 @@ func TestResolve_DefaultPolicy_DtoHiddenInC3_DetailInFocus(t *testing.T) {
 	}
 }
 
+func TestResolve_DefaultPolicy_ContainerAltitude(t *testing.T) {
+	// C2 is the container view: services and topics are boxes; endpoints and
+	// flows are badges (represented as counts/pills on their containers),
+	// not separate boxes — otherwise a domain-level diagram becomes a
+	// hairball of every route and use case.
+	r, err := registry.LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	p := r.SaliencePolicy()
+	if d := Resolve(p, Input{NodeType: "endpoint", Layer: "contract", Level: "c2"}); d.RenderMode != RenderBadge {
+		t.Errorf("endpoint at c2: want badge got %s", d.RenderMode)
+	}
+	for _, nt := range []string{"flow", "use_case", "usecase"} {
+		if d := Resolve(p, Input{NodeType: nt, Layer: "flow", Level: "c2"}); d.RenderMode != RenderBadge {
+			t.Errorf("%s at c2: want badge got %s", nt, d.RenderMode)
+		}
+	}
+	if d := Resolve(p, Input{NodeType: "service", Layer: "service", Level: "c2"}); d.RenderMode != RenderBox {
+		t.Errorf("service at c2: want box got %s", d.RenderMode)
+	}
+	if d := Resolve(p, Input{NodeType: "topic", Layer: "contract", Level: "c2"}); d.RenderMode != RenderBox {
+		t.Errorf("topic at c2: want box got %s", d.RenderMode)
+	}
+	// Default level unchanged: endpoint stays a primary box.
+	if d := Resolve(p, Input{NodeType: "endpoint", Layer: "contract", Level: "default"}); d.RenderMode != RenderBox {
+		t.Errorf("endpoint at default: want box got %s", d.RenderMode)
+	}
+}
+
 func TestResolve_DefaultPolicy_FlowsShown(t *testing.T) {
 	r, err := registry.LoadDefaults()
 	if err != nil {
