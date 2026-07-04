@@ -318,18 +318,30 @@ salience:
     "role:entity":               { default: { tier: primary, render_mode: box } }
     "role:aggregate":            { default: { tier: primary, render_mode: box } }
     "role:port":                 { default: { tier: primary, render_mode: box } }
+    "role:gateway":              { default: { tier: primary, render_mode: box } }
     "role:helper":               { default: { render_mode: hidden } }
+    "role:config":               { default: { render_mode: hidden } }
+    "role:dto":                  { default: { tier: detail, render_mode: hidden }, focus: { render_mode: attached_detail } }
     "role:request_dto":          { default: { tier: detail, render_mode: hidden }, focus: { render_mode: attached_detail } }
     "role:response_dto":         { default: { tier: detail, render_mode: hidden }, focus: { render_mode: attached_detail } }
+  # Closed SEMANTIC vocabulary. Roles that merely duplicate a node_type
+  # (controller, resolver, interface) are deliberately absent — they add
+  # nothing over the type and dilute LLM classification. generated and
+  # test_fixture are provenance flags kept as a fallback for cases the
+  # deterministic noise_paths patterns cannot see.
   roles:
     entity:       { promotable: true }
     aggregate:    { promotable: true }
     port:         { promotable: true }
+    gateway:      { promotable: true }
     repository:   { promotable: true }
+    dto:          { promotable: true, max_tier: secondary }
     request_dto:  { promotable: true, max_tier: secondary }
     response_dto: { promotable: true, max_tier: secondary }
     mapper:       { promotable: true, max_tier: secondary }
+    value_object: { promotable: false }
     helper:       { promotable: false }
+    config:       { promotable: false }
     generated:    { promotable: false }
     test_fixture: { promotable: false }
   noise_roles: [generated, test_fixture]

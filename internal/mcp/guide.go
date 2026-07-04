@@ -81,7 +81,7 @@ func ExtractionGuide(technology string) string {
 		"node_role_classification": map[string]string{
 			"how":      "Set node metadata to {\"role\":\"<role>\",\"role_confidence\":0-1,\"role_reason\":\"<evidence>\"}. Pick role from chronicle_schema field salience_roles (closed vocab). Drives diagram salience (box vs hidden vs badge).",
 			"evidence": "For an auditable/multi-extractor claim, also emit evidence with source_kind=role_classification, assertion={\"role\":..,\"role_reason\":..}, confidence=role_confidence. The highest-confidence claim wins (winning_role) and overrides metadata.",
-			"boundary": "CLASSIFY role only — never decide visibility (no should_show); a deterministic renderer does that. role_confidence is YOUR extractor confidence, not system trust. No fit → role \"unknown\" + proposed_role via chronicle_report_discovery (don't invent roles inline).",
+			"boundary": "CLASSIFY role only — never decide visibility (no should_show); a deterministic renderer does that. role_confidence is YOUR extractor confidence, not system trust. No fit → role \"unknown\" + proposed_role via chronicle_report_discovery (don't invent roles inline). Low-confidence claims can raise salience but never hide. generated/test_fixture: claim only when the path doesn't already reveal it (generated/, *.spec.* are auto-detected).",
 		},
 
 		"layer_guide": map[string]string{

@@ -312,3 +312,29 @@ func TestLoadDefaults_KnownRolesNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadDefaults_RoleVocabIsSemantic(t *testing.T) {
+	r, err := LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	roles := r.SaliencePolicy().KnownRoles()
+	found := map[string]bool{}
+	for _, x := range roles {
+		found[x] = true
+	}
+	// The full semantic vocabulary must be classifiable (spec §3.3 minus
+	// type duplicates).
+	for _, must := range []string{"dto", "value_object", "gateway", "config", "repository", "mapper", "port", "aggregate"} {
+		if !found[must] {
+			t.Errorf("semantic role %q missing from default vocab (got %v)", must, roles)
+		}
+	}
+	// Roles that merely duplicate node_types dilute LLM classification and
+	// must NOT be in the vocabulary.
+	for _, dup := range []string{"controller", "resolver", "interface"} {
+		if found[dup] {
+			t.Errorf("type-duplicating role %q must not be in the vocab", dup)
+		}
+	}
+}
