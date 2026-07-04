@@ -235,12 +235,14 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 				Tier:       string(sal.Tier),
 				RenderMode: string(sal.RenderMode),
 			})
-		case salience.RenderHidden:
+		case salience.RenderCollapsedGroup:
+			// Represented elsewhere (Modules / uses_models), not counted.
+		default:
+			// hidden, badge, attached/expandable detail: C3 does not draw
+			// these as components — count them so no node vanishes without
+			// a trace (custom policies can produce any mode here).
 			hiddenCount++
 		}
-		// collapsed_group (modules/models) is represented elsewhere (Modules /
-		// uses_models); badge/attached_detail do not occur for owned code nodes
-		// at the c3 level under default policy.
 	}
 	sortComponents(components)
 

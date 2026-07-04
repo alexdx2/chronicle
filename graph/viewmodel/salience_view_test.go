@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"os"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -245,6 +246,56 @@ func TestBuildC3_BoundaryCrossingPromotes(t *testing.T) {
 	}
 	if boxes["LocalRepo"] {
 		t.Errorf("local repository without cross-service edges must stay hidden")
+	}
+}
+
+// No silent drops: an owned node that resolves to a mode C3 does not draw
+// (badge/attached_detail/...) must still be accounted for in HiddenCount —
+// under a custom policy a node must never vanish without a trace.
+func TestBuildC3_NonBoxModesAreCounted(t *testing.T) {
+	dir := t.TempDir()
+	// Project policy: controllers render as badges at c3 (not boxes).
+	types := []byte(`
+version: "1"
+layers: [code]
+node_types:
+  code: [controller]
+salience:
+  render_policy:
+    "type:code.controller": { c3: { render_mode: badge } }
+`)
+	if err := os.WriteFile(dir+"/chronicle.types.yaml", types, 0o644); err != nil {
+		t.Fatalf("write types.yaml: %v", err)
+	}
+	st, err := store.Open(dir + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	mk := func(key, layer, ntype, name, file string) {
+		if _, err := st.UpsertNode(store.NodeRow{
+			NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d",
+			Name: name, FilePath: file, Status: "active",
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+	}
+	mk("service:service:d:app", "service", "service", "app", "app/main.ts")
+	mk("code:controller:d:ctl", "code", "controller", "BadgeCtl", "app/app.controller.ts")
+
+	c3, err := BuildC3(st, "d", "app")
+	if err != nil {
+		t.Fatalf("BuildC3: %v", err)
+	}
+	for _, c := range c3.Components {
+		if c.Name == "BadgeCtl" {
+			t.Fatalf("badge-mode node must not be a component")
+		}
+	}
+	if c3.HiddenCount != 1 {
+		t.Errorf("badge-mode node must be counted (HiddenCount=%d want 1)", c3.HiddenCount)
 	}
 }
 
