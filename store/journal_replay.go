@@ -318,13 +318,28 @@ func (s *Store) applyJournalEvent(ev flushedEvent) error {
 			n := int(v)
 			lineEnd = &n
 		}
+		// Re-observation may refresh the claim itself (assertion drift fix):
+		// apply assertion/verification fields only when the event carries them.
+		var assertion, verStatus, verReason *string
+		if v, ok := fields["assertion"].(string); ok && v != "" {
+			assertion = &v
+		}
+		if v, ok := fields["verification_status"].(string); ok && v != "" {
+			verStatus = &v
+			if r, ok := fields["verification_reason"].(string); ok {
+				verReason = &r
+			}
+		}
 		_, err := s.db.Exec(`UPDATE graph_evidence
 			SET evidence_status = ?,
 			    confidence = COALESCE(?, confidence),
 			    line_start = COALESCE(?, line_start),
-			    line_end = COALESCE(?, line_end)
+			    line_end = COALESCE(?, line_end),
+			    assertion = COALESCE(?, assertion),
+			    verification_status = COALESCE(?, verification_status),
+			    verification_reason = COALESCE(?, verification_reason)
 			WHERE evidence_uid = ?`,
-			str("status"), conf, lineStart, lineEnd, ev.Key)
+			str("status"), conf, lineStart, lineEnd, assertion, verStatus, verReason, ev.Key)
 		return err
 
 	case EvAliasAdd:

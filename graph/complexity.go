@@ -10,9 +10,13 @@ import (
 	"github.com/alexdx2/chronicle-core/validate"
 )
 
-// callSymbolEdgeType is the edge Chronicle uses for direct function/method calls
-// (the substrate for Tier-B complexity propagation).
-const callSymbolEdgeType = "CALLS_SYMBOL"
+// callEdgeTypes are the edges Tier-B complexity propagates along. CALLS_SYMBOL
+// is the direct call edge; INJECTS is included because live scans express
+// call dependencies as DI edges (call facts attach call_expression evidence to
+// INJECTS rather than creating CALLS_SYMBOL) — without it Tier-B never fires
+// on a real scan. At Chronicle's class-level granularity "A injects B" is a
+// call dependency.
+var callEdgeTypes = []string{"CALLS_SYMBOL", "INJECTS"}
 
 // ComputeASTComplexity runs the Tier-A pass: for every code-layer node backed by
 // a readable TypeScript source file, it extracts exact per-function metrics,
@@ -145,9 +149,13 @@ func mergeASTComplexity(metadata string, a ast.AggregatedComplexity) (string, er
 // CALLS_SYMBOL edges, so a metric is never emitted where no call graph exists.
 func (g *Graph) ComputeGraphComplexity(revisionID int64) error {
 	active := true
-	edges, err := g.store.ListEdges(store.EdgeFilter{EdgeType: callSymbolEdgeType, Active: &active})
-	if err != nil {
-		return fmt.Errorf("ComputeGraphComplexity edges: %w", err)
+	var edges []store.EdgeRow
+	for _, et := range callEdgeTypes {
+		batch, err := g.store.ListEdges(store.EdgeFilter{EdgeType: et, Active: &active})
+		if err != nil {
+			return fmt.Errorf("ComputeGraphComplexity edges %s: %w", et, err)
+		}
+		edges = append(edges, batch...)
 	}
 	if len(edges) == 0 {
 		return nil // no call graph -> no derived metrics

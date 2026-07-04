@@ -539,3 +539,43 @@ func TestInsightsHotPathWeighsChurn(t *testing.T) {
 		t.Fatalf("reason should name churn, got %q", ins.HotPathTargets[0].Reason)
 	}
 }
+
+// TestComputeGraphComplexityOverInjects proves Tier-B fires on the edges live
+// scans actually produce: resolve_extractions never creates CALLS_SYMBOL (call
+// facts only attach evidence to INJECTS), so propagation must also walk
+// INJECTS or transitive depth stays dormant in production.
+func TestComputeGraphComplexityOverInjects(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	for _, n := range []validate.NodeInput{
+		{NodeKey: "code:controller:orders:api", Layer: "code", NodeType: "controller", DomainKey: "orders", Name: "Api",
+			Metadata: `{"complexity":{"loop_depth":0,"metric_sources":{"loop_depth":"ast"}}}`},
+		{NodeKey: "code:provider:orders:svc", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Svc",
+			Metadata: `{"complexity":{"loop_depth":2,"metric_sources":{"loop_depth":"ast"}}}`},
+	} {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode: %v", err)
+		}
+	}
+	// The edge kind a real scan creates for DI usage.
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: "code:controller:orders:api", ToNodeKey: "code:provider:orders:svc",
+		EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code",
+	}, revID); err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	if err := g.ComputeGraphComplexity(revID); err != nil {
+		t.Fatalf("ComputeGraphComplexity: %v", err)
+	}
+
+	api, err := g.store.GetNodeByKey("code:controller:orders:api")
+	if err != nil {
+		t.Fatalf("GetNodeByKey: %v", err)
+	}
+	m, ok := complexityFromMetadata(api.Metadata)
+	if !ok || m.TransitiveLoopDepth != 2 {
+		t.Fatalf("INJECTS edge must carry Tier-B propagation: ok=%v got %+v, want tld=2", ok, m)
+	}
+}
