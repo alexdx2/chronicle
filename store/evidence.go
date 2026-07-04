@@ -120,6 +120,12 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 			evKey = existingUID // respect a caller-supplied uid already on the row
 		}
 
+		// Re-observation refreshes the claim itself, not just its status:
+		// changing metrics (churn, complexity) re-assert every scan, and a
+		// frozen assertion would make later mechanical re-verification compare
+		// stale claims against fresh source. Assertion/verification fields
+		// update only when the caller supplied them (COALESCE keeps old values
+		// for status-only touches).
 		const updQ = `
 			UPDATE graph_evidence
 			SET observed_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),
@@ -128,18 +134,37 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 			    extractor_version=?,
 			    evidence_status=?,
 			    last_verified_revision_id=?,
+			    assertion=COALESCE(?, assertion),
+			    assertion_kind=COALESCE(?, assertion_kind),
+			    line_end=COALESCE(?, line_end),
+			    verification_status=COALESCE(?, verification_status),
+			    verification_reason=COALESCE(?, verification_reason),
 			    evidence_uid=COALESCE(evidence_uid, ?)
 			WHERE evidence_id=?
 		`
 		_, err = s.db.Exec(updQ, e.Confidence, nullableStr(e.CommitSHA), e.ExtractorVersion,
-			newStatus, nullableInt64(e.ValidFromRevisionID), evKey, existingID)
+			newStatus, nullableInt64(e.ValidFromRevisionID),
+			nullableStr(e.Assertion), nullableStr(e.AssertionKind),
+			nullableInt(e.LineEnd), nullableStr(e.VerificationStatus), nullableStr(e.VerificationReason),
+			evKey, existingID)
 		if err != nil {
 			return 0, fmt.Errorf("AddEvidence update: %w", err)
+		}
+		fields := map[string]any{"status": "valid", "confidence": e.Confidence}
+		if e.Assertion != "" {
+			fields["assertion"] = e.Assertion
+		}
+		if e.LineEnd != 0 {
+			fields["line_end"] = e.LineEnd
+		}
+		if e.VerificationStatus != "" {
+			fields["verification_status"] = e.VerificationStatus
+			fields["verification_reason"] = e.VerificationReason
 		}
 		if err := s.appendEvent(journalEvent{
 			DomainKey: domain, RevisionID: e.ValidFromRevisionID,
 			Kind: EvEvidenceStatus, Key: evKey, OwnerKey: ownerKey,
-			Fields: map[string]any{"status": "valid", "confidence": e.Confidence},
+			Fields: fields,
 		}); err != nil {
 			return 0, err
 		}
@@ -268,6 +293,16 @@ func (s *Store) ListEvidenceByEdge(edgeID int64) ([]EvidenceRow, error) {
 }
 
 func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
+	return s.queryEvidence(col+" = ?", id)
+}
+
+// ListEvidenceBySourceKind returns all evidence rows with the given source_kind
+// (across all nodes/edges). Used e.g. to batch-load role_classification claims.
+func (s *Store) ListEvidenceBySourceKind(sourceKind string) ([]EvidenceRow, error) {
+	return s.queryEvidence("source_kind = ?", sourceKind)
+}
+
+func (s *Store) queryEvidence(where string, arg any) ([]EvidenceRow, error) {
 	q := `
 		SELECT evidence_id, target_kind,
 		       COALESCE(node_id,0), COALESCE(edge_id,0),
@@ -287,10 +322,10 @@ func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
 		       COALESCE(verification_status,'unverified'), COALESCE(verification_reason,''),
 		       metadata
 		FROM graph_evidence
-		WHERE ` + col + ` = ?
+		WHERE ` + where + `
 		ORDER BY evidence_id
 	`
-	rows, err := s.db.Query(q, id)
+	rows, err := s.db.Query(q, arg)
 	if err != nil {
 		return nil, fmt.Errorf("listEvidence: %w", err)
 	}

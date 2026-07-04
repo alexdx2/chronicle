@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/graph/salience"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -22,13 +23,18 @@ type Endpoint struct {
 	Name string `json:"name"`
 }
 
-// Component is a controller or provider inside a service.
+// Component is a node shown as a box inside a service (controller, provider, or
+// any node whose salience render_mode resolves to "box" at the c3 level).
 type Component struct {
 	Key        string     `json:"key"`
 	Name       string     `json:"name"`
 	Type       string     `json:"type"`
 	Endpoints  []Endpoint `json:"endpoints,omitempty"`
 	UsesModels []string   `json:"uses_models,omitempty"`
+	// Salience annotations (registry-driven). RenderMode is the UI source of
+	// truth; Tier is diagnostic. Components in this list are always "box".
+	Tier       string `json:"tier,omitempty"`
+	RenderMode string `json:"render_mode,omitempty"`
 }
 
 // InternalEdge is an edge between two components inside the boundary.
@@ -65,6 +71,9 @@ type C3 struct {
 	Components    []Component       `json:"components"`
 	InternalEdges []InternalEdge    `json:"internal_edges"`
 	Boundary      Boundary          `json:"boundary"`
+	// HiddenCount is the number of owned nodes suppressed by salience at the c3
+	// level (render_mode=hidden) — surfaced so the UI can offer "show hidden".
+	HiddenCount int `json:"hidden_count,omitempty"`
 }
 
 // BuildC3 builds the C3 component view model for one service, looked up by
@@ -191,22 +200,42 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 		}
 	}
 
+	// Components: owned nodes whose salience render_mode resolves to "box" at the
+	// c3 level (registry-driven, replacing the old hardcoded controller/provider
+	// list). Owned nodes that resolve to "hidden" are counted for transparency;
+	// collapsed/badge nodes (e.g. models) are represented elsewhere (uses_models).
+	pol := saliencePolicyFor(st)
+	roleByNode := resolveRolesByNode(st)
 	var components []Component
-	for _, n := range nodes {
+	hiddenCount := 0
+	for i := range nodes {
+		n := &nodes[i]
 		if !ownedByTarget[n.NodeID] {
 			continue
 		}
-		if n.NodeType != "controller" && n.NodeType != "provider" {
-			continue
+		sal := salience.Resolve(pol, salience.Input{
+			NodeType: n.NodeType,
+			Layer:    n.Layer,
+			Role:     effectiveRole(n, roleByNode),
+			Level:    "c3",
+		})
+		switch sal.RenderMode {
+		case salience.RenderBox:
+			components = append(components, Component{
+				Key:        n.NodeKey,
+				Name:       n.Name,
+				Type:       n.NodeType,
+				Endpoints:  compEndpoints[n.NodeID],
+				UsesModels: compModels[n.NodeID],
+				Tier:       string(sal.Tier),
+				RenderMode: string(sal.RenderMode),
+			})
+		case salience.RenderHidden:
+			hiddenCount++
 		}
-		comp := Component{
-			Key:        n.NodeKey,
-			Name:       n.Name,
-			Type:       n.NodeType,
-			Endpoints:  compEndpoints[n.NodeID],
-			UsesModels: compModels[n.NodeID],
-		}
-		components = append(components, comp)
+		// collapsed_group (modules/models) is represented elsewhere (Modules /
+		// uses_models); badge/attached_detail do not occur for owned code nodes
+		// at the c3 level under default policy.
 	}
 	sortComponents(components)
 
@@ -365,5 +394,6 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 			Outgoing: outgoing,
 			Incoming: incoming,
 		},
+		HiddenCount: hiddenCount,
 	}, nil
 }

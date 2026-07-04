@@ -44,7 +44,7 @@ func (g *Graph) resolveConfirmedValid(targetKind, targetKey, reason, evidenceJSO
 	// Add the positive evidence
 	input := validate.EvidenceInput{
 		TargetKind:       targetKind,
-		SourceKind:       strOrDefault(evData, "source_kind", "claude"),
+		SourceKind:       strOrDefault(evData, "source_kind", "manual_resolution"),
 		FilePath:         strOrDefault(evData, "file_path", ""),
 		ExtractorID:      "chronicle-resolve-review",
 		ExtractorVersion: "v1",
@@ -118,7 +118,7 @@ func (g *Graph) resolveConfirmedRemoved(targetKind, targetKey, reason, evidenceJ
 	// Add negative evidence
 	input := validate.EvidenceInput{
 		TargetKind:       targetKind,
-		SourceKind:       strOrDefault(evData, "source_kind", "claude"),
+		SourceKind:       strOrDefault(evData, "source_kind", "manual_resolution"),
 		FilePath:         strOrDefault(evData, "file_path", ""),
 		ExtractorID:      "chronicle-resolve-review",
 		ExtractorVersion: "v1",
@@ -169,7 +169,7 @@ func (g *Graph) resolveReplacedBy(targetKind, targetKey, reason, evidenceJSON, r
 
 	input := validate.EvidenceInput{
 		TargetKind:       targetKind,
-		SourceKind:       "claude",
+		SourceKind:       "manual_resolution",
 		ExtractorID:      "chronicle-resolve-review",
 		ExtractorVersion: "v1",
 		Confidence:       0.95,

@@ -14,8 +14,8 @@
 // FilePath. This is used to "lift" provider-level CALLS_SERVICE /
 // PUBLISHES_TOPIC / CONSUMES_TOPIC edges to their owning service.
 //
-// This package is public API: it imports only store, manifest and stdlib
-// (no internal/* packages).
+// This package is public API: it imports only store, manifest, registry,
+// graph/salience and stdlib (no internal/* packages).
 package viewmodel
 
 import (

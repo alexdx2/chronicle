@@ -202,6 +202,10 @@ function adaptView(view, baseLookup) {
       // via the renderer's existing ref pattern (_isRef → opacity 0.4).
       _isRef: !!n.boundary,
       _boundary: !!n.boundary,
+      // View-specific salience (registry-driven). _renderMode is the UI source
+      // of truth; _tier is diagnostic. Used to hide/dim low-salience nodes.
+      _renderMode: n.render_mode || '',
+      _tier: n.tier || '',
     });
   });
 

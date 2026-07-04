@@ -20,8 +20,23 @@ type InsightsResult struct {
 	Hubs                []HubInsight  `json:"hubs"`
 	SuspiciousEdges     []EdgeInsight `json:"suspicious_cross_domain_edges"`
 	VerificationTargets []EdgeInsight `json:"verification_targets"`
+	HotPathTargets      []NodeInsight `json:"hot_path_targets"`
 	Gaps                []GapInsight  `json:"gaps"`
 	SuggestedQueries    []string      `json:"suggested_queries"`
+}
+
+// NodeInsight is a complexity hot-spot: a node ranked by complexity × impact ×
+// staleness, independent of edge trust (so complex-but-trusted functions surface).
+type NodeInsight struct {
+	NodeKey    string  `json:"node_key"`
+	Name       string  `json:"name"`
+	Layer      string  `json:"layer"`
+	Degree     int     `json:"degree"`
+	Trust      float64 `json:"trust_score"`
+	Complexity float64 `json:"complexity"`
+	Churn      int     `json:"churn,omitempty"` // commits touching the node's file in the git window
+	HotScore   float64 `json:"hot_score"`
+	Reason     string  `json:"reason"`
 }
 
 type HubInsight struct {
@@ -39,6 +54,11 @@ type EdgeInsight struct {
 	EdgeType string  `json:"type"`
 	Trust    float64 `json:"trust_score"`
 	Reason   string  `json:"reason"`
+	// Score is the verification priority (higher = check first), stamped at
+	// construction so a federated aggregator can rank by the same
+	// complexity-aware value rather than re-deriving or discarding it. Zero for
+	// insights that aren't priority-ranked (e.g. suspicious/cross-repo edges).
+	Score float64 `json:"score,omitempty"`
 }
 
 type GapInsight struct {
@@ -49,10 +69,14 @@ type GapInsight struct {
 }
 
 const (
-	hubLimit          = 10
-	suspiciousLimit   = 15
-	verificationLimit = 15
-	lowTrustThreshold = 0.7
+	hubLimit                = 10
+	suspiciousLimit         = 15
+	verificationLimit       = 15
+	hotPathLimit            = 15
+	lowTrustThreshold       = 0.7
+	staleFreshnessThreshold = 0.5
+	highTransitiveDepth     = 3
+	highChurnThreshold      = 10 // commits in the churn window that flag "high churn"
 )
 
 // Insights computes the report for one domain (empty = all domains).
@@ -108,12 +132,16 @@ func (g *Graph) Insights(domainKey string) (*InsightsResult, error) {
 			})
 		}
 
-		// Verification target: low-trust edge, ranked by impact (degree of source).
+		// Verification target: low-trust edge, ranked by impact (degree of source)
+		// weighted by the source function's complexity.
 		if e.TrustScore < lowTrustThreshold {
+			cx := nodeComplexityNorm(nodeByKey, from)
+			score := float64(degree[from]) * (1 - e.TrustScore) * (1 + cx)
 			res.VerificationTargets = append(res.VerificationTargets, EdgeInsight{
 				EdgeKey: e.EdgeKey, From: from, To: to, EdgeType: e.EdgeType,
 				Trust:  e.TrustScore,
-				Reason: fmt.Sprintf("trust %.2f, source degree %d — verify with evidence_verify", e.TrustScore, degree[from]),
+				Score:  score,
+				Reason: fmt.Sprintf("trust %.2f, source degree %d, src cx=%.2f — verify with evidence_verify", e.TrustScore, degree[from], cx),
 			})
 		}
 	}
@@ -149,14 +177,11 @@ func (g *Graph) Insights(domainKey string) (*InsightsResult, error) {
 		res.SuspiciousEdges = res.SuspiciousEdges[:suspiciousLimit]
 	}
 
-	// Verification targets: highest impact (degree) × lowest trust first.
+	// Verification targets: highest priority score (impact × lowest trust ×
+	// source complexity) first — the score is stamped at construction.
 	sort.Slice(res.VerificationTargets, func(i, j int) bool {
-		di := degree[res.VerificationTargets[i].From]
-		dj := degree[res.VerificationTargets[j].From]
-		si := float64(di) * (1 - res.VerificationTargets[i].Trust)
-		sj := float64(dj) * (1 - res.VerificationTargets[j].Trust)
-		if si != sj {
-			return si > sj
+		if res.VerificationTargets[i].Score != res.VerificationTargets[j].Score {
+			return res.VerificationTargets[i].Score > res.VerificationTargets[j].Score
 		}
 		return res.VerificationTargets[i].EdgeKey < res.VerificationTargets[j].EdgeKey
 	})
@@ -164,9 +189,104 @@ func (g *Graph) Insights(domainKey string) (*InsightsResult, error) {
 		res.VerificationTargets = res.VerificationTargets[:verificationLimit]
 	}
 
+	res.HotPathTargets = computeHotPathTargets(nodes, degree)
+
 	res.Gaps = computeGaps(nodes, hasOutEdge, hasInEdge)
 	res.SuggestedQueries = suggestedQueries(res.Hubs)
 	return res, nil
+}
+
+// computeHotPathTargets ranks complex nodes by complexity × impact × staleness,
+// independent of edge trust. Unlike verification targets (edges, low-trust only),
+// this surfaces complex-but-trusted functions that would otherwise stay hidden.
+func computeHotPathTargets(nodes []store.NodeRow, degree map[string]int) []NodeInsight {
+	var out []NodeInsight
+	for _, n := range nodes {
+		if n.Status == "deleted" {
+			continue
+		}
+		m, ok := complexityFromMetadata(n.Metadata)
+		if !ok {
+			continue
+		}
+		cx := normComplexity(m)
+		if cx <= 0 {
+			continue
+		}
+		deg := degree[n.NodeKey]
+		churn := churnFromMetadata(n.Metadata)
+		// churn × complexity is the classic hotspot formula: change frequency
+		// multiplies the risk a complex unit carries. Capped so churn scales
+		// the score by at most 2×.
+		churnFactor := 1 + minF(1, float64(churn)/float64(highChurnThreshold))
+		// A complex unit the test pass examined and found uncovered is riskier
+		// than an identical covered one. Only applies when we actually looked.
+		looked, tested := testSignalFromMetadata(n.Metadata)
+		untestedFactor := 1.0
+		if looked && !tested {
+			untestedFactor = 1.5
+		}
+		hot := cx * float64(deg) * (1 + (1 - n.Freshness)) * churnFactor * untestedFactor
+		out = append(out, NodeInsight{
+			NodeKey: n.NodeKey, Name: n.Name, Layer: n.Layer, Degree: deg,
+			Trust: n.TrustScore, Complexity: cx, Churn: churn, HotScore: hot,
+			Reason: hotPathReason(m, n.Freshness, deg, churn, looked, tested),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].HotScore != out[j].HotScore {
+			return out[i].HotScore > out[j].HotScore
+		}
+		return out[i].NodeKey < out[j].NodeKey
+	})
+	if len(out) > hotPathLimit {
+		out = out[:hotPathLimit]
+	}
+	return out
+}
+
+// hotPathReason tags the dominant factor by fixed precedence. Low-evidence-coverage
+// (precedence 1) is added once per-node evidence counts are plumbed; until then the
+// remaining factors apply in order: stale, recursive / high transitive depth, connected.
+func hotPathReason(m ComplexityMetrics, freshness float64, degree int, churn int, testLooked, tested bool) string {
+	if testLooked && !tested {
+		return "complex + untested (no test file found)"
+	}
+	if len(m.Smells) > 0 {
+		return fmt.Sprintf("complex + smell: %s", strings.Join(m.Smells, ", "))
+	}
+	if churn >= highChurnThreshold {
+		return fmt.Sprintf("complex + high churn (%d commits in %dd)", churn, churnWindowDays)
+	}
+	if freshness < staleFreshnessThreshold {
+		return fmt.Sprintf("complex + stale (freshness %.2f)", freshness)
+	}
+	if m.Recursive || m.TransitiveLoopDepth >= highTransitiveDepth {
+		return fmt.Sprintf("complex: recursive=%v, transitive_loop_depth=%d", m.Recursive, m.TransitiveLoopDepth)
+	}
+	return fmt.Sprintf("complex + highly connected (degree %d)", degree)
+}
+
+// minF is a float64 min helper for score clamps.
+func minF(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// nodeComplexityNorm returns the [0,1] complexity weight for a node, or 0 when
+// the node is unknown or carries no complexity metadata.
+func nodeComplexityNorm(nodeByKey map[string]store.NodeRow, key string) float64 {
+	n, ok := nodeByKey[key]
+	if !ok {
+		return 0
+	}
+	m, ok := complexityFromMetadata(n.Metadata)
+	if !ok {
+		return 0
+	}
+	return normComplexity(m)
 }
 
 // computeGaps finds structural holes: services without endpoints, endpoints
@@ -259,6 +379,16 @@ func (r *InsightsResult) Markdown() string {
 	} else {
 		for _, e := range r.VerificationTargets {
 			fmt.Fprintf(&b, "- `%s` →`%s` [%s] trust %.2f — %s\n", e.From, e.To, e.EdgeType, e.Trust, e.Reason)
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("## Hot path targets (complexity × impact × staleness)\n\n")
+	if len(r.HotPathTargets) == 0 {
+		b.WriteString("_none — no complexity metrics yet_\n\n")
+	} else {
+		for _, n := range r.HotPathTargets {
+			fmt.Fprintf(&b, "- `%s` (%s) — cx %.2f, degree %d, trust %.2f — %s\n", n.NodeKey, n.Layer, n.Complexity, n.Degree, n.Trust, n.Reason)
 		}
 		b.WriteString("\n")
 	}

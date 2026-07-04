@@ -45,6 +45,7 @@ type RegistryFile struct {
 	NodeStatuses       []string               `yaml:"node_statuses" json:"node_statuses"`
 	TriggerKinds       []string               `yaml:"trigger_kinds" json:"trigger_kinds"`
 	TraversalPolicyDef *TraversalPolicyDef    `yaml:"traversal_policy" json:"traversal_policy"`
+	Salience           *SaliencePolicy        `yaml:"salience" json:"salience,omitempty"`
 }
 
 type Registry struct {
@@ -56,6 +57,7 @@ type Registry struct {
 	statuses        map[string]bool
 	triggers        map[string]bool
 	traversalPolicy *TraversalPolicy
+	salience        *SaliencePolicy
 }
 
 func LoadFile(path string) (*Registry, error) {
@@ -111,6 +113,12 @@ func Load(data []byte) (*Registry, error) {
 		policy.noReverseImpact = toSet(f.TraversalPolicyDef.NoReverseImpact)
 	}
 	r.traversalPolicy = policy
+
+	if f.Salience != nil {
+		r.salience = f.Salience
+	} else {
+		r.salience = &SaliencePolicy{}
+	}
 
 	return r, nil
 }
@@ -234,12 +242,15 @@ func (r *Registry) IsValidTrigger(trigger string) bool {
 
 // SchemaJSON is the serializable representation of the registry schema.
 type SchemaJSON struct {
-	Filter          map[string]string          `json:"filter,omitempty"`
-	Layers          []string                   `json:"layers,omitempty"`
-	NodeTypes       map[string][]string        `json:"node_types,omitempty"`
-	EdgeTypes       map[string]EdgeTypeDef     `json:"edge_types,omitempty"`
-	DerivationKinds []string                   `json:"derivation_kinds,omitempty"`
-	NodeStatuses    []string                   `json:"node_statuses,omitempty"`
+	Filter          map[string]string      `json:"filter,omitempty"`
+	Layers          []string               `json:"layers,omitempty"`
+	NodeTypes       map[string][]string    `json:"node_types,omitempty"`
+	EdgeTypes       map[string]EdgeTypeDef `json:"edge_types,omitempty"`
+	DerivationKinds []string               `json:"derivation_kinds,omitempty"`
+	NodeStatuses    []string               `json:"node_statuses,omitempty"`
+	// SalienceRoles is the closed vocabulary of semantic node roles the scan
+	// agent may classify into (emitted in node metadata). Source of truth.
+	SalienceRoles []string `json:"salience_roles,omitempty"`
 }
 
 // EdgeSuggestion is a suggested edge type with intent label.
@@ -315,6 +326,11 @@ func (r *Registry) ToSchemaJSON(fromLayer, toLayer string, include []string) Sch
 			layers = append(layers, l)
 		}
 		schema.Layers = layers
+	}
+
+	// Salience roles (closed vocabulary for scan-time role classification).
+	if includeAll || includeSet["nodes"] {
+		schema.SalienceRoles = r.SaliencePolicy().KnownRoles()
 	}
 
 	// Node types

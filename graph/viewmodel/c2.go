@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"github.com/alexdx2/chronicle-core/graph/salience"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 )
@@ -21,6 +22,11 @@ type C2Service struct {
 	Name  string         `json:"name"`
 	Stats C2ServiceStats `json:"stats"`
 	Tech  string         `json:"tech,omitempty"`
+	// Salience annotation (registry-driven, level c2). Services are structural
+	// at container level — always shown — so this is uniformly box/primary; it
+	// exists so the frontend can treat every level's nodes uniformly.
+	Tier       string `json:"tier,omitempty"`
+	RenderMode string `json:"render_mode,omitempty"`
 }
 
 // Topic is a message topic/queue with its publishers and consumers.
@@ -87,6 +93,7 @@ func BuildC2Manifest(st *store.Store, domain, manifestPath string) (*C2, error) 
 	}
 
 	// Build services.
+	pol := saliencePolicyFor(st)
 	svcByID := make(map[int64]*C2Service)
 	svcByKey := make(map[string]*C2Service)
 	var services []C2Service
@@ -94,10 +101,18 @@ func BuildC2Manifest(st *store.Store, domain, manifestPath string) (*C2, error) 
 		if n.Layer != "service" || n.NodeType != "service" {
 			continue
 		}
+		sal := salience.Resolve(pol, salience.Input{
+			NodeType: n.NodeType,
+			Layer:    n.Layer,
+			Role:     nodeRole(&n),
+			Level:    "c2",
+		})
 		svc := C2Service{
-			Key:  n.NodeKey,
-			Name: n.Name,
-			Tech: svcTech,
+			Key:        n.NodeKey,
+			Name:       n.Name,
+			Tech:       svcTech,
+			Tier:       string(sal.Tier),
+			RenderMode: string(sal.RenderMode),
 		}
 		svcByID[n.NodeID] = &svc
 		svcByKey[n.NodeKey] = &svc

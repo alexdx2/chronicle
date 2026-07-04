@@ -530,6 +530,19 @@ func (s *Store) SetNodeStatus(nodeID int64, status string) error {
 	return nil
 }
 
+// UpdateNodeMetadata replaces the metadata JSON on a node row. Used by the
+// complexity pass to fold derived metrics into the node without a versioned
+// re-upsert (mirrors UpdateNodeTrust's single-column update).
+func (s *Store) UpdateNodeMetadata(nodeID int64, metadata string) error {
+	if metadata == "" {
+		metadata = "{}"
+	}
+	if _, err := s.db.Exec(`UPDATE graph_nodes SET metadata=? WHERE node_id=?`, metadata, nodeID); err != nil {
+		return fmt.Errorf("UpdateNodeMetadata: %w", err)
+	}
+	return nil
+}
+
 // UpdateNodeTrust updates computed trust fields on a node.
 func (s *Store) UpdateNodeTrust(nodeID int64, confidence, freshness, trustScore float64, status string) error {
 	_, err := s.db.Exec(`

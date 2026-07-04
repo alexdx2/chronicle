@@ -267,6 +267,35 @@ func (g *Graph) finalizeIncrementalScanInTx(domainKey string, revisionID int64) 
 		})
 	}
 
+	// Derive complexity / hot-path metrics. Tier-A (exact, from source files)
+	// runs first so the AST-derived loop_depth is available to seed Tier-B's
+	// transitive propagation along the now-settled call graph.
+	// Best-effort: a complexity bug must not fail an otherwise-clean scan.
+	// File passes are scoped to this revision's changed set (from file
+	// obligations) so an incremental 1-file finalize never re-reads the whole
+	// repo; no obligations = full scan = full pass.
+	scope := revisionFileScope(g.store, revisionID)
+	if err := g.computeASTComplexity(revisionID, scope); err != nil {
+		g.noteEvidenceErr(err)
+	}
+	if err := g.ComputeGraphComplexity(revisionID); err != nil {
+		g.noteEvidenceErr(err)
+	}
+	// Git history signals: per-node churn + CHANGES_WITH co-change coupling.
+	// Inherently repo-wide but cheap: one git-log exec, no file reads.
+	if err := g.ComputeGitSignals(revisionID); err != nil {
+		g.noteEvidenceErr(err)
+	}
+	// Test coverage linkage (naming convention) — feeds "complex + untested".
+	if err := g.computeTestSignals(revisionID, scope); err != nil {
+		g.noteEvidenceErr(err)
+	}
+	// Near-clone detection (MinHash) — SIMILAR_TO copy-paste twins. Unchanged
+	// files compare via fingerprints cached in Metadata.
+	if err := g.computeSimilarity(revisionID, scope); err != nil {
+		g.noteEvidenceErr(err)
+	}
+
 	// Compute scan status
 	switch {
 	case result.Obligations.Open == 0 && len(result.NeedsReviewEdges) == 0 && len(result.RejectedEvidence) == 0:
