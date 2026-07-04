@@ -71,12 +71,18 @@ func findTestFile(src string) string {
 // say "untested" only for nodes the pass actually examined. One heuristic
 // evidence row (test-link) per node; test files themselves are skipped.
 func (g *Graph) ComputeTestSignals(revisionID int64) error {
+	return g.computeTestSignals(revisionID, nil)
+}
+
+// computeTestSignals is the scoped worker: a non-nil scope limits filesystem
+// probing to the changed set on incremental finalizes.
+func (g *Graph) computeTestSignals(revisionID int64, scope fileScope) error {
 	nodes, err := g.store.ListNodes(store.NodeFilter{Layer: "code"})
 	if err != nil {
 		return fmt.Errorf("ComputeTestSignals nodes: %w", err)
 	}
 	for _, n := range nodes {
-		if n.FilePath == "" || isTestFilePath(n.FilePath) {
+		if n.FilePath == "" || isTestFilePath(n.FilePath) || !scope.matches(n.FilePath) {
 			continue
 		}
 		if _, err := os.Stat(n.FilePath); err != nil {

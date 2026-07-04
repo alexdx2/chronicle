@@ -1,9 +1,12 @@
 package graph
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
@@ -85,6 +88,44 @@ func tokenize(content []byte) []string {
 	return tokens
 }
 
+// fingerprintFromMetadata decodes a cached minhash signature from node
+// Metadata ("fp" hex). ok=false when absent or malformed.
+func fingerprintFromMetadata(metadata string) (minhashSig, bool) {
+	var sig minhashSig
+	if metadata == "" {
+		return sig, false
+	}
+	var wrap struct {
+		FP string `json:"fp"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &wrap); err != nil || len(wrap.FP) != minhashPerms*16 {
+		return sig, false
+	}
+	for i := 0; i < minhashPerms; i++ {
+		v, err := strconv.ParseUint(wrap.FP[i*16:(i+1)*16], 16, 64)
+		if err != nil {
+			return sig, false
+		}
+		sig[i] = v
+	}
+	return sig, true
+}
+
+// mergeFingerprint stores the signature as hex under the "fp" Metadata key.
+func mergeFingerprint(metadata string, sig minhashSig) (string, error) {
+	root, err := metadataMap(metadata)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.Grow(minhashPerms * 16)
+	for _, v := range sig {
+		fmt.Fprintf(&b, "%016x", v)
+	}
+	root["fp"] = b.String()
+	return marshalMetadata(root)
+}
+
 // jaccardEstimate estimates Jaccard similarity as the fraction of matching
 // signature slots.
 func jaccardEstimate(a, b minhashSig) float64 {
@@ -103,6 +144,15 @@ func jaccardEstimate(a, b minhashSig) float64 {
 // threshold. Pairwise comparison is fine at Chronicle's node counts (units,
 // not functions); deterministic order. Unreadable files are skipped.
 func (g *Graph) ComputeSimilarity(revisionID int64) error {
+	return g.computeSimilarity(revisionID, nil)
+}
+
+// computeSimilarity is the scoped worker. Fingerprints are cached in node
+// Metadata ("fp" hex): on an incremental finalize only in-scope (changed)
+// files are re-read and re-fingerprinted; everything else reuses its cached
+// signature, so the pairwise comparison still spans the whole repo without
+// touching unchanged files.
+func (g *Graph) computeSimilarity(revisionID int64, scope fileScope) error {
 	nodes, err := g.store.ListNodes(store.NodeFilter{Layer: "code"})
 	if err != nil {
 		return fmt.Errorf("ComputeSimilarity nodes: %w", err)
@@ -117,12 +167,29 @@ func (g *Graph) ComputeSimilarity(revisionID int64) error {
 		if n.FilePath == "" || seenFile[n.FilePath] {
 			continue
 		}
-		content := readFileContent(n.FilePath)
-		if content == nil {
-			continue
+		var sig minhashSig
+		if cached, ok := fingerprintFromMetadata(n.Metadata); ok && !scope.matches(n.FilePath) {
+			sig = cached
+		} else {
+			content := readFileContent(n.FilePath)
+			if content == nil {
+				if !ok {
+					continue // no file, no cache — nothing to compare
+				}
+				sig = cached // unreadable now, cached fingerprint still stands
+			} else {
+				sig = minhashSignature(content)
+				merged, err := mergeFingerprint(n.Metadata, sig)
+				if err != nil {
+					return fmt.Errorf("ComputeSimilarity fp merge %s: %w", n.NodeKey, err)
+				}
+				if err := g.store.UpdateNodeMetadata(n.NodeID, merged); err != nil {
+					return fmt.Errorf("ComputeSimilarity fp cache %s: %w", n.NodeKey, err)
+				}
+			}
 		}
 		seenFile[n.FilePath] = true
-		entries = append(entries, entry{key: n.NodeKey, sig: minhashSignature(content)})
+		entries = append(entries, entry{key: n.NodeKey, sig: sig})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
 

@@ -27,12 +27,19 @@ var callEdgeTypes = []string{"CALLS_SYMBOL", "INJECTS"}
 // Tier-B transitive_loop_depth propagation. Nodes whose file cannot be read are
 // skipped — never fabricated.
 func (g *Graph) ComputeASTComplexity(revisionID int64) error {
+	return g.computeASTComplexity(revisionID, nil)
+}
+
+// computeASTComplexity is the scoped worker: a non-nil scope (incremental
+// finalize) limits file reads to the changed set so a 1-file scan never
+// re-parses the whole repo.
+func (g *Graph) computeASTComplexity(revisionID int64, scope fileScope) error {
 	nodes, err := g.store.ListNodes(store.NodeFilter{Layer: "code"})
 	if err != nil {
 		return fmt.Errorf("ComputeASTComplexity nodes: %w", err)
 	}
 	for _, n := range nodes {
-		if n.FilePath == "" || !isTypeScriptFile(n.FilePath) {
+		if n.FilePath == "" || !isTypeScriptFile(n.FilePath) || !scope.matches(n.FilePath) {
 			continue
 		}
 		content := readFileContent(n.FilePath)
