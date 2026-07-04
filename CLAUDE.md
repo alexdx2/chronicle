@@ -89,6 +89,25 @@ Sync on open: every command applies journal events the db hasn't seen yet, so ev
 - NEVER mutate `graph_*` tables with raw SQL. Every mutation goes through the instrumented store methods so it journals. Scan-lab runs `journal verify` as a shadow validator — raw-SQL mutations make replay diverge and fail it.
 - Trust/confidence are derived from evidence (asserter-tier caps, verification promotion) and recomputed on read — never journaled. If a choke point forces a status, it must adjust the evidence in the same write so the derived state stays coherent.
 
+## Signal pipeline (scan finalize)
+
+Every `FinalizeIncrementalScan` runs a best-effort post-pass chain
+(`graph/invalidation.go`), each signal stored as verifiable evidence:
+
+| Pass | Signal | Evidence row | Confidence |
+|------|--------|--------------|------------|
+| `ComputeASTComplexity` | cyclomatic / loop_count / loop_depth (TS AST, exact) + cognitive/smells (heuristic) | `complexity-ast`, `complexity-smells` | 1.0 exact / 0.6 heuristic, verified-at-creation by recompute |
+| `ComputeGraphComplexity` | recursive, transitive_loop_depth over CALLS_SYMBOL ∪ INJECTS (Tarjan SCC) | `complexity-graph` | binding-path |
+| `ComputeGitSignals` | per-node churn + `CHANGES_WITH` co-change edges (score = co/min(a,b), ≥3 co-changes) | `churn-git`, `coupling-git` | 1.0 exact / score |
+| `ComputeTestSignals` | has_test_file by naming convention (.spec/.test/__tests__/_test.go) | `test-link` | 0.7 |
+| `ComputeSimilarity` | `SIMILAR_TO` near-clones (MinHash 64-perm, jaccard ≥ 0.8; fp cached in Metadata) | `similarity-minhash` | jaccard |
+
+Rules when touching this chain:
+- `CHANGES_WITH`/`SIMILAR_TO` stay in `structural_edge_types` (registry) — analytical edges must never inflate impact blast radius.
+- Incremental finalizes scope file passes via `revisionFileScope` (file obligations); no obligations = full scan = full pass.
+- Evidence re-observation refreshes assertion + verification fields AND journals them — `journal verify` diverges otherwise.
+- Insights consume the signals: hot_score = normComplexity × degree × staleness × churn(≤2×) × untested(1.5×); dashboard reads `/api/insights`.
+
 ## Build and test
 
 ```bash

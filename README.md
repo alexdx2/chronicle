@@ -48,6 +48,18 @@ arena-api → calls_service → tom-api
 
 Each fact links back to source code: file, line number, confidence score.
 
+On top of the structure, every scan derives risk signals — each one stored as
+re-checkable evidence, not an opaque number:
+
+- **Complexity** — exact AST counts (cyclomatic, loop depth) plus graph-derived
+  transitive depth and recursion, verified against source on write.
+- **Hot paths** — complexity × connectivity × git churn ranks the units where a
+  bug hurts most; `chronicle_insights` reports them with the reason
+  ("complex + untested", "complex + high churn").
+- **Hidden coupling** — files that change together in git history
+  (`CHANGES_WITH`) and near-duplicate units (`SIMILAR_TO`, MinHash) become
+  queryable edges, kept out of impact blast-radius by default.
+
 This is not a vector index or chat memory. It is a structured graph with traceable evidence.
 
 ## Keeping it fresh
