@@ -264,6 +264,38 @@ func TestLoad_MinDemoteConfidence(t *testing.T) {
 	}
 }
 
+func TestLoad_NoisePaths(t *testing.T) {
+	// Defaults ship path patterns for all three classes.
+	rd, err := LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	np := rd.SaliencePolicy().NoisePaths
+	for _, class := range []string{"generated", "test", "vendor"} {
+		if len(np[class]) == 0 {
+			t.Errorf("defaults must ship noise_paths for %q", class)
+		}
+	}
+	// User override replaces per class, keeps others.
+	y := []byte("version: \"1\"\nlayers: [data]\nnode_types:\n  data: [dto]\nsalience:\n  noise_paths:\n    generated: [\"codegen/\"]\n")
+	r, err := Load(y)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := r.SaliencePolicy().NoisePaths
+	if len(got["generated"]) != 1 || got["generated"][0] != "codegen/" {
+		t.Fatalf("user generated patterns must win: %v", got["generated"])
+	}
+	if len(got["test"]) == 0 {
+		t.Fatal("default test patterns must survive per-class merge")
+	}
+	// Unknown class rejected (closed vocab: generated|test|vendor).
+	bad := []byte("version: \"1\"\nlayers: [data]\nnode_types:\n  data: [dto]\nsalience:\n  noise_paths:\n    junk: [\"x/\"]\n")
+	if _, err := Load(bad); err == nil || !strings.Contains(err.Error(), "noise_paths") {
+		t.Fatalf("unknown noise class must be rejected, got err=%v", err)
+	}
+}
+
 func TestLoadDefaults_KnownRolesNonEmpty(t *testing.T) {
 	r, _ := LoadDefaults()
 	roles := r.SaliencePolicy().KnownRoles()

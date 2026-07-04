@@ -108,6 +108,7 @@ func BuildC2Manifest(st *store.Store, domain, manifestPath string) (*C2, error) 
 			Role:           role,
 			RoleConfidence: roleConf,
 			Level:          "c2",
+			NoiseClass:     salience.NoiseClassForPath(pol, n.FilePath),
 		})
 		svc := C2Service{
 			Key:        n.NodeKey,

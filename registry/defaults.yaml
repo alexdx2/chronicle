@@ -337,3 +337,9 @@ salience:
   # visibility (a wrong promotion = one extra box; a wrong demotion =
   # silently hidden architecture).
   min_demote_confidence: 0.7
+  # Deterministic path-based noise detection (no LLM, never gated).
+  # "dir/" matches a path segment; other patterns glob the base name.
+  noise_paths:
+    generated: ["generated/", "__generated__/", "*.pb.go", "*_pb2.py", "*.generated.*"]
+    test: ["__tests__/", "testdata/", "*.spec.*", "*.test.*", "*_test.go"]
+    vendor: ["node_modules/", "vendor/", "dist/"]

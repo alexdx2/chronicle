@@ -48,6 +48,11 @@ func (p *SaliencePolicy) Validate() error {
 	if p.MinDemoteConfidence != nil && (*p.MinDemoteConfidence < 0 || *p.MinDemoteConfidence > 1) {
 		return fmt.Errorf("salience: min_demote_confidence %v out of range [0,1]", *p.MinDemoteConfidence)
 	}
+	for class := range p.NoisePaths {
+		if !validNoiseClasses[class] {
+			return fmt.Errorf("salience: noise_paths class %q unknown (want generated|test|vendor)", class)
+		}
+	}
 	return nil
 }
 
@@ -76,7 +81,15 @@ type SaliencePolicy struct {
 	// not reduce a node's tier/render_mode below what the type policy gives.
 	// nil = use DefaultMinDemoteConfidence.
 	MinDemoteConfidence *float64 `yaml:"min_demote_confidence" json:"min_demote_confidence,omitempty"`
+	// NoisePaths maps a noise class (generated|test|vendor — closed set) to
+	// file-path patterns detected deterministically at render time, no LLM.
+	// Pattern forms: "dir/" matches a path segment ("generated/" hits
+	// src/generated/x.ts); anything else is a glob on the base name
+	// ("*.pb.go", "*.spec.*").
+	NoisePaths map[string][]string `yaml:"noise_paths" json:"noise_paths,omitempty"`
 }
+
+var validNoiseClasses = map[string]bool{"generated": true, "test": true, "vendor": true}
 
 // DefaultMinDemoteConfidence is the demote gate used when the policy does not
 // set min_demote_confidence. Rationale: a wrong promotion costs one extra box;
@@ -191,6 +204,7 @@ func mergeSalience(base, user *SaliencePolicy) *SaliencePolicy {
 	out := &SaliencePolicy{
 		RenderPolicy: make(map[string]map[string]RenderRule),
 		Roles:        make(map[string]RoleRule),
+		NoisePaths:   make(map[string][]string),
 	}
 	if base != nil {
 		for k, v := range base.RenderPolicy {
@@ -200,6 +214,9 @@ func mergeSalience(base, user *SaliencePolicy) *SaliencePolicy {
 			out.Roles[k] = v
 		}
 		out.NoiseRoles = append([]string(nil), base.NoiseRoles...)
+		for k, v := range base.NoisePaths {
+			out.NoisePaths[k] = append([]string(nil), v...)
+		}
 	}
 	if base != nil && base.MinDemoteConfidence != nil {
 		v := *base.MinDemoteConfidence
@@ -218,6 +235,9 @@ func mergeSalience(base, user *SaliencePolicy) *SaliencePolicy {
 		if user.MinDemoteConfidence != nil {
 			v := *user.MinDemoteConfidence
 			out.MinDemoteConfidence = &v
+		}
+		for k, v := range user.NoisePaths {
+			out.NoisePaths[k] = append([]string(nil), v...)
 		}
 	}
 	return out

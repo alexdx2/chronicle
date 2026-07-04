@@ -220,6 +220,7 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 			Role:           role,
 			RoleConfidence: roleConf,
 			Level:          "c3",
+			NoiseClass:     salience.NoiseClassForPath(pol, n.FilePath),
 		})
 		switch sal.RenderMode {
 		case salience.RenderBox:

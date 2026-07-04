@@ -210,6 +210,35 @@ func TestResolve_UserTierRaiseFloorsMode(t *testing.T) {
 	}
 }
 
+func TestNoiseClassForPath(t *testing.T) {
+	p := &registry.SaliencePolicy{NoisePaths: map[string][]string{
+		"generated": {"generated/", "*.pb.go"},
+		"test":      {"__tests__/", "*.spec.*", "*_test.go"},
+		"vendor":    {"node_modules/", "vendor/"},
+	}}
+	cases := []struct{ path, want string }{
+		{"src/api/generated/client.ts", "generated"},
+		{"proto/orders.pb.go", "generated"},
+		{"src/battle/__tests__/battle.ts", "test"},
+		{"src/battle/battle.controller.spec.ts", "test"},
+		{"graph/salience/salience_test.go", "test"},
+		{"node_modules/lodash/index.js", "vendor"},
+		{"src/battle/battle.controller.ts", ""},
+		{"", ""},
+		// A directory pattern must match path segments, not substrings:
+		// "vendor/" must not match a file named vendors.ts.
+		{"src/vendors.ts", ""},
+	}
+	for _, tc := range cases {
+		if got := NoiseClassForPath(p, tc.path); got != tc.want {
+			t.Errorf("NoiseClassForPath(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+	if got := NoiseClassForPath(nil, "node_modules/x.js"); got != "" {
+		t.Errorf("nil policy must yield no noise class, got %q", got)
+	}
+}
+
 func TestResolve_DefaultPolicy_DtoHiddenInC3_DetailInFocus(t *testing.T) {
 	r, err := registry.LoadDefaults()
 	if err != nil {

@@ -151,6 +151,49 @@ func TestBuildC3_LowConfidenceRoleClaimCannotHide(t *testing.T) {
 	}
 }
 
+// Deterministic path-based noise: nodes whose file paths match noise_paths
+// patterns (generated/test/vendor) are demoted regardless of role claims —
+// no LLM involved, so no confidence gate.
+func TestBuildC3_PathNoiseDemotes(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	mk := func(key, layer, ntype, name, file string) {
+		if _, err := st.UpsertNode(store.NodeRow{
+			NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d",
+			Name: name, FilePath: file, Status: "active",
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+	}
+	mk("service:service:d:app", "service", "service", "app", "app/main.ts")
+	mk("code:controller:d:real", "code", "controller", "RealCtl", "app/app.controller.ts")
+	mk("code:controller:d:gen", "code", "controller", "GenCtl", "app/generated/gen.controller.ts")
+	mk("code:controller:d:spec", "code", "controller", "SpecCtl", "app/app.controller.spec.ts")
+
+	c3, err := BuildC3(st, "d", "app")
+	if err != nil {
+		t.Fatalf("BuildC3: %v", err)
+	}
+	boxes := map[string]bool{}
+	for _, c := range c3.Components {
+		boxes[c.Name] = true
+	}
+	if !boxes["RealCtl"] {
+		t.Errorf("real controller must stay a box (components=%v)", boxes)
+	}
+	if boxes["GenCtl"] {
+		t.Errorf("generated-path controller must be demoted")
+	}
+	if boxes["SpecCtl"] {
+		t.Errorf("spec-file controller must be demoted")
+	}
+}
+
 // BuildView (the dashboard's data path) annotates each VNode with salience so
 // the frontend can render by render_mode.
 func TestBuildPresetC3_VNodesCarrySalience(t *testing.T) {

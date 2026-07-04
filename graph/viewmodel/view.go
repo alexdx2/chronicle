@@ -1114,6 +1114,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			Role:           role,
 			RoleConfidence: roleConf,
 			Level:          salLevel,
+			NoiseClass:     salience.NoiseClassForPath(salPol, n.FilePath),
 		})
 		view.Nodes = append(view.Nodes, VNode{
 			Key:        n.NodeKey,
