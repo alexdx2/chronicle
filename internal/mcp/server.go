@@ -88,6 +88,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(mcpIdentityTool(), mcpIdentityHandler())
 	s.AddTool(commandTool(), commandHandler(g))
 	s.AddTool(diagramBuildTool(), diagramBuildHandler(g))
+	s.AddTool(salienceExplainTool(), salienceExplainHandler(g))
 	s.AddTool(domainListTool(), domainListHandler(g))
 	s.AddTool(resolveContextTool(), resolveContextHandler(g))
 	s.AddTool(contextListTool(), contextListHandler(g))
@@ -2726,6 +2727,33 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 			"edge_count": edgeCount,
 			"missing":    missing,
 		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_salience_explain
+// ---------------------------------------------------------------------------
+
+func salienceExplainTool() mcp.Tool {
+	return mcp.NewTool("chronicle_salience_explain",
+		mcp.WithDescription("Explain why a node renders the way it does on diagrams: the resolved tier/render_mode at a diagram level plus the layer-by-layer salience trace (type policy, role claim + confidence, path noise class, boundary promotion). Use when a node is unexpectedly hidden or shown."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key to explain")),
+		mcp.WithString("level", mcp.Description("Diagram level: default|c2|c3|focus|data|... (default: default)")),
+	)
+}
+
+func salienceExplainHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		nodeKey := strParam(args, "node_key")
+		if nodeKey == "" {
+			return errorResult(fmt.Errorf("node_key is required")), nil
+		}
+		ex, err := viewmodel.ExplainSalience(g.Store(), nodeKey, strParam(args, "level"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(ex), nil
 	}
 }
 

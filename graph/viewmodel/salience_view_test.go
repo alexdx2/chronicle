@@ -426,6 +426,54 @@ func TestBuildC3_RoleEvidenceResolvesWinner(t *testing.T) {
 	}
 }
 
+// ExplainSalience surfaces the resolve trace on demand — the "why is this node
+// hidden" answer the spec promises, without embedding traces in every payload.
+func TestExplainSalience(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	if _, err := st.UpsertNode(store.NodeRow{
+		NodeKey: "data:dto:d:x", Layer: "data", NodeType: "dto", DomainKey: "d",
+		Name: "XDto", FilePath: "app/x.dto.ts", Status: "active",
+		Confidence: 1, Freshness: 1, TrustScore: 1,
+		Metadata: `{"role":"request_dto","role_confidence":0.9}`,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	ex, err := ExplainSalience(st, "data:dto:d:x", "")
+	if err != nil {
+		t.Fatalf("ExplainSalience: %v", err)
+	}
+	if ex.RenderMode != "hidden" || ex.Tier != "detail" {
+		t.Errorf("dto at default: got %s/%s want detail/hidden", ex.Tier, ex.RenderMode)
+	}
+	if ex.Role != "request_dto" || ex.RoleConfidence != 0.9 {
+		t.Errorf("role claim not surfaced: %q %v", ex.Role, ex.RoleConfidence)
+	}
+	if len(ex.Trace) == 0 {
+		t.Error("trace must not be empty")
+	}
+	if ex.Level != "default" {
+		t.Errorf("empty level must normalize to default, got %q", ex.Level)
+	}
+
+	ex, err = ExplainSalience(st, "data:dto:d:x", "focus")
+	if err != nil {
+		t.Fatalf("ExplainSalience(focus): %v", err)
+	}
+	if ex.RenderMode != "attached_detail" {
+		t.Errorf("dto at focus: got %q want attached_detail (trace=%v)", ex.RenderMode, ex.Trace)
+	}
+
+	if _, err := ExplainSalience(st, "data:dto:d:missing", ""); err == nil {
+		t.Error("missing node must error")
+	}
+}
+
 // Lens-specific salience: the Data lens promotes models to primary boxes, whereas
 // the same models are collapsed background in C2/C3. Proves the lens dimension
 // works via the existing data preset (layout.preset reaches salience as level).

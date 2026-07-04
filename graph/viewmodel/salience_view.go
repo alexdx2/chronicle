@@ -169,3 +169,71 @@ func effectiveRoleClaim(n *store.NodeRow, roleByNode map[int64]salience.RoleClai
 	}
 	return nodeRoleClaim(n)
 }
+
+// SalienceExplanation is the on-demand "why does this node render like that"
+// answer: the resolved decision plus every input that produced it and the
+// layer-by-layer trace.
+type SalienceExplanation struct {
+	NodeKey          string   `json:"node_key"`
+	Layer            string   `json:"layer"`
+	NodeType         string   `json:"node_type"`
+	Level            string   `json:"level"`
+	Role             string   `json:"role,omitempty"`
+	RoleConfidence   float64  `json:"role_confidence,omitempty"`
+	NoiseClass       string   `json:"noise_class,omitempty"`
+	BoundaryCrossing bool     `json:"boundary_crossing"`
+	Tier             string   `json:"tier"`
+	RenderMode       string   `json:"render_mode"`
+	Trace            []string `json:"trace"`
+}
+
+// ExplainSalience resolves one node's salience at a diagram level and returns
+// the full trace. It reproduces exactly what the view builders feed Resolve
+// (winning role claim, path noise class, boundary crossing in the node's
+// domain graph), so the answer matches what a diagram at that level shows.
+// ViewSpec-level user overrides are session state and not part of the answer.
+func ExplainSalience(st *store.Store, nodeKey, level string) (*SalienceExplanation, error) {
+	if level == "" {
+		level = "default"
+	}
+	n, err := st.GetNodeByKey(nodeKey)
+	if err != nil {
+		return nil, err
+	}
+	pol := saliencePolicyFor(st)
+	role, roleConf := effectiveRoleClaim(n, resolveRolesByNode(st))
+
+	allNodes, err := st.ListNodes(store.NodeFilter{Domain: n.DomainKey})
+	if err != nil {
+		return nil, err
+	}
+	allEdges, err := st.ListEdges(store.EdgeFilter{})
+	if err != nil {
+		return nil, err
+	}
+	crossing := boundaryCrossings(activeEdges(allEdges), ownershipMap(activeOnly(allNodes)))
+
+	noise := salience.NoiseClassForPath(pol, n.FilePath)
+	d := salience.Resolve(pol, salience.Input{
+		NodeType:         n.NodeType,
+		Layer:            n.Layer,
+		Role:             role,
+		RoleConfidence:   roleConf,
+		Level:            level,
+		NoiseClass:       noise,
+		BoundaryCrossing: crossing[n.NodeID],
+	})
+	return &SalienceExplanation{
+		NodeKey:          n.NodeKey,
+		Layer:            n.Layer,
+		NodeType:         n.NodeType,
+		Level:            level,
+		Role:             role,
+		RoleConfidence:   roleConf,
+		NoiseClass:       noise,
+		BoundaryCrossing: crossing[n.NodeID],
+		Tier:             string(d.Tier),
+		RenderMode:       string(d.RenderMode),
+		Trace:            d.Trace,
+	}, nil
+}
