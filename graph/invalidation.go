@@ -285,6 +285,10 @@ func (g *Graph) finalizeIncrementalScanInTx(domainKey string, revisionID int64) 
 	if err := g.ComputeTestSignals(revisionID); err != nil {
 		g.noteEvidenceErr(err)
 	}
+	// Near-clone detection (MinHash) — SIMILAR_TO copy-paste twins.
+	if err := g.ComputeSimilarity(revisionID); err != nil {
+		g.noteEvidenceErr(err)
+	}
 
 	// Compute scan status
 	switch {
