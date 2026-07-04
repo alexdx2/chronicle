@@ -433,6 +433,25 @@ button,input,select,textarea{font-family:inherit}
 <!-- Overview Tab -->
 <!-- TAB_PANEL:overview:start -->
 <div class="container" x-show="tab==='overview'" x-cloak>
+  <!-- Hot Path Targets (insights) -->
+  <template x-if="hotPaths.length > 0">
+  <div class="card" style="margin-bottom:20px;padding:16px">
+      <h3 style="margin-top:0;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--text-secondary)">
+          Hot path targets
+          <span style="font-weight:normal;color:var(--text-muted);font-size:11px;text-transform:none;letter-spacing:0">— complexity × impact × churn, evidence-backed</span>
+      </h3>
+      <template x-for="h in hotPaths.slice(0, 5)" :key="h.node_key">
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
+              <span x-text="h.hot_score.toFixed(2)" style="font-weight:bold;color:var(--warning,#d4915e);min-width:42px;"></span>
+              <span x-text="h.name || h.node_key" style="color:var(--text-primary);font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%;" :title="h.node_key"></span>
+              <span x-text="'deg ' + h.degree" style="color:var(--text-muted);"></span>
+              <template x-if="h.churn > 0"><span x-text="h.churn + ' commits/180d'" style="color:var(--text-muted);"></span></template>
+              <span x-text="h.reason" style="color:var(--text-secondary);margin-left:auto;text-align:right;"></span>
+          </div>
+      </template>
+  </div>
+  </template>
+
   <!-- Scan Progress Panel -->
   <template x-if="scanProgress && scanProgress.phase !== 'idle'">
   <div class="card" style="margin-bottom:20px;border-left:3px solid var(--success);padding:16px">
@@ -1990,6 +2009,7 @@ function dashboard() {
     hiddenNodeTypes: [],      // string[] of node_type values (legacy — computed from nodeTypeFilter)
     hiddenEdgeTypes: [],      // string[] of edge_type values
     edgeCategories: {},       // category_name → {color, types: {EDGE_TYPE: shortLabel}}
+    hotPaths: [],             // insights hot-path targets (complexity × impact × churn)
     edgeCategoryLookup: {},   // EDGE_TYPE → {category, color, shortLabel}
     editingCategory: null,    // category name being edited, or null
     editCategoryData: null,   // temp copy of the category being edited
@@ -2229,6 +2249,16 @@ function dashboard() {
       this.fetchScans().then(() => { this.loading.scans = false; this.loaded.scans = true; });
       this.fetchLowConfidence().then(() => { this.loading.lowConf = false; this.loaded.lowConf = true; });
       this.fetchValidation().then(() => { this.loading.validation = false; this.loaded.validation = true; });
+      this.fetchInsights();
+    },
+
+    async fetchInsights() {
+      try {
+        const r = await fetch('/api/insights?domain=' + encodeURIComponent(this.domain || ''));
+        if (!r.ok) return; // endpoint absent (older server) — card stays hidden
+        const ins = await r.json();
+        this.hotPaths = ins.hot_path_targets || [];
+      } catch (e) { /* insights are optional decor — never break overview */ }
     },
 
     async fetchManifest() {

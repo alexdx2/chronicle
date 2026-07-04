@@ -539,3 +539,40 @@ func TestHandleGraphDomains(t *testing.T) {
 		t.Errorf("orders code layer = %d, want 2", orders.ByLayer["code"])
 	}
 }
+
+// TestHandleInsights proves the dashboard can read the deterministic insights
+// report (hot paths, verification targets) over HTTP.
+func TestHandleInsights(t *testing.T) {
+	srv := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/insights?domain=", nil)
+	rec := httptest.NewRecorder()
+	srv.handleInsights(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		HotPathTargets      []any `json:"hot_path_targets"`
+		VerificationTargets []any `json:"verification_targets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	// Empty graph: sections exist (never null-panic in the UI), just empty.
+	if out.HotPathTargets == nil {
+		t.Fatalf("hot_path_targets must be present (empty array), body: %s", rec.Body.String())
+	}
+}
+
+// TestAnalyticsEdgeCategory proves the new analytical edge types carry a visual
+// category so CHANGES_WITH/SIMILAR_TO edges are distinguishable in the graph.
+func TestAnalyticsEdgeCategory(t *testing.T) {
+	cats := DefaultEdgeCategories
+	a, ok := cats["analytics"]
+	if !ok {
+		t.Fatal("analytics edge category missing")
+	}
+	if a.Types["CHANGES_WITH"] == "" || a.Types["SIMILAR_TO"] == "" {
+		t.Fatalf("analytics category must map CHANGES_WITH and SIMILAR_TO, got %+v", a.Types)
+	}
+}

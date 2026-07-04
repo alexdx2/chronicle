@@ -188,6 +188,15 @@ var DefaultEdgeCategories = map[string]EdgeCategory{
 			"TARGETS_SERVICE":   "targets",
 		},
 	},
+	// Analytical signals (git co-change, near-clones) — visually distinct so
+	// they read as observations about the code, not dependencies of it.
+	"analytics": {
+		Color: "#c96b8f",
+		Types: map[string]string{
+			"CHANGES_WITH": "co-change",
+			"SIMILAR_TO":   "clone",
+		},
+	},
 }
 
 // mergedEdgeCategories returns DefaultEdgeCategories merged with project overrides.
@@ -363,6 +372,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/projects/discover", s.handleDiscoverProjects)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/stats", s.handleStats)
+	mux.HandleFunc("/api/insights", s.handleInsights)
 	mux.HandleFunc("/api/scan-progress", s.handleScanProgress)
 	mux.HandleFunc("/api/metrics", s.handleMetrics)
 	mux.HandleFunc("/api/requests", s.handleRequests)
@@ -597,6 +607,24 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	reqStats, _ := s.getStore().RequestStats()
 	httpJSON(w, map[string]any{"domain": domain, "graph": stats, "requests": reqStats})
+}
+
+// handleInsights serves the deterministic insights report (hubs, verification
+// targets, hot-path targets, gaps) for the dashboard overview.
+func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request) {
+	domain := s.getDomain(r)
+	ins, err := s.getGraph().Insights(domain)
+	if err != nil {
+		httpError(w, err, 500)
+		return
+	}
+	if ins.HotPathTargets == nil {
+		ins.HotPathTargets = []graph.NodeInsight{}
+	}
+	if ins.VerificationTargets == nil {
+		ins.VerificationTargets = []graph.EdgeInsight{}
+	}
+	httpJSON(w, ins)
 }
 
 func (s *Server) handleScanProgress(w http.ResponseWriter, r *http.Request) {
