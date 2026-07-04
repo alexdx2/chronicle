@@ -61,13 +61,17 @@ type Override struct {
 
 // Input is the node + view context for resolution.
 type Input struct {
-	NodeType         string
-	Layer            string
-	Role             string // winning_role; "" or "unknown" treated as no role
+	NodeType string
+	Layer    string
+	Role     string // winning_role; "" or "unknown" treated as no role
+	// RoleConfidence is the winning claim's confidence. <= 0 means "no
+	// recorded confidence" (manually set role) and is treated as trusted.
+	// Claims below the policy's demote threshold may promote but not demote.
+	RoleConfidence   float64
 	Level            string // diagram level: default|focus|c3|...
 	Lens             string // v1: "" (no-op)
 	BoundaryCrossing bool
-	NoiseClass       string // "" => none
+	NoiseClass       string // "" => none; explicit values are deterministic (not gated)
 	UserOverride     *Override
 }
 
@@ -82,8 +86,19 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	// Layer 1: base policy by type.
 	applyKey(p, &d, typeKey(in.Layer, in.NodeType), in.Level)
 
+	// Effective claim confidence: <= 0 means "manually set role" => trusted.
+	conf := in.RoleConfidence
+	if conf <= 0 {
+		conf = 1
+	}
+	threshold := p.DemoteConfidenceThreshold()
+
 	// Layer 2: role override (winning_role). "unknown"/"" => skip.
+	// Asymmetric confidence gate: a role claim below the demote threshold may
+	// refine visibility UP (promote) but not DOWN — a wrong promotion costs
+	// one extra box, a wrong demotion silently hides architecture.
 	if in.Role != "" && in.Role != "unknown" {
+		preTier, preMode := d.Tier, d.RenderMode
 		applyKey(p, &d, roleKey(in.Role), in.Level)
 		// Caps come from the roles: section (single source of truth).
 		if rr, ok := p.Role(in.Role); ok {
@@ -91,10 +106,16 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 			d.MaxTier = Tier(rr.MaxTier)
 			d.Trace = append(d.Trace, fmt.Sprintf("role:%s -> promotable=%v max_tier=%q", in.Role, rr.Promotable, rr.MaxTier))
 		}
+		demoted := tierRank(d.Tier) < tierRank(preTier) || renderRank(d.RenderMode) < renderRank(preMode)
+		if demoted && conf < threshold {
+			d.Tier, d.RenderMode = preTier, preMode
+			d.Trace = append(d.Trace, fmt.Sprintf("role:%s demote_gated (confidence %.2f < %.2f) -> tier/mode restored", in.Role, conf, threshold))
+		}
 	}
 
 	// (A future lens override layer slots between role and promotion; v1 no-op.)
 	// Layer 3: bounded topology promotion. Only if the role allows it.
+	tierRaised := false
 	if in.BoundaryCrossing && d.Promotable {
 		target := TierPrimary
 		if d.MaxTier != "" && tierRank(d.MaxTier) < tierRank(target) {
@@ -102,6 +123,7 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		}
 		if tierRank(target) > tierRank(d.Tier) {
 			d.Tier = target
+			tierRaised = true
 			d.Trace = append(d.Trace, fmt.Sprintf("promotion:boundary -> tier=%s (cap=%q)", target, d.MaxTier))
 		} else {
 			d.Trace = append(d.Trace, "promotion:noop(already >= target)")
@@ -113,17 +135,25 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	}
 
 	// Layer 4: noise demotion (generated/test/vendor). Symmetric to promotion.
-	// NoiseClass may be supplied explicitly by a caller (downstream plan), or
-	// inferred here when the node's role is listed in the policy's noise_roles.
+	// NoiseClass may be supplied explicitly by a caller (deterministic, e.g.
+	// path-based detection — never gated), or inferred from a noise role, in
+	// which case it is an LLM claim and subject to the same demote gate.
 	noiseClass := in.NoiseClass
+	noiseFromRole := false
 	if noiseClass == "" && in.Role != "" && in.Role != "unknown" && p.IsNoiseRole(in.Role) {
 		noiseClass = in.Role
+		noiseFromRole = true
 	}
 	if noiseClass != "" && noiseClass != "none" {
-		d.NoiseClass = noiseClass
-		d.Tier = TierDetail
-		d.RenderMode = RenderHidden
-		d.Trace = append(d.Trace, "noise:"+noiseClass+" -> tier=detail mode=hidden")
+		if noiseFromRole && conf < threshold {
+			d.Trace = append(d.Trace, fmt.Sprintf("noise:%s gated (confidence %.2f < %.2f)", noiseClass, conf, threshold))
+		} else {
+			d.NoiseClass = noiseClass
+			d.Tier = TierDetail
+			d.RenderMode = RenderHidden
+			tierRaised = false
+			d.Trace = append(d.Trace, "noise:"+noiseClass+" -> tier=detail mode=hidden")
+		}
 	} else {
 		d.Trace = append(d.Trace, "noise:none")
 	}
@@ -132,6 +162,9 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	pinned := false
 	if in.UserOverride != nil {
 		if in.UserOverride.Tier != nil {
+			if tierRank(*in.UserOverride.Tier) > tierRank(d.Tier) {
+				tierRaised = true
+			}
 			d.Tier = *in.UserOverride.Tier
 			d.Trace = append(d.Trace, "user_override:tier="+string(*in.UserOverride.Tier))
 		}
@@ -144,8 +177,13 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		d.Trace = append(d.Trace, "user_override:none")
 	}
 
-	// Layer 6: reconcile tier -> render_mode floor, unless pinned.
-	if !pinned {
+	// Layer 6: reconcile tier -> render_mode floor. The floor exists so a
+	// RAISED tier (promotion or user override) isn't visually lost; it must
+	// not resurrect nodes whose render_mode was deliberately lowered by a
+	// policy layer while their tier stayed put (e.g. role:helper hiding a
+	// primary-typed node). Hence: only when the tier was raised, never over
+	// a user-pinned mode.
+	if !pinned && tierRaised {
 		floor := floorMode(d.Tier)
 		if renderRank(floor) > renderRank(d.RenderMode) {
 			d.Trace = append(d.Trace, fmt.Sprintf("reconcile:floor %s->%s for tier=%s", d.RenderMode, floor, d.Tier))

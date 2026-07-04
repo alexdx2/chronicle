@@ -29,27 +29,31 @@ func saliencePolicyFor(st *store.Store) *registry.SaliencePolicy {
 	return reg.SaliencePolicy()
 }
 
-// nodeRole extracts the semantic role (if any) stored in a node's metadata.
-// Role population is a downstream (scan) concern; until then this returns "".
-func nodeRole(n *store.NodeRow) string {
+// nodeRoleClaim extracts the semantic role (if any) stored in a node's
+// metadata, with the extractor confidence recorded alongside it. Confidence 0
+// means "not recorded" (manually set role) — the engine treats that as trusted.
+func nodeRoleClaim(n *store.NodeRow) (string, float64) {
 	if n.Metadata == "" {
-		return ""
+		return "", 0
 	}
 	var m map[string]any
 	if json.Unmarshal([]byte(n.Metadata), &m) != nil {
-		return ""
+		return "", 0
 	}
-	if r, ok := m["role"].(string); ok {
-		return r
+	role, ok := m["role"].(string)
+	if !ok {
+		return "", 0
 	}
-	return ""
+	conf, _ := m["role_confidence"].(float64)
+	return role, conf
 }
 
 // resolveRolesByNode batch-loads role_classification evidence (one query) and
-// resolves the winning role per node via salience.ResolveRole. This is the
-// evidence-backed, multi-claim path; the result is the node's effective role.
+// resolves the winning claim per node via salience.ResolveRole. This is the
+// evidence-backed, multi-claim path; the result is the node's effective role
+// plus its claim confidence (feeds the demote gate).
 // Returns nil when there are no role claims (callers fall back to metadata).
-func resolveRolesByNode(st *store.Store) map[int64]string {
+func resolveRolesByNode(st *store.Store) map[int64]salience.RoleClaim {
 	evs, err := st.ListEvidenceBySourceKind("role_classification")
 	if err != nil || len(evs) == 0 {
 		return nil
@@ -69,10 +73,10 @@ func resolveRolesByNode(st *store.Store) map[int64]string {
 	if len(claims) == 0 {
 		return nil
 	}
-	out := make(map[int64]string, len(claims))
+	out := make(map[int64]salience.RoleClaim, len(claims))
 	for nid, cs := range claims {
 		if w, ok := salience.ResolveRole(cs); ok {
-			out[nid] = w.Role
+			out[nid] = w
 		}
 	}
 	return out
@@ -102,13 +106,13 @@ func parseRoleClaim(assertion, metadata string) (string, string) {
 	return "", ""
 }
 
-// effectiveRole returns the node's role, preferring the evidence-resolved
-// winning role (roleByNode) over the role cached in node metadata.
-func effectiveRole(n *store.NodeRow, roleByNode map[int64]string) string {
+// effectiveRoleClaim returns the node's role and claim confidence, preferring
+// the evidence-resolved winning claim (roleByNode) over metadata.
+func effectiveRoleClaim(n *store.NodeRow, roleByNode map[int64]salience.RoleClaim) (string, float64) {
 	if roleByNode != nil {
-		if r := roleByNode[n.NodeID]; r != "" {
-			return r
+		if w, ok := roleByNode[n.NodeID]; ok && w.Role != "" {
+			return w.Role, w.Confidence
 		}
 	}
-	return nodeRole(n)
+	return nodeRoleClaim(n)
 }

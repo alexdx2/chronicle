@@ -1107,11 +1107,13 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			continue // grouped members fold into their VGroup
 		}
 		n := nodeByID[id]
+		role, roleConf := effectiveRoleClaim(n, roleByNode)
 		sal := salience.Resolve(salPol, salience.Input{
-			NodeType: n.NodeType,
-			Layer:    n.Layer,
-			Role:     effectiveRole(n, roleByNode),
-			Level:    salLevel,
+			NodeType:       n.NodeType,
+			Layer:          n.Layer,
+			Role:           role,
+			RoleConfidence: roleConf,
+			Level:          salLevel,
 		})
 		view.Nodes = append(view.Nodes, VNode{
 			Key:        n.NodeKey,

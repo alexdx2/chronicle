@@ -14,6 +14,7 @@ func basePolicy() *registry.SaliencePolicy {
 			"role:entity":            {"default": {Tier: "primary", RenderMode: "box"}},
 			"role:request_dto":       {"default": {Tier: "detail", RenderMode: "hidden"}, "focus": {RenderMode: "attached_detail"}},
 			"role:aggregate":         {"default": {Tier: "secondary", RenderMode: "collapsed_group"}},
+			"role:helper":            {"default": {RenderMode: "hidden"}},
 		},
 		Roles: map[string]registry.RoleRule{
 			"entity":      {Promotable: true},
@@ -130,6 +131,82 @@ func TestResolve_PromotionRaisesBelowPrimary(t *testing.T) {
 	// And render_mode must be reconciled up to box (floor for primary).
 	if promoted.RenderMode != RenderBox {
 		t.Fatalf("promoted aggregate render_mode should floor to box: got %s", promoted.RenderMode)
+	}
+}
+
+func TestResolve_LowConfidenceRoleCannotDemote(t *testing.T) {
+	// A wrong LLM "helper" claim at 0.4 must not hide a node whose type
+	// policy says primary/box. Promotion is cheap to be wrong about;
+	// hiding is not.
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Role: "helper", RoleConfidence: 0.4, Level: "default"})
+	if d.Tier != TierPrimary || d.RenderMode != RenderBox {
+		t.Fatalf("low-confidence helper must not demote: got tier=%s mode=%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+}
+
+func TestResolve_HighConfidenceRoleDemotes(t *testing.T) {
+	// At 0.9 the helper claim clears the gate — and the tier floor must NOT
+	// resurrect the node to box (tier stayed primary but was never raised).
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Role: "helper", RoleConfidence: 0.9, Level: "default"})
+	if d.RenderMode != RenderHidden {
+		t.Fatalf("high-confidence helper must hide: got mode=%s trace=%v", d.RenderMode, d.Trace)
+	}
+}
+
+func TestResolve_LowConfidenceRoleCanPromote(t *testing.T) {
+	// Promotion direction is allowed at any confidence.
+	d := Resolve(basePolicy(), Input{NodeType: "dto", Layer: "data", Role: "entity", RoleConfidence: 0.3, Level: "default"})
+	if d.Tier != TierPrimary || d.RenderMode != RenderBox {
+		t.Fatalf("low-confidence entity may promote: got tier=%s mode=%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+}
+
+func TestResolve_UnsetConfidenceTreatedAsManual(t *testing.T) {
+	// RoleConfidence <= 0 means "no recorded confidence" (manually set role)
+	// and is trusted — existing behavior preserved.
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Role: "helper", Level: "default"})
+	if d.RenderMode != RenderHidden {
+		t.Fatalf("manual helper role must hide: got mode=%s trace=%v", d.RenderMode, d.Trace)
+	}
+}
+
+func TestResolve_NoiseRoleInferenceGated(t *testing.T) {
+	low := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Role: "generated", RoleConfidence: 0.4, Level: "default"})
+	if low.RenderMode != RenderBox {
+		t.Fatalf("low-confidence generated must not demote: got mode=%s trace=%v", low.RenderMode, low.Trace)
+	}
+	high := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Role: "generated", RoleConfidence: 0.9, Level: "default"})
+	if high.Tier != TierDetail || high.RenderMode != RenderHidden {
+		t.Fatalf("high-confidence generated must demote: got tier=%s mode=%s trace=%v", high.Tier, high.RenderMode, high.Trace)
+	}
+}
+
+func TestResolve_ExplicitNoiseClassBypassesGate(t *testing.T) {
+	// A caller-supplied NoiseClass (e.g. deterministic path detection) is not
+	// an LLM claim and must demote regardless of role confidence.
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", NoiseClass: "generated", RoleConfidence: 0.1, Level: "default"})
+	if d.Tier != TierDetail || d.RenderMode != RenderHidden {
+		t.Fatalf("explicit noise class must demote: got tier=%s mode=%s trace=%v", d.Tier, d.RenderMode, d.Trace)
+	}
+}
+
+func TestResolve_DemoteThresholdFromPolicy(t *testing.T) {
+	p := basePolicy()
+	v := 0.95
+	p.MinDemoteConfidence = &v
+	d := Resolve(p, Input{NodeType: "endpoint", Layer: "contract", Role: "helper", RoleConfidence: 0.9, Level: "default"})
+	if d.RenderMode != RenderBox {
+		t.Fatalf("0.9 < policy threshold 0.95 must gate demotion: got mode=%s trace=%v", d.RenderMode, d.Trace)
+	}
+}
+
+func TestResolve_UserTierRaiseFloorsMode(t *testing.T) {
+	// Raising the tier via user override without pinning render_mode must
+	// still surface the node (floor applies to user-raised tiers too).
+	tier := TierPrimary
+	d := Resolve(basePolicy(), Input{NodeType: "dto", Layer: "data", Level: "default", UserOverride: &Override{Tier: &tier}})
+	if d.RenderMode != RenderBox {
+		t.Fatalf("user tier raise must floor mode to box: got %s trace=%v", d.RenderMode, d.Trace)
 	}
 }
 

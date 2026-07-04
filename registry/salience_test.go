@@ -239,6 +239,31 @@ func TestLoad_RejectsInvalidSalienceValues(t *testing.T) {
 	}
 }
 
+func TestLoad_MinDemoteConfidence(t *testing.T) {
+	// User value wins.
+	y := []byte("version: \"1\"\nlayers: [data]\nnode_types:\n  data: [dto]\nsalience:\n  min_demote_confidence: 0.9\n")
+	r, err := Load(y)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := r.SaliencePolicy().DemoteConfidenceThreshold(); got != 0.9 {
+		t.Fatalf("user threshold: got %v want 0.9", got)
+	}
+	// Defaults carry 0.7.
+	rd, err := LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	if got := rd.SaliencePolicy().DemoteConfidenceThreshold(); got != 0.7 {
+		t.Fatalf("default threshold: got %v want 0.7", got)
+	}
+	// Out of range rejected.
+	bad := []byte("version: \"1\"\nlayers: [data]\nnode_types:\n  data: [dto]\nsalience:\n  min_demote_confidence: 1.5\n")
+	if _, err := Load(bad); err == nil || !strings.Contains(err.Error(), "min_demote_confidence") {
+		t.Fatalf("out-of-range threshold must be rejected, got err=%v", err)
+	}
+}
+
 func TestLoadDefaults_KnownRolesNonEmpty(t *testing.T) {
 	r, _ := LoadDefaults()
 	roles := r.SaliencePolicy().KnownRoles()

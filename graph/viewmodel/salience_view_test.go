@@ -112,6 +112,45 @@ func TestBuildC3_RolesDriveBuckets(t *testing.T) {
 	}
 }
 
+// The demote confidence gate must flow through the viewmodel: a low-confidence
+// LLM "helper" claim may not hide a controller the type policy shows as a box,
+// while a high-confidence claim may.
+func TestBuildC3_LowConfidenceRoleClaimCannotHide(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/c.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	mk := func(key, layer, ntype, name, file, meta string) {
+		if _, err := st.UpsertNode(store.NodeRow{
+			NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d",
+			Name: name, FilePath: file, Status: "active",
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: meta,
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+	}
+	mk("service:service:d:app", "service", "service", "app", "app/main.ts", "{}")
+	mk("code:controller:d:low", "code", "controller", "LowConfCtl", "app/low.ts", `{"role":"helper","role_confidence":0.4}`)
+	mk("code:controller:d:high", "code", "controller", "HighConfCtl", "app/high.ts", `{"role":"helper","role_confidence":0.9}`)
+
+	c3, err := BuildC3(st, "d", "app")
+	if err != nil {
+		t.Fatalf("BuildC3: %v", err)
+	}
+	boxes := map[string]bool{}
+	for _, c := range c3.Components {
+		boxes[c.Name] = true
+	}
+	if !boxes["LowConfCtl"] {
+		t.Errorf("low-confidence helper claim must NOT hide a controller (components=%v)", boxes)
+	}
+	if boxes["HighConfCtl"] {
+		t.Errorf("high-confidence helper claim must hide the controller")
+	}
+}
+
 // BuildView (the dashboard's data path) annotates each VNode with salience so
 // the frontend can render by render_mode.
 func TestBuildPresetC3_VNodesCarrySalience(t *testing.T) {

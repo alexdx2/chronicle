@@ -101,11 +101,13 @@ func BuildC2Manifest(st *store.Store, domain, manifestPath string) (*C2, error) 
 		if n.Layer != "service" || n.NodeType != "service" {
 			continue
 		}
+		role, roleConf := nodeRoleClaim(&n)
 		sal := salience.Resolve(pol, salience.Input{
-			NodeType: n.NodeType,
-			Layer:    n.Layer,
-			Role:     nodeRole(&n),
-			Level:    "c2",
+			NodeType:       n.NodeType,
+			Layer:          n.Layer,
+			Role:           role,
+			RoleConfidence: roleConf,
+			Level:          "c2",
 		})
 		svc := C2Service{
 			Key:        n.NodeKey,

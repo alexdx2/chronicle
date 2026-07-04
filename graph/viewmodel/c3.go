@@ -213,11 +213,13 @@ func BuildC3(st *store.Store, domain, serviceKeyOrName string) (*C3, error) {
 		if !ownedByTarget[n.NodeID] {
 			continue
 		}
+		role, roleConf := effectiveRoleClaim(n, roleByNode)
 		sal := salience.Resolve(pol, salience.Input{
-			NodeType: n.NodeType,
-			Layer:    n.Layer,
-			Role:     effectiveRole(n, roleByNode),
-			Level:    "c3",
+			NodeType:       n.NodeType,
+			Layer:          n.Layer,
+			Role:           role,
+			RoleConfidence: roleConf,
+			Level:          "c3",
 		})
 		switch sal.RenderMode {
 		case salience.RenderBox:

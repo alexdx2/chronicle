@@ -45,6 +45,9 @@ func (p *SaliencePolicy) Validate() error {
 			return fmt.Errorf("salience: role %q: invalid max_tier %q (want primary|secondary|detail)", role, rr.MaxTier)
 		}
 	}
+	if p.MinDemoteConfidence != nil && (*p.MinDemoteConfidence < 0 || *p.MinDemoteConfidence > 1) {
+		return fmt.Errorf("salience: min_demote_confidence %v out of range [0,1]", *p.MinDemoteConfidence)
+	}
 	return nil
 }
 
@@ -68,6 +71,24 @@ type SaliencePolicy struct {
 	RenderPolicy map[string]map[string]RenderRule `yaml:"render_policy" json:"render_policy"`
 	Roles        map[string]RoleRule              `yaml:"roles" json:"roles"`
 	NoiseRoles   []string                         `yaml:"noise_roles" json:"noise_roles"`
+	// MinDemoteConfidence gates visibility DEMOTION by LLM role claims: a
+	// role claim below this confidence may refine upward (promote) but may
+	// not reduce a node's tier/render_mode below what the type policy gives.
+	// nil = use DefaultMinDemoteConfidence.
+	MinDemoteConfidence *float64 `yaml:"min_demote_confidence" json:"min_demote_confidence,omitempty"`
+}
+
+// DefaultMinDemoteConfidence is the demote gate used when the policy does not
+// set min_demote_confidence. Rationale: a wrong promotion costs one extra box;
+// a wrong demotion silently hides architecture.
+const DefaultMinDemoteConfidence = 0.7
+
+// DemoteConfidenceThreshold returns the effective demote gate.
+func (p *SaliencePolicy) DemoteConfidenceThreshold() float64 {
+	if p == nil || p.MinDemoteConfidence == nil {
+		return DefaultMinDemoteConfidence
+	}
+	return *p.MinDemoteConfidence
 }
 
 // Rule returns the render rule for a policy key at a given level.
@@ -180,6 +201,10 @@ func mergeSalience(base, user *SaliencePolicy) *SaliencePolicy {
 		}
 		out.NoiseRoles = append([]string(nil), base.NoiseRoles...)
 	}
+	if base != nil && base.MinDemoteConfidence != nil {
+		v := *base.MinDemoteConfidence
+		out.MinDemoteConfidence = &v
+	}
 	if user != nil {
 		for k, v := range user.RenderPolicy {
 			out.RenderPolicy[k] = v
@@ -189,6 +214,10 @@ func mergeSalience(base, user *SaliencePolicy) *SaliencePolicy {
 		}
 		if user.NoiseRoles != nil {
 			out.NoiseRoles = append([]string(nil), user.NoiseRoles...)
+		}
+		if user.MinDemoteConfidence != nil {
+			v := *user.MinDemoteConfidence
+			out.MinDemoteConfidence = &v
 		}
 	}
 	return out

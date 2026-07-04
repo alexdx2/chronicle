@@ -333,3 +333,7 @@ salience:
     generated:    { promotable: false }
     test_fixture: { promotable: false }
   noise_roles: [generated, test_fixture]
+  # LLM role claims below this confidence may promote but not demote
+  # visibility (a wrong promotion = one extra box; a wrong demotion =
+  # silently hidden architecture).
+  min_demote_confidence: 0.7
