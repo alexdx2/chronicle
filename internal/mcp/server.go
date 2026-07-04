@@ -2075,7 +2075,21 @@ func scanPoolStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 		run, err := g.Store().GetActiveScanRun(domain)
 		if err != nil || run == nil {
-			return errorResult(fmt.Errorf("no active scan run for domain %s", domain)), nil
+			// A finished scan must satisfy the wave-loop exit condition
+			// (wave_complete, nothing claimable, nothing in progress) instead
+			// of erroring — agents can't otherwise tell "done" from "missing".
+			if last, lerr := g.Store().GetLatestScanRun(domain); lerr == nil && last != nil && last.Status == "completed" {
+				return jsonResult(map[string]any{
+					"state":           "scan_complete",
+					"wave_complete":   true,
+					"claimable_now":   0,
+					"in_progress":     0,
+					"remaining_total": 0,
+					"revision_id":     last.RevisionID,
+					"message":         "The last scan for this domain completed — the graph is ready to query. Do not start extraction waves. For changed files use chronicle_command(command=\"update\").",
+				}), nil
+			}
+			return errorResult(fmt.Errorf("no active scan run for domain %s — start one via chronicle_command(command=\"scan\")", domain)), nil
 		}
 
 		scanStatus, err := g.BuildScanRunStatus(run, "scan_file")

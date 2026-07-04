@@ -37,9 +37,10 @@ Or add to your Claude Code MCP config (`~/.claude.json`):
 chronicle setup codex
 ```
 
-This registers the server in `~/.codex/config.toml`, writes usage guidance to
-`~/.codex/AGENTS.md` (and to the project's `AGENTS.md` when run inside a project),
-and installs `/chronicle-scan`, `/chronicle-impact`, ... custom prompts.
+This registers the server in `~/.codex/config.toml` (plus a SessionStart hook that
+re-primes the Chronicle entry point after `/clear` or compaction), writes usage
+guidance to `~/.codex/AGENTS.md` (and to the project's `AGENTS.md` when run inside
+a project), and installs `/chronicle-scan`, `/chronicle-impact`, ... custom prompts.
 Equivalent manual config:
 
 ```toml

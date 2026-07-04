@@ -117,6 +117,36 @@ func (s *Store) GetActiveScanRun(domainKey string) (*ScanRunRow, error) {
 	return &r, nil
 }
 
+// GetLatestScanRun returns the most recent run for a domain regardless of
+// state — lets callers distinguish "scan finished" from "never scanned"
+// after GetActiveScanRun returns nil. Returns nil, nil when no runs exist.
+func (s *Store) GetLatestScanRun(domainKey string) (*ScanRunRow, error) {
+	var r ScanRunRow
+	var updatedAt sql.NullString
+	var autopilot int
+	err := s.db.QueryRow(`
+		SELECT run_id, revision_id, domain_key, phase, status,
+		       total_files, extracted_files, resolved, COALESCE(votes_needed,1),
+		       autopilot, auto_confirms, created_at, updated_at
+		FROM scan_runs
+		WHERE domain_key = ?
+		ORDER BY run_id DESC LIMIT 1
+	`, domainKey).Scan(&r.RunID, &r.RevisionID, &r.DomainKey, &r.Phase, &r.Status,
+		&r.TotalFiles, &r.ExtractedFiles, &r.Resolved, &r.VotesNeeded,
+		&autopilot, &r.AutoConfirms, &r.CreatedAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetLatestScanRun: %w", err)
+	}
+	r.Autopilot = autopilot != 0
+	if updatedAt.Valid {
+		r.UpdatedAt = updatedAt.String
+	}
+	return &r, nil
+}
+
 // TransitionScanRun updates the phase and optionally sets total_files if > 0.
 func (s *Store) TransitionScanRun(runID int64, newPhase string, totalFiles int) error {
 	var err error

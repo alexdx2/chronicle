@@ -25,6 +25,9 @@ const (
 
 	codexSentinelStart = "# >>> chronicle mcp >>>"
 	codexSentinelEnd   = "# <<< chronicle mcp <<<"
+
+	codexHookSentinelStart = "# >>> chronicle hooks >>>"
+	codexHookSentinelEnd   = "# <<< chronicle hooks <<<"
 )
 
 // Actions reported by upsert helpers.
@@ -175,29 +178,72 @@ func upsertCodexMCPConfig(configPath, binaryPath string) (string, error) {
 	}
 
 	text := string(existing)
-	start := strings.Index(text, codexSentinelStart)
-	end := strings.Index(text, codexSentinelEnd)
-
-	if start >= 0 && end > start {
-		tail := text[end+len(codexSentinelEnd):]
-		tail = strings.TrimPrefix(tail, "\n")
-		updated := text[:start] + block + tail
-		if updated == text {
-			return setupUnchanged, nil
-		}
-		return setupUpdated, writeFileMkdir(configPath, updated)
-	}
-
-	if strings.Contains(text, "[mcp_servers.chronicle]") {
+	if !strings.Contains(text, codexSentinelStart) && strings.Contains(text, "[mcp_servers.chronicle]") {
 		return setupSkipped, nil
 	}
 
+	updated := spliceSentinelBlock(text, codexSentinelStart, codexSentinelEnd, block)
+	if updated == text {
+		return setupUnchanged, nil
+	}
+	return setupUpdated, writeFileMkdir(configPath, updated)
+}
+
+// spliceSentinelBlock replaces the sentinel-delimited block in text, or
+// appends it when absent, preserving all surrounding content.
+func spliceSentinelBlock(text, sentinelStart, sentinelEnd, block string) string {
+	start := strings.Index(text, sentinelStart)
+	end := strings.Index(text, sentinelEnd)
+	if start >= 0 && end > start {
+		tail := text[end+len(sentinelEnd):]
+		tail = strings.TrimPrefix(tail, "\n")
+		return text[:start] + block + tail
+	}
 	updated := text
 	if updated != "" && !strings.HasSuffix(updated, "\n") {
 		updated += "\n"
 	}
-	updated += "\n" + block
-	return setupUpdated, writeFileMkdir(configPath, updated)
+	if updated != "" {
+		updated += "\n"
+	}
+	return updated + block
+}
+
+// codexSessionHookBlock is the SessionStart reminder installed into Codex's
+// config.toml: after startup/resume/clear/compact the echoed line re-primes
+// the Chronicle entry point (context compaction loses AGENTS.md emphasis).
+// The command is a TOML single-quoted literal — it must contain no single
+// quotes and no newlines.
+func codexSessionHookBlock() string {
+	return codexHookSentinelStart + "\n" +
+		`[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'echo "Chronicle MCP: for architecture questions prefer the graph tools - start with chronicle_command help. Never call chronicle_scan_ tools directly outside chronicle_command instructions."'
+` + codexHookSentinelEnd + "\n"
+}
+
+// upsertCodexSessionHook installs or refreshes the SessionStart reminder
+// hook. Returns whether the file changed.
+func upsertCodexSessionHook(configPath string) (bool, error) {
+	block := codexSessionHookBlock()
+
+	existing, err := os.ReadFile(configPath)
+	if os.IsNotExist(err) {
+		return true, writeFileMkdir(configPath, block)
+	}
+	if err != nil {
+		return false, err
+	}
+
+	text := string(existing)
+	updated := spliceSentinelBlock(text, codexHookSentinelStart, codexHookSentinelEnd, block)
+	if updated == text {
+		return false, nil
+	}
+	return true, writeFileMkdir(configPath, updated)
 }
 
 // codexPrompts are custom prompts installed to ~/.codex/prompts/ — each file
@@ -294,6 +340,13 @@ func newSetupCodexCmd() *cobra.Command {
 				os.Exit(1)
 			}
 			fmt.Printf("%-40s %s\n", configPath, action)
+
+			hookChanged, err := upsertCodexSessionHook(configPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error installing SessionStart hook in %s: %v\n", configPath, err)
+				os.Exit(1)
+			}
+			fmt.Printf("%-40s %s\n", configPath+" (SessionStart hook)", changedWord(hookChanged))
 
 			globalAgents := filepath.Join(home, ".codex", "AGENTS.md")
 			changed, err := upsertMarkedSection(globalAgents, globalAgentsSection())

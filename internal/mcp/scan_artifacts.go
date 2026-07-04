@@ -49,7 +49,10 @@ func scanCheckoutBatchHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 		run, err := g.Store().GetActiveScanRun(domain)
 		if err != nil || run == nil {
-			return errorResult(fmt.Errorf("no active scan run for domain %s", domain)), nil
+			if last, lerr := g.Store().GetLatestScanRun(domain); lerr == nil && last != nil && last.Status == "completed" {
+				return errorResult(fmt.Errorf("no active scan run for domain %s — the last scan completed and the graph is ready to query; do not check out extraction work", domain)), nil
+			}
+			return errorResult(fmt.Errorf("no active scan run for domain %s — start one via chronicle_command(command=\"scan\")", domain)), nil
 		}
 
 		batches, err := g.ScanCheckoutBatches(run.RevisionID, obligationType, limit)

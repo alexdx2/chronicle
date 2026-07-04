@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -18,13 +19,28 @@ type FileTreeEntry struct {
 	Files []string `json:"files"`
 }
 
+// friendlyGitError translates git plumbing failures into something an agent
+// can act on. "exit status 128" on its own sends agents into diagnosis loops.
+func friendlyGitError(err error, rootDir string) error {
+	if ee, ok := err.(*exec.ExitError); ok {
+		stderr := string(ee.Stderr)
+		if strings.Contains(stderr, "not a git repository") || ee.ExitCode() == 128 {
+			return fmt.Errorf("not a git repository: %s — Chronicle discovers files via git; run 'git init && git add -A && git commit' first", rootDir)
+		}
+		if stderr != "" {
+			return fmt.Errorf("git ls-files failed in %s: %s", rootDir, strings.TrimSpace(stderr))
+		}
+	}
+	return fmt.Errorf("git ls-files failed in %s: %w", rootDir, err)
+}
+
 // GroupFilesByDirectory runs git ls-files and groups results by top-level directory (2-3 levels deep).
 func GroupFilesByDirectory(rootDir string) ([]DirectoryGroup, int, error) {
 	cmd := exec.Command("git", "ls-files")
 	cmd.Dir = rootDir
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, friendlyGitError(err, rootDir)
 	}
 
 	dirCounts := make(map[string]int)
@@ -61,7 +77,7 @@ func BuildFileTree(rootDir string) ([]FileTreeEntry, int, error) {
 	cmd.Dir = rootDir
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, friendlyGitError(err, rootDir)
 	}
 
 	dirMap := make(map[string][]string)

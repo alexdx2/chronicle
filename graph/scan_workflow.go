@@ -138,8 +138,17 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 		return nil, err
 	}
 
-	// No active run — tell Claude to start one.
+	// No active run. If the last run completed, say so explicitly — returning
+	// start_scan here makes agents begin a second scan of a finished domain.
 	if run == nil {
+		if last, lerr := g.store.GetLatestScanRun(domainKey); lerr == nil && last != nil && last.Status == "completed" {
+			return &ScanAction{
+				Phase:  "finalized",
+				Action: "scan_complete",
+				Done:   true,
+				Reason: "The last scan for this domain completed. The graph is ready to query — do not start extraction. For a rescan, begin the scan workflow from the start; for changed files only, use chronicle_command(command=\"update\").",
+			}, nil
+		}
 		return &ScanAction{
 			Phase:  "",
 			Action: "start_scan",

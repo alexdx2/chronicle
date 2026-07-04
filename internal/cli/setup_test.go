@@ -246,6 +246,62 @@ func TestGlobalAgentsSection_IsProjectAgnostic(t *testing.T) {
 	}
 }
 
+// ─── Codex SessionStart hook ────────────────────────────────────────────────
+
+func TestUpsertCodexSessionHook_CreatesBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeFileOrFail(t, path, "[mcp_servers.other]\ncommand = \"x\"\n")
+
+	changed, err := upsertCodexSessionHook(path)
+	if err != nil {
+		t.Fatalf("upsertCodexSessionHook: %v", err)
+	}
+	if !changed {
+		t.Error("changed = false; want true when hook is added")
+	}
+
+	got := readFileOrFail(t, path)
+	for _, want := range []string{
+		"[[hooks.SessionStart]]",
+		`matcher = "startup|resume|clear|compact"`,
+		"chronicle_command", // the reminder must re-prime the entry point
+		codexHookSentinelStart,
+		codexHookSentinelEnd,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hook block missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "[mcp_servers.other]") {
+		t.Errorf("existing config lost:\n%s", got)
+	}
+	// TOML single-quoted literal — the command must contain no single quotes.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "command = '") && strings.Count(line, "'") != 2 {
+			t.Errorf("hook command must not contain inner single quotes: %s", line)
+		}
+	}
+}
+
+func TestUpsertCodexSessionHook_Idempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	if _, err := upsertCodexSessionHook(path); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	changed, err := upsertCodexSessionHook(path)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if changed {
+		t.Error("changed = true on identical re-run; want false")
+	}
+	got := readFileOrFail(t, path)
+	if strings.Count(got, "[[hooks.SessionStart]]") != 1 {
+		t.Errorf("want exactly one hook block:\n%s", got)
+	}
+}
+
 // ─── Codex custom prompts ───────────────────────────────────────────────────
 
 func TestWriteCodexPrompts_CreatesPromptFiles(t *testing.T) {
