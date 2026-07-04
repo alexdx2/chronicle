@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSaliencePolicy_RenderRuleLookup(t *testing.T) {
 	p := &SaliencePolicy{
@@ -128,6 +131,39 @@ func TestSaliencePolicy_KnownRoles(t *testing.T) {
 		if got[i-1] > got[i] {
 			t.Fatalf("not sorted: %v", got)
 		}
+	}
+}
+
+func TestLoad_RejectsInvalidSalienceValues(t *testing.T) {
+	cases := []struct {
+		name     string
+		salience string
+		wantSub  string
+	}{
+		{"bad tier", `
+  render_policy:
+    "type:data.dto": { default: { tier: primry } }`, "tier"},
+		{"bad render_mode", `
+  render_policy:
+    "type:data.dto": { default: { render_mode: boxx } }`, "render_mode"},
+		{"unnamespaced key", `
+  render_policy:
+    "data.dto": { default: { render_mode: hidden } }`, "namespaced"},
+		{"bad max_tier", `
+  roles:
+    helper: { promotable: false, max_tier: primry }`, "max_tier"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			y := []byte("version: \"1\"\nlayers: [data]\nnode_types:\n  data: [dto]\nsalience:" + tc.salience + "\n")
+			_, err := Load(y)
+			if err == nil {
+				t.Fatalf("Load should reject %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("error %q should mention %q", err.Error(), tc.wantSub)
+			}
+		})
 	}
 }
 

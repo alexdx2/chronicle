@@ -1,9 +1,49 @@
 package registry
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
+
+// Closed vocabularies (spec principle 4). Typos in a user chronicle.types.yaml
+// must fail Load loudly instead of silently degrading to hidden.
+var (
+	validTiers = map[string]bool{"primary": true, "secondary": true, "detail": true}
+
+	validRenderModes = map[string]bool{
+		"box": true, "collapsed_group": true, "badge": true,
+		"attached_detail": true, "expandable_detail": true, "hidden": true,
+	}
+)
+
+// Validate checks the salience section against the closed vocabularies.
+// Level keys are intentionally NOT validated (the set of diagram levels /
+// layout presets is open); policy keys, tiers and render modes are closed.
+func (p *SaliencePolicy) Validate() error {
+	if p == nil {
+		return nil
+	}
+	for key, byLevel := range p.RenderPolicy {
+		if !strings.HasPrefix(key, "type:") && !strings.HasPrefix(key, "role:") {
+			return fmt.Errorf("salience: render_policy key %q must be namespaced (type:<layer>.<type> or role:<role>)", key)
+		}
+		for level, rule := range byLevel {
+			if rule.Tier != "" && !validTiers[rule.Tier] {
+				return fmt.Errorf("salience: render_policy %q level %q: invalid tier %q (want primary|secondary|detail)", key, level, rule.Tier)
+			}
+			if rule.RenderMode != "" && !validRenderModes[rule.RenderMode] {
+				return fmt.Errorf("salience: render_policy %q level %q: invalid render_mode %q (want box|collapsed_group|badge|attached_detail|expandable_detail|hidden)", key, level, rule.RenderMode)
+			}
+		}
+	}
+	for role, rr := range p.Roles {
+		if rr.MaxTier != "" && !validTiers[rr.MaxTier] {
+			return fmt.Errorf("salience: role %q: invalid max_tier %q (want primary|secondary|detail)", role, rr.MaxTier)
+		}
+	}
+	return nil
+}
 
 // RenderRule is one (level-scoped) salience override for a policy key.
 // Empty fields mean "this layer does not touch that field".
