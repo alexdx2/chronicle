@@ -1066,7 +1066,7 @@ func importExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 		domain := strParam(args, "domain")
 		revisionID := int64Param(args, "revision_id")
 
-		tmpDir := filepath.Join(paths.Dir(), "tmp")
+		tmpDir := filepath.Join(paths.DirAt(graph.ProjectRoot()), "tmp")
 
 		entries, err := os.ReadDir(tmpDir)
 		if err != nil {

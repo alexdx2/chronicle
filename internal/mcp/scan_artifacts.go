@@ -129,7 +129,7 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("domain and revision_id are required")), nil
 		}
 
-		outboxDir := filepath.Join(paths.Dir(), "scan-outbox", fmt.Sprintf("%d", revisionID))
+		outboxDir := filepath.Join(paths.DirAt(graph.ProjectRoot()), "scan-outbox", fmt.Sprintf("%d", revisionID))
 		entries, err := os.ReadDir(outboxDir)
 		if err != nil {
 			return errorResult(fmt.Errorf("read outbox %s: %w", outboxDir, err)), nil

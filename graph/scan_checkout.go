@@ -81,8 +81,11 @@ func (g *Graph) ScanCheckoutBatches(revisionID int64, obligationType string, lim
 	}
 
 	projectRoot := ProjectRoot()
-	outboxDir := filepath.Join(paths.Dir(), "scan-outbox", fmt.Sprintf("%d", revisionID))
-	workDir := filepath.Join(paths.Dir(), "scan-work", fmt.Sprintf("%d", revisionID))
+	// Artifact paths are handed to other agent processes in tool responses —
+	// resolve against the project root (cwd fallback) so they are absolute.
+	chronDir := paths.DirAt(projectRoot)
+	outboxDir := filepath.Join(chronDir, "scan-outbox", fmt.Sprintf("%d", revisionID))
+	workDir := filepath.Join(chronDir, "scan-work", fmt.Sprintf("%d", revisionID))
 	for _, dir := range []string{outboxDir, workDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", dir, err)
