@@ -10,6 +10,16 @@ import (
 // runaway traversal in pathological graphs.
 const maxInjectDepth = 6
 
+// hubInDegreeThreshold: providers injected by this many components or more are
+// hubs (prisma, logger, config) — every flow "requires" them, which is noise.
+// Field-measured on otopoint: hubs of in-degree 200-450 made derived REQUIRES
+// 87% of all edges. Hubs stay traversable but are dropped from REQUIRES output.
+const hubInDegreeThreshold = 20
+
+// maxFlowRequires caps derived REQUIRES per flow, closest-first (BFS order):
+// a flow "requiring" 45 providers says nothing; the ~15 nearest say plenty.
+const maxFlowRequires = 15
+
 // DeriveFlows derives flow nodes deterministically from endpoint nodes in the domain.
 //
 // For each active contract:endpoint node:
@@ -98,9 +108,20 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 		endpointToController[e.ToNodeID] = e.FromNodeID
 	}
 
+	// Inbound INJECTS count per node — identifies hub providers.
+	injectInDegree := make(map[int64]int)
+	for _, e := range injectEdges {
+		injectInDegree[e.ToNodeID]++
+	}
+
 	// Process each endpoint in the domain.
 	for _, ep := range contractNodes {
 		if ep.Status == "deleted" || ep.Status == "stale" {
+			continue
+		}
+		// Junk endpoints (regex-extracted ports like "GET /:19000") must not
+		// spawn flows — each derived flow drags a REQUIRES closure behind it.
+		if !endpointPathHasAlpha(ep.Name) {
 			continue
 		}
 		ctrlID, ok := endpointToController[ep.NodeID]
@@ -110,7 +131,20 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 		}
 
 		// Compute REQUIRES closure from the controller via INJECTS, max depth 6.
+		// Hubs are excluded from the output and the fan-out is capped
+		// closest-first (BFS order).
 		closureIDs := injectiveClosureIDs(ctrlID, injectAdj, maxInjectDepth)
+		filtered := make([]int64, 0, len(closureIDs))
+		for _, id := range closureIDs {
+			if injectInDegree[id] >= hubInDegreeThreshold {
+				continue
+			}
+			filtered = append(filtered, id)
+			if len(filtered) == maxFlowRequires {
+				break
+			}
+		}
+		closureIDs = filtered
 
 		// Derive flow name: lastSegment (METHOD path)
 		flowName := deriveFlowName(ep.Name)
@@ -182,6 +216,22 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 	}
 
 	return nil
+}
+
+// endpointPathHasAlpha reports whether the path part of an endpoint name
+// (after the leading HTTP-method token, if any) contains at least one letter.
+// "GET /:19000" → false (a port misparsed as a route); "DELETE /voucher/:id" → true.
+func endpointPathHasAlpha(name string) bool {
+	path := name
+	if i := strings.IndexByte(name, ' '); i > 0 {
+		path = name[i+1:]
+	}
+	for _, r := range path {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveNodeKey returns the node key for a given node ID, consulting the

@@ -31,6 +31,16 @@ func TestSoloScanStages_NoSpawning(t *testing.T) {
 	}
 }
 
+// Solo extractors are tempted to script extraction at scale (Codex regex'd
+// 6.3k files in 21 min on otopoint — junk endpoints, templated flows). The
+// solo instructions must forbid it where the extractor actually reads them.
+func TestSoloScanStages_ForbidsScriptedExtraction(t *testing.T) {
+	solo := strings.ToLower(BuildSoloScanStagesInstruction())
+	if !strings.Contains(solo, "script") {
+		t.Error("solo instructions must explicitly forbid script-generated facts")
+	}
+}
+
 func TestSoloScanStages_KeepsCheckpoints(t *testing.T) {
 	solo := BuildSoloScanStagesInstruction()
 	orchestrator := BuildScanStagesInstruction()

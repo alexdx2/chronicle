@@ -34,6 +34,18 @@ You receive:
 
 # Rules
 
+## READ the code — never script the extraction
+
+You MUST READ the trigger file and the files in `flow_context.files_to_read`
+with your file-reading tools and trace what the code actually does.
+Do NOT write scripts (regex, grep, AST dumps) to mass-generate flow facts —
+scripted flows produce templated garbage that poisons the graph.
+steps MUST describe what the code actually does at each stage (validations,
+records written, events published), never generic templates like
+"Receive X request / Return X result".
+requires MUST list the services the flow actually calls on that path,
+not everything the constructor injects.
+
 ## One flow per real entry point
 
 A controller with 5 endpoints = up to 5 flows.

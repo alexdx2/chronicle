@@ -142,6 +142,8 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		imported := 0
+		rowsWritten := 0
+		deduped := 0
 		errors := 0
 		var errMsgs []string
 		for _, entry := range entries {
@@ -173,10 +175,16 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 				continue
 			}
 
+			// Phase-2 flow artifacts are saved under role="flow" and skip the
+			// AST merge: prepended AST import facts used to flip the artifact's
+			// primary kind to "import", making the dedup match the phase-1 row
+			// and silently discard the flow facts (otopoint field finding).
+			isFlow := strings.Contains(factsJSON, `"kind":"flow"`)
+
 			// Merge server-side AST facts with LLM facts for TypeScript and Prisma files.
 			// This ensures deterministic AST imports/from_type are present regardless of
 			// extractor model quality (evidence-first principle).
-			if ext.Status == "extracted" {
+			if ext.Status == "extracted" && !isFlow {
 				factsJSON, ext.FromType = graph.MergeASTFactsJSON(ext.FilePath, factsJSON, ext.FromType, manifestTech)
 			}
 
@@ -189,17 +197,25 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 				dom = ext.Domain
 			}
 
-			if ext.VoteGroup != "" {
-				_, err = g.SaveFileExtractionWithVote(revisionID, dom, ext.FilePath, ext.Status, ext.FromType, factsJSON, errMsg, "llm_vote", ext.VoteGroup, ext.VoteIndex)
-			} else {
-				_, err = g.SaveFileExtraction(revisionID, dom, ext.FilePath, ext.Status, ext.FromType, factsJSON, errMsg)
+			role := "single"
+			switch {
+			case isFlow:
+				role = "flow"
+			case ext.VoteGroup != "":
+				role = "llm_vote"
 			}
+			_, written, err := g.Store().SaveExtractionWithOutcome(revisionID, dom, ext.FilePath, ext.Status, ext.FromType, factsJSON, errMsg, role, ext.VoteGroup, ext.VoteIndex)
 			if err != nil {
 				errors++
 				if len(errMsgs) < 3 {
 					errMsgs = append(errMsgs, ext.FilePath+": "+err.Error())
 				}
 				continue
+			}
+			if written {
+				rowsWritten++
+			} else {
+				deduped++
 			}
 
 			_ = g.SatisfyFileObligation(revisionID, ext.FilePath)
@@ -222,10 +238,12 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(map[string]any{
-			"imported":   imported,
-			"errors":     errors,
-			"dir":        outboxDir,
-			"error_msgs": errMsgs,
+			"imported":     imported,
+			"rows_written": rowsWritten,
+			"deduped":      deduped,
+			"errors":       errors,
+			"dir":          outboxDir,
+			"error_msgs":   errMsgs,
 		}), nil
 	}
 }

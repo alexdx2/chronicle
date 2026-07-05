@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
@@ -17,6 +18,12 @@ type Graph struct {
 	store   *store.Store
 	reg     *registry.Registry
 	emitter EventEmitter
+
+	// resolveInFlight guards ResolveExtractions per domain+revision: a resolve
+	// can outlive the MCP client's tool timeout and agents retry while the
+	// first run is still working — the retry must be rejected, not raced.
+	// Pointer so the tx-scoped struct copies (g2 := *g) share the same guard.
+	resolveInFlight *sync.Map
 
 	// scanFileIndex is populated during ResolveExtractions for class-name → file_path lookup.
 	scanFileIndex scanFileIndex
@@ -71,7 +78,7 @@ func defaultEvidenceConfidence(explicit float64) float64 {
 
 // New creates a new Graph.
 func New(s *store.Store, r *registry.Registry) *Graph {
-	return &Graph{store: s, reg: r, emitter: noopEmitter{}}
+	return &Graph{store: s, reg: r, emitter: noopEmitter{}, resolveInFlight: &sync.Map{}}
 }
 
 // SetEventEmitter attaches a listener for scan events.

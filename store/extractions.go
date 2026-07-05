@@ -40,39 +40,79 @@ func (s *Store) SaveExtraction(revisionID int64, domainKey, filePath, status, fr
 
 // SaveExtractionWithVote stores facts with voting metadata.
 func (s *Store) SaveExtractionWithVote(revisionID int64, domainKey, filePath, status, fromType, factsJSON, errorMessage, role, voteGroup string, voteIndex int) (int64, error) {
+	id, _, err := s.SaveExtractionWithOutcome(revisionID, domainKey, filePath, status, fromType, factsJSON, errorMessage, role, voteGroup, voteIndex)
+	return id, err
+}
+
+// SaveExtractionWithOutcome saves an extraction and additionally reports
+// whether the facts were actually stored (written=false means dedup returned
+// an existing row and the new facts were discarded). Callers surfacing scan
+// progress must use this — the 2026-07-05 otopoint scans lost every phase-2
+// flow artifact silently because the plain save hid the dedup outcome.
+//
+// Roles:
+//   - "llm_vote": always INSERT (each vote independent)
+//   - "flow": phase-2 flow facts — dedup ONLY within role='flow' for the same
+//     file (a phase-1 row must never swallow them); re-commit refreshes in place
+//   - anything else: dedup by domain+file against non-flow rows
+func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath, status, fromType, factsJSON, errorMessage, role, voteGroup string, voteIndex int) (int64, bool, error) {
 	if factsJSON == "" {
 		factsJSON = "[]"
 	}
 
-	// llm_vote: always INSERT (no dedup — each vote is independent)
-	if role == "llm_vote" {
+	insert := func() (int64, bool, error) {
 		res, err := s.db.Exec(`
 			INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, from_type, extraction_role, vote_group, vote_index, facts_json, error_message)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, revisionID, domainKey, filePath, status, fromType, role, voteGroup, voteIndex, factsJSON, nullableStr(errorMessage))
 		if err != nil {
-			return 0, fmt.Errorf("SaveExtraction: %w", err)
+			return 0, false, fmt.Errorf("SaveExtraction: %w", err)
 		}
-		return res.LastInsertId()
+		id, err := res.LastInsertId()
+		return id, true, err
 	}
 
-	// ast / llm_single / default: dedup by domain + file
+	// llm_vote: always INSERT (no dedup — each vote is independent)
+	if role == "llm_vote" {
+		return insert()
+	}
+
+	// flow: dedup within role='flow' only; refresh in place on re-commit.
+	if role == "flow" {
+		var existingID int64
+		err := s.db.QueryRow(`
+			SELECT extraction_id FROM scan_extractions
+			WHERE domain_key = ? AND file_path = ? AND extraction_role = 'flow'
+			ORDER BY extraction_id DESC LIMIT 1
+		`, domainKey, filePath).Scan(&existingID)
+		if err == nil {
+			_, uerr := s.db.Exec(`UPDATE scan_extractions SET facts_json = ?, from_type = ?, status = ?, error_message = ? WHERE extraction_id = ?`,
+				factsJSON, fromType, status, nullableStr(errorMessage), existingID)
+			if uerr != nil {
+				return 0, false, fmt.Errorf("SaveExtraction: %w", uerr)
+			}
+			return existingID, true, nil
+		}
+		return insert()
+	}
+
+	// ast / llm_single / default: dedup by domain + file against non-flow rows.
 	var existingID int64
 	var existingFacts string
 	err := s.db.QueryRow(`
 		SELECT extraction_id, facts_json FROM scan_extractions
-		WHERE domain_key = ? AND file_path = ?
+		WHERE domain_key = ? AND file_path = ? AND COALESCE(extraction_role,'single') != 'flow'
 		ORDER BY extraction_id DESC LIMIT 1
 	`, domainKey, filePath).Scan(&existingID, &existingFacts)
 	if err == nil {
 		if factsJSON == "[]" || factsJSON == "" {
-			return existingID, nil
+			return existingID, false, nil
 		}
 		if existingFacts == "[]" || existingFacts == "" {
 			s.db.Exec(`UPDATE scan_extractions SET facts_json = ?, from_type = ?, status = 'extracted', extraction_role = ? WHERE extraction_id = ?`, factsJSON, fromType, role, existingID)
-			return existingID, nil
+			return existingID, true, nil
 		}
-		// Different fact kind — allow insert (phase 2 flow facts for phase 1 file)
+		// Same primary fact kind already stored for this file — dedup.
 		primaryKind := extractPrimaryKind(factsJSON)
 		var existingWithKind int64
 		if primaryKind != "" {
@@ -82,19 +122,12 @@ func (s *Store) SaveExtractionWithVote(revisionID int64, domainKey, filePath, st
 				LIMIT 1
 			`, domainKey, filePath, "%\"kind\":\""+primaryKind+"\"%").Scan(&existingWithKind)
 			if existingWithKind > 0 {
-				return existingWithKind, nil
+				return existingWithKind, false, nil
 			}
 		}
 	}
 
-	res, err := s.db.Exec(`
-		INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, from_type, extraction_role, vote_group, vote_index, facts_json, error_message)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, revisionID, domainKey, filePath, status, fromType, role, voteGroup, voteIndex, factsJSON, nullableStr(errorMessage))
-	if err != nil {
-		return 0, fmt.Errorf("SaveExtraction: %w", err)
-	}
-	return res.LastInsertId()
+	return insert()
 }
 
 // ListExtractions returns all extractions for a revision.

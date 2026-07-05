@@ -237,7 +237,9 @@ var scanStages = []ScanStage{
     4. Call chronicle_scan_checkout_batch(domain, limit=10) ONCE for this wave
        Response is file-backed: read items_path (not inline items). Read fact_schema from fact_schema_path.
     5. For EACH item in the batch:
-       - Read the source file at file_path
+       - READ the source file at file_path with your file-reading tools — do NOT
+         write scripts (regex/grep) to mass-generate facts; scripted extraction
+         produces junk facts that poison the graph
        - Extract facts per fact_schema.md
        - If deterministic_candidates_path is set, read candidates and merge into facts (accept high-confidence hints)
        - Write ONE JSON artifact to outbox_dir:
@@ -308,8 +310,10 @@ var scanStages = []ScanStage{
 		SoloInstruction: `scan_next_file returned "trace_flow" with flow_context.
   Solo flow tracing — you trace each flow yourself:
     1. chronicle_scan_checkout_batch(domain, obligation_type="trace_flow")
-    2. For each item: read the files in files_to_read, trace the flow end-to-end,
-       write the outbox JSON artifact per the flow fact_schema
+    2. For each item: READ the trigger file and the files in files_to_read,
+       trace the flow end-to-end, write the outbox JSON artifact per the flow
+       fact_schema. Do NOT script this (regex/grep) — steps must describe what
+       the code actually does, not templates
     3. commit_scan_outbox after each wave
     4. Repeat until no trace_flow obligations remain`,
 		AfterAgents: `a. Call chronicle_resolve_extractions(domain, revision_id)

@@ -504,6 +504,20 @@ func (g *Graph) endpointReconcileAction(run *store.ScanRunRow) (*ScanAction, err
 	}, nil
 }
 
+// isFlowTriggerFile reports whether a file can be a flow-tracing trigger.
+// Only source-code files qualify — config/infra files (fly.toml, compose
+// files, app.json) sometimes carry junk endpoint facts and must not receive
+// trace_flow obligations.
+func isFlowTriggerFile(path string) bool {
+	lower := strings.ToLower(path)
+	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".py", ".cs", ".java", ".kt", ".rb", ".php", ".scala", ".ex", ".exs", ".rs"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // phase2SelectAction finds trigger files (endpoints, consumers) and creates trace_flow obligations.
 func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 	// Find trigger files: nodes that expose endpoints or consume topics
@@ -528,6 +542,9 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 				skippedNoFilePath++
 				continue
 			}
+			if !isFlowTriggerFile(node.FilePath) {
+				continue
+			}
 			triggerFiles[node.FilePath] = true
 		}
 	}
@@ -548,7 +565,7 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 		// Search all nodes with file_path set; if they match a trigger node ID, use them
 		allNodes, _ := g.store.ListNodes(store.NodeFilter{Domain: run.DomainKey})
 		for _, n := range allNodes {
-			if n.FilePath != "" && triggerNodeIDs[n.NodeID] {
+			if n.FilePath != "" && triggerNodeIDs[n.NodeID] && isFlowTriggerFile(n.FilePath) {
 				triggerFiles[n.FilePath] = true
 			}
 		}
@@ -565,7 +582,9 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 				}
 			}
 			for _, fp := range parentFiles {
-				triggerFiles[fp] = true
+				if isFlowTriggerFile(fp) {
+					triggerFiles[fp] = true
+				}
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
@@ -242,6 +243,20 @@ func (g *Graph) ResolveExtractions(domainKey string, revisionID int64) (*Resolve
 	return g.ResolveExtractionsWithOptions(domainKey, revisionID, ResolveOptions{})
 }
 
+// tryBeginResolve acquires the per-revision resolve guard. On success it
+// returns a release func; when a resolve is already running for the same
+// domain+revision it returns an actionable error instead of racing.
+func (g *Graph) tryBeginResolve(domainKey string, revisionID int64) (func(), error) {
+	if g.resolveInFlight == nil {
+		g.resolveInFlight = &sync.Map{}
+	}
+	key := fmt.Sprintf("%s:%d", domainKey, revisionID)
+	if _, loaded := g.resolveInFlight.LoadOrStore(key, true); loaded {
+		return nil, fmt.Errorf("resolve already in progress for %s revision %d — a previous chronicle_resolve_extractions call is still running (it can outlive your client's tool timeout). Poll chronicle_scan_pool_status until the phase advances instead of retrying", domainKey, revisionID)
+	}
+	return func() { g.resolveInFlight.Delete(key) }, nil
+}
+
 // testHookResolveInTx is called (when set, tests only) with the InTx state of the resolve body's store.
 var testHookResolveInTx func(bool)
 
@@ -252,8 +267,13 @@ func (g *Graph) ResolveExtractionsWithOptions(domainKey string, revisionID int64
 	if g.store.InTx() {
 		return g.resolveExtractionsInTx(domainKey, revisionID, opts)
 	}
+	release, err := g.tryBeginResolve(domainKey, revisionID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	var result *ResolveExtractionsResult
-	err := g.store.WithTx(func(tx *store.Store) error {
+	err = g.store.WithTx(func(tx *store.Store) error {
 		g2 := *g
 		g2.store = tx
 		r, err := g2.resolveExtractionsInTx(domainKey, revisionID, opts)
