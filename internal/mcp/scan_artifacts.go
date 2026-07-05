@@ -107,6 +107,24 @@ func scanCheckoutBatchHandler(g *graph.Graph) server.ToolHandlerFunc {
 // chronicle_commit_scan_outbox — orchestrator commits extractor artifacts to DB
 // ---------------------------------------------------------------------------
 
+// hasFlowFacts reports whether a facts JSON array contains a flow fact.
+// Parses rather than substring-matches: artifact JSON arrives in whatever
+// formatting the agent used (pretty-printed, key-reordered).
+func hasFlowFacts(factsJSON string) bool {
+	var facts []struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(factsJSON), &facts); err != nil {
+		return false
+	}
+	for _, f := range facts {
+		if f.Kind == "flow" {
+			return true
+		}
+	}
+	return false
+}
+
 func commitScanOutboxTool() mcp.Tool {
 	return mcp.NewTool("chronicle_commit_scan_outbox",
 		mcp.WithDescription("Import extraction JSON artifacts from .depbot/scan-outbox/{revision_id}/ into the database and satisfy obligations. Orchestrator-only single-writer commit step after a wave finishes."),
@@ -179,7 +197,9 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 			// AST merge: prepended AST import facts used to flip the artifact's
 			// primary kind to "import", making the dedup match the phase-1 row
 			// and silently discard the flow facts (otopoint field finding).
-			isFlow := strings.Contains(factsJSON, `"kind":"flow"`)
+			// Detection must PARSE the facts — agents write pretty-printed JSON
+			// (`"kind": "flow"` with a space), a compact substring check misses it.
+			isFlow := hasFlowFacts(factsJSON)
 
 			// Merge server-side AST facts with LLM facts for TypeScript and Prisma files.
 			// This ensures deterministic AST imports/from_type are present regardless of
