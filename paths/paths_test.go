@@ -1,4 +1,3 @@
-// depbot/paths/paths_test.go
 package paths
 
 import "testing"

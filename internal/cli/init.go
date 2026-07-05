@@ -61,7 +61,7 @@ owner: my-team
 			s.Close()
 			fmt.Fprintf(os.Stderr, "database ready at %s\n", dbPath)
 
-			// Add .depbot to .gitignore if not already there
+			// Add the chronicle dir to .gitignore if not already there
 			addToGitignore()
 
 			outputJSON(map[string]string{
@@ -87,8 +87,11 @@ func addToGitignore() {
 		os.WriteFile(gitignorePath, []byte(line+"\n"), 0644)
 		return
 	}
-	if strings.Contains(string(content), entry) {
-		return
+	for _, l := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == entry || trimmed == line {
+			return
+		}
 	}
 	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {

@@ -55,8 +55,7 @@ func TestCLIWorkflow(t *testing.T) {
 		t.Errorf("version = %q, want contains 'release_codename:'", versionOut)
 	}
 
-	// 2. Init (creates DB via --db flag, which auto-migrates)
-	// The DB is created automatically on first command that opens it
+	// 2. Init (DB is created automatically under --project on first command that opens it)
 
 	// 3. Create revision
 	revOut := runJSON("revision", "create", "--domain", "orders", "--after-sha", "abc123", "--trigger", "manual", "--mode", "full")

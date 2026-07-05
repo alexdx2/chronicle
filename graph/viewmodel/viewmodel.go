@@ -43,7 +43,8 @@ func notFoundf(format string, args ...any) error {
 // DefaultManifestPath resolves the domain manifest path relative to the
 // store's directory. It mirrors the admin server lookup: when the DB lives in
 // a .depbot directory, the project-root chronicle.domain.yaml wins if it
-// exists, otherwise .depbot/chronicle.domain.yaml is used.
+// exists, otherwise .depbot/chronicle.domain.yaml is used. A custom
+// --chronicle-dir base name is honored the same way.
 func DefaultManifestPath(st *store.Store) string {
 	dir := st.Dir()
 	base := filepath.Base(dir)
