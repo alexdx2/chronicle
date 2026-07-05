@@ -1,7 +1,7 @@
 services:
   admin:
     build: .
-    command: ["admin", "--port", "4200", "--db", "/data/chronicle.db"]
+    command: ["admin", "--port", "4200", "--chronicle-dir", "/data"]
     ports:
       - "4200:4200"
     volumes:

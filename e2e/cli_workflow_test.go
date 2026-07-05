@@ -13,11 +13,10 @@ func TestCLIWorkflow(t *testing.T) {
 	// Find the chronicle binary — build it if needed
 	binaryPath := findOrBuildBinary(t)
 	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
 
 	// Helper to run chronicle commands
 	run := func(args ...string) string {
-		fullArgs := append([]string{"--db", dbPath}, args...)
+		fullArgs := append([]string{"--project", tmpDir}, args...)
 		cmd := exec.Command(binaryPath, fullArgs...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

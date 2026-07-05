@@ -66,7 +66,7 @@ if [ ! -f "$DB_PATH" ]; then
   "$CHRONICLE" init > /dev/null 2>&1
   EXPECTED="$FIXTURE_DIR/expected-graph.json"
   if [ -f "$EXPECTED" ]; then
-    "$CHRONICLE" import --file "$EXPECTED" --db "$DB_PATH" > /dev/null 2>&1
+    "$CHRONICLE" import --file "$EXPECTED" --project "$WORK_DIR" > /dev/null 2>&1
     pass "Graph imported from expected-graph.json"
   else
     fail "No fixture DB and no expected-graph.json"
@@ -156,7 +156,7 @@ cat > "$MCP_CONFIG" << MCPEOF
   "mcpServers": {
     "chronicle": {
       "command": "$CHRONICLE",
-      "args": ["mcp", "serve", "--db", "$DB_PATH", "--no-admin", "--live-check"]
+      "args": ["mcp", "serve", "--project", "$WORK_DIR", "--no-admin", "--live-check"]
     }
   }
 }

@@ -74,7 +74,7 @@ EDGES_BEFORE=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM graph_edges WHERE active
 CAT_NODE_ID=$(sqlite3 "$DB_PATH" "SELECT node_id FROM graph_nodes WHERE node_key='data:model:tomandjerry:cat'" 2>/dev/null)
 
 # Run ground truth impact for comparison
-GROUND_TRUTH_IMPACT=$("$CHRONICLE" impact data:model:tomandjerry:cat --depth 4 --db "$DB_PATH" 2>/dev/null)
+GROUND_TRUTH_IMPACT=$("$CHRONICLE" impact data:model:tomandjerry:cat --depth 4 --project "$WORK_DIR" 2>/dev/null)
 GT_IMPACTED=$(echo "$GROUND_TRUTH_IMPACT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_impacted',0))" 2>/dev/null)
 GT_NAMES=$(echo "$GROUND_TRUTH_IMPACT" | python3 -c "import sys,json; print(', '.join(i['name'] for i in json.load(sys.stdin).get('impacts',[])))" 2>/dev/null)
 GT_ENDPOINTS=$(echo "$GROUND_TRUTH_IMPACT" | python3 -c "
@@ -102,7 +102,7 @@ cat > "$MCP_CONFIG" << MCPEOF
   "mcpServers": {
     "chronicle": {
       "command": "$CHRONICLE",
-      "args": ["mcp", "serve", "--db", "$DB_PATH", "--no-admin"]
+      "args": ["mcp", "serve", "--project", "$WORK_DIR", "--no-admin"]
     }
   }
 }

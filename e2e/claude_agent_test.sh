@@ -67,7 +67,7 @@ cat > "$MCP_CONFIG" << MCPEOF
   "mcpServers": {
     "chronicle": {
       "command": "$CHRONICLE",
-      "args": ["mcp", "serve", "--db", "$DB_PATH", "--no-admin"]
+      "args": ["mcp", "serve", "--project", "$WORK_DIR", "--no-admin"]
     }
   }
 }
@@ -145,7 +145,7 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 
 # Helper to query stats
-STATS=$("$CHRONICLE" query stats --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo '{"node_count":0,"edge_count":0,"nodes_by_layer":{},"edges_by_type":{},"edges_by_derivation":{}}')
+STATS=$("$CHRONICLE" query stats --domain tomandjerry --project "$WORK_DIR" 2>/dev/null || echo '{"node_count":0,"edge_count":0,"nodes_by_layer":{},"edges_by_type":{},"edges_by_derivation":{}}')
 echo "$STATS" > "$RESULTS_DIR/stats.json"
 
 NODE_COUNT=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_count',0))")
@@ -180,7 +180,7 @@ done
 
 # ── 3d: Services ──
 section "Services"
-SERVICES=$("$CHRONICLE" node list --layer service --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
+SERVICES=$("$CHRONICLE" node list --layer service --domain tomandjerry --project "$WORK_DIR" 2>/dev/null || echo "[]")
 SERVICE_COUNT=$(echo "$SERVICES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
 SERVICE_NAMES=$(echo "$SERVICES" | python3 -c "import sys,json; print(', '.join(n['name'] for n in json.load(sys.stdin)))" 2>/dev/null || echo "(none)")
 if [ "$SERVICE_COUNT" -ge 3 ]; then pass "Services ($SERVICE_COUNT): $SERVICE_NAMES"
@@ -188,7 +188,7 @@ else fail "Services: $SERVICE_COUNT (want >= 3). Found: $SERVICE_NAMES"; fi
 
 # ── 3e: Data models ──
 section "Data Models"
-DATA_NODES=$("$CHRONICLE" node list --layer data --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
+DATA_NODES=$("$CHRONICLE" node list --layer data --domain tomandjerry --project "$WORK_DIR" 2>/dev/null || echo "[]")
 DATA_COUNT=$(echo "$DATA_NODES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
 DATA_NAMES=$(echo "$DATA_NODES" | python3 -c "import sys,json; print(', '.join(n['name'] for n in json.load(sys.stdin)))")
 if [ "$DATA_COUNT" -ge 3 ]; then pass "Data nodes ($DATA_COUNT): $DATA_NAMES"
@@ -203,7 +203,7 @@ done
 
 # ── 3f: Endpoints ──
 section "Endpoints"
-CONTRACT_NODES=$("$CHRONICLE" node list --layer contract --domain tomandjerry --db "$DB_PATH" 2>/dev/null || echo "[]")
+CONTRACT_NODES=$("$CHRONICLE" node list --layer contract --domain tomandjerry --project "$WORK_DIR" 2>/dev/null || echo "[]")
 ENDPOINT_COUNT=$(echo "$CONTRACT_NODES" | python3 -c "import sys,json; print(len([n for n in json.load(sys.stdin) if n['node_type']=='endpoint']))")
 TOPIC_COUNT=$(echo "$CONTRACT_NODES" | python3 -c "import sys,json; print(len([n for n in json.load(sys.stdin) if n['node_type']=='topic']))")
 if [ "$ENDPOINT_COUNT" -ge 8 ]; then pass "Endpoints: $ENDPOINT_COUNT (>= 8)"
@@ -260,7 +260,7 @@ section "Path Queries"
 ARENA_CTRL=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE node_key LIKE '%arena%controller%' AND node_type='controller' AND status='active' LIMIT 1" 2>/dev/null || echo "")
 TOM_SVC=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE node_key LIKE '%tom-api%' AND layer='service' AND status='active' LIMIT 1" 2>/dev/null || echo "")
 if [ -n "$ARENA_CTRL" ] && [ -n "$TOM_SVC" ]; then
-  TOM_PATH=$("$CHRONICLE" query path "$ARENA_CTRL" "$TOM_SVC" --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+  TOM_PATH=$("$CHRONICLE" query path "$ARENA_CTRL" "$TOM_SVC" --mode directed --project "$WORK_DIR" 2>/dev/null || echo '{"paths":[]}')
   TOM_PATH_COUNT=$(echo "$TOM_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))" 2>/dev/null || echo "0")
   if [ "$TOM_PATH_COUNT" -ge 1 ]; then
     pass "ArenaController → tom-api: $TOM_PATH_COUNT path(s)"
@@ -279,7 +279,7 @@ else
 fi
 
 # Tom ↔ Jerry: should NOT have direct path (only through arena)
-TJ_DIRECT=$("$CHRONICLE" query path service:service:tomandjerry:tom-api service:service:tomandjerry:jerry-api --mode directed --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+TJ_DIRECT=$("$CHRONICLE" query path service:service:tomandjerry:tom-api service:service:tomandjerry:jerry-api --mode directed --project "$WORK_DIR" 2>/dev/null || echo '{"paths":[]}')
 TJ_PATH_COUNT=$(echo "$TJ_DIRECT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('paths') or []))")
 if [ "$TJ_PATH_COUNT" -eq 0 ]; then pass "tom-api ↛ jerry-api: no direct path (correct — only via arena)"
 else echo -e "  ${YELLOW}⚠ tom-api → jerry-api: found $TJ_PATH_COUNT path(s) (unexpected direct connection)${NC}"; fi
@@ -288,7 +288,7 @@ else echo -e "  ${YELLOW}⚠ tom-api → jerry-api: found $TJ_PATH_COUNT path(s)
 section "Impact Analysis"
 
 # What breaks if Cat model changes?
-CAT_IMPACT=$("$CHRONICLE" impact data:model:tomandjerry:cat --depth 4 --db "$DB_PATH" 2>/dev/null || echo '{"total_impacted":0,"impacts":[]}')
+CAT_IMPACT=$("$CHRONICLE" impact data:model:tomandjerry:cat --depth 4 --project "$WORK_DIR" 2>/dev/null || echo '{"total_impacted":0,"impacts":[]}')
 CAT_IMPACT_COUNT=$(echo "$CAT_IMPACT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_impacted',0))")
 if [ "$CAT_IMPACT_COUNT" -ge 1 ]; then
   pass "Cat model impact: $CAT_IMPACT_COUNT nodes affected"
@@ -307,7 +307,7 @@ section "Kafka Flow"
 PRODUCER_KEY=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE (node_key LIKE '%producer%' OR name LIKE '%Producer%') AND layer='code' AND status='active' LIMIT 1" 2>/dev/null || echo "")
 CONSUMER_KEY=$(sqlite3 "$DB_PATH" "SELECT node_key FROM graph_nodes WHERE (node_key LIKE '%consumer%' OR name LIKE '%Consumer%') AND layer='code' AND status='active' LIMIT 1" 2>/dev/null || echo "")
 if [ -n "$PRODUCER_KEY" ] && [ -n "$CONSUMER_KEY" ]; then
-  KAFKA_PATH=$("$CHRONICLE" query path "$PRODUCER_KEY" "$CONSUMER_KEY" --mode connected --db "$DB_PATH" 2>/dev/null || echo '{"paths":[]}')
+  KAFKA_PATH=$("$CHRONICLE" query path "$PRODUCER_KEY" "$CONSUMER_KEY" --mode connected --project "$WORK_DIR" 2>/dev/null || echo '{"paths":[]}')
   KAFKA_PATH_COUNT=$(echo "$KAFKA_PATH" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('paths') or []))" 2>/dev/null || echo "0")
   if [ "$KAFKA_PATH_COUNT" -ge 1 ]; then
     pass "Kafka flow: $PRODUCER_KEY → topic → $CONSUMER_KEY"
@@ -388,7 +388,7 @@ SHARED_NODE=$(echo "$STATS" | python3 -c "
 import sys,json
 # Check if any node has 'shared' or 'package' in it
 " 2>/dev/null || echo "")
-SHARED_COUNT=$("$CHRONICLE" node list --db "$DB_PATH" 2>/dev/null | python3 -c "
+SHARED_COUNT=$("$CHRONICLE" node list --project "$WORK_DIR" 2>/dev/null | python3 -c "
 import sys,json
 nodes = json.load(sys.stdin)
 shared = [n for n in nodes if 'shared' in n.get('node_key','').lower() or n.get('node_type') == 'package']
@@ -402,10 +402,10 @@ fi
 
 # ── 3p: Business Flows ──
 section "Business Flows"
-FLOW_COUNT=$("$CHRONICLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+FLOW_COUNT=$("$CHRONICLE" node list --layer flow --project "$WORK_DIR" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
 if [ "$FLOW_COUNT" -ge 2 ]; then
   pass "Flow use cases: $FLOW_COUNT (>= 2)"
-  "$CHRONICLE" node list --layer flow --db "$DB_PATH" 2>/dev/null | python3 -c "
+  "$CHRONICLE" node list --layer flow --project "$WORK_DIR" 2>/dev/null | python3 -c "
 import sys,json
 for n in json.load(sys.stdin):
     print(f'    {n[\"node_type\"]:12s} {n[\"name\"]}')
@@ -435,7 +435,7 @@ section "Infrastructure"
 INFRA_COUNT=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('nodes_by_layer',{}).get('infra',0))" 2>/dev/null || echo "0")
 if [ "$INFRA_COUNT" -ge 1 ]; then
   pass "Infrastructure nodes: $INFRA_COUNT (>= 1)"
-  "$CHRONICLE" node list --layer infra --db "$DB_PATH" 2>/dev/null | python3 -c "
+  "$CHRONICLE" node list --layer infra --project "$WORK_DIR" 2>/dev/null | python3 -c "
 import sys,json
 for n in json.load(sys.stdin):
     print(f'    {n[\"node_type\"]:12s} {n[\"name\"]}')
@@ -474,7 +474,7 @@ else
   echo -e "  ${YELLOW}⚠ No domain terms defined — Claude didn't call chronicle_define_term${NC}"
 fi
 
-VIOLATION_COUNT=$("$CHRONICLE" node list --db "$DB_PATH" 2>/dev/null | python3 -c "
+VIOLATION_COUNT=$("$CHRONICLE" node list --project "$WORK_DIR" 2>/dev/null | python3 -c "
 import sys, json, sqlite3
 nodes = json.load(sys.stdin)
 conn = sqlite3.connect('$DB_PATH')

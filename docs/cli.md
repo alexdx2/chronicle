@@ -6,10 +6,8 @@ All commands accept these flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--project` | `.` (current dir) | Path to project root containing `.depbot/` |
-| `--db` | `<project>/.depbot/chronicle.db` | Path to SQLite database (overrides `--project`) |
-| `--manifest` | `<project>/.depbot/chronicle.domain.yaml` | Path to domain manifest (overrides `--project`) |
-| `--registry` | `<project>/.depbot/chronicle.types.yaml` | Path to type registry (overrides `--project`) |
+| `--project` | `.` (current dir) | Path to the project root; the chronicle dir resolves against it |
+| `--chronicle-dir` | `.depbot` | Artifacts directory (db, manifest, registry, journal, scan work). Relative → under project root; absolute → used as-is |
 
 Most of the time you only need `--project`:
 

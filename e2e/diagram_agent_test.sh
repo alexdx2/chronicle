@@ -86,7 +86,7 @@ cat > "$MCP_CONFIG" << MCPEOF
   "mcpServers": {
     "chronicle": {
       "command": "$CHRONICLE",
-      "args": ["mcp", "serve", "--db", "$DB_PATH", "--no-admin"]
+      "args": ["mcp", "serve", "--project", "$WORK_DIR", "--no-admin"]
     }
   }
 }
