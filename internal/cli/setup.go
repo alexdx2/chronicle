@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/spf13/cobra"
 )
 
@@ -366,7 +367,7 @@ func newSetupCodexCmd() *cobra.Command {
 
 			// Project-level AGENTS.md only when run inside a Chronicle project;
 			// other projects get it automatically on first chronicle command.
-			if _, statErr := os.Stat(depbotDir); statErr == nil {
+			if _, statErr := os.Stat(paths.Dir()); statErr == nil {
 				changed, err = upsertMarkedSection("AGENTS.md", projectAgentsSection())
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error updating AGENTS.md: %v\n", err)

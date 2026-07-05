@@ -131,6 +131,43 @@ func TestCLIWorkflow(t *testing.T) {
 	t.Log("Full CLI workflow passed!")
 }
 
+func TestChronicleDirFlag(t *testing.T) {
+	binaryPath := findOrBuildBinary(t)
+
+	t.Run("relative dir under project root", func(t *testing.T) {
+		projDir := t.TempDir()
+		cmd := exec.Command(binaryPath, "--project", projDir, "--chronicle-dir", ".depbot-exp",
+			"revision", "create", "--domain", "orders", "--after-sha", "abc", "--trigger", "manual", "--mode", "full")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("revision create failed: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(projDir, ".depbot-exp", "chronicle.db")); err != nil {
+			t.Errorf("expected db in custom dir: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(projDir, ".depbot")); !os.IsNotExist(err) {
+			t.Errorf(".depbot must not be created when --chronicle-dir is set")
+		}
+	})
+
+	t.Run("absolute dir", func(t *testing.T) {
+		projDir := t.TempDir()
+		artifacts := filepath.Join(t.TempDir(), "artifacts")
+		cmd := exec.Command(binaryPath, "--project", projDir, "--chronicle-dir", artifacts,
+			"revision", "create", "--domain", "orders", "--after-sha", "abc", "--trigger", "manual", "--mode", "full")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("revision create failed: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(artifacts, "chronicle.db")); err != nil {
+			t.Errorf("expected db in absolute dir: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(projDir, ".depbot")); !os.IsNotExist(err) {
+			t.Errorf(".depbot must not be created in project root")
+		}
+	})
+}
+
 func findOrBuildBinary(t *testing.T) string {
 	t.Helper()
 

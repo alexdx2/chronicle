@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/version"
@@ -18,23 +19,24 @@ import (
 
 var (
 	projectPath  string
+	chronicleDir string
 	dbPath       string
 	registryPath string
 	manifestPath string
 )
 
-const depbotDir = ".depbot"
-
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "chronicle",
 		Short: "Chronicle MCP — knowledge graph for your codebase",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			paths.SetProjectRoot(projectPath)
+			paths.SetChronicleDir(chronicleDir)
+		},
 	}
 
-	root.PersistentFlags().StringVar(&projectPath, "project", "", "Path to project root containing .depbot/ (default: current directory)")
-	root.PersistentFlags().StringVar(&dbPath, "db", "", "Path to SQLite database (overrides --project)")
-	root.PersistentFlags().StringVar(&registryPath, "registry", "", "Path to type registry (overrides --project)")
-	root.PersistentFlags().StringVar(&manifestPath, "manifest", "", "Path to domain manifest (overrides --project)")
+	root.PersistentFlags().StringVar(&projectPath, "project", "", "Path to project root (default: current directory)")
+	root.PersistentFlags().StringVar(&chronicleDir, "chronicle-dir", ".depbot", "Artifacts directory: relative to project root, or absolute")
 
 	root.AddCommand(
 		newVersionCmd(),
@@ -86,22 +88,12 @@ func newVersionCmd() *cobra.Command {
 	return c
 }
 
-// resolveDefaults sets default paths under .depbot/ if not explicitly provided.
-// If --project is set, all paths are relative to that directory.
+// resolveDefaults derives artifact file paths from the resolved chronicle dir.
 func resolveDefaults() {
-	base := depbotDir
-	if projectPath != "" {
-		base = filepath.Join(projectPath, depbotDir)
-	}
-	if dbPath == "" {
-		dbPath = filepath.Join(base, "chronicle.db")
-	}
-	if registryPath == "" {
-		registryPath = filepath.Join(base, "chronicle.types.yaml")
-	}
-	if manifestPath == "" {
-		manifestPath = filepath.Join(base, "chronicle.domain.yaml")
-	}
+	base := paths.Dir()
+	dbPath = filepath.Join(base, "chronicle.db")
+	registryPath = filepath.Join(base, "chronicle.types.yaml")
+	manifestPath = filepath.Join(base, "chronicle.domain.yaml")
 }
 
 func openGraph() *graph.Graph {

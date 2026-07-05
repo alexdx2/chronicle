@@ -3,7 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
@@ -12,13 +15,13 @@ import (
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Initialize .depbot/ with manifest, types, and database",
+		Short: "Initialize the chronicle dir with manifest, types, and database",
 		Run: func(cmd *cobra.Command, args []string) {
 			resolveDefaults()
 
-			// Create .depbot/ directory
-			if err := os.MkdirAll(depbotDir, 0755); err != nil {
-				fmt.Fprintf(os.Stderr, "error creating %s: %v\n", depbotDir, err)
+			// Create the chronicle dir
+			if err := os.MkdirAll(paths.Dir(), 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "error creating %s: %v\n", paths.Dir(), err)
 				os.Exit(1)
 			}
 
@@ -62,7 +65,7 @@ owner: my-team
 			addToGitignore()
 
 			outputJSON(map[string]string{
-				"directory": depbotDir,
+				"directory": paths.Dir(),
 				"manifest":  manifestPath,
 				"registry":  registryPath,
 				"database":  dbPath,
@@ -73,29 +76,24 @@ owner: my-team
 }
 
 func addToGitignore() {
+	entry := paths.ConfiguredDir()
+	if filepath.IsAbs(entry) {
+		return // artifacts live outside the repo — nothing to ignore
+	}
+	line := entry + "/"
 	gitignorePath := ".gitignore"
 	content, err := os.ReadFile(gitignorePath)
 	if err != nil {
-		// No .gitignore — create one
-		os.WriteFile(gitignorePath, []byte(".depbot/\n"), 0644)
+		os.WriteFile(gitignorePath, []byte(line+"\n"), 0644)
 		return
 	}
-	// Check if already present
-	if contains := func(s, sub string) bool {
-		for i := 0; i <= len(s)-len(sub); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	}; contains(string(content), ".depbot") {
+	if strings.Contains(string(content), entry) {
 		return
 	}
-	// Append
 	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	f.WriteString("\n.depbot/\n")
+	f.WriteString("\n" + line + "\n")
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/alexdx2/chronicle-core/internal/admin"
 	mcpserver "github.com/alexdx2/chronicle-core/internal/mcp"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/version"
 	"github.com/mark3labs/mcp-go/server"
@@ -73,8 +74,7 @@ func newMCPCmd() *cobra.Command {
 
 			debugMode, _ := cmd.Flags().GetBool("debug")
 			if debugMode {
-				cwd, _ := os.Getwd()
-				debugDir := filepath.Join(cwd, ".depbot", "debug")
+				debugDir := filepath.Join(paths.Dir(), "debug")
 				dl, err := mcpserver.NewDebugLogger(debugDir, version.Version)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "debug mode init failed: %v\n", err)
