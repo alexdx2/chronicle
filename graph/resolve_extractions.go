@@ -1341,15 +1341,34 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fact.FlowName == "" {
 			return counts, nil, nil
 		}
-		// Key from trigger (deterministic) — not from flow_name (agent-dependent)
-		// "POST /arena/attack" → "post__arena_attack", "battle-results" → "battle-results"
+		// Key from trigger, UNIFIED with DeriveFlows' endpoint-suffix format:
+		// "POST /tom/arm" → flow:use_case:<dom>:post:/tom/arm — the same key the
+		// derived flow for that endpoint uses. A traced flow therefore lands on
+		// (and claims) the derived node instead of creating a duplicate.
 		triggerForKey := fact.Trigger
 		if triggerForKey == "" {
 			triggerForKey = fact.FlowName
 		}
-		flowKeyBase := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(triggerForKey, " ", "_"), "/", "_"))
-		flowKey := "flow:use_case:" + domainKey + ":" + flowKeyBase
-		if err := g.ensureNode(domainKey, revisionID, flowKey, fact.FlowName, filePath); err != nil {
+		triggerMethod, triggerPath := "GET", triggerForKey
+		if parts := strings.SplitN(triggerForKey, " ", 2); len(parts) == 2 {
+			triggerMethod = parts[0]
+			triggerPath = parts[1]
+		}
+		triggerKey, triggerName := normalizeEndpointKey(domainKey, triggerMethod, triggerPath)
+		flowKey := "flow:use_case:" + domainKey + ":" + strings.TrimPrefix(triggerKey, "contract:endpoint:"+domainKey+":")
+		if existing, gerr := g.store.GetNodeByKey(flowKey); gerr == nil && existing != nil {
+			// Claim the derived node: the traced name and file path win.
+			if existing.Name != fact.FlowName || existing.FilePath == "" {
+				existing.Name = fact.FlowName
+				if existing.FilePath == "" {
+					existing.FilePath = filePath
+				}
+				existing.LastSeenRevisionID = revisionID
+				if _, uerr := g.store.UpsertNode(*existing); uerr != nil {
+					return counts, nil, uerr
+				}
+			}
+		} else if err := g.ensureNode(domainKey, revisionID, flowKey, fact.FlowName, filePath); err != nil {
 			return counts, nil, err
 		}
 		counts.nodes++
@@ -1371,15 +1390,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		counts.evidence++
 
-		// Trigger → TRIGGERS_FLOW edge
+		// Trigger → TRIGGERS_FLOW edge (triggerKey/triggerName parsed above,
+		// same normalization that produced the flow key)
 		if fact.Trigger != "" {
-			// Parse trigger: "GET /arena/attack" → method="GET", path="/arena/attack"
-			triggerMethod, triggerPath := "GET", fact.Trigger
-			if parts := strings.SplitN(fact.Trigger, " ", 2); len(parts) == 2 {
-				triggerMethod = parts[0]
-				triggerPath = parts[1]
-			}
-			triggerKey, triggerName := normalizeEndpointKey(domainKey, triggerMethod, triggerPath)
 			triggerID := g.ensureNodeID(domainKey, revisionID, triggerKey, triggerName, "")
 			flowID, _ := g.store.GetNodeIDByKey(flowKey)
 			edgeKey := triggerKey + "->" + flowKey + ":TRIGGERS_FLOW"

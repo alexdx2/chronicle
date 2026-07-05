@@ -104,7 +104,8 @@ func TestCommitOutbox_FlowArtifactSurvivesPhase1Row(t *testing.T) {
 	if _, err := g.ResolveExtractions("testdomain", revID); err != nil {
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
-	node, err := st.GetNodeByKey("flow:use_case:testdomain:post__arena_enter")
+	// Unified key format: same suffix as the derived flow for this endpoint.
+	node, err := st.GetNodeByKey("flow:use_case:testdomain:post:/arena/enter")
 	if err != nil || node == nil {
 		t.Fatalf("flow node missing after resolve: %v", err)
 	}

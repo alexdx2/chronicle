@@ -150,8 +150,16 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 		flowName := deriveFlowName(ep.Name)
 
 		// Deterministic flow key: strip "contract:endpoint:<domain>:" prefix to get the suffix.
+		// Traced flows use the SAME key format, so both land on one node.
 		epSuffix := strings.TrimPrefix(ep.NodeKey, "contract:endpoint:"+domainKey+":")
 		flowKey := "flow:use_case:" + domainKey + ":" + epSuffix
+
+		// A flow node with a different name means a traced flow claimed this
+		// entry point — its name, REQUIRES, and steps are richer than the
+		// derived closure. Leave it entirely alone.
+		if existing, gerr := g.store.GetNodeByKey(flowKey); gerr == nil && existing != nil && existing.Name != flowName {
+			continue
+		}
 
 		// Upsert the flow node.
 		if err := g.ensureFlowNode(domainKey, revisionID, flowKey, flowName); err != nil {
