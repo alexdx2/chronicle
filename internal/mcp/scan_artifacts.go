@@ -11,6 +11,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/manifest"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -128,8 +129,7 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("domain and revision_id are required")), nil
 		}
 
-		rootDir := graph.ProjectRoot()
-		outboxDir := filepath.Join(rootDir, ".depbot", "scan-outbox", fmt.Sprintf("%d", revisionID))
+		outboxDir := filepath.Join(paths.Dir(), "scan-outbox", fmt.Sprintf("%d", revisionID))
 		entries, err := os.ReadDir(outboxDir)
 		if err != nil {
 			return errorResult(fmt.Errorf("read outbox %s: %w", outboxDir, err)), nil
@@ -137,7 +137,7 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 		// Load manifest tech list for AST rule selection (best-effort; empty → defaults).
 		var manifestTech []string
-		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
+		if m, err := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); err == nil {
 			manifestTech = m.Tech
 		}
 

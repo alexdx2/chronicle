@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/manifest"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -45,7 +46,8 @@ func notFoundf(format string, args ...any) error {
 // exists, otherwise .depbot/chronicle.domain.yaml is used.
 func DefaultManifestPath(st *store.Store) string {
 	dir := st.Dir()
-	if filepath.Base(dir) == ".depbot" {
+	base := filepath.Base(dir)
+	if base == ".depbot" || base == filepath.Base(paths.ConfiguredDir()) {
 		rootPath := filepath.Join(filepath.Dir(dir), "chronicle.domain.yaml")
 		if _, err := os.Stat(rootPath); err == nil {
 			return rootPath

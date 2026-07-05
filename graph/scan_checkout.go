@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/alexdx2/chronicle-core/extract/deterministic"
+	"github.com/alexdx2/chronicle-core/paths"
 )
 
 // Checkout wave sizing — orchestrator should use spawn_count * DefaultBatchSize, capped here.
@@ -80,8 +81,8 @@ func (g *Graph) ScanCheckoutBatches(revisionID int64, obligationType string, lim
 	}
 
 	projectRoot := ProjectRoot()
-	outboxDir := filepath.Join(projectRoot, ".depbot", "scan-outbox", fmt.Sprintf("%d", revisionID))
-	workDir := filepath.Join(projectRoot, ".depbot", "scan-work", fmt.Sprintf("%d", revisionID))
+	outboxDir := filepath.Join(paths.Dir(), "scan-outbox", fmt.Sprintf("%d", revisionID))
+	workDir := filepath.Join(paths.Dir(), "scan-work", fmt.Sprintf("%d", revisionID))
 	for _, dir := range []string{outboxDir, workDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", dir, err)
@@ -148,8 +149,12 @@ func (g *Graph) ScanCheckoutBatches(revisionID int64, obligationType string, lim
 	return []CheckoutBatch{batch}, nil
 }
 
-// ProjectRoot returns the current working directory used for scan artifact paths.
+// ProjectRoot returns the project root used for scan artifact and source
+// file paths: --project when set, else the current working directory.
 func ProjectRoot() string {
+	if r := paths.Root(); r != "" {
+		return r
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return "."

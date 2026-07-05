@@ -16,6 +16,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 	"github.com/alexdx2/chronicle-core/internal/diagrams"
 	"github.com/alexdx2/chronicle-core/manifest"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
 	"github.com/alexdx2/chronicle-core/version"
@@ -669,7 +670,7 @@ func fileGroupsTool() mcp.Tool {
 
 func fileGroupsHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		rootDir, _ := os.Getwd()
+		rootDir := graph.ProjectRoot()
 		tree, total, err := graph.BuildFileTree(rootDir)
 		if err != nil {
 			return errorResult(err), nil
@@ -711,9 +712,9 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		// Load manifest for scan config + per-file domain assignment
-		rootDir, _ := os.Getwd()
+		rootDir := graph.ProjectRoot()
 		var m *manifest.Manifest
-		if loaded, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
+		if loaded, err := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); err == nil {
 			m = loaded
 		}
 
@@ -878,8 +879,7 @@ func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
 		var tech []string
 		var infra []manifest.InfraEntry
 		var candidates []string
-		rootDir, _ := os.Getwd()
-		if m, err := manifest.LoadFile(filepath.Join(rootDir, ".depbot", "chronicle.domain.yaml")); err == nil {
+		if m, err := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); err == nil {
 			tech = m.Tech
 			infra = m.Infrastructure
 			// Derive candidate service boundaries from include patterns
@@ -1066,8 +1066,7 @@ func importExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 		domain := strParam(args, "domain")
 		revisionID := int64Param(args, "revision_id")
 
-		rootDir, _ := os.Getwd()
-		tmpDir := filepath.Join(rootDir, ".depbot", "tmp")
+		tmpDir := filepath.Join(paths.Dir(), "tmp")
 
 		entries, err := os.ReadDir(tmpDir)
 		if err != nil {
@@ -2220,9 +2219,9 @@ func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 		path := manifestFilePath
 		if path == "" {
-			path = ".depbot/chronicle.domain.yaml"
+			path = filepath.Join(paths.Dir(), "chronicle.domain.yaml")
 		}
-		os.MkdirAll(".depbot", 0755)
+		os.MkdirAll(paths.Dir(), 0755)
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			return errorResult(err), nil
 		}

@@ -900,6 +900,8 @@ func readFileContent(filePath string) []byte {
 				continue
 			}
 			sub := filepath.Join(dir, e.Name())
+			// Literal ".depbot" on purpose: probing sibling repos for their
+			// (default) chronicle dirs, not this process's --chronicle-dir.
 			if _, err := os.Stat(filepath.Join(sub, ".depbot")); err != nil {
 				continue
 			}
