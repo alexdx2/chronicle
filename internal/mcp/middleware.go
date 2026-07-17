@@ -438,6 +438,7 @@ func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServ
 	add(snapshotCreateTool(), snapshotCreateHandler(g))
 	add(staleMarkTool(), staleMarkHandler(g))
 	add(invalidateChangedTool(), invalidateChangedHandler(g))
+	add(reviewReportTool(), reviewReportHandler(g))
 	add(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
 	add(queryPathTool(), queryPathHandler(g))
 	add(impactTool(), impactHandler(g))

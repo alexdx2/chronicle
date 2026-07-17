@@ -62,6 +62,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(snapshotCreateTool(), snapshotCreateHandler(g))
 	s.AddTool(staleMarkTool(), staleMarkHandler(g))
 	s.AddTool(invalidateChangedTool(), invalidateChangedHandler(g))
+	s.AddTool(reviewReportTool(), reviewReportHandler(g))
 	s.AddTool(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
 	s.AddTool(queryPathTool(), queryPathHandler(g))
 	s.AddTool(impactTool(), impactHandler(g))
