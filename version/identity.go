@@ -34,6 +34,9 @@ var Capabilities = []string{
 	"view_algebra",
 	"external_endpoints",
 	"env_url_identity",
+	"field_impact",     // data:field nodes, READS/WRITES_FIELD, field-mode impact
+	"review_report",    // chronicle_review_report MR review tool
+	"client_aware_ids", // extractor/source defaults follow the connected client
 }
 
 // MCPIdentity is the full identity payload for agents and operators.
