@@ -127,6 +127,50 @@ func TestGraphUpsertEdgeValid(t *testing.T) {
 	}
 }
 
+func TestGraphUpsertEdgeRawKeysMatchNormalizedNodes(t *testing.T) {
+	// Regression for the 2026-07-04 debug-journal bug: nodes are stored under
+	// normalized keys (tom.weapon.equipped → tom-weapon-equipped), so an edge
+	// arriving with the agent's raw keys must still resolve both endpoints.
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+
+	_, err := g.UpsertNode(validate.NodeInput{
+		NodeKey:   "code:controller:test-domain:tom.weapon.equipped",
+		Layer:     "code",
+		NodeType:  "controller",
+		DomainKey: "test-domain",
+		Name:      "TomWeaponEquipped",
+	}, revID)
+	if err != nil {
+		t.Fatalf("UpsertNode from: %v", err)
+	}
+	_, err = g.UpsertNode(validate.NodeInput{
+		NodeKey:   "contract:endpoint:test-domain:get__tom_status",
+		Layer:     "contract",
+		NodeType:  "endpoint",
+		DomainKey: "test-domain",
+		Name:      "GET /tom/status",
+	}, revID)
+	if err != nil {
+		t.Fatalf("UpsertNode to: %v", err)
+	}
+
+	edgeID, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey:    "code:controller:test-domain:tom.weapon.equipped",
+		ToNodeKey:      "contract:endpoint:test-domain:get__tom_status",
+		EdgeType:       "CALLS_ENDPOINT",
+		DerivationKind: "hard",
+		FromLayer:      "code",
+		ToLayer:        "contract",
+	}, revID)
+	if err != nil {
+		t.Fatalf("UpsertEdge with raw keys must resolve normalized nodes: %v", err)
+	}
+	if edgeID == 0 {
+		t.Fatal("expected non-zero edge ID")
+	}
+}
+
 func TestGraphUpsertEdgeInvalidLayers(t *testing.T) {
 	g := setupGraph(t)
 	revID := makeRevision(t, g)

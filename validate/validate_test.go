@@ -113,6 +113,48 @@ func TestValidateEdgeInput_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateEdgeInput_NormalizesNodeKeys(t *testing.T) {
+	// Regression: chronicle_import_all normalizes node keys on insert
+	// (get__tom_status → get-tom-status) but edge validation used to pass
+	// from/to keys through raw, so edge lookups missed the stored nodes.
+	reg := loadTestRegistry(t)
+	input := EdgeInput{
+		FromNodeKey: "code:controller:dom:tom.weapon.equipped",
+		ToNodeKey:   "contract:endpoint:dom:get__tom_status",
+		EdgeType:    "CALLS_ENDPOINT",
+		FromLayer:   "code",
+		ToLayer:     "contract",
+	}
+	result, err := ValidateEdgeInput(input, reg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FromNodeKey != "code:controller:dom:tom-weapon-equipped" {
+		t.Errorf("from_node_key not normalized: %q", result.FromNodeKey)
+	}
+	if result.ToNodeKey != "contract:endpoint:dom:get-tom-status" {
+		t.Errorf("to_node_key not normalized: %q", result.ToNodeKey)
+	}
+	want := "code:controller:dom:tom-weapon-equipped->contract:endpoint:dom:get-tom-status:CALLS_ENDPOINT"
+	if result.EdgeKey != want {
+		t.Errorf("edge_key built from raw keys:\n got %q\nwant %q", result.EdgeKey, want)
+	}
+}
+
+func TestValidateEdgeInput_MalformedNodeKey(t *testing.T) {
+	reg := loadTestRegistry(t)
+	input := EdgeInput{
+		FromNodeKey: "justaname",
+		ToNodeKey:   "code:provider:orders:ordersservice",
+		EdgeType:    "INJECTS",
+		FromLayer:   "code",
+		ToLayer:     "code",
+	}
+	if _, err := ValidateEdgeInput(input, reg); err == nil {
+		t.Fatal("expected error for malformed from_node_key")
+	}
+}
+
 func TestValidateEdgeInput_BadEdgeType(t *testing.T) {
 	reg := loadTestRegistry(t)
 	input := EdgeInput{

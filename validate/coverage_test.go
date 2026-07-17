@@ -18,7 +18,9 @@ func reg(t *testing.T) *registry.Registry {
 
 func TestValidateEdgeInput_Errors(t *testing.T) {
 	r := reg(t)
-	base := EdgeInput{FromNodeKey: "a", ToNodeKey: "b", EdgeType: "CONTAINS", FromLayer: "code", ToLayer: "code"}
+	// Well-formed keys: ValidateEdgeInput now normalizes (and therefore
+	// format-checks) node keys before the later validations these cases target.
+	base := EdgeInput{FromNodeKey: "code:module:d:a", ToNodeKey: "code:module:d:b", EdgeType: "CONTAINS", FromLayer: "code", ToLayer: "code"}
 
 	cases := []struct {
 		name string

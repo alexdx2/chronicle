@@ -166,6 +166,20 @@ func ValidateEdgeInput(input EdgeInput, reg *registry.Registry) (*ValidatedEdge,
 		input.DerivationKind = "hard" // default
 	}
 
+	// Normalize endpoint keys the same way node upsert does — nodes are stored
+	// under normalized keys, so raw agent-supplied keys (dots, underscores,
+	// camelCase) must be normalized here or the edge lookups miss them.
+	fromKey, err := NormalizeNodeKey(input.FromNodeKey)
+	if err != nil {
+		return nil, fmt.Errorf("validation: from_node_key: %w", err)
+	}
+	toKey, err := NormalizeNodeKey(input.ToNodeKey)
+	if err != nil {
+		return nil, fmt.Errorf("validation: to_node_key: %w", err)
+	}
+	input.FromNodeKey = fromKey
+	input.ToNodeKey = toKey
+
 	if !reg.IsValidEdgeType(input.EdgeType) {
 		return nil, fmt.Errorf("validation: invalid edge_type %q", input.EdgeType)
 	}
