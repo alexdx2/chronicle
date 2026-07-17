@@ -501,7 +501,7 @@ IMPORTANT: Do NOT increase confidence directly. Your job is to collect proof. Th
         "file_path": "<path where evidence found>",
         "line_start": <line number>,
         "line_end": <line number>,
-        "extractor_id": "claude-code",
+        "extractor_id": "<your agent id: claude-code, codex, ...>",
         "extractor_version": "1.0",
         "confidence": 0.95,
         "polarity": "positive"
