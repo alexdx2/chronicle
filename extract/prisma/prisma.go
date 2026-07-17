@@ -12,9 +12,10 @@ type Model struct {
 }
 
 type Field struct {
-	Name    string
-	Type    string
-	IsArray bool
+	Name     string
+	Type     string
+	IsArray  bool
+	IsScalar bool // built-in Prisma type (String, Int, ...) — never a relation
 }
 
 type Enum struct {
@@ -81,14 +82,13 @@ func Extract(content []byte) Result {
 				fieldType := m[2]
 				isArray := m[3] == "[]"
 
-				if isBuiltinType(fieldType) {
-					continue
-				}
-
+				// Scalar fields are kept (field-level graph needs them) but
+				// tagged so relation detection still ignores them.
 				model.Fields = append(model.Fields, Field{
-					Name:    fieldName,
-					Type:    fieldType,
-					IsArray: isArray,
+					Name:     fieldName,
+					Type:     fieldType,
+					IsArray:  isArray,
+					IsScalar: isBuiltinType(fieldType),
 				})
 			}
 		}
@@ -109,6 +109,9 @@ func Extract(content []byte) Result {
 		for _, field := range model.Fields {
 			// Only the FK-holding side (singular field) defines the relation —
 			// the array side is the inverse and would double every relation.
+			if field.IsScalar {
+				continue
+			}
 			if modelNames[field.Type] && !field.IsArray {
 				result.Relations = append(result.Relations, Relation{
 					From:      model.Name,
