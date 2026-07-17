@@ -147,6 +147,7 @@ func (g *Graph) BuildReviewReport(q GraphQuerier, domainKey string, opts ReviewR
 				}
 			}
 			entity.Impact = mergeImpacts(q, seeds, node.NodeKey, depth)
+			expandTopicConsumers(q, entity.Impact)
 
 			if entity.Impact != nil {
 				report.Stats.TotalImpacted += entity.Impact.TotalImpacted
@@ -218,6 +219,40 @@ func mergeImpacts(q GraphQuerier, seeds []string, fallbackKey string, depth int)
 		merged.TotalImpacted = len(merged.Impacts)
 	}
 	return merged
+}
+
+// expandTopicConsumers folds consumers of every affected-surface topic into
+// the impact list. A changed field alters the messages published on those
+// topics, so their consumers are part of the blast radius — and with a
+// federated querier, topic twins carry this across repo boundaries (models
+// themselves are deliberately never name-stitched across repos).
+func expandTopicConsumers(q GraphQuerier, impact *ImpactResult) {
+	if impact == nil || len(impact.AffectedSurface.Topics) == 0 {
+		return
+	}
+	seen := map[string]bool{impact.ChangedNode: true}
+	for _, imp := range impact.Impacts {
+		seen[imp.NodeKey] = true
+	}
+	for _, topic := range impact.AffectedSurface.Topics {
+		res, err := q.QueryImpact(topic.NodeKey, ImpactOptions{MaxDepth: 2})
+		if err != nil {
+			continue
+		}
+		for _, imp := range res.Impacts {
+			if seen[imp.NodeKey] {
+				continue
+			}
+			seen[imp.NodeKey] = true
+			imp.Precision = "message"
+			imp.EdgeTypes = append([]string{"VIA_TOPIC:" + topic.Name}, imp.EdgeTypes...)
+			impact.Impacts = append(impact.Impacts, imp)
+		}
+	}
+	impact.TotalImpacted = len(impact.Impacts)
+	if impact.PrecisionNote != "" {
+		impact.PrecisionNote += " precision=message: consumes a topic this change publishes to."
+	}
 }
 
 func mergeSurface(a, b []SurfaceEntry) []SurfaceEntry {
