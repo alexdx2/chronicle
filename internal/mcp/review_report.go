@@ -3,11 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -31,7 +27,6 @@ func reviewReportTool() mcp.Tool {
 func reviewReportHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
-		repoRoot := graph.ProjectRoot()
 
 		domain := strParam(args, "domain")
 		if domain == "" {
@@ -45,46 +40,10 @@ func reviewReportHandler(g *graph.Graph) server.ToolHandlerFunc {
 			domain = domains[0]
 		}
 
-		base := strParam(args, "base")
-		if base == "" {
-			base = defaultReviewBase(g, repoRoot, domain)
-		}
-		if base == "" {
-			return errorResult(fmt.Errorf("cannot determine base ref: no main/master merge-base and no prior scan SHA — pass base explicitly")), nil
-		}
-		head := strParam(args, "head")
-
-		changed, err := gitdiff.ChangedFiles(repoRoot, base, head)
-		if err != nil {
-			return errorResult(fmt.Errorf("git diff failed: %w", err)), nil
-		}
-
-		// Collect prisma blobs on both sides for field-level rows.
-		oldPrisma := map[string][]byte{}
-		newPrisma := map[string][]byte{}
-		for _, cf := range changed {
-			if !strings.HasSuffix(cf.Path, ".prisma") {
-				continue
-			}
-			if blob, err := gitdiff.Show(repoRoot, base, cf.Path); err == nil {
-				oldPrisma[cf.Path] = blob
-			}
-			if head == "" {
-				if blob, err := os.ReadFile(filepath.Join(repoRoot, cf.Path)); err == nil {
-					newPrisma[cf.Path] = blob
-				}
-			} else if blob, err := gitdiff.Show(repoRoot, head, cf.Path); err == nil {
-				newPrisma[cf.Path] = blob
-			}
-		}
-
-		report, err := g.BuildReviewReport(nil, domain, graph.ReviewReportOptions{
-			Base:      base,
-			Head:      head,
-			Depth:     intParam(args, "depth"),
-			Changed:   changed,
-			OldPrisma: oldPrisma,
-			NewPrisma: newPrisma,
+		report, err := g.BuildReviewReportFromGit(nil, graph.ProjectRoot(), domain, graph.ReviewReportOptions{
+			Base:  strParam(args, "base"),
+			Head:  strParam(args, "head"),
+			Depth: intParam(args, "depth"),
 		})
 		if err != nil {
 			return errorResult(err), nil
@@ -95,18 +54,4 @@ func reviewReportHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 		return mcp.NewToolResultText(report.Markdown()), nil
 	}
-}
-
-// defaultReviewBase picks the merge-base with main/master, falling back to the
-// last scanned revision SHA (same fallback family as chronicle refresh).
-func defaultReviewBase(g *graph.Graph, repoRoot, domain string) string {
-	for _, ref := range []string{"main", "master"} {
-		if sha, err := gitdiff.MergeBase(repoRoot, ref); err == nil && sha != "" {
-			return sha
-		}
-	}
-	if rev, err := g.Store().GetLatestRevision(domain); err == nil && rev != nil && rev.GitAfterSHA != "" {
-		return rev.GitAfterSHA
-	}
-	return ""
 }
