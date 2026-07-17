@@ -280,3 +280,86 @@ func TestImpactAffectedSurfaceFromChangedNode(t *testing.T) {
 		t.Errorf("endpoint = %q, want get:/health", ep.NodeKey)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Field-mode impact: seeding QueryImpact with a data:field node hops to the
+// parent model (precision "model") and follows READS_FIELD/WRITES_FIELD
+// directly (precision "field"). Model-seeded impact is unchanged.
+// ---------------------------------------------------------------------------
+
+func seedFieldImpactGraph(t *testing.T) *Graph {
+	t.Helper()
+	g := setupGraphDefaults(t)
+	revID, _ := g.Store().CreateRevision("orders", "", "sha1", "manual", "full", "{}")
+
+	nodes := []validate.NodeInput{
+		{NodeKey: "data:model:orders:battle", Layer: "data", NodeType: "model", DomainKey: "orders", Name: "Battle"},
+		{NodeKey: "data:field:orders:battle/winner-id", Layer: "data", NodeType: "field", DomainKey: "orders", Name: "Battle.winnerId"},
+		{NodeKey: "code:provider:orders:writer", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "Writer"},
+		{NodeKey: "code:provider:orders:modeluser", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "ModelUser"},
+		{NodeKey: "code:controller:orders:api", Layer: "code", NodeType: "controller", DomainKey: "orders", Name: "Api"},
+	}
+	for _, n := range nodes {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode %s: %v", n.NodeKey, err)
+		}
+	}
+	edges := []validate.EdgeInput{
+		{FromNodeKey: "data:model:orders:battle", ToNodeKey: "data:field:orders:battle/winner-id", EdgeType: "HAS_FIELD", DerivationKind: "hard", FromLayer: "data", ToLayer: "data"},
+		{FromNodeKey: "code:provider:orders:writer", ToNodeKey: "data:field:orders:battle/winner-id", EdgeType: "WRITES_FIELD", DerivationKind: "hard", FromLayer: "code", ToLayer: "data"},
+		{FromNodeKey: "code:provider:orders:modeluser", ToNodeKey: "data:model:orders:battle", EdgeType: "USES_MODEL", DerivationKind: "hard", FromLayer: "code", ToLayer: "data"},
+		{FromNodeKey: "code:controller:orders:api", ToNodeKey: "code:provider:orders:modeluser", EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"},
+	}
+	for _, e := range edges {
+		if _, err := g.UpsertEdge(e, revID); err != nil {
+			t.Fatalf("UpsertEdge %s: %v", e.EdgeType, err)
+		}
+	}
+	return g
+}
+
+func TestImpactFieldMode(t *testing.T) {
+	g := seedFieldImpactGraph(t)
+	result, err := g.QueryImpact("data:field:orders:battle/winner-id", ImpactOptions{MaxDepth: 4, MinScore: 0.0})
+	if err != nil {
+		t.Fatalf("QueryImpact field: %v", err)
+	}
+	byKey := map[string]ImpactEntry{}
+	for _, imp := range result.Impacts {
+		byKey[imp.NodeKey] = imp
+	}
+	if e, ok := byKey["code:provider:orders:writer"]; !ok || e.Precision != "field" {
+		t.Errorf("writer: ok=%v precision=%q, want field", ok, e.Precision)
+	}
+	if e, ok := byKey["data:model:orders:battle"]; !ok || e.Precision != "model" {
+		t.Errorf("parent model: ok=%v precision=%q, want model", ok, e.Precision)
+	}
+	if e, ok := byKey["code:provider:orders:modeluser"]; !ok || e.Precision != "model" {
+		t.Errorf("modeluser (via parent model): ok=%v precision=%q, want model", ok, e.Precision)
+	}
+	if e, ok := byKey["code:controller:orders:api"]; !ok || e.Precision != "model" {
+		t.Errorf("api (transitive via model path): ok=%v precision=%q, want model", ok, e.Precision)
+	}
+	if result.PrecisionNote == "" {
+		t.Error("PrecisionNote must explain precision labels in field mode")
+	}
+}
+
+func TestImpactModelSeedUnchangedByFieldEdges(t *testing.T) {
+	g := seedFieldImpactGraph(t)
+	result, err := g.QueryImpact("data:model:orders:battle", ImpactOptions{MaxDepth: 4, MinScore: 0.0})
+	if err != nil {
+		t.Fatalf("QueryImpact model: %v", err)
+	}
+	for _, imp := range result.Impacts {
+		if imp.Precision != "" {
+			t.Errorf("model seed must not set precision, got %q on %s", imp.Precision, imp.NodeKey)
+		}
+		if imp.NodeKey == "code:provider:orders:writer" {
+			t.Error("field writer must not appear in model-level impact (field edges point at the field node)")
+		}
+	}
+	if result.PrecisionNote != "" {
+		t.Errorf("model seed must not set PrecisionNote, got %q", result.PrecisionNote)
+	}
+}
