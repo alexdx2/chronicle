@@ -146,6 +146,12 @@ edge_types:
   HAS_FIELD:
     from_layers: [data]
     to_layers: [data]
+  READS_FIELD:
+    from_layers: [code, service]
+    to_layers: [data]
+  WRITES_FIELD:
+    from_layers: [code, service]
+    to_layers: [data]
   REFERENCES_MODEL:
     from_layers: [data]
     to_layers: [data]

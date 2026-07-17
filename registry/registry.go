@@ -270,6 +270,8 @@ var edgeIntentLabels = map[string]string{
 	"IMPORTS":          "module import",
 	"CALLS_SERVICE":    "HTTP client call to service",
 	"CALLS_ENDPOINT":   "HTTP client call to endpoint",
+	"READS_FIELD":      "code reads a specific data field",
+	"WRITES_FIELD":     "code writes a specific data field",
 	"REFERENCES_MODEL": "FK / @relation",
 	"HAS_FIELD":        "field ownership",
 	"USES_ENUM":        "enum type usage",

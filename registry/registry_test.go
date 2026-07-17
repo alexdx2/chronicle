@@ -384,3 +384,32 @@ func TestLoadDefaults(t *testing.T) {
 		t.Error("expected contract:endpoint to be valid")
 	}
 }
+
+func TestFieldUsageEdgeTypes(t *testing.T) {
+	r, err := LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	policy := r.TraversalPolicy()
+	for _, et := range []string{"READS_FIELD", "WRITES_FIELD"} {
+		if !r.IsValidEdgeType(et) {
+			t.Errorf("%s not registered", et)
+		}
+		if policy.IsStructural(et) {
+			t.Errorf("%s must not be structural", et)
+		}
+		if !policy.AllowsReverseImpact(et) {
+			t.Errorf("%s must carry reverse impact", et)
+		}
+		if err := r.ValidateEdgeLayers(et, "code", "data"); err != nil {
+			t.Errorf("%s code→data should be valid: %v", et, err)
+		}
+		if err := r.ValidateEdgeLayers(et, "data", "code"); err == nil {
+			t.Errorf("%s data→code should be invalid", et)
+		}
+	}
+	// HAS_FIELD stays structural — containment must not inflate model impact.
+	if !policy.IsStructural("HAS_FIELD") {
+		t.Error("HAS_FIELD must stay structural")
+	}
+}
