@@ -1,1 +1,0 @@
-{"candidates":[{"kind":"consumes","to":"battle-results","reason":"@EventPattern"}],"file_path":"spectators-api/src/spectators/battle-result.consumer.ts"}
