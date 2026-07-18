@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -15,9 +16,31 @@ func (s *Store) NodeKeysByFilePaths(paths []string) (map[string][]string, error)
 		return result, nil
 	}
 
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(paths)), ",")
-	args := make([]any, len(paths))
-	for i, p := range paths {
+	// Some creation paths store node file_path WITHOUT the extension
+	// (path-keyed nodes: api/src/services/payment.service) while git diffs
+	// carry the full path — query both variants and map hits back to the
+	// caller's original path.
+	variantOf := map[string]string{} // variant → original path
+	var variants []string
+	addVariant := func(v, orig string) {
+		if v == "" {
+			return
+		}
+		if _, seen := variantOf[v]; !seen {
+			variantOf[v] = orig
+			variants = append(variants, v)
+		}
+	}
+	for _, p := range paths {
+		addVariant(p, p)
+		if ext := filepath.Ext(p); ext != "" {
+			addVariant(strings.TrimSuffix(p, ext), p)
+		}
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(variants)), ",")
+	args := make([]any, len(variants))
+	for i, p := range variants {
 		args[i] = p
 	}
 
@@ -37,6 +60,10 @@ func (s *Store) NodeKeysByFilePaths(paths []string) (map[string][]string, error)
 
 	seen := map[string]map[string]bool{} // path → node_key set
 	add := func(path, key string) {
+		// Map the matched variant back to the caller's original path.
+		if orig, ok := variantOf[path]; ok {
+			path = orig
+		}
 		if seen[path] == nil {
 			seen[path] = map[string]bool{}
 		}
