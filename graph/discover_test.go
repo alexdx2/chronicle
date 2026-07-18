@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/manifest"
+	"github.com/alexdx2/chronicle-core/store"
 )
 
 func TestBoundaryPriority_Order(t *testing.T) {
@@ -197,5 +198,62 @@ func TestDiscoverFilesScopedToRequestedDomain(t *testing.T) {
 	}
 	if res2.TotalFiles != 2 {
 		t.Errorf("unknown domain must fall back to merged config, got %d files", res2.TotalFiles)
+	}
+}
+
+// 2026-07-18 codex-fixture finding: manifest infra nodes landed in domain
+// "Tom and Jerry" (the DISPLAY name) with unregistered node type
+// "message_broker". Infra created during a scan belongs to the scan's domain
+// and must carry a registry-valid type.
+func TestDiscoverManifestInfraDomainAndType(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	tmpDir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tmpDir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	p := filepath.Join(tmpDir, "src/a.ts")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-m", "c")
+
+	m := &manifest.Manifest{
+		Domains: []manifest.DomainEntry{{Name: "Tom and Jerry", Scan: manifest.ScanConfig{Include: []string{"src/**"}}}},
+		Infrastructure: []manifest.InfraEntry{{Name: "kafka:9092", Type: "message_broker"}},
+	}
+
+	if _, err := g.DiscoverFilesOpts(tmpDir, "test-domain", revID, m, DiscoverOpts{VotesNeeded: 1}); err != nil {
+		t.Fatalf("DiscoverFilesOpts: %v", err)
+	}
+
+	rows, _ := g.Store().ListNodes(store.NodeFilter{Layer: "infra"})
+	if len(rows) == 0 {
+		t.Fatal("no infra node created")
+	}
+	for _, n := range rows {
+		if n.DomainKey == "Tom and Jerry" {
+			t.Errorf("infra node stamped with display-name domain: %s", n.NodeKey)
+		}
+		if n.DomainKey != "test-domain" {
+			t.Errorf("infra node domain = %q, want the scan's domain test-domain", n.DomainKey)
+		}
+		if n.NodeType == "message_broker" {
+			t.Errorf("unregistered node type passed through: %s", n.NodeType)
+		}
 	}
 }

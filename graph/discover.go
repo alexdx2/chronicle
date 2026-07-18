@@ -11,6 +11,7 @@ import (
 
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/paths"
+	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -173,23 +174,17 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 		}
 	}
 
-	// Create infrastructure nodes from manifest
+	// Create infrastructure nodes from manifest. They belong to the SCAN's
+	// domain — consulting m.Domains[0] used to stamp the domain DISPLAY name
+	// ("Tom and Jerry") as domain_key when the manifest key was absent.
 	if m != nil && revisionID > 0 {
 		for _, infra := range m.Infrastructure {
 			nodeKey := infra.InfraNodeKey()
-			infraDomain := domainKey
-			if len(m.Domains) > 0 {
-				if m.Domains[0].Key != "" {
-					infraDomain = m.Domains[0].Key
-				} else {
-					infraDomain = m.Domains[0].Name
-				}
-			}
 			g.store.UpsertNode(store.NodeRow{
 				NodeKey:   nodeKey,
 				Layer:     "infra",
-				NodeType:  infra.Type,
-				DomainKey: infraDomain,
+				NodeType:  registryValidInfraType(g.reg, infra.Type),
+				DomainKey: domainKey,
 				Name:      infra.Name,
 				Status:    "active",
 			})
@@ -370,4 +365,26 @@ func matchGlob(filePath, pattern string) bool {
 	// Also try against just the filename for patterns like "Dockerfile"
 	matched, _ = filepath.Match(pattern, filepath.Base(filePath))
 	return matched
+}
+
+// registryValidInfraType maps common manifest spellings onto registered infra
+// node types; unknown types fall back to the generic "infrastructure" so a
+// loose manifest never plants unregistered types in the graph.
+func registryValidInfraType(reg *registry.Registry, t string) string {
+	if reg.IsValidNodeType("infra", t) {
+		return t
+	}
+	aliases := map[string]string{
+		"message_broker": "broker",
+		"message-broker": "broker",
+		"kafka":          "broker",
+		"redis":          "cache",
+		"postgres":       "database",
+		"postgresql":     "database",
+		"mysql":          "database",
+	}
+	if mapped, ok := aliases[strings.ToLower(t)]; ok && reg.IsValidNodeType("infra", mapped) {
+		return mapped
+	}
+	return "infrastructure"
 }
