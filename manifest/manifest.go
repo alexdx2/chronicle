@@ -235,6 +235,20 @@ func (m *Manifest) ReplaceDomainsWithClone(baseKey, newKey string) bool {
 	return false
 }
 
+// ScanConfigFor returns the scan config of one named domain, when declared.
+// Domain-scoped discovery must not inherit other domains' includes (the
+// 2026-07-18 otopoint scan pulled 820 files instead of ~350 because discover
+// used the merged view for a single-domain request).
+func (m *Manifest) ScanConfigFor(domainKey string) (*ScanConfig, bool) {
+	for i := range m.Domains {
+		if m.Domains[i].Name == domainKey {
+			cfg := m.Domains[i].Scan
+			return &cfg, true
+		}
+	}
+	return nil, false
+}
+
 // MergedScanConfig builds a single ScanConfig from all domains' scan patterns.
 // Useful for callers that need a flat include/exclude list.
 func (m *Manifest) MergedScanConfig() ScanConfig {

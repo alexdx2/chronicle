@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/manifest"
@@ -136,5 +137,65 @@ domains:
 	// other/readme.md should not be in obligations (excluded by include patterns)
 	if _, found := domainByFile["other/readme.md"]; found {
 		t.Errorf("other/readme.md should not have an obligation (not matching any include pattern)")
+	}
+}
+
+// 2026-07-18 otopoint finding: discover(domain='api') pulled ALL manifest
+// domains' includes (820 files instead of ~350). A domain-scoped discover must
+// use only THAT domain's scan config; unknown domains keep the merged view.
+func TestDiscoverFilesScopedToRequestedDomain(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	tmpDir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tmpDir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	for _, f := range []string{"api/src/a.ts", "web/src/b.tsx"} {
+		p := filepath.Join(tmpDir, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("add", ".")
+	run("commit", "-m", "c")
+
+	m := &manifest.Manifest{Domains: []manifest.DomainEntry{
+		{Name: "api", Scan: manifest.ScanConfig{Include: []string{"api/**"}}},
+		{Name: "web", Scan: manifest.ScanConfig{Include: []string{"web/**"}}},
+	}}
+
+	res, err := g.DiscoverFilesOpts(tmpDir, "api", revID, m, DiscoverOpts{VotesNeeded: 1})
+	if err != nil {
+		t.Fatalf("DiscoverFilesOpts: %v", err)
+	}
+	for _, f := range res.Files {
+		if strings.HasPrefix(f, "web/") {
+			t.Errorf("domain=api discover included other domain's file %s", f)
+		}
+	}
+	if res.TotalFiles != 1 {
+		t.Errorf("want 1 api file, got %d: %+v", res.TotalFiles, res.Files)
+	}
+
+	// Unknown domain (no manifest entry) keeps the merged view.
+	res2, err := g.DiscoverFilesOpts(tmpDir, "everything", revID, m, DiscoverOpts{VotesNeeded: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.TotalFiles != 2 {
+		t.Errorf("unknown domain must fall back to merged config, got %d files", res2.TotalFiles)
 	}
 }

@@ -59,7 +59,7 @@ type DiscoverOpts struct {
 
 // DiscoverFilesOpts finds all scannable files using git ls-files + manifest include/exclude rules,
 // with optional scope filtering. Only git-tracked files are considered.
-// If manifest is provided, uses MergedScanConfig for filtering and DomainForFile for per-file domain.
+// If manifest is provided, uses the requested domain's scan config (merged view for unknown domains) and DomainForFile for per-file domain.
 // Falls back to domainKey for all files when manifest is nil.
 func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m *manifest.Manifest, opts DiscoverOpts) (*DiscoverResult, error) {
 	// Get git-tracked files
@@ -68,11 +68,19 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 		return nil, err
 	}
 
-	// Build scan config from manifest (or nil for no filtering)
+	// Build scan config from manifest (or nil for no filtering). A domain that
+	// is declared in the manifest scopes discovery to ITS OWN include/exclude —
+	// merging every domain's includes turns a single-domain scan into a
+	// whole-workspace one. Unknown domains (no manifest entry) keep the merged
+	// view for backward compatibility.
 	var scanCfg *manifest.ScanConfig
 	if m != nil {
-		merged := m.MergedScanConfig()
-		scanCfg = &merged
+		if cfg, ok := m.ScanConfigFor(domainKey); ok {
+			scanCfg = cfg
+		} else {
+			merged := m.MergedScanConfig()
+			scanCfg = &merged
+		}
 	}
 
 	// Apply include/exclude filters from manifest
