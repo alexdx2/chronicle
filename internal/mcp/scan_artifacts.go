@@ -274,7 +274,7 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func fileExtractedBatchTool() mcp.Tool {
 	return mcp.NewTool("chronicle_file_extracted_batch",
-		mcp.WithDescription("Report extraction results for multiple files in one call. Orchestrator-only in artifact-pool mode."),
+		mcp.WithDescription("Report extraction results for multiple files in one call. Orchestrator-only in artifact-pool mode — EXCEPT when the client cannot write outbox files (read-only sandbox): then this is the supported extraction-reporting path. Each item: {file_path, status, from_type, facts, obligation_id}. status MUST be one of: extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed. facts may be a JSON array or a pre-encoded JSON string. Check the per-item 'failures' array in the response and fix+resubmit failed items."),
 		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
 		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
 		mcp.WithString("items", mcp.Required(), mcp.Description("JSON array of file_extracted payloads")),
@@ -307,7 +307,9 @@ func fileExtractedBatchHandler(g *graph.Graph) server.ToolHandlerFunc {
 				continue
 			}
 			if res != nil && res.IsError {
-				failures = append(failures, fmt.Sprintf("%v: tool error", item["file_path"]))
+				// Surface the REAL per-item error — a bare "tool error" is
+				// unactionable and killed the 2026-07-18 Codex field run.
+				failures = append(failures, fmt.Sprintf("%v: %s", item["file_path"], errorResultText(res)))
 				continue
 			}
 			committed++
@@ -363,6 +365,24 @@ func scanReviewCandidatesTool() mcp.Tool {
 	)
 }
 
+// validExtractionStatus mirrors the scan_extractions CHECK constraint so
+// agents get a named-values error instead of a SQLite constraint failure.
+var validExtractionStatus = map[string]bool{
+	"extracted": true, "no_runtime_architecture": true, "config_only": true,
+	"type_only": true, "generated": true, "skipped": true, "failed": true,
+	"resolved": true,
+}
+
+// errorResultText extracts the human-readable message from an error result.
+func errorResultText(res *mcp.CallToolResult) string {
+	for _, c := range res.Content {
+		if tc, ok := c.(mcp.TextContent); ok && tc.Text != "" {
+			return tc.Text
+		}
+	}
+	return "unknown error"
+}
+
 func commitOneFileExtracted(g *graph.Graph, ctx context.Context, item map[string]any) (*mcp.CallToolResult, error) {
 	filePath, _ := item["file_path"].(string)
 	status, _ := item["status"].(string)
@@ -371,9 +391,25 @@ func commitOneFileExtracted(g *graph.Graph, ctx context.Context, item map[string
 	if filePath == "" || status == "" || revisionID == 0 || domain == "" {
 		return errorResult(fmt.Errorf("each item needs file_path, status, revision_id, domain")), nil
 	}
+	// Validate status HERE with an actionable message — the store's CHECK
+	// constraint otherwise surfaces as an opaque SQLite error the agent
+	// cannot self-correct on (2026-07-18 Codex field test: "ok" → dead run).
+	if !validExtractionStatus[status] {
+		return errorResult(fmt.Errorf("invalid status %q — allowed: extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed", status)), nil
+	}
 
 	fromType, _ := item["from_type"].(string)
+	// facts may arrive as a pre-encoded JSON string OR as a plain JSON array
+	// (the natural shape for agents). The old string-only assertion silently
+	// DROPPED array facts — every LLM fact of a run vanished.
 	factsJSON, _ := item["facts"].(string)
+	if factsJSON == "" {
+		if raw, ok := item["facts"]; ok && raw != nil {
+			if b, err := json.Marshal(raw); err == nil && string(b) != "null" && string(b) != `""` {
+				factsJSON = string(b)
+			}
+		}
+	}
 	errorMsg, _ := item["error_message"].(string)
 	if errorMsg == "" {
 		errorMsg, _ = item["error"].(string)
