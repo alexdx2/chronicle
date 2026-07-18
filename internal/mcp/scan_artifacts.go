@@ -418,6 +418,17 @@ func commitOneFileExtracted(g *graph.Graph, ctx context.Context, item map[string
 	voteIndex := int(int64Param(item, "vote_index"))
 	obligationID := int64Param(item, "obligation_id")
 
+	// Same server-side AST merge as the outbox commit path — clients reporting
+	// via batch (read-only sandboxes) must not get systematically worse graphs.
+	// Flow artifacts skip the merge for the same reason the outbox path does.
+	if status == "extracted" && !hasFlowFacts(factsJSON) {
+		var manifestTech []string
+		if m, merr := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); merr == nil {
+			manifestTech = m.Tech
+		}
+		factsJSON, fromType = graph.MergeASTFactsJSON(filePath, factsJSON, fromType, manifestTech)
+	}
+
 	var id int64
 	var err error
 	if voteGroup != "" {

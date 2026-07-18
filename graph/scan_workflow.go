@@ -904,6 +904,15 @@ func readFileContent(filePath string) []byte {
 		return nil
 	}
 
+	// The configured project root is authoritative — resolving elsewhere can
+	// silently read the SAME relative path from a different repo (the sibling
+	// probe below exists for monorepos) and poison the scan with foreign facts.
+	if root := ProjectRoot(); root != "" {
+		if content := tryRead(root); content != nil {
+			return content
+		}
+	}
+
 	if content := tryRead(""); content != nil {
 		return content
 	}
