@@ -28,6 +28,10 @@ type ImpactEntry struct {
 	TrustChain  float64  `json:"trust_chain"`
 	Path        []string `json:"path"`
 	EdgeTypes   []string `json:"edge_types"`
+	// Precision is set only for field-seeded queries: "field" = reached via an
+	// explicit READS_FIELD/WRITES_FIELD edge; "model" = reached through the
+	// parent model (potential impact — no field-level usage edge exists yet).
+	Precision string `json:"precision,omitempty"`
 }
 
 // SurfaceEntry represents an endpoint or topic exposed by an impacted node.
@@ -50,6 +54,8 @@ type ImpactResult struct {
 	AffectedSurface AffectedSurface `json:"affected_surface"`
 	TotalImpacted   int             `json:"total_impacted"`
 	MaxDepthReached int             `json:"max_depth_reached"`
+	// PrecisionNote explains the precision labels; set only for field seeds.
+	PrecisionNote string `json:"precision_note,omitempty"`
 }
 
 // QueryImpact performs a reverse BFS from changedNodeKey, finding all nodes
@@ -77,12 +83,18 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 		return nil, fmt.Errorf("QueryImpact: %w", err)
 	}
 
+	// Field mode: a data:field seed additionally hops up HAS_FIELD to the
+	// parent model once (structural edges are otherwise never traversed) and
+	// labels every entry with how precisely it is known to depend on the field.
+	fieldMode := startNode.Layer == "data" && startNode.NodeType == "field"
+
 	type queueItem struct {
 		nodeID      int64
 		depth       int
 		pathKeys    []string  // node keys from start to this node
 		edgeTypes   []string  // edge types traversed
 		scoreProduct float64  // product of confidences so far
+		precision    string   // field-mode label inherited along the path
 	}
 
 	visited := map[int64]bool{startNode.NodeID: true}
@@ -117,12 +129,20 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 		}
 
 		for _, edge := range edges {
+			// Field-mode parent hop: from the seed field, HAS_FIELD (model →
+			// field) is the one structural edge worth crossing — the parent
+			// model IS impacted when its field changes, and continuing from it
+			// reaches model-level consumers.
+			viaParentModel := fieldMode && item.depth == 0 && edge.EdgeType == "HAS_FIELD"
+
 			// Check traversal policy.
-			if !opts.IncludeStructural && policy.IsStructural(edge.EdgeType) {
-				continue
-			}
-			if !policy.AllowsReverseImpact(edge.EdgeType) {
-				continue
+			if !viaParentModel {
+				if !opts.IncludeStructural && policy.IsStructural(edge.EdgeType) {
+					continue
+				}
+				if !policy.AllowsReverseImpact(edge.EdgeType) {
+					continue
+				}
 			}
 
 			// Apply derivation filter.
@@ -145,6 +165,17 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 			nextDepth := item.depth + 1
 			if nextDepth > maxDepthReached {
 				maxDepthReached = nextDepth
+			}
+
+			// Field-mode precision label: decided at the first hop, inherited
+			// by everything downstream of that hop.
+			precision := item.precision
+			if fieldMode && item.depth == 0 {
+				if viaParentModel {
+					precision = "model"
+				} else {
+					precision = "field"
+				}
 			}
 
 			// Compute impact score: 100 * Π(trust_score) * 0.95^(depth-1)
@@ -171,6 +202,7 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 				TrustChain:  math.Round(newScoreProduct*1000) / 1000,
 				Path:        newPath,
 				EdgeTypes:   newEdgeTypes,
+				Precision:   precision,
 			})
 
 			queue = append(queue, queueItem{
@@ -179,6 +211,7 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 				pathKeys:     newPath,
 				edgeTypes:    newEdgeTypes,
 				scoreProduct: newScoreProduct,
+				precision:    precision,
 			})
 		}
 	}
@@ -208,13 +241,18 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 	// Forward expansion: find affected endpoints and topics from impacted nodes.
 	surface := g.collectAffectedSurface(startNode.NodeID, impacts)
 
-	return &ImpactResult{
+	result := &ImpactResult{
 		ChangedNode:     changedNodeKey,
 		Impacts:         impacts,
 		AffectedSurface: surface,
 		TotalImpacted:   len(impacts),
 		MaxDepthReached: maxDepthReached,
-	}, nil
+	}
+	if fieldMode {
+		result.PrecisionNote = "precision=field: code names this exact field (READS_FIELD/WRITES_FIELD). " +
+			"precision=model: reached through the parent model — potential impact until field-level usage edges exist."
+	}
+	return result, nil
 }
 
 // surfaceEdgeTypes defines which forward edge types reveal affected surface.

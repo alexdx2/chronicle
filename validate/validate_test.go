@@ -113,6 +113,44 @@ func TestValidateEdgeInput_Valid(t *testing.T) {
 	}
 }
 
+func TestValidateEdgeInput_PreservesRawKeysButChecksFormat(t *testing.T) {
+	// Endpoint keys pass through unchanged — the raw-vs-normalized resolution
+	// happens at edge upsert against what is actually stored (nodes exist in
+	// both styles: validate-normalized and resolver-literal dotted keys).
+	reg := loadTestRegistry(t)
+	input := EdgeInput{
+		FromNodeKey: "code:controller:dom:tom.weapon.equipped",
+		ToNodeKey:   "contract:endpoint:dom:get__tom_status",
+		EdgeType:    "CALLS_ENDPOINT",
+		FromLayer:   "code",
+		ToLayer:     "contract",
+	}
+	result, err := ValidateEdgeInput(input, reg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FromNodeKey != input.FromNodeKey {
+		t.Errorf("from_node_key rewritten: %q", result.FromNodeKey)
+	}
+	if result.ToNodeKey != input.ToNodeKey {
+		t.Errorf("to_node_key rewritten: %q", result.ToNodeKey)
+	}
+}
+
+func TestValidateEdgeInput_MalformedNodeKey(t *testing.T) {
+	reg := loadTestRegistry(t)
+	input := EdgeInput{
+		FromNodeKey: "justaname",
+		ToNodeKey:   "code:provider:orders:ordersservice",
+		EdgeType:    "INJECTS",
+		FromLayer:   "code",
+		ToLayer:     "code",
+	}
+	if _, err := ValidateEdgeInput(input, reg); err == nil {
+		t.Fatal("expected error for malformed from_node_key")
+	}
+}
+
 func TestValidateEdgeInput_BadEdgeType(t *testing.T) {
 	reg := loadTestRegistry(t)
 	input := EdgeInput{

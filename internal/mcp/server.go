@@ -62,6 +62,7 @@ func NewServer(g *graph.Graph) *server.MCPServer {
 	s.AddTool(snapshotCreateTool(), snapshotCreateHandler(g))
 	s.AddTool(staleMarkTool(), staleMarkHandler(g))
 	s.AddTool(invalidateChangedTool(), invalidateChangedHandler(g))
+	s.AddTool(reviewReportTool(), reviewReportHandler(g))
 	s.AddTool(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
 	s.AddTool(queryPathTool(), queryPathHandler(g))
 	s.AddTool(impactTool(), impactHandler(g))
@@ -512,7 +513,7 @@ func edgeListHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func evidenceAddTool() mcp.Tool {
 	return mcp.NewTool("chronicle_evidence_add",
-		mcp.WithDescription("Add provenance evidence for a node or edge. Include assertion_kind and assertion JSON for mechanical verification — evidence is verified at creation time against the actual file. If the assertion is not found, evidence is marked 'rejected' with low confidence. For user corrections: use polarity='negative' with checked_scope. Extractor_id should be 'claude-code'."),
+		mcp.WithDescription("Add provenance evidence for a node or edge. Include assertion_kind and assertion JSON for mechanical verification — evidence is verified at creation time against the actual file. If the assertion is not found, evidence is marked 'rejected' with low confidence. For user corrections: use polarity='negative' with checked_scope. Extractor_id should identify the agent (e.g. 'claude-code', 'codex')."),
 		mcp.WithString("extractor_id", mcp.Required(), mcp.Description("Extractor ID")),
 		mcp.WithString("extractor_version", mcp.Required(), mcp.Description("Extractor version")),
 		mcp.WithString("target_kind", mcp.Description("Target kind: node or edge")),
@@ -2289,7 +2290,12 @@ func reportDiscoveryHandler(g *graph.Graph) server.ToolHandlerFunc {
 		args := req.GetArguments()
 		source := strParam(args, "source")
 		if source == "" {
-			source = "claude"
+			// Default to the connected client's identity (claude-code, codex,
+			// cursor, ...) — discoveries must not all read as "claude".
+			source = ConnectedClient()
+		}
+		if source == "" {
+			source = "agent"
 		}
 		conf := float64Param(args, "confidence")
 		if conf == 0 {

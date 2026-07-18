@@ -164,6 +164,19 @@ Do not infer a model from variable names or type annotations.
 Use when this file reads/writes/queries/persists a data model via ORM, repository, or database client.
 Do NOT use for TypeScript type annotations or DTO usage.
 
+## Field usage (optional, high-precision)
+
+```json
+{"kind":"field_usage","target":"Battle","to":"winnerId","method":"write"}
+```
+
+Emit ONLY when the code names a specific persisted field explicitly:
+`battle.winnerId = x`, `select: { winnerId: true }`, `data: { score: ... }`,
+`UPDATE ... SET winner_id`. `method` is `"read"` or `"write"`; `target` is the model.
+Enables field-level blast radius ("who breaks if winnerId changes").
+NEVER infer fields from spreads, serialization, or logging (`...battle`, `toJSON`, `console.log(battle)`).
+Skip this fact entirely when unsure — a missing field edge is recoverable, a wrong one poisons impact analysis.
+
 ## Service declaration
 
 ```json

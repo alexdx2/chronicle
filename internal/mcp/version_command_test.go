@@ -25,7 +25,7 @@ func TestVersionIdentityFingerprintStable(t *testing.T) {
 	if id.ReleaseCodename != "osprey-fed1" {
 		t.Fatalf("release_codename = %q, want osprey-fed1", id.ReleaseCodename)
 	}
-	if id.Fingerprint != "9d2d8920ffd4" {
-		t.Fatalf("fingerprint = %q, want 9d2d8920ffd4", id.Fingerprint)
+	if id.Fingerprint != "41f29fad7929" {
+		t.Fatalf("fingerprint = %q, want 41f29fad7929", id.Fingerprint)
 	}
 }

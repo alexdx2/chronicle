@@ -122,6 +122,13 @@ func (g *Graph) NodeSearch(q string, f store.NodeFilter, limit int) ([]SearchRes
 		if results[i].Score != results[j].Score {
 			return results[i].Score > results[j].Score
 		}
+		// Equal lexical score → architectural altitude wins: resolving a name
+		// should surface THE entity (service, topic, model), not one of the
+		// many code files that merely mention it.
+		ri, rj := layerRank(results[i].Layer), layerRank(results[j].Layer)
+		if ri != rj {
+			return ri < rj
+		}
 		if results[i].Trust != results[j].Trust {
 			return results[i].Trust > results[j].Trust
 		}
@@ -186,6 +193,29 @@ func matchTerm(term string, c candidates, glossary map[string]map[string]bool) (
 		return tierPath, "path"
 	}
 	return 0, ""
+}
+
+// layerRank orders layers by architectural altitude for tie-breaking:
+// boundary entities first, implementation detail last.
+func layerRank(layer string) int {
+	switch layer {
+	case "service":
+		return 0
+	case "contract":
+		return 1
+	case "data":
+		return 2
+	case "infra":
+		return 3
+	case "flow":
+		return 4
+	case "ownership":
+		return 5
+	case "code":
+		return 6
+	default:
+		return 7
+	}
 }
 
 // norm produces the canonical kebab form shared with key validation.

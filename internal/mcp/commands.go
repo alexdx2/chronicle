@@ -58,6 +58,7 @@ var UserCommands = map[string]string{
 	"status":   "Show current graph state — nodes, edges, layers, last scan",
 	"version":  "Show MCP server identity — codename, fingerprint, capabilities (call before scan)",
 	"update":  "Incremental update — rescan only changed files since last scan via git diff",
+	"review":  "MR/PR review report — changed entities, blast radius (field-level where known), external services affected",
 	"verify":  "Verify low-confidence edges — find code evidence to confirm or reject inferred relationships",
 	"help":    "Show available Chronicle commands",
 	"diagram":     "Show a live diagram to explain architecture",
@@ -121,6 +122,17 @@ __STAGES__`,
    - Confirmed: chronicle_evidence_add(target_kind="edge", edge_key, source_kind="file", file_path, line_start, line_end, confidence=0.95, polarity="positive")
    - Disproved: chronicle_evidence_add(..., polarity="negative", confidence=0.90)
    This raises/lowers confidence for future queries.`,
+
+	"review": `MR/PR review report:
+1. Call chronicle_review_report (defaults: base = merge-base with main/master, head = working tree).
+   For a specific MR branch pass base/head refs explicitly.
+2. Present the returned markdown verbatim — it is the report.
+3. Offer drill-down: chronicle_impact on any listed entity, depth 4.
+4. If "Unmapped changes" is non-empty, say those files have NO graph coverage —
+   their impact is unknown, not zero. Suggest a scan/update to close the gap.
+5. precision=model rows are potential impact (reached via the parent model);
+   precision=field rows are exact (code names that field). Never present
+   model-precision rows as confirmed breakage.`,
 
 	"deps": `Dependency analysis:
 1. Find the node_key
@@ -489,7 +501,7 @@ IMPORTANT: Do NOT increase confidence directly. Your job is to collect proof. Th
         "file_path": "<path where evidence found>",
         "line_start": <line number>,
         "line_end": <line number>,
-        "extractor_id": "claude-code",
+        "extractor_id": "<your agent id: claude-code, codex, ...>",
         "extractor_version": "1.0",
         "confidence": 0.95,
         "polarity": "positive"

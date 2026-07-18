@@ -58,6 +58,14 @@ func MergeASTFacts(filePath string, llmFacts []map[string]any, llmFromType strin
 					"kind": "model", "name": m.Name,
 					"file_path": filePath, "line": m.Line,
 				})
+				// Field-level facts: every field (scalars included) becomes a
+				// data:field node so impact can answer field-precision queries.
+				for _, f := range m.Fields {
+					astFacts = append(astFacts, map[string]any{
+						"kind": "model_field", "from": m.Name, "to": f.Name,
+						"to_type": f.Type, "file_path": filePath,
+					})
+				}
 			}
 			for _, e := range prismaResult.Enums {
 				astFacts = append(astFacts, map[string]any{
@@ -203,6 +211,14 @@ func factKey(f map[string]any) string {
 	method, _ := f["method"].(string)
 	k := strings.ToLower(kind)
 	v := strings.ToLower(val)
+	// Field identity is model-scoped: Battle.id and Cat.id are different facts.
+	if k == "model_field" || k == "field_usage" {
+		owner, _ := f["from"].(string)
+		if owner == "" {
+			owner, _ = f["target"].(string)
+		}
+		v = strings.ToLower(owner) + "." + v
+	}
 	// method is identity only where it disambiguates (GET vs POST /x, call sites);
 	// for topic/eventing kinds the topic name IS the identity — AST and LLM
 	// record different method names for the same emit/handler.

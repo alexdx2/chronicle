@@ -264,6 +264,7 @@ var allowedFactKinds = map[string]bool{
 	"endpoint": true, "http_call": true, "calls_service": true,
 	"calls_endpoint": true, "uses_model": true,
 	"model": true, "enum": true, "model_relation": true,
+	"model_field": true, "field_usage": true,
 	"produces": true, "consumes": true,
 	"decorator": true, "constructor_param": true,
 	"call": true, "member_call": true,

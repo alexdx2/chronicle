@@ -35,6 +35,6 @@ e2e/AGENTS.md
 e2e/results/
 docs/superpowers/
 .depbot/tmp/
-.depbot/scan-work/
-.depbot/scan-outbox/
+**/.depbot/scan-work/
+**/.depbot/scan-outbox/
 .gstack/

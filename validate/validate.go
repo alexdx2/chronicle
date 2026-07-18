@@ -166,6 +166,18 @@ func ValidateEdgeInput(input EdgeInput, reg *registry.Registry) (*ValidatedEdge,
 		input.DerivationKind = "hard" // default
 	}
 
+	// Format-check the endpoint keys (layer:type:domain:name) without
+	// rewriting them: nodes exist in two storage styles — validate-normalized
+	// (import path, kebab-case) and resolver-literal (scan path, e.g. dotted
+	// topic names) — so the actual raw-vs-normalized resolution happens at
+	// edge upsert, against what is really stored.
+	if _, err := NormalizeNodeKey(input.FromNodeKey); err != nil {
+		return nil, fmt.Errorf("validation: from_node_key: %w", err)
+	}
+	if _, err := NormalizeNodeKey(input.ToNodeKey); err != nil {
+		return nil, fmt.Errorf("validation: to_node_key: %w", err)
+	}
+
 	if !reg.IsValidEdgeType(input.EdgeType) {
 		return nil, fmt.Errorf("validation: invalid edge_type %q", input.EdgeType)
 	}

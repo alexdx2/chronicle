@@ -251,6 +251,14 @@ var scanStages = []ScanStage{
     7. Verify wave_complete=true in chronicle_scan_pool_status before starting the next wave
     8. Go to step 1
 
+  READ-ONLY SANDBOX FALLBACK: if your environment blocks writing files, skip
+  the outbox (steps 5-6 artifact writing) and report each wave's items via
+  chronicle_file_extracted_batch(domain, revision_id, items=[...]) instead —
+  same item shape, status MUST be "extracted" (or skipped/failed), facts as a
+  JSON array. Check the response's "failures" list and fix+resubmit any
+  failed item before the next wave; NEVER mark a file failed just because a
+  batch item was rejected — read the failure message and correct the payload.
+
   Fact kinds that build the graph backbone:
   - "provides" from @Module files (from_type="module")
   - "parent" when ownership is clear

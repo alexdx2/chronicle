@@ -1336,6 +1336,110 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		counts.evidence++
 
+	case "model_field":
+		// Field of a data model (deterministic, from schema AST) — data:field
+		// node + HAS_FIELD edge from the owning model. Key uses '/' between
+		// model and field: NormalizeNodeKey preserves slashes, so the key is
+		// stable however the agent later spells it.
+		if fact.From == "" || fact.To == "" {
+			return counts, nil, nil
+		}
+		modelKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.From)
+		fieldKey := "data:field:" + domainKey + ":" + validate.NormalizeName(fact.From) + "/" + validate.NormalizeName(fact.To)
+		fieldName := fact.From + "." + fact.To
+
+		modelID := g.ensureNodeID(domainKey, revisionID, modelKey, fact.From, "")
+		fieldID := g.ensureNodeID(domainKey, revisionID, fieldKey, fieldName, "")
+		if fact.ToType != "" {
+			if node, err := g.store.GetNodeByKey(fieldKey); err == nil && (node.Metadata == "" || node.Metadata == "{}") {
+				meta, _ := json.Marshal(map[string]string{"field_type": fact.ToType, "model": fact.From})
+				node.Metadata = string(meta)
+				node.LastSeenRevisionID = revisionID
+				g.store.UpsertNode(*node)
+			}
+		}
+
+		fieldEdgeKey := modelKey + "->" + fieldKey + ":HAS_FIELD"
+		if _, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: fieldEdgeKey, FromNodeID: modelID, ToNodeID: fieldID,
+			FromNodeKey: modelKey, ToNodeKey: fieldKey,
+			EdgeType: "HAS_FIELD", DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
+		}); err == nil {
+			counts.edges++
+		}
+		fieldAssertion, _ := json.Marshal(map[string]any{"substring": fact.To})
+		_, _ = g.AddNodeEvidence(fieldKey, validate.EvidenceInput{
+			TargetKind: "node", SourceKind: "file", FilePath: filePath,
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(fieldAssertion),
+		})
+		if _, err := g.AddEdgeEvidence(fieldEdgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(fieldAssertion),
+		}); err != nil {
+			return counts, nil, err
+		}
+		counts.nodes++
+		counts.evidence += 2
+
+	case "field_usage":
+		// Code reads/writes a specific persisted field (LLM-refined precision).
+		// Only accepted when the owning MODEL already exists — no phantom
+		// fields from hallucinated models. method: "write" → WRITES_FIELD,
+		// anything else → READS_FIELD.
+		fieldOwner := fact.Target
+		fieldName := fact.To
+		if fieldOwner == "" && strings.Contains(fact.To, ".") {
+			parts := strings.SplitN(fact.To, ".", 2)
+			fieldOwner, fieldName = parts[0], parts[1]
+		}
+		if fieldOwner == "" || fieldName == "" {
+			return counts, nil, nil
+		}
+		ownerKey := "data:model:" + domainKey + ":" + strings.ToLower(fieldOwner)
+		if _, err := g.store.GetNodeIDByKey(ownerKey); err != nil {
+			// Unknown model — skip silently (agent hallucination guard).
+			return counts, nil, nil
+		}
+		usageFromKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+		usageFromID := g.ensureNodeID(domainKey, revisionID, usageFromKey, inferNameFromPath(filePath), filePath)
+		fKey := "data:field:" + domainKey + ":" + validate.NormalizeName(fieldOwner) + "/" + validate.NormalizeName(fieldName)
+		fID := g.ensureNodeID(domainKey, revisionID, fKey, fieldOwner+"."+fieldName, "")
+
+		usageEdgeType := "READS_FIELD"
+		if strings.EqualFold(fact.Method, "write") {
+			usageEdgeType = "WRITES_FIELD"
+		}
+		usageConfidence := fact.Confidence
+		if usageConfidence == 0 {
+			usageConfidence = 0.85
+		}
+		usageEdgeKey := usageFromKey + "->" + fKey + ":" + usageEdgeType
+		if _, err := g.store.UpsertEdge(store.EdgeRow{
+			EdgeKey: usageEdgeKey, FromNodeID: usageFromID, ToNodeID: fID,
+			FromNodeKey: usageFromKey, ToNodeKey: fKey,
+			EdgeType: usageEdgeType, DerivationKind: "hard", Active: true,
+			LastSeenRevisionID: revisionID, Confidence: usageConfidence, Freshness: 1.0, TrustScore: usageConfidence,
+			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
+		}); err == nil {
+			counts.edges++
+		}
+		usageAssertion, _ := json.Marshal(map[string]any{"substring": fieldName})
+		if _, err := g.AddEdgeEvidence(usageEdgeKey, validate.EvidenceInput{
+			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
+			Confidence: usageConfidence, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(usageAssertion),
+		}); err != nil {
+			return counts, nil, err
+		}
+		counts.evidence++
+
 	case "flow":
 		// Business flow / use case — creates flow node + edges to triggers and requirements
 		if fact.FlowName == "" {
@@ -1557,6 +1661,25 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		svcName := normalizePackageName(fact.To)
 		nodeKey := "service:service:" + domainKey + ":" + svcName
+
+		// Same flattened identity = same service: a .csproj declaring
+		// "ScoreboardApi" must attach to the manifest-declared
+		// "scoreboard-api" node, not mint a twin (same policy as
+		// mergeExternalSystemsIntoServices).
+		if existing := g.findServiceByFlatName(domainKey, fact.To); existing != nil {
+			nodeKey = existing.NodeKey
+			g.registerNodeAlias(existing.NodeID, fact.To, "name")
+			if existing.FilePath == "" && filePath != "" {
+				existing.FilePath = filePath
+				existing.LastSeenRevisionID = revisionID
+				g.store.UpsertNode(*existing)
+			}
+			g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, fact.To, filePath,
+				"chronicle:resolve:declares_service", "service_declaration"))
+			counts.evidence++
+			return counts, nil, nil
+		}
+
 		id, err := g.UpsertNode(validate.NodeInput{
 			NodeKey:   nodeKey,
 			Layer:     "service",
@@ -2431,7 +2554,7 @@ func mergeVotedExtractions(extractions []store.ExtractionRow) []store.Extraction
 func isHardFact(fact map[string]any) bool {
 	kind, _ := fact["kind"].(string)
 	switch kind {
-	case "model", "enum", "model_relation", "endpoint", "provides", "injects",
+	case "model", "enum", "model_relation", "model_field", "endpoint", "provides", "injects",
 		"declares_service", "produces", "consumes", "decorator", "import", "parent":
 		return true
 	}
@@ -2625,6 +2748,11 @@ func canonicalFactKey(f map[string]any) string {
 
 	to = strings.TrimRight(to, "/")
 	target = strings.TrimRight(target, "/")
+
+	// Field identity is model-scoped: Battle.id and Cat.id must not merge.
+	if kind == "model_field" {
+		return kind + "|" + from + "." + to + "|" + target + "|" + method
+	}
 
 	return kind + "|" + to + "|" + target + "|" + method
 }
@@ -3452,3 +3580,27 @@ func lookupCodeNode(g *Graph, domainKey, name string) bool {
 	return false
 }
 
+
+// findServiceByFlatName returns the active service node in the domain whose
+// flattened name (or key leaf) equals the flattened candidate, or nil.
+func (g *Graph) findServiceByFlatName(domainKey, name string) *store.NodeRow {
+	flat := flattenName(name)
+	if flat == "" {
+		return nil
+	}
+	nodes, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: "service"})
+	if err != nil {
+		return nil
+	}
+	for i := range nodes {
+		n := nodes[i]
+		if n.NodeType != "service" || n.Status != "active" {
+			continue
+		}
+		leaf := n.NodeKey[strings.LastIndex(n.NodeKey, ":")+1:]
+		if flattenName(n.Name) == flat || flattenName(leaf) == flat {
+			return &n
+		}
+	}
+	return nil
+}

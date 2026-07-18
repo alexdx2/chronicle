@@ -1,1 +1,0 @@
-{"candidates":[{"kind":"consumes","to":"battle-results","method":"Subscribe","reason":"Confluent.Kafka Subscribe"}],"file_path":"scoreboard-api/Services/BattleResultConsumer.cs"}

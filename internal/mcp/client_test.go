@@ -73,3 +73,55 @@ func callToolText(t *testing.T, h server.ToolHandlerFunc, args map[string]any) s
 	}
 	return text.Text
 }
+
+// The scan command must dispatch per client: solo flow for clients without a
+// Task tool (Codex, Cursor), orchestrator flow for Claude. This is the
+// Claude↔Codex contract the lab parity gate builds on.
+func TestScanCommandDispatchPerClient(t *testing.T) {
+	g := newSearchTestGraph(t)
+	h := commandHandler(g)
+
+	setConnectedClientForTest(t, "codex")
+	solo := callToolText(t, h, map[string]any{"command": "scan"})
+	if !strings.Contains(solo, "sole extractor") {
+		t.Errorf("codex client must get the solo scan flow; got:\n%.400s", solo)
+	}
+	if strings.Contains(strings.ToLower(solo), "spawn") {
+		t.Errorf("solo scan flow must not mention spawning")
+	}
+
+	setConnectedClientForTest(t, "claude-code")
+	orch := callToolText(t, h, map[string]any{"command": "scan"})
+	if strings.Contains(orch, "sole extractor") {
+		t.Errorf("claude client must get the orchestrator flow")
+	}
+	if !strings.Contains(strings.ToLower(orch), "spawn") {
+		t.Errorf("orchestrator flow must tell the agent to spawn extractors")
+	}
+}
+
+// Discoveries reported without an explicit source must carry the connected
+// client's name, not a hardcoded "claude" (naming parity for Codex et al.).
+func TestReportDiscoveryDefaultsSourceToClient(t *testing.T) {
+	g := newSearchTestGraph(t)
+	h := reportDiscoveryHandler(g)
+
+	setConnectedClientForTest(t, "codex")
+	callToolText(t, h, map[string]any{
+		"domain":   "testapp",
+		"category": "pattern",
+		"title":    "solo scan finding",
+		"content":  "codex discovered something",
+	})
+
+	discoveries, err := g.Store().ListDiscoveries("testapp", "")
+	if err != nil {
+		t.Fatalf("ListDiscoveries: %v", err)
+	}
+	if len(discoveries) == 0 {
+		t.Fatal("no discovery stored")
+	}
+	if discoveries[0].Source != "codex" {
+		t.Errorf("discovery source = %q, want codex", discoveries[0].Source)
+	}
+}
