@@ -203,3 +203,56 @@ func TestNodeSearchEmptyQuery(t *testing.T) {
 		t.Fatal("expected error for empty query")
 	}
 }
+
+// At equal lexical score, architectural altitude wins: a service beats code
+// files, a topic beats consumers/producers. Agents use node_search to resolve
+// names to THE entity — burying the service under six of its files is noise.
+func TestNodeSearchLayerRankBreaksTies(t *testing.T) {
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+	nodes := []validate.NodeInput{
+		{NodeKey: "service:service:orders:spectators-api", Layer: "service", NodeType: "service", DomainKey: "orders", Name: "spectators-api"},
+		{NodeKey: "code:controller:orders:spectators-api/src/spectators/stats.controller", Layer: "code", NodeType: "controller", DomainKey: "orders", Name: "StatsController", FilePath: "spectators-api/src/spectators/stats.controller.ts"},
+		{NodeKey: "code:provider:orders:spectators-api/src/spectators/spectator.service", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "SpectatorService", FilePath: "spectators-api/src/spectators/spectator.service.ts"},
+	}
+	for _, n := range nodes {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode: %v", err)
+		}
+	}
+	results, err := g.NodeSearch("spectators", store.NodeFilter{}, 5)
+	if err != nil {
+		t.Fatalf("NodeSearch: %v", err)
+	}
+	if len(results) == 0 || results[0].NodeKey != "service:service:orders:spectators-api" {
+		var got []string
+		for _, r := range results {
+			got = append(got, r.NodeKey)
+		}
+		t.Errorf("service must outrank its code files at equal score; got %v", got)
+	}
+}
+
+func TestNodeSearchContractBeatsCodeAtEqualScore(t *testing.T) {
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+	nodes := []validate.NodeInput{
+		{NodeKey: "contract:topic:orders:battle-results", Layer: "contract", NodeType: "topic", DomainKey: "orders", Name: "battle-results"},
+		{NodeKey: "code:provider:orders:arena-api/src/arena/battle-result.producer", Layer: "code", NodeType: "provider", DomainKey: "orders", Name: "BattleResultProducer", FilePath: "arena-api/src/arena/battle-result.producer.ts"},
+	}
+	for _, n := range nodes {
+		if _, err := g.UpsertNode(n, revID); err != nil {
+			t.Fatalf("UpsertNode: %v", err)
+		}
+	}
+	results, err := g.NodeSearch("battle.result", store.NodeFilter{}, 5)
+	if err != nil {
+		t.Fatalf("NodeSearch: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("want both nodes matched, got %d", len(results))
+	}
+	if results[0].NodeKey != "contract:topic:orders:battle-results" {
+		t.Errorf("topic must outrank producer code at equal score; got %s first", results[0].NodeKey)
+	}
+}

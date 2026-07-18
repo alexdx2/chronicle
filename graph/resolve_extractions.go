@@ -1661,6 +1661,25 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		svcName := normalizePackageName(fact.To)
 		nodeKey := "service:service:" + domainKey + ":" + svcName
+
+		// Same flattened identity = same service: a .csproj declaring
+		// "ScoreboardApi" must attach to the manifest-declared
+		// "scoreboard-api" node, not mint a twin (same policy as
+		// mergeExternalSystemsIntoServices).
+		if existing := g.findServiceByFlatName(domainKey, fact.To); existing != nil {
+			nodeKey = existing.NodeKey
+			g.registerNodeAlias(existing.NodeID, fact.To, "name")
+			if existing.FilePath == "" && filePath != "" {
+				existing.FilePath = filePath
+				existing.LastSeenRevisionID = revisionID
+				g.store.UpsertNode(*existing)
+			}
+			g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, fact.To, filePath,
+				"chronicle:resolve:declares_service", "service_declaration"))
+			counts.evidence++
+			return counts, nil, nil
+		}
+
 		id, err := g.UpsertNode(validate.NodeInput{
 			NodeKey:   nodeKey,
 			Layer:     "service",
@@ -3561,3 +3580,27 @@ func lookupCodeNode(g *Graph, domainKey, name string) bool {
 	return false
 }
 
+
+// findServiceByFlatName returns the active service node in the domain whose
+// flattened name (or key leaf) equals the flattened candidate, or nil.
+func (g *Graph) findServiceByFlatName(domainKey, name string) *store.NodeRow {
+	flat := flattenName(name)
+	if flat == "" {
+		return nil
+	}
+	nodes, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: "service"})
+	if err != nil {
+		return nil
+	}
+	for i := range nodes {
+		n := nodes[i]
+		if n.NodeType != "service" || n.Status != "active" {
+			continue
+		}
+		leaf := n.NodeKey[strings.LastIndex(n.NodeKey, ":")+1:]
+		if flattenName(n.Name) == flat || flattenName(leaf) == flat {
+			return &n
+		}
+	}
+	return nil
+}

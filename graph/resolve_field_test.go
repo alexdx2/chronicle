@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 )
 
 // ---------------------------------------------------------------------------
@@ -91,5 +92,44 @@ func TestResolveFieldUsageFacts(t *testing.T) {
 	// Ghost model must not have produced a field node.
 	if _, err := s.GetNodeByKey("data:field:testapp:ghost/nope"); err == nil {
 		t.Error("phantom field node created for unknown model Ghost")
+	}
+}
+
+func TestDeclaresServiceMergesByFlattenedName(t *testing.T) {
+	// A .csproj declaring "ScoreboardApi" must NOT create a twin of the
+	// manifest-declared "scoreboard-api" service — same flattened identity.
+	g, s, revID := setupTestGraph(t)
+
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: "service:service:testapp:scoreboard-api", Layer: "service",
+		NodeType: "service", DomainKey: "testapp", Name: "scoreboard-api",
+	}, revID); err != nil {
+		t.Fatalf("manifest service: %v", err)
+	}
+
+	facts := `[{"kind":"declares_service","to":"ScoreboardApi"}]`
+	g.SaveFileExtraction(revID, "testapp", "scoreboard-api/ScoreboardApi.csproj", "extracted", "manifest", facts, "")
+	if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+		t.Fatalf("ResolveExtractions: %v", err)
+	}
+
+	rows, _ := s.ListNodes(store.NodeFilter{Domain: "testapp"})
+	var services []string
+	for _, n := range rows {
+		if n.NodeType == "service" && n.Status == "active" {
+			services = append(services, n.NodeKey)
+		}
+	}
+	if len(services) != 1 || services[0] != "service:service:testapp:scoreboard-api" {
+		t.Errorf("duplicate service nodes: %v", services)
+	}
+	// The declaration evidence must land on the surviving node.
+	node, err := s.GetNodeByKey("service:service:testapp:scoreboard-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := s.ListEvidenceByNode(node.NodeID)
+	if len(evs) == 0 {
+		t.Error("declaration evidence missing on merged service node")
 	}
 }
