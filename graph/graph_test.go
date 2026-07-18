@@ -171,6 +171,63 @@ func TestGraphUpsertEdgeRawKeysMatchNormalizedNodes(t *testing.T) {
 	}
 }
 
+func TestGraphUpsertEdgeResolvesResolverLiteralKeys(t *testing.T) {
+	// The scan resolver stores topic nodes under literal keys (dots kept:
+	// contract:topic:d:tom.weapon.equipped) via store-level upsert. An edge
+	// arriving with that exact key must attach to the stored node — never be
+	// rewritten to the (kebab) normalized form that matches nothing.
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+
+	_, err := g.UpsertNode(validate.NodeInput{
+		NodeKey:   "code:provider:test-domain:producer",
+		Layer:     "code",
+		NodeType:  "provider",
+		DomainKey: "test-domain",
+		Name:      "Producer",
+	}, revID)
+	if err != nil {
+		t.Fatalf("UpsertNode producer: %v", err)
+	}
+	// Store-level insert — bypasses validate on purpose (resolver path).
+	if _, err := g.Store().UpsertNode(store.NodeRow{
+		NodeKey: "contract:topic:test-domain:tom.weapon.equipped",
+		Layer:   "contract", NodeType: "topic", DomainKey: "test-domain",
+		Name: "tom.weapon.equipped", Status: "active",
+		LastSeenRevisionID: revID, Confidence: 1, Freshness: 1, TrustScore: 1,
+		Metadata: "{}",
+	}); err != nil {
+		t.Fatalf("store UpsertNode topic: %v", err)
+	}
+
+	edgeID, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey:    "code:provider:test-domain:producer",
+		ToNodeKey:      "contract:topic:test-domain:tom.weapon.equipped",
+		EdgeType:       "PUBLISHES_TOPIC",
+		DerivationKind: "hard",
+		FromLayer:      "code",
+		ToLayer:        "contract",
+	}, revID)
+	if err != nil {
+		t.Fatalf("UpsertEdge to resolver-literal topic key: %v", err)
+	}
+	if edgeID == 0 {
+		t.Fatal("expected non-zero edge ID")
+	}
+
+	// The edge must reference the stored dotted key, not a kebab rewrite.
+	edges, _ := g.Store().ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES_TOPIC"})
+	found := false
+	for _, e := range edges {
+		if e.ToNodeKey == "contract:topic:test-domain:tom.weapon.equipped" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("edge does not reference the stored dotted topic key; edges: %v", edges)
+	}
+}
+
 func TestGraphUpsertEdgeInvalidLayers(t *testing.T) {
 	g := setupGraph(t)
 	revID := makeRevision(t, g)

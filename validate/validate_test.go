@@ -113,10 +113,10 @@ func TestValidateEdgeInput_Valid(t *testing.T) {
 	}
 }
 
-func TestValidateEdgeInput_NormalizesNodeKeys(t *testing.T) {
-	// Regression: chronicle_import_all normalizes node keys on insert
-	// (get__tom_status → get-tom-status) but edge validation used to pass
-	// from/to keys through raw, so edge lookups missed the stored nodes.
+func TestValidateEdgeInput_PreservesRawKeysButChecksFormat(t *testing.T) {
+	// Endpoint keys pass through unchanged — the raw-vs-normalized resolution
+	// happens at edge upsert against what is actually stored (nodes exist in
+	// both styles: validate-normalized and resolver-literal dotted keys).
 	reg := loadTestRegistry(t)
 	input := EdgeInput{
 		FromNodeKey: "code:controller:dom:tom.weapon.equipped",
@@ -129,15 +129,11 @@ func TestValidateEdgeInput_NormalizesNodeKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.FromNodeKey != "code:controller:dom:tom-weapon-equipped" {
-		t.Errorf("from_node_key not normalized: %q", result.FromNodeKey)
+	if result.FromNodeKey != input.FromNodeKey {
+		t.Errorf("from_node_key rewritten: %q", result.FromNodeKey)
 	}
-	if result.ToNodeKey != "contract:endpoint:dom:get-tom-status" {
-		t.Errorf("to_node_key not normalized: %q", result.ToNodeKey)
-	}
-	want := "code:controller:dom:tom-weapon-equipped->contract:endpoint:dom:get-tom-status:CALLS_ENDPOINT"
-	if result.EdgeKey != want {
-		t.Errorf("edge_key built from raw keys:\n got %q\nwant %q", result.EdgeKey, want)
+	if result.ToNodeKey != input.ToNodeKey {
+		t.Errorf("to_node_key rewritten: %q", result.ToNodeKey)
 	}
 }
 

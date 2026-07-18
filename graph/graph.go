@@ -172,13 +172,21 @@ func (g *Graph) UpsertEdge(input validate.EdgeInput, revisionID int64) (int64, e
 		return 0, fmt.Errorf("UpsertEdge: %w", err)
 	}
 
-	fromID, err := g.store.GetNodeIDByKey(ve.FromNodeKey)
+	fromID, fromKey, err := g.resolveEdgeEndpoint(ve.FromNodeKey)
 	if err != nil {
 		return 0, fmt.Errorf("UpsertEdge: from_node_key %q: %w", ve.FromNodeKey, err)
 	}
-	toID, err := g.store.GetNodeIDByKey(ve.ToNodeKey)
+	toID, toKey, err := g.resolveEdgeEndpoint(ve.ToNodeKey)
 	if err != nil {
 		return 0, fmt.Errorf("UpsertEdge: to_node_key %q: %w", ve.ToNodeKey, err)
+	}
+	// The edge key must reference the keys the endpoints are actually stored
+	// under, or the same logical edge imported twice creates two rows.
+	if fromKey != ve.FromNodeKey || toKey != ve.ToNodeKey {
+		ve.FromNodeKey, ve.ToNodeKey = fromKey, toKey
+		if input.EdgeKey == "" {
+			ve.EdgeKey = validate.BuildEdgeKey(fromKey, toKey, ve.EdgeType)
+		}
 	}
 
 	confidence := ConfidenceFromDerivation(ve.DerivationKind)
@@ -202,6 +210,26 @@ func (g *Graph) UpsertEdge(input validate.EdgeInput, revisionID int64) (int64, e
 		return 0, fmt.Errorf("UpsertEdge: %w", err)
 	}
 	return id, nil
+}
+
+// resolveEdgeEndpoint finds the node an edge endpoint refers to. Nodes exist
+// in two key styles: validate-normalized (import path — kebab-case) and
+// resolver-literal (scan path — e.g. dotted topic names). Try the key as
+// given first (exact match wins), then its normalized form. Returns the id
+// and the key the node is actually stored under.
+func (g *Graph) resolveEdgeEndpoint(key string) (int64, string, error) {
+	if id, err := g.store.GetNodeIDByKey(key); err == nil {
+		return id, key, nil
+	}
+	norm, nerr := validate.NormalizeNodeKey(key)
+	if nerr == nil && norm != key {
+		if id, err := g.store.GetNodeIDByKey(norm); err == nil {
+			return id, norm, nil
+		}
+	}
+	// Preserve the original not-found error shape for the raw key.
+	_, err := g.store.GetNodeIDByKey(key)
+	return 0, "", err
 }
 
 // AddNodeEvidence validates the input and adds evidence for a node.
