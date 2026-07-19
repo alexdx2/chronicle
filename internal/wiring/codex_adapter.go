@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -80,12 +81,22 @@ func (a *CodexAdapter) Plan() (*Plan, error) {
 	hookAction, hookContent := planCodexSessionHook(base, baseExists)
 	if hookContent != nil {
 		// merge: hook content already includes the MCP change — replace the
-		// earlier planned config write with the combined content
+		// earlier planned config write with the combined content. When the MCP
+		// block is user-managed (ActionSkip), planCodexSessionHook was planned
+		// against the original, untouched config (base == cfg), so hookContent
+		// carries the user's block byte-for-byte plus the hook block — the
+		// write must still happen, so promote the action off both
+		// ActionUnchanged and ActionSkip.
+		mcpSkipped := p.Changes[0].Action == ActionSkip
 		p.Changes[0].NewContent = hookContent
-		if p.Changes[0].Action == ActionUnchanged {
+		if p.Changes[0].Action == ActionUnchanged || p.Changes[0].Action == ActionSkip {
 			p.Changes[0].Action = hookAction
 		}
-		p.Changes[0].Summary = "MCP server block + SessionStart reminder (sentinel-wrapped)"
+		if mcpSkipped {
+			p.Changes[0].Summary = "SessionStart reminder (MCP block user-managed, skipped)"
+		} else {
+			p.Changes[0].Summary = "MCP server block + SessionStart reminder (sentinel-wrapped)"
+		}
 	}
 
 	agentsPath := filepath.Join(a.CodexDir, "AGENTS.md")
@@ -99,7 +110,14 @@ func (a *CodexAdapter) Plan() (*Plan, error) {
 		Summary: "global Chronicle guidance section", NewContent: agContent,
 	})
 
-	for name, body := range CodexPrompts() {
+	prompts := CodexPrompts()
+	names := make([]string, 0, len(prompts))
+	for name := range prompts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		body := prompts[name]
 		target := filepath.Join(a.CodexDir, "prompts", name)
 		want := []byte(body + "\n")
 		cur, exists, err := readTarget(target)

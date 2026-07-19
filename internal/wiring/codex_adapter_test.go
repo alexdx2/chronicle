@@ -106,6 +106,71 @@ func TestCodexVerifyTiers(t *testing.T) {
 	}
 }
 
+func TestCodexPlanUserManagedMCPStillInstallsHook(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(dir, 0755)
+	userBlock := "[mcp_servers.chronicle]\ncommand = \"/usr/local/bin/my-chronicle\"\nargs = [\"serve\"]\n"
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(userBlock), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := testCodexAdapter(t, dir, true)
+	p, err := a.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfgChange *PlannedChange
+	for i := range p.Changes {
+		if p.Changes[i].Target == configPath {
+			cfgChange = &p.Changes[i]
+			break
+		}
+	}
+	if cfgChange == nil {
+		t.Fatal("no config.toml change planned")
+	}
+	if cfgChange.Action != ActionUpdate {
+		t.Fatalf("action = %s, want %s", cfgChange.Action, ActionUpdate)
+	}
+	if !cfgChange.Mutating() {
+		t.Fatal("config change must be mutating so ApplyPlan doesn't discard the hook write")
+	}
+	got := string(cfgChange.NewContent)
+	if !strings.Contains(got, userBlock) {
+		t.Fatalf("user's original MCP block not preserved byte-for-byte:\n%s", got)
+	}
+	if strings.Contains(got, codexSentinelStart) {
+		t.Fatal("chronicle MCP sentinel must not appear when the user manages the block")
+	}
+	if !strings.Contains(got, codexHookSentinelStart) {
+		t.Fatal("chronicle hook sentinel missing")
+	}
+
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+	if _, err := ApplyPlan(p); err != nil {
+		t.Fatal(err)
+	}
+	onDisk, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != got {
+		t.Fatalf("file on disk does not match planned content:\ndisk: %s\nplanned: %s", onDisk, got)
+	}
+
+	p2, err := a.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range p2.Changes {
+		if c.Mutating() && c.Ownership == OwnershipUser {
+			t.Fatalf("re-plan still mutates user file %s (%s)", c.Target, c.Action)
+		}
+	}
+}
+
 func TestCodexRemovePlan(t *testing.T) {
 	t.Setenv("CHRONICLE_HOME", t.TempDir())
 	a := testCodexAdapter(t, filepath.Join(t.TempDir(), ".codex"), true)
