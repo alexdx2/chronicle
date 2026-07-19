@@ -60,6 +60,8 @@ func NewRootCmd() *cobra.Command {
 		newAliasCmd(),
 		newJournalCmd(),
 		newSetupCmd(),
+		newAttachCmd(),
+		newDetachCmd(),
 	)
 
 	return root
