@@ -9,11 +9,12 @@ import (
 )
 
 type JournalStep struct {
-	Target     string `json:"target"`
-	Action     string `json:"action"`
-	Existed    bool   `json:"existed"`
-	BackupPath string `json:"backupPath,omitempty"`
-	Applied    bool   `json:"applied"`
+	Target     string      `json:"target"`
+	Action     string      `json:"action"`
+	Existed    bool        `json:"existed"`
+	Mode       os.FileMode `json:"mode,omitempty"`
+	BackupPath string      `json:"backupPath,omitempty"`
+	Applied    bool        `json:"applied"`
 }
 
 type ApplyJournal struct {
@@ -61,10 +62,17 @@ func ApplyPlan(p *Plan) (*ApplyResult, error) {
 				var data []byte
 				data, rerr = os.ReadFile(s.BackupPath)
 				if rerr == nil {
-					rerr = AtomicWrite(s.Target, data, 0644)
+					mode := s.Mode
+					if mode == 0 {
+						mode = 0644
+					}
+					rerr = AtomicWrite(s.Target, data, mode)
 				}
 			case !s.Existed:
 				rerr = os.Remove(s.Target)
+				if rerr != nil && os.IsNotExist(rerr) {
+					rerr = nil // already gone — rollback goal achieved
+				}
 			}
 			if rerr != nil {
 				rollbackOK = false
@@ -76,8 +84,10 @@ func ApplyPlan(p *Plan) (*ApplyResult, error) {
 		} else {
 			j.Status = "partial" // backups kept for doctor recovery
 		}
-		saveJournal(j)
 		res.Status = j.Status
+		if saveErr := saveJournal(j); saveErr != nil {
+			return res, fmt.Errorf("apply failed (%s, journal %s) [journal save also failed: %v]: %w", j.Status, journalPath(opID), saveErr, applyErr)
+		}
 		return res, fmt.Errorf("apply failed (%s, journal %s): %w", j.Status, journalPath(opID), applyErr)
 	}
 
@@ -86,8 +96,9 @@ func ApplyPlan(p *Plan) (*ApplyResult, error) {
 			continue
 		}
 		step := JournalStep{Target: c.Target, Action: c.Action}
-		if _, err := os.Stat(c.Target); err == nil {
+		if info, err := os.Stat(c.Target); err == nil {
 			step.Existed = true
+			step.Mode = info.Mode()
 			step.BackupPath = filepath.Join(backupDir(opID), fmt.Sprintf("%d.bak", i))
 			data, rerr := os.ReadFile(c.Target)
 			if rerr != nil {
@@ -105,12 +116,19 @@ func ApplyPlan(p *Plan) (*ApplyResult, error) {
 		if c.Action == ActionDelete {
 			err = os.Remove(c.Target)
 		} else {
-			err = AtomicWrite(c.Target, c.NewContent, 0644)
+			mode := step.Mode
+			if mode == 0 {
+				mode = 0644
+			}
+			err = AtomicWrite(c.Target, c.NewContent, mode)
 		}
 		if err != nil {
 			return rollback(err)
 		}
 		j.Steps[len(j.Steps)-1].Applied = true
+		if err := saveJournal(j); err != nil {
+			return rollback(err)
+		}
 		res.Applied++
 	}
 
