@@ -217,10 +217,3 @@ func readFileOrFail(t *testing.T, path string) string {
 	}
 	return string(b)
 }
-
-func writeFileOrFail(t *testing.T, path string, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-}
