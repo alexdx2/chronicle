@@ -7,7 +7,6 @@ package wiring
 
 import (
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -60,22 +59,6 @@ func planCodexMCPConfig(existing []byte, fileExists bool, binaryPath string) (st
 	return ActionUpdate, []byte(updated)
 }
 
-// UpsertCodexMCPConfigFile is the transitional read-plan-write convenience
-// used by `setup codex` until Task 8 rewrites the command onto Plan/Apply.
-// Returns one of ActionCreate/ActionUpdate/ActionUnchanged/ActionSkip.
-func UpsertCodexMCPConfigFile(configPath, binaryPath string) (string, error) {
-	existing, err := os.ReadFile(configPath)
-	exists := err == nil
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	action, newContent := planCodexMCPConfig(existing, exists, binaryPath)
-	if action == ActionUnchanged || action == ActionSkip {
-		return action, nil
-	}
-	return action, AtomicWrite(configPath, newContent, 0644)
-}
-
 // codexSessionHookBlock is the SessionStart reminder installed into Codex's
 // config.toml: after startup/resume/clear/compact the echoed line re-primes
 // the Chronicle entry point (context compaction loses AGENTS.md emphasis).
@@ -107,21 +90,6 @@ func planCodexSessionHook(existing []byte, fileExists bool) (string, []byte) {
 		return ActionUnchanged, nil
 	}
 	return ActionUpdate, []byte(updated)
-}
-
-// UpsertCodexSessionHookFile is the transitional read-plan-write convenience
-// used by `setup codex` until Task 8 rewrites the command onto Plan/Apply.
-func UpsertCodexSessionHookFile(configPath string) (bool, error) {
-	existing, err := os.ReadFile(configPath)
-	exists := err == nil
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
-	action, newContent := planCodexSessionHook(existing, exists)
-	if action == ActionUnchanged {
-		return false, nil
-	}
-	return true, AtomicWrite(configPath, newContent, 0644)
 }
 
 // removeSentinelBlock strips the sentinel-delimited block from text,
