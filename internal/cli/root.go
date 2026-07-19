@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
@@ -218,5 +219,5 @@ The admin dashboard shows the graph visually — get the URL via chronicle_comma
 	// AGENTS.md — same guidance for agents that don't read CLAUDE.md
 	// (Codex, OpenCode, Gemini CLI, ...). Marker-wrapped upsert: creates the
 	// file if missing, refreshes only the chronicle section otherwise.
-	upsertMarkedSection("AGENTS.md", projectAgentsSection())
+	wiring.UpsertMarkedSectionFile("AGENTS.md", wiring.ProjectAgentsSection())
 }
