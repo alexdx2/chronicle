@@ -1,6 +1,7 @@
 package wiring
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,9 +62,87 @@ func TestEnsureCanonicalBinarySelfSkip(t *testing.T) {
 	}
 }
 
-func TestResolveSourceBinaryRejectsNpxWhenAlternativeExists(t *testing.T) {
-	// pure guard behavior is covered above; here just assert it returns
-	// SOMETHING non-empty in a normal test process (the test binary itself).
+func TestPickSourceBinary(t *testing.T) {
+	errLookPathFailed := errors.New("lookpath: not found")
+	errExeFailed := errors.New("os.Executable failed")
+
+	cases := []struct {
+		name        string
+		exe         string
+		exeErr      error
+		lookPath    func(string) (string, error)
+		lookPathHit bool // whether lookPath is expected to be invoked
+		want        string
+		wantErr     error
+	}{
+		{
+			name:   "normal exe returned as-is, lookPath never needed",
+			exe:    "/usr/local/bin/chronicle",
+			exeErr: nil,
+			lookPath: func(string) (string, error) {
+				t.Fatal("lookPath should not be called when exe is not an npx cache path")
+				return "", nil
+			},
+			want: "/usr/local/bin/chronicle",
+		},
+		{
+			name:   "npx exe with non-npx PATH alternative returns the alternative",
+			exe:    "/home/u/.npm/_npx/abc123/node_modules/.bin/chronicle",
+			exeErr: nil,
+			lookPath: func(name string) (string, error) {
+				if name != "chronicle" {
+					t.Fatalf("lookPath called with %q, want %q", name, "chronicle")
+				}
+				return "/usr/local/bin/chronicle", nil
+			},
+			want: "/usr/local/bin/chronicle",
+		},
+		{
+			name:   "npx exe with no alternative falls back to npx exe as last resort",
+			exe:    "/home/u/.npm/_npx/abc123/node_modules/.bin/chronicle",
+			exeErr: nil,
+			lookPath: func(string) (string, error) {
+				return "", errLookPathFailed
+			},
+			want: "/home/u/.npm/_npx/abc123/node_modules/.bin/chronicle",
+		},
+		{
+			name:   "exe error with no alternative returns the exe error",
+			exe:    "",
+			exeErr: errExeFailed,
+			lookPath: func(string) (string, error) {
+				return "", errLookPathFailed
+			},
+			wantErr: errExeFailed,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pickSourceBinary(tc.exe, tc.exeErr, tc.lookPath)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				if got != "" {
+					t.Fatalf("got = %q, want empty on error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveSourceBinaryReturnsNonEmpty(t *testing.T) {
+	// pure decision logic is covered by TestPickSourceBinary above; here just
+	// assert the thin wrapper returns SOMETHING non-empty in a normal test
+	// process (the test binary itself).
 	p, err := ResolveSourceBinary()
 	if err != nil || p == "" || strings.TrimSpace(p) == "" {
 		t.Fatalf("ResolveSourceBinary: %q %v", p, err)

@@ -24,16 +24,15 @@ func looksLikeNpxCache(p string) bool {
 	return strings.Contains(filepath.ToSlash(p), "/_npx/")
 }
 
-// ResolveSourceBinary picks the binary to copy from: the running executable,
-// unless it lives in an npx cache — then a PATH-resolved install is
-// preferred; the npx path is the last resort (better a stale copy source
-// than none: the copy itself outlives the cache).
-func ResolveSourceBinary() (string, error) {
-	exe, exeErr := os.Executable()
+// pickSourceBinary is the pure decision logic behind ResolveSourceBinary: the
+// running executable, unless it lives in an npx cache — then a PATH-resolved
+// install is preferred; the npx path is the last resort (better a stale copy
+// source than none: the copy itself outlives the cache).
+func pickSourceBinary(exe string, exeErr error, lookPath func(string) (string, error)) (string, error) {
 	if exeErr == nil && !looksLikeNpxCache(exe) {
 		return exe, nil
 	}
-	if p, err := exec.LookPath("chronicle"); err == nil {
+	if p, err := lookPath("chronicle"); err == nil {
 		if abs, aerr := filepath.Abs(p); aerr == nil && !looksLikeNpxCache(abs) {
 			return abs, nil
 		}
@@ -42,6 +41,13 @@ func ResolveSourceBinary() (string, error) {
 		return exe, nil
 	}
 	return "", exeErr
+}
+
+// ResolveSourceBinary picks the binary to copy from. See pickSourceBinary for
+// the decision logic.
+func ResolveSourceBinary() (string, error) {
+	exe, exeErr := os.Executable()
+	return pickSourceBinary(exe, exeErr, exec.LookPath)
 }
 
 // EnsureCanonicalBinaryFrom copies src to the canonical path via stage +
