@@ -162,7 +162,12 @@ func runDetach(root string, out io.Writer) error {
 	settingsFile := filepath.Join(root, ".claude", "settings.json")
 	if settings, sExists, _ := readProjectFile(settingsFile); sExists && changes.HookEntryAdded {
 		cleaned, hookRemoved, herr := removeHookFromSettings(settings, hookFireMarker())
-		if herr == nil && hookRemoved {
+		if herr != nil {
+			// Detach proceeds with the other removals by design (asymmetric with
+			// attach, which aborts) — but silently leaving the hook in place would
+			// be a false "detached" claim, so surface it.
+			fmt.Fprintf(out, "! %s is not valid JSON — chronicle hook (if any) left in place; fix by hand\n", settingsFile)
+		} else if hookRemoved {
 			plan.Changes = append(plan.Changes, wiring.PlannedChange{
 				Target: settingsFile, Ownership: wiring.OwnershipUser, Action: wiring.ActionUpdate,
 				Summary: "remove Chronicle hook", NewContent: cleaned,
