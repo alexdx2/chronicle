@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,43 +184,26 @@ func ensureDepbotDir() {
 		os.WriteFile(manifestPath, []byte(skeleton), 0644)
 	}
 
-	// Create CLAUDE.md if not exists — enables slash commands
-	claudeMD := "CLAUDE.md"
-	if _, err := os.Stat(claudeMD); os.IsNotExist(err) {
-		content := `# Chronicle Knowledge Graph
-
-This project uses Chronicle for code analysis and knowledge management. Chronicle MCP tools are available.
-
-## Quick Commands
-
-When the user says any of these, call chronicle_command with the command name and execute the instructions:
-
-| User says | Command | What it does |
-|---|---|---|
-| "chronicle scan" or "scan this project" | chronicle_command(command='scan') | Full project scan |
-| "chronicle data" or "analyze data models" | chronicle_command(command='data') | Prisma/data model analysis |
-| "chronicle language" or "define domain language" | chronicle_command(command='language') | Domain glossary + violations |
-| "chronicle impact X" or "what breaks if I change X" | chronicle_command(command='impact') | Blast radius analysis |
-| "chronicle deps X" or "what depends on X" | chronicle_command(command='deps') | Dependency analysis |
-| "chronicle path A B" or "how does A connect to B" | chronicle_command(command='path') | Path between nodes |
-| "chronicle services" or "show service architecture" | chronicle_command(command='services') | Service dependency map |
-| "chronicle topology" or "show domain topology" | chronicle_command(command='topology') | Federation domain map |
-| "chronicle connections" or "show cross-repo edges" | chronicle_command(command='connections') | Cross-repo edge inventory |
-| "chronicle status" or "chronicle dashboard" | chronicle_command(command='status') | Graph state + dashboard URL |
-| "chronicle version" or "which MCP" | chronicle_command(command='version') or chronicle_mcp_identity | MCP codename + fingerprint |
-| "chronicle help" | chronicle_command(command='help') | Show all commands |
-
-## How it works
-
-Chronicle builds a knowledge graph of your codebase: data models, services, endpoints, dependencies.
-Call chronicle_command to get step-by-step instructions for any analysis task.
-The admin dashboard shows the graph visually — get the URL via chronicle_command(command='status').
-`
-		os.WriteFile(claudeMD, []byte(content), 0644)
+	// Write boundary: ordinary commands never modify wiring files
+	// (AGENTS.md / CLAUDE.md). setup/attach own those; here we only
+	// notice staleness. (Spec: agent-setup-distribution rev 3.)
+	base := "."
+	if projectPath != "" {
+		base = projectPath
 	}
+	maybePrintWiringNotice(base, os.Stderr)
+}
 
-	// AGENTS.md — same guidance for agents that don't read CLAUDE.md
-	// (Codex, OpenCode, Gemini CLI, ...). Marker-wrapped upsert: creates the
-	// file if missing, refreshes only the chronicle section otherwise.
-	wiring.UpsertMarkedSectionFile("AGENTS.md", wiring.ProjectAgentsSection())
+// maybePrintWiringNotice prints a single stderr hint when the project HAS
+// chronicle wiring (marker present) and the managed section is outdated.
+// Unwired projects stay silent — attach is opt-in.
+func maybePrintWiringNotice(dir string, w io.Writer) {
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil || !strings.Contains(string(data), wiring.AgentsMarkerStart) {
+		return
+	}
+	action, _ := wiring.PlanMarkedSection(data, true, wiring.ProjectAgentsSection())
+	if action != wiring.ActionUnchanged {
+		fmt.Fprintln(w, "chronicle: project wiring is outdated — run 'chronicle attach --upgrade'")
+	}
 }

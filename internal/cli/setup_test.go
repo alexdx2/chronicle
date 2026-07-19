@@ -6,15 +6,16 @@ package cli
 // internal/wiring/codex_content_test.go as pure planner tests.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// ─── ensureDepbotDir writes project AGENTS.md ───────────────────────────────
+// ─── ensureDepbotDir no longer writes wiring files; attach does ────────────
 
-func TestEnsureDepbotDir_WritesProjectAgentsMD(t *testing.T) {
+func TestEnsureDepbotDir_DoesNotWriteProjectAgentsMD(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
 
@@ -24,6 +25,25 @@ func TestEnsureDepbotDir_WritesProjectAgentsMD(t *testing.T) {
 	manifestPath = filepath.Join(tmp, ".depbot", "chronicle.domain.yaml")
 
 	ensureDepbotDir()
+
+	if _, err := os.Stat(filepath.Join(tmp, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Errorf("ensureDepbotDir must not create AGENTS.md anymore")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Errorf("ensureDepbotDir must not create CLAUDE.md anymore")
+	}
+}
+
+// ─── attach writes project AGENTS.md (wiring moved to setup/attach) ────────
+
+func TestAttach_WritesProjectAgentsMD(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+
+	var out bytes.Buffer
+	if err := runAttach(tmp, &out); err != nil {
+		t.Fatal(err)
+	}
 
 	got := readFileOrFail(t, filepath.Join(tmp, "AGENTS.md"))
 	if !strings.Contains(got, "<!-- chronicle:start -->") {
