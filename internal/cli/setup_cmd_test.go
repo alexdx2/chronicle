@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,5 +66,52 @@ func TestRunSetupUnknownAgent(t *testing.T) {
 	err := runSetup(setupOptions{agents: []string{"emacs"}, yes: true}, &out)
 	if err == nil || !strings.Contains(err.Error(), "unknown agent") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func decodeSetupReport(t *testing.T, raw []byte) []struct {
+	ID string `json:"id"`
+} {
+	t.Helper()
+	var report struct {
+		Agents []struct {
+			ID string `json:"id"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("stdout not pure JSON: %v\nstdout:\n%s", err, string(raw))
+	}
+	return report.Agents
+}
+
+func TestRunSetupJSONStdoutIsPureJSON(t *testing.T) {
+	dir := testCodexHome(t)
+	var out, humanBuf bytes.Buffer
+	err := runSetup(setupOptions{agents: []string{"codex"}, yes: true, jsonOut: true, codexDirOverride: dir, errOut: &humanBuf}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := decodeSetupReport(t, out.Bytes())
+	if len(agents) == 0 || agents[0].ID != "codex" {
+		t.Fatalf("report.agents[0].id = %+v, want codex", agents)
+	}
+	if humanBuf.Len() == 0 {
+		t.Fatal("expected progress output on errOut, got none")
+	}
+}
+
+func TestRunSetupJSONDryRunStdoutIsPureJSON(t *testing.T) {
+	dir := testCodexHome(t)
+	var out, humanBuf bytes.Buffer
+	err := runSetup(setupOptions{agents: []string{"codex"}, dryRun: true, jsonOut: true, codexDirOverride: dir, errOut: &humanBuf}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := decodeSetupReport(t, out.Bytes())
+	if len(agents) == 0 || agents[0].ID != "codex" {
+		t.Fatalf("report.agents[0].id = %+v, want codex", agents)
+	}
+	if humanBuf.Len() == 0 {
+		t.Fatal("expected progress output on errOut, got none")
 	}
 }

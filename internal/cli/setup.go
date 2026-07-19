@@ -30,6 +30,9 @@ type setupOptions struct {
 	// test seam: when set, codex adapter uses this dir instead of ~/.codex
 	codexDirOverride string
 	stdin            io.Reader
+	// test seam: destination for human/progress output when jsonOut is set.
+	// Defaults to os.Stderr when nil.
+	errOut io.Writer
 }
 
 func selectAdapters(opts setupOptions) ([]wiring.Adapter, error) {
@@ -83,13 +86,23 @@ func runSetup(opts setupOptions, out io.Writer) error {
 	if opts.status {
 		return runWiringStatus(out)
 	}
+	// In JSON mode, out carries ONLY the final JSON document. All human
+	// progress/prompt output routes to a separate writer (stderr by default)
+	// so stdout stays parseable.
+	human := out
+	if opts.jsonOut {
+		human = opts.errOut
+		if human == nil {
+			human = os.Stderr
+		}
+	}
 	adapters, err := selectAdapters(opts)
 	if err != nil {
 		return err
 	}
 	if len(adapters) == 0 {
-		fmt.Fprintln(out, "No coding agents detected. Supported:", strings.Join(wiring.AdapterIDs(), ", "))
-		fmt.Fprintln(out, "Force one with: chronicle setup --agent <id>")
+		fmt.Fprintln(human, "No coding agents detected. Supported:", strings.Join(wiring.AdapterIDs(), ", "))
+		fmt.Fprintln(human, "Force one with: chronicle setup --agent <id>")
 		return nil
 	}
 
@@ -102,9 +115,9 @@ func runSetup(opts setupOptions, out io.Writer) error {
 		if binPath, err = wiring.EnsureCanonicalBinaryFrom(src); err != nil {
 			return fmt.Errorf("install canonical binary: %w", err)
 		}
-		fmt.Fprintf(out, "canonical binary: %s\n\n", binPath)
+		fmt.Fprintf(human, "canonical binary: %s\n\n", binPath)
 	} else {
-		fmt.Fprintf(out, "canonical binary (dry-run, not written): %s\n\n", binPath)
+		fmt.Fprintf(human, "canonical binary (dry-run, not written): %s\n\n", binPath)
 	}
 
 	type agentReport struct {
@@ -131,13 +144,13 @@ func runSetup(opts setupOptions, out io.Writer) error {
 			rep.Error = perr.Error()
 			rep.Health = string(wiring.HealthFailed)
 			reports = append(reports, rep)
-			fmt.Fprintf(out, "✗ %s: plan failed: %v (fix the file by hand and re-run)\n", a.ID(), perr)
+			fmt.Fprintf(human, "✗ %s: plan failed: %v (fix the file by hand and re-run)\n", a.ID(), perr)
 			continue
 		}
-		fmt.Fprintf(out, "%s (%s):\n", a.DisplayName(), det.Confidence)
+		fmt.Fprintf(human, "%s (%s):\n", a.DisplayName(), det.Confidence)
 		mutating := 0
 		for _, c := range plan.Changes {
-			fmt.Fprintf(out, "  %-9s %-11s %s — %s\n", c.Action, "["+string(c.Ownership)+"]", c.Target, c.Summary)
+			fmt.Fprintf(human, "  %-9s %-11s %s — %s\n", c.Action, "["+string(c.Ownership)+"]", c.Target, c.Summary)
 			if c.Mutating() {
 				mutating++
 			}
@@ -147,8 +160,8 @@ func runSetup(opts setupOptions, out io.Writer) error {
 			continue
 		}
 		if mutating > 0 && !opts.yes {
-			if !confirm(opts.stdin, out, fmt.Sprintf("Apply %d change(s) for %s? [Y/n] ", mutating, a.ID())) {
-				fmt.Fprintf(out, "  skipped by user\n")
+			if !confirm(opts.stdin, human, fmt.Sprintf("Apply %d change(s) for %s? [Y/n] ", mutating, a.ID())) {
+				fmt.Fprintf(human, "  skipped by user\n")
 				reports = append(reports, rep)
 				continue
 			}
@@ -158,7 +171,7 @@ func runSetup(opts setupOptions, out io.Writer) error {
 			rep.Error = aerr.Error()
 			rep.Health = res.Status // rolled-back | partial
 			reports = append(reports, rep)
-			fmt.Fprintf(out, "✗ %s: %v\n", a.ID(), aerr)
+			fmt.Fprintf(human, "✗ %s: %v\n", a.ID(), aerr)
 			continue // one adapter failing never blocks the rest
 		}
 		rep.Applied = res.Applied
@@ -198,16 +211,16 @@ func runSetup(opts setupOptions, out io.Writer) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(map[string]any{"agents": reports})
 	}
-	fmt.Fprintln(out, "\nSummary:")
+	fmt.Fprintln(human, "\nSummary:")
 	for _, r := range reports {
 		mark := "✓"
 		if r.Error != "" {
 			mark = "✗"
 		}
-		fmt.Fprintf(out, "  %s %-10s detection=%s applied=%d verify=%s health=%s %s\n",
+		fmt.Fprintf(human, "  %s %-10s detection=%s applied=%d verify=%s health=%s %s\n",
 			mark, r.ID, r.Detection, r.Applied, r.Verification, r.Health, r.Error)
 	}
-	fmt.Fprintln(out, "\nNext: run 'chronicle attach' inside each project that should use the graph.")
+	fmt.Fprintln(human, "\nNext: run 'chronicle attach' inside each project that should use the graph.")
 	return nil
 }
 
