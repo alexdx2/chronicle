@@ -3,7 +3,6 @@ package wiring
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 )
 
 type DetectionConfidence string
@@ -91,12 +90,4 @@ func SaveState(st *State) error {
 		return err
 	}
 	return AtomicWrite(StatePath(), append(data, '\n'), 0644)
-}
-
-// TEMP until Task 2: non-atomic write so Task 1 stands alone.
-func AtomicWrite(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, perm)
 }
