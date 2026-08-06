@@ -33,6 +33,14 @@ When the user reports an error (missing connection, wrong dependency, missing se
 2. If the graph is wrong — fix it with chronicle_import_all (add/correct nodes and edges)
 3. Then rebuild the output (diagram, query result, etc.) from the corrected graph`
 
+// WrapWithLogging wraps h with the same request logging core's own toolset
+// gets (mcp_request_log row + debug JSONL + post-import auto-discovery).
+// Exported for embedders — chronicle-pro's single-repo superset wraps its own
+// tools with it so the request log covers the whole merged toolset.
+func WrapWithLogging(logStore *store.Store, name string, h server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return loggingWrap(logStore, name, h)
+}
+
 func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		start := time.Now()
