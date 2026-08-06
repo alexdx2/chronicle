@@ -153,6 +153,96 @@ func TestReattachPreservesOwnershipRecord(t *testing.T) {
 	}
 }
 
+// ─── root --project flag ────────────────────────────────────────────────
+
+func TestAttachHonorsRootProjectFlag(t *testing.T) {
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+	dir := t.TempDir()
+
+	projectPath = dir
+	defer func() { projectPath = "" }()
+
+	cmd := newAttachCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); err != nil {
+		t.Fatalf("AGENTS.md not written to --project dir: %v", err)
+	}
+}
+
+func TestAttachPositionalArgBeatsRootProjectFlag(t *testing.T) {
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+	flagDir := t.TempDir()
+	argDir := t.TempDir()
+
+	projectPath = flagDir
+	defer func() { projectPath = "" }()
+
+	cmd := newAttachCmd()
+	if err := cmd.RunE(cmd, []string{argDir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(argDir, "AGENTS.md")); err != nil {
+		t.Fatalf("AGENTS.md not written to positional [dir]: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(flagDir, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("--project dir should be untouched when a positional [dir] is given, got err=%v", err)
+	}
+}
+
+func TestDetachHonorsRootProjectFlag(t *testing.T) {
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+	dir := t.TempDir()
+
+	var out bytes.Buffer
+	if err := runAttach(dir, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	projectPath = dir
+	defer func() { projectPath = "" }()
+
+	cmd := newDetachCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	ag, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if strings.Contains(string(ag), wiring.AgentsMarkerStart) {
+		t.Fatalf("detach did not use --project dir, chronicle section still present: %s", ag)
+	}
+}
+
+func TestDetachPositionalArgBeatsRootProjectFlag(t *testing.T) {
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+	flagDir := t.TempDir()
+	argDir := t.TempDir()
+
+	var out bytes.Buffer
+	if err := runAttach(flagDir, &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := runAttach(argDir, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	projectPath = flagDir
+	defer func() { projectPath = "" }()
+
+	cmd := newDetachCmd()
+	if err := cmd.RunE(cmd, []string{argDir}); err != nil {
+		t.Fatal(err)
+	}
+	agArg, _ := os.ReadFile(filepath.Join(argDir, "AGENTS.md"))
+	if strings.Contains(string(agArg), wiring.AgentsMarkerStart) {
+		t.Fatalf("detach should have used positional [dir], chronicle section still present: %s", agArg)
+	}
+	agFlag, _ := os.ReadFile(filepath.Join(flagDir, "AGENTS.md"))
+	if !strings.Contains(string(agFlag), wiring.AgentsMarkerStart) {
+		t.Fatalf("--project dir should be untouched when a positional [dir] is given, got: %s", agFlag)
+	}
+}
+
 func TestAttachIsIdempotent(t *testing.T) {
 	t.Setenv("CHRONICLE_HOME", t.TempDir())
 	root := t.TempDir()

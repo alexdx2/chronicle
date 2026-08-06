@@ -195,6 +195,9 @@ func newAttachCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := "."
+			if projectPath != "" {
+				root = projectPath
+			}
 			if len(args) == 1 {
 				root = args[0]
 			}
@@ -212,6 +215,9 @@ func newDetachCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := "."
+			if projectPath != "" {
+				root = projectPath
+			}
 			if len(args) == 1 {
 				root = args[0]
 			}
