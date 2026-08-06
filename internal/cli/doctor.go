@@ -51,13 +51,32 @@ func runDoctor(agentFilter []string, out io.Writer) error {
 			continue
 		}
 		if j.Status == "partial" || j.Status == "in-progress" {
+			journalPath := filepath.Join(jdir, e.Name())
 			fmt.Fprintf(out, "\n! operation %s (%s) is %s\n", j.OperationID, j.Agent, j.Status)
-			fmt.Fprintf(out, "  journal: %s\n", filepath.Join(jdir, e.Name()))
+			fmt.Fprintf(out, "  journal: %s\n", journalPath)
 			fmt.Fprintf(out, "  backups: %s\n", filepath.Join(wiring.Home(), "backups", j.OperationID))
-			fmt.Fprintf(out, "  recover: restore listed backups, then re-run 'chronicle setup --agent %s'\n", j.Agent)
+			rerunCmd := reattachCommandFor(j.Agent)
+			fmt.Fprintf(out, "  recover: restore listed backups, then re-run '%s'\n", rerunCmd)
+			fmt.Fprintf(out, "           (re-running clears this alert; deleting %s manually also works)\n", journalPath)
 		}
 	}
 	return nil
+}
+
+// reattachCommandFor maps a journal's agent to the real CLI command that
+// re-runs the operation it recorded. "project-attach"/"project-detach" are
+// internal Plan.Agent values for `chronicle attach`/`chronicle detach` — not
+// adapter IDs — so `chronicle setup --agent <id>` (which only knows adapter
+// IDs) is not a valid recovery command for them.
+func reattachCommandFor(agent string) string {
+	switch agent {
+	case "project-attach":
+		return "chronicle attach <dir>"
+	case "project-detach":
+		return "chronicle detach <dir>"
+	default:
+		return fmt.Sprintf("chronicle setup --agent %s", agent)
+	}
 }
 
 func newDoctorCmd() *cobra.Command {

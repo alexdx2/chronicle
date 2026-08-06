@@ -138,5 +138,40 @@ func ApplyPlan(p *Plan) (*ApplyResult, error) {
 	}
 	os.RemoveAll(backupDir(opID))
 	res.Status = "committed"
+	resolveOlderPartialJournals(p.Agent, opID)
 	return res, nil
+}
+
+// resolveOlderPartialJournals rewrites older "partial" journals for the same
+// agent to "resolved" once a fresh apply for that agent has committed
+// cleanly. A "partial" journal means an earlier apply's rollback couldn't
+// fully undo itself (see the rollback closure above); doctor keeps flagging
+// it until something clears it. Reaching a clean commit for the same agent
+// means the recovery instructions in doctor's hint (restore backups, re-run)
+// were followed successfully, so the old alert no longer applies.
+func resolveOlderPartialJournals(agent, currentOpID string) {
+	jdir := filepath.Join(Home(), "journal")
+	entries, err := os.ReadDir(jdir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == currentOpID+".json" {
+			continue
+		}
+		path := filepath.Join(jdir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var old ApplyJournal
+		if json.Unmarshal(data, &old) != nil {
+			continue
+		}
+		if old.Agent != agent || old.Status != "partial" {
+			continue
+		}
+		old.Status = "resolved"
+		_ = saveJournal(&old)
+	}
 }

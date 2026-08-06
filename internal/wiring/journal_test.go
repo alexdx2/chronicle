@@ -124,6 +124,42 @@ func TestApplyPlanRollsBackFailedDeleteRestoresContentAndMode(t *testing.T) {
 	}
 }
 
+func TestApplyPlanResolvesOlderPartialJournalForSameAgent(t *testing.T) {
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+	jdir := filepath.Join(Home(), "journal")
+	os.MkdirAll(jdir, 0755)
+	stalePath := filepath.Join(jdir, "codex-111.json")
+	os.WriteFile(stalePath, []byte(`{"operationId":"codex-111","agent":"codex","status":"partial","steps":[]}`), 0644)
+	// A partial journal for a DIFFERENT agent must not be touched.
+	otherAgentPath := filepath.Join(jdir, "claude-code-222.json")
+	os.WriteFile(otherAgentPath, []byte(`{"operationId":"claude-code-222","agent":"claude-code","status":"partial","steps":[]}`), 0644)
+
+	dir := t.TempDir()
+	p := &Plan{Agent: "codex", Changes: []PlannedChange{
+		{Target: filepath.Join(dir, "a.md"), Action: ActionCreate, Ownership: OwnershipChronicle, Summary: "c", NewContent: []byte("p")},
+	}}
+	res, err := ApplyPlan(p)
+	if err != nil || res.Status != "committed" {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+
+	stale, err := os.ReadFile(stalePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stale), `"resolved"`) {
+		t.Fatalf("stale partial journal for same agent not resolved: %s", stale)
+	}
+
+	other, err := os.ReadFile(otherAgentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(other), `"partial"`) {
+		t.Fatalf("partial journal for a different agent should be untouched: %s", other)
+	}
+}
+
 func TestApplyPlanDeleteAndRestore(t *testing.T) {
 	t.Setenv("CHRONICLE_HOME", t.TempDir())
 	dir := t.TempDir()
