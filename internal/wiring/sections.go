@@ -3,11 +3,9 @@ package wiring
 // Agent-facing content and marker-section planning — the AGENTS.md delivery
 // channel for coding agents that don't read CLAUDE.md (Codex, OpenCode,
 // Gemini CLI, ...). Planners here are pure: byte-in, (action, newContent)-out.
-// No filesystem access except in the transitional UpsertMarkedSectionFile
-// convenience, which Task 10 removes once callers plan+apply explicitly.
+// No filesystem access — all writes go through wiring.ApplyPlan.
 
 import (
-	"os"
 	"strings"
 )
 
@@ -132,21 +130,6 @@ func RemoveMarkedSection(existing []byte) (string, []byte, bool) {
 	}
 	updated += tail
 	return ActionUpdate, []byte(updated), true
-}
-
-// UpsertMarkedSectionFile is the transitional read-plan-write convenience
-// used by root.go until Task 10 and by `setup codex` until Task 8.
-func UpsertMarkedSectionFile(path, content string) (bool, error) {
-	existing, err := os.ReadFile(path)
-	exists := err == nil
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
-	action, newContent := PlanMarkedSection(existing, exists, content)
-	if action == ActionUnchanged {
-		return false, nil
-	}
-	return true, AtomicWrite(path, newContent, 0644)
 }
 
 // spliceSentinelBlock replaces the sentinel-delimited block in text, or

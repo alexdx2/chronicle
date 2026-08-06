@@ -29,8 +29,12 @@ type AttachmentRecord struct {
 	Changes       AttachmentChanges `json:"changes"`
 }
 
-// ProjectID identifies a project across moves: remote survives a relocated
-// checkout; path disambiguates same-remote clones.
+// ProjectID identifies a project by hashing remote + path together. Path is
+// part of the hash, so a relocated checkout gets a new ID — the old
+// attachment record is orphaned, and detach falls back to conservative mode
+// (see runDetach) rather than finding it. The remote only disambiguates
+// distinct clones that happen to share a path prefix; it does not make the
+// ID survive a move.
 func ProjectID(root, gitRemote string) string {
 	sum := sha256.Sum256([]byte(gitRemote + "|" + filepath.Clean(root)))
 	return hex.EncodeToString(sum[:12])

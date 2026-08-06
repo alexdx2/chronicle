@@ -1,8 +1,6 @@
 package wiring
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -133,48 +131,6 @@ func TestRemoveMarkedSection(t *testing.T) {
 	}
 }
 
-// ─── UpsertMarkedSectionFile (transitional read-plan-write convenience) ────
-
-func TestUpsertMarkedSectionFile_CreatesFileWhenMissing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "AGENTS.md")
-
-	changed, err := UpsertMarkedSectionFile(path, "hello section")
-	if err != nil {
-		t.Fatalf("UpsertMarkedSectionFile: %v", err)
-	}
-	if !changed {
-		t.Error("changed = false; want true for new file")
-	}
-
-	got := readFileOrFail(t, path)
-	if !strings.Contains(got, AgentsMarkerStart) || !strings.Contains(got, AgentsMarkerEnd) {
-		t.Errorf("missing markers in:\n%s", got)
-	}
-	if !strings.Contains(got, "hello section") {
-		t.Errorf("missing content in:\n%s", got)
-	}
-}
-
-func TestUpsertMarkedSectionFile_IdempotentWhenUnchanged(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "AGENTS.md")
-
-	if _, err := UpsertMarkedSectionFile(path, "same content"); err != nil {
-		t.Fatalf("first upsert: %v", err)
-	}
-	first := readFileOrFail(t, path)
-
-	changed, err := UpsertMarkedSectionFile(path, "same content")
-	if err != nil {
-		t.Fatalf("second upsert: %v", err)
-	}
-	if changed {
-		t.Error("changed = true on identical content; want false")
-	}
-	if got := readFileOrFail(t, path); got != first {
-		t.Errorf("content drifted between identical upserts:\n%s\nvs\n%s", first, got)
-	}
-}
-
 // ─── content: ProjectAgentsSection / GlobalAgentsSection ──────────────────
 
 func TestProjectAgentsSection_CoversEntryPointAndScanGating(t *testing.T) {
@@ -205,15 +161,4 @@ func TestGlobalAgentsSection_IsProjectAgnostic(t *testing.T) {
 	if !strings.Contains(content, ".depbot") {
 		t.Error("global AGENTS section should tell agents how to recognize a Chronicle project (.depbot)")
 	}
-}
-
-// ─── helpers ────────────────────────────────────────────────────────────────
-
-func readFileOrFail(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(b)
 }
