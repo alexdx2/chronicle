@@ -399,86 +399,11 @@ func truncate(s string, max int) string {
 
 // NewServerWithLogging creates an MCP server with request logging to SQLite.
 func NewServerWithLogging(g *graph.Graph, logStore *store.Store) *server.MCPServer {
-	instructions := serverInstructions
-	if GetDebugLogger() != nil {
-		instructions += "\n\n" + debugInstructions
-	}
 	serverOpts := []server.ServerOption{
-		server.WithInstructions(instructions),
+		server.WithInstructions(ServerInstructions()),
 		server.WithHooks(clientDetectionHooks()),
 	}
 	s := server.NewMCPServer("chronicle", version.Version, serverOpts...)
-
-	add := func(tool mcplib.Tool, handler server.ToolHandlerFunc) {
-		s.AddTool(tool, loggingWrap(logStore, tool.Name, handler))
-	}
-
-	add(revisionCreateTool(), revisionCreateHandler(g))
-	add(nodeUpsertTool(), nodeUpsertHandler(g))
-	add(nodeListTool(), nodeListHandler(g))
-	add(nodeGetTool(), nodeGetHandler(g))
-	add(edgeUpsertTool(), edgeUpsertHandler(g))
-	add(edgeListTool(), edgeListHandler(g))
-	add(evidenceAddTool(), evidenceAddHandler(g))
-	add(evidenceVerifyTool(), evidenceVerifyHandler(g))
-	add(resolveReviewTool(), resolveReviewHandler(g))
-	add(fileGroupsTool(), fileGroupsHandler(g))
-	add(discoverFilesTool(), discoverFilesHandler(g))
-	add(scanNextFileTool(), scanNextFileHandler(g))
-	add(fileExtractedTool(), fileExtractedHandler(g))
-	add(importExtractionsTool(), importExtractionsHandler(g))
-	add(resolveExtractionsTool(), resolveExtractionsHandler(g))
-	add(importAllTool(), importAllHandler(g))
-	add(nodeSearchTool(), nodeSearchHandler(g))
-	add(subgraphTool(), subgraphHandler(g))
-	add(insightsTool(), insightsHandler(g))
-	add(queryDepsTool(), queryDepsHandler(g))
-	add(queryReverseDepsTool(), queryReverseDepsHandler(g))
-	add(queryStatsTool(), queryStatsHandler(g))
-	add(snapshotCreateTool(), snapshotCreateHandler(g))
-	add(staleMarkTool(), staleMarkHandler(g))
-	add(invalidateChangedTool(), invalidateChangedHandler(g))
-	add(reviewReportTool(), reviewReportHandler(g))
-	add(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
-	add(queryPathTool(), queryPathHandler(g))
-	add(impactTool(), impactHandler(g))
-	add(schemaTool(), schemaHandler(g))
-	add(extractionGuideTool(), extractionGuideHandler())
-	add(extractionHintsTool(), extractionHintsHandler())
-	add(instructionPacksTool(), instructionPacksHandler(g))
-	add(getInstructionPackTool(), getInstructionPackHandler(g))
-	add(saveCustomPackTool(), saveCustomPackHandler(g))
-	add(scanConfirmTool(), scanConfirmHandler(g))
-	add(scanStatusTool(), scanStatusHandler(g))
-	add(scanPoolStatusTool(), scanPoolStatusHandler(g))
-	add(scanCheckoutBatchTool(), scanCheckoutBatchHandler(g))
-	add(commitScanOutboxTool(), commitScanOutboxHandler(g))
-	add(fileExtractedBatchTool(), fileExtractedBatchHandler(g))
-	add(scanMarkFailedTool(), scanMarkFailedHandler(g))
-	add(scanReviewCandidatesTool(), scanReviewCandidatesHandler(g))
-	add(saveManifestTool(), saveManifestHandler(g))
-	add(resetDBTool(), resetDBHandler(g))
-	add(reportDiscoveryTool(), reportDiscoveryHandler(g))
-	add(getDiscoveriesTool(), getDiscoveriesHandler(g))
-	add(adminURLTool(), adminURLHandler())
-	add(defineTermTool(), defineTermHandler(g))
-	add(getGlossaryTool(), getGlossaryHandler(g))
-	add(checkLanguageTool(), checkLanguageHandler(g))
-	add(mcpIdentityTool(), mcpIdentityHandler())
-	add(commandTool(), commandHandler(g))
-	add(diagramBuildTool(), diagramBuildHandler(g))
-	add(salienceExplainTool(), salienceExplainHandler(g))
-	add(domainListTool(), domainListHandler(g))
-	add(resolveContextTool(), resolveContextHandler(g))
-	add(contextListTool(), contextListHandler(g))
-	add(contextCreateTool(), contextCreateHandler(g))
-	add(contextArchiveTool(), contextArchiveHandler(g))
-	add(changelogQueryTool(), changelogQueryHandler(g))
-
-	// Debug mode: register chronicle_debug_log tool
-	if GetDebugLogger() != nil {
-		add(debugLogTool(), debugLogHandler())
-	}
-
+	s.AddTools(ToolsWithLogging(g, logStore)...)
 	return s
 }
