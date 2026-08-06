@@ -9,7 +9,7 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/alexdx2/chronicle-core/internal/diagrams"
+	"github.com/alexdx2/chronicle-core/diagrams"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 	"github.com/alexdx2/chronicle-core/store"

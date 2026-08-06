@@ -19,7 +19,7 @@ import (
 	dashboard "github.com/alexdx2/chronicle-core/admin"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
-	"github.com/alexdx2/chronicle-core/internal/diagrams"
+	"github.com/alexdx2/chronicle-core/diagrams"
 	"github.com/alexdx2/chronicle-core/internal/mcp"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/registry"
