@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/alexdx2/chronicle-core/internal/admin"
-	mcpserver "github.com/alexdx2/chronicle-core/internal/mcp"
+	"github.com/alexdx2/chronicle-core/mcpserver"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/version"

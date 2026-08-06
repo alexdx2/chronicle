@@ -1,0 +1,2984 @@
+package mcpserver
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/graph/prompts"
+	"github.com/alexdx2/chronicle-core/graph/viewmodel"
+	"github.com/alexdx2/chronicle-core/diagrams"
+	"github.com/alexdx2/chronicle-core/manifest"
+	"github.com/alexdx2/chronicle-core/paths"
+	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
+	"github.com/alexdx2/chronicle-core/version"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+)
+
+var manifestFilePath string
+var adminPortValue int
+var liveCheckEnabled bool
+
+func SetManifestPath(p string) { manifestFilePath = p }
+func SetAdminPort(p int)       { adminPortValue = p }
+func SetLiveCheck(v bool)      { liveCheckEnabled = v }
+
+// NewServer creates a new MCP server exposing all graph operations as tools.
+func NewServer(g *graph.Graph) *server.MCPServer {
+	s := server.NewMCPServer("chronicle", version.Version,
+		server.WithHooks(clientDetectionHooks()))
+
+	s.AddTool(revisionCreateTool(), revisionCreateHandler(g))
+	s.AddTool(nodeUpsertTool(), nodeUpsertHandler(g))
+	s.AddTool(nodeListTool(), nodeListHandler(g))
+	s.AddTool(nodeGetTool(), nodeGetHandler(g))
+	s.AddTool(edgeUpsertTool(), edgeUpsertHandler(g))
+	s.AddTool(edgeListTool(), edgeListHandler(g))
+	s.AddTool(evidenceAddTool(), evidenceAddHandler(g))
+	s.AddTool(evidenceVerifyTool(), evidenceVerifyHandler(g))
+	s.AddTool(resolveReviewTool(), resolveReviewHandler(g))
+	s.AddTool(fileGroupsTool(), fileGroupsHandler(g))
+	s.AddTool(discoverFilesTool(), discoverFilesHandler(g))
+	s.AddTool(scanNextFileTool(), scanNextFileHandler(g))
+	s.AddTool(fileExtractedTool(), fileExtractedHandler(g))
+	s.AddTool(importExtractionsTool(), importExtractionsHandler(g))
+	s.AddTool(resolveExtractionsTool(), resolveExtractionsHandler(g))
+	s.AddTool(importAllTool(), importAllHandler(g))
+	s.AddTool(nodeSearchTool(), nodeSearchHandler(g))
+	s.AddTool(subgraphTool(), subgraphHandler(g))
+	s.AddTool(insightsTool(), insightsHandler(g))
+	s.AddTool(queryDepsTool(), queryDepsHandler(g))
+	s.AddTool(queryReverseDepsTool(), queryReverseDepsHandler(g))
+	s.AddTool(queryStatsTool(), queryStatsHandler(g))
+	s.AddTool(snapshotCreateTool(), snapshotCreateHandler(g))
+	s.AddTool(staleMarkTool(), staleMarkHandler(g))
+	s.AddTool(invalidateChangedTool(), invalidateChangedHandler(g))
+	s.AddTool(reviewReportTool(), reviewReportHandler(g))
+	s.AddTool(finalizeIncrementalScanTool(), finalizeIncrementalScanHandler(g))
+	s.AddTool(queryPathTool(), queryPathHandler(g))
+	s.AddTool(impactTool(), impactHandler(g))
+	s.AddTool(schemaTool(), schemaHandler(g))
+	s.AddTool(extractionGuideTool(), extractionGuideHandler())
+	s.AddTool(extractionHintsTool(), extractionHintsHandler())
+	s.AddTool(instructionPacksTool(), instructionPacksHandler(g))
+	s.AddTool(getInstructionPackTool(), getInstructionPackHandler(g))
+	s.AddTool(saveCustomPackTool(), saveCustomPackHandler(g))
+	s.AddTool(scanConfirmTool(), scanConfirmHandler(g))
+	s.AddTool(scanStatusTool(), scanStatusHandler(g))
+	s.AddTool(scanPoolStatusTool(), scanPoolStatusHandler(g))
+	s.AddTool(scanCheckoutBatchTool(), scanCheckoutBatchHandler(g))
+	s.AddTool(commitScanOutboxTool(), commitScanOutboxHandler(g))
+	s.AddTool(fileExtractedBatchTool(), fileExtractedBatchHandler(g))
+	s.AddTool(scanMarkFailedTool(), scanMarkFailedHandler(g))
+	s.AddTool(scanReviewCandidatesTool(), scanReviewCandidatesHandler(g))
+	s.AddTool(saveManifestTool(), saveManifestHandler(g))
+	s.AddTool(resetDBTool(), resetDBHandler(g))
+	s.AddTool(reportDiscoveryTool(), reportDiscoveryHandler(g))
+	s.AddTool(getDiscoveriesTool(), getDiscoveriesHandler(g))
+	s.AddTool(adminURLTool(), adminURLHandler())
+	s.AddTool(defineTermTool(), defineTermHandler(g))
+	s.AddTool(getGlossaryTool(), getGlossaryHandler(g))
+	s.AddTool(checkLanguageTool(), checkLanguageHandler(g))
+	s.AddTool(mcpIdentityTool(), mcpIdentityHandler())
+	s.AddTool(commandTool(), commandHandler(g))
+	s.AddTool(diagramBuildTool(), diagramBuildHandler(g))
+	s.AddTool(salienceExplainTool(), salienceExplainHandler(g))
+	s.AddTool(domainListTool(), domainListHandler(g))
+	s.AddTool(resolveContextTool(), resolveContextHandler(g))
+	s.AddTool(contextListTool(), contextListHandler(g))
+	s.AddTool(contextCreateTool(), contextCreateHandler(g))
+	s.AddTool(contextArchiveTool(), contextArchiveHandler(g))
+	s.AddTool(changelogQueryTool(), changelogQueryHandler(g))
+
+	return s
+}
+
+// ---------------------------------------------------------------------------
+// Parameter helpers
+// ---------------------------------------------------------------------------
+
+func strParam(args map[string]any, key string) string {
+	v, _ := args[key].(string)
+	return v
+}
+
+func intParam(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+func int64Param(args map[string]any, key string) int64 {
+	switch v := args[key].(type) {
+	case float64:
+		return int64(v)
+	}
+	return 0
+}
+
+func float64Param(args map[string]any, key string) float64 {
+	v, _ := args[key].(float64)
+	return v
+}
+
+func boolParam(args map[string]any, key string) bool {
+	v, _ := args[key].(bool)
+	return v
+}
+
+// manualEvidenceConfidence returns the confidence for the manual evidence row
+// auto-created on node/edge upsert. The caller's confidence input expresses
+// itself through evidence (trust is derived from evidence, not column writes);
+// absent or zero falls back to 0.9.
+func manualEvidenceConfidence(c float64) float64 {
+	if c <= 0 {
+		return 0.9
+	}
+	return c
+}
+
+func jsonResult(v any) *mcp.CallToolResult {
+	data, _ := json.Marshal(v)
+	return mcp.NewToolResultText(string(data))
+}
+
+// resolveKey resolves a node_key parameter — accepts either a full key or a name.
+func resolveKey(g *graph.Graph, raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("node_key is required")
+	}
+	return g.ResolveNodeKey(raw)
+}
+
+func errorResult(err error) *mcp.CallToolResult {
+	if store.IsCorruptionError(err) {
+		return mcp.NewToolResultError(err.Error() + "\n\n" + store.RecoveryHint)
+	}
+	return mcp.NewToolResultError(err.Error())
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_revision_create
+// ---------------------------------------------------------------------------
+
+func revisionCreateTool() mcp.Tool {
+	return mcp.NewTool("chronicle_revision_create",
+		mcp.WithDescription("Create a new graph revision to track a scan pass. Call this at the start of every scan. Use trigger='manual' for human-initiated scans. Mode is 'full' for complete rescan or 'incremental' for partial. Returns revision_id to use in subsequent import calls."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithString("after_sha", mcp.Required(), mcp.Description("Git after SHA")),
+		mcp.WithString("before_sha", mcp.Description("Git before SHA")),
+		mcp.WithString("trigger", mcp.Description("Trigger kind (full_scan, manual, git_hook, push_webhook, release_webhook, ci_pipeline)")),
+		mcp.WithString("mode", mcp.Description("Mode (full or incremental)")),
+		mcp.WithBoolean("autopilot", mcp.Description("Lab: auto-answer all scan checkpoints (no interactive confirm)")),
+		mcp.WithString("answers", mcp.Description("Lab: JSON object {checkpoint_id: answer}, e.g. {\"phase1_summary\":\"skip flows\"}. Default answer is 'proceed'.")),
+		mcp.WithString("base_domain", mcp.Description("Lab: inherit scan include/exclude/tech from this manifest domain; 'domain' may be a synthetic lab key like tom-and-jerry__haiku-3x1")),
+	)
+}
+
+func revisionCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		afterSHA := strParam(args, "after_sha")
+		beforeSHA := strParam(args, "before_sha")
+		trigger := strParam(args, "trigger")
+		mode := strParam(args, "mode")
+
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		if afterSHA == "" {
+			return errorResult(fmt.Errorf("after_sha is required")), nil
+		}
+		if trigger == "" {
+			trigger = "manual"
+		}
+		if mode == "" {
+			mode = "full"
+		}
+
+		metadata := "{}"
+		autopilot := boolParam(args, "autopilot")
+		answersJSON := strParam(args, "answers")
+		baseDomain := strParam(args, "base_domain")
+		if autopilot || answersJSON != "" || baseDomain != "" {
+			answers := map[string]string{}
+			if answersJSON != "" {
+				if err := json.Unmarshal([]byte(answersJSON), &answers); err != nil {
+					return errorResult(fmt.Errorf("answers must be a JSON object of strings: %w", err)), nil
+				}
+			}
+			lab := store.LabConfig{Autopilot: autopilot, Answers: answers, BaseDomain: baseDomain}
+			b, _ := json.Marshal(map[string]any{"lab": lab})
+			metadata = string(b)
+		}
+
+		id, err := g.Store().CreateRevision(domain, beforeSHA, afterSHA, trigger, mode, metadata)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"revision_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_node_upsert
+// ---------------------------------------------------------------------------
+
+func nodeUpsertTool() mcp.Tool {
+	return mcp.NewTool("chronicle_node_upsert",
+		mcp.WithDescription("Create or update a graph node. Upsert by node_key — if the key exists, mutable fields (name, file_path, confidence, metadata) are updated. Immutable fields (layer, node_type, domain) must match or the upsert is rejected. Key format: layer:type:domain:qualified_name (all lowercase)."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Node name")),
+		mcp.WithString("node_key", mcp.Description("Node key (auto-generated if omitted)")),
+		mcp.WithString("layer", mcp.Description("Layer (code, service, contract, flow, ownership, infra, ci)")),
+		mcp.WithString("node_type", mcp.Description("Node type")),
+		mcp.WithString("domain", mcp.Description("Domain key")),
+		mcp.WithString("repo_name", mcp.Description("Repository name")),
+		mcp.WithString("file_path", mcp.Description("File path")),
+		mcp.WithString("metadata", mcp.Description("JSON metadata string")),
+		mcp.WithNumber("confidence", mcp.Description("Confidence [0,1]")),
+	)
+}
+
+func nodeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+
+		confidence := float64Param(args, "confidence")
+		input := validate.NodeInput{
+			NodeKey:    strParam(args, "node_key"),
+			Layer:      strParam(args, "layer"),
+			NodeType:   strParam(args, "node_type"),
+			DomainKey:  strParam(args, "domain"),
+			Name:       strParam(args, "name"),
+			RepoName:   strParam(args, "repo_name"),
+			FilePath:   strParam(args, "file_path"),
+			Metadata:   strParam(args, "metadata"),
+			Confidence: confidence,
+		}
+
+		id, err := g.UpsertNode(input, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Evidence-first: a manual upsert is itself an assertion by the operator.
+		// Fetch by ID — the node_key may have been auto-generated or normalized.
+		// Evidence failures surface as tool errors: the evidence write journals
+		// an event, and a silently dropped event corrupts replay.
+		// The caller's confidence expresses itself through this evidence row —
+		// the direct column write above is a transient seed that the recompute
+		// (inside AddNodeEvidence) overwrites.
+		if node, nerr := g.Store().GetNodeByID(id); nerr == nil {
+			if _, err := g.AddNodeEvidence(node.NodeKey, validate.EvidenceInput{
+				TargetKind:       "node",
+				SourceKind:       "manual",
+				Locator:          node.NodeKey,
+				ExtractorID:      "mcp:node_upsert",
+				ExtractorVersion: "1.0",
+				AssertionKind:    "manual_assertion",
+				Confidence:       manualEvidenceConfidence(confidence),
+				RevisionID:       revisionID,
+			}); err != nil {
+				return errorResult(fmt.Errorf("node upserted (id=%d) but evidence write failed: %w", id, err)), nil
+			}
+		}
+		return jsonResult(map[string]any{"node_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_node_list
+// ---------------------------------------------------------------------------
+
+func nodeListTool() mcp.Tool {
+	return mcp.NewTool("chronicle_node_list",
+		mcp.WithDescription("List graph nodes with optional filters. Filter by layer (code/service/contract/etc), node_type, domain, or status (active/stale/deleted)."),
+		mcp.WithString("layer", mcp.Description("Filter by layer")),
+		mcp.WithString("node_type", mcp.Description("Filter by node type")),
+		mcp.WithString("domain", mcp.Description("Filter by domain key")),
+		mcp.WithString("status", mcp.Description("Filter by status")),
+	)
+}
+
+func nodeListHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filter := store.NodeFilter{
+			Layer:    strParam(args, "layer"),
+			NodeType: strParam(args, "node_type"),
+			Domain:   strParam(args, "domain"),
+			Status:   strParam(args, "status"),
+		}
+		nodes, err := g.Store().ListNodes(filter)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(nodes), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_node_get
+// ---------------------------------------------------------------------------
+
+func nodeGetTool() mcp.Tool {
+	return mcp.NewTool("chronicle_node_get",
+		mcp.WithDescription("Get a single node by key with all its evidence entries. Use to inspect a specific entity and see what evidence supports its existence in the graph."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key")),
+	)
+}
+
+func nodeGetHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		nodeKey := strParam(args, "node_key")
+		if nodeKey == "" {
+			return errorResult(fmt.Errorf("node_key is required")), nil
+		}
+
+		node, err := g.Store().GetNodeByKey(nodeKey)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		evidence, err := g.Store().ListEvidenceByNode(node.NodeID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		result := map[string]any{
+			"node":     node,
+			"evidence": evidence,
+		}
+		// Live check: verify evidence assertions against current files on disk.
+		if liveCheckEnabled {
+			if changed := g.LiveCheckEvidence(evidence); len(changed) > 0 {
+				result["_changed"] = changed
+			}
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_edge_upsert
+// ---------------------------------------------------------------------------
+
+func edgeUpsertTool() mcp.Tool {
+	return mcp.NewTool("chronicle_edge_upsert",
+		mcp.WithDescription("Create or update a graph edge. Upsert by edge_key (auto-generated as from->to:type if not provided). The from/to nodes must already exist. Edge type and layers are validated against the type registry. Derivation: hard (AST-level), linked (convention-based), inferred (guessed), unknown."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
+		mcp.WithString("derivation_kind", mcp.Required(), mcp.Description("Derivation kind (hard, linked, inferred, unknown)")),
+		mcp.WithString("from_node_key", mcp.Description("From node key")),
+		mcp.WithString("to_node_key", mcp.Description("To node key")),
+		mcp.WithString("edge_type", mcp.Description("Edge type")),
+		mcp.WithString("edge_key", mcp.Description("Edge key (auto-generated if omitted)")),
+		mcp.WithString("metadata", mcp.Description("JSON metadata string")),
+		mcp.WithNumber("confidence", mcp.Description("Confidence [0,1]")),
+	)
+}
+
+func edgeUpsertHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+
+		fromNodeKey := strParam(args, "from_node_key")
+		toNodeKey := strParam(args, "to_node_key")
+
+		// Look up from/to nodes to get layers for validation.
+		var fromLayer, toLayer string
+		if fromNodeKey != "" {
+			fromNode, err := g.Store().GetNodeByKey(fromNodeKey)
+			if err != nil {
+				return errorResult(fmt.Errorf("from_node_key: %w", err)), nil
+			}
+			fromLayer = fromNode.Layer
+		}
+		if toNodeKey != "" {
+			toNode, err := g.Store().GetNodeByKey(toNodeKey)
+			if err != nil {
+				return errorResult(fmt.Errorf("to_node_key: %w", err)), nil
+			}
+			toLayer = toNode.Layer
+		}
+
+		confidence := float64Param(args, "confidence")
+		input := validate.EdgeInput{
+			EdgeKey:        strParam(args, "edge_key"),
+			FromNodeKey:    fromNodeKey,
+			ToNodeKey:      toNodeKey,
+			EdgeType:       strParam(args, "edge_type"),
+			DerivationKind: strParam(args, "derivation_kind"),
+			FromLayer:      fromLayer,
+			ToLayer:        toLayer,
+			Metadata:       strParam(args, "metadata"),
+			Confidence:     confidence,
+		}
+
+		id, err := g.UpsertEdge(input, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Evidence-first: a manual upsert is itself an assertion by the operator.
+		// Evidence failures surface as tool errors (journal integrity).
+		// The caller's confidence expresses itself through this evidence row —
+		// the direct column write above is a transient seed that the recompute
+		// (inside AddEdgeEvidence) overwrites.
+		edgeKey := input.EdgeKey
+		if edgeKey == "" {
+			edgeKey = validate.BuildEdgeKey(fromNodeKey, toNodeKey, input.EdgeType)
+		}
+		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			TargetKind:       "edge",
+			SourceKind:       "manual",
+			Locator:          edgeKey,
+			ExtractorID:      "mcp:edge_upsert",
+			ExtractorVersion: "1.0",
+			AssertionKind:    "manual_assertion",
+			Confidence:       manualEvidenceConfidence(confidence),
+			RevisionID:       revisionID,
+		}); err != nil {
+			return errorResult(fmt.Errorf("edge upserted (id=%d) but evidence write failed: %w", id, err)), nil
+		}
+		return jsonResult(map[string]any{"edge_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_edge_list
+// ---------------------------------------------------------------------------
+
+func edgeListTool() mcp.Tool {
+	return mcp.NewTool("chronicle_edge_list",
+		mcp.WithDescription("List graph edges with optional filters. Filter by source node, target node, or edge type. Returns all matching edges with derivation kind and confidence."),
+		mcp.WithString("from_node_key", mcp.Description("Filter by from node key")),
+		mcp.WithString("to_node_key", mcp.Description("Filter by to node key")),
+		mcp.WithString("edge_type", mcp.Description("Filter by edge type")),
+	)
+}
+
+func edgeListHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filter := store.EdgeFilter{
+			EdgeType: strParam(args, "edge_type"),
+		}
+
+		if fromKey := strParam(args, "from_node_key"); fromKey != "" {
+			fromNode, err := g.Store().GetNodeByKey(fromKey)
+			if err != nil {
+				return errorResult(fmt.Errorf("from_node_key: %w", err)), nil
+			}
+			filter.FromNodeID = fromNode.NodeID
+		}
+		if toKey := strParam(args, "to_node_key"); toKey != "" {
+			toNode, err := g.Store().GetNodeByKey(toKey)
+			if err != nil {
+				return errorResult(fmt.Errorf("to_node_key: %w", err)), nil
+			}
+			filter.ToNodeID = toNode.NodeID
+		}
+
+		edges, err := g.Store().ListEdges(filter)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(edges), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_evidence_add
+// ---------------------------------------------------------------------------
+
+func evidenceAddTool() mcp.Tool {
+	return mcp.NewTool("chronicle_evidence_add",
+		mcp.WithDescription("Add provenance evidence for a node or edge. Include assertion_kind and assertion JSON for mechanical verification — evidence is verified at creation time against the actual file. If the assertion is not found, evidence is marked 'rejected' with low confidence. For user corrections: use polarity='negative' with checked_scope. Extractor_id should identify the agent (e.g. 'claude-code', 'codex')."),
+		mcp.WithString("extractor_id", mcp.Required(), mcp.Description("Extractor ID")),
+		mcp.WithString("extractor_version", mcp.Required(), mcp.Description("Extractor version")),
+		mcp.WithString("target_kind", mcp.Description("Target kind: node or edge")),
+		mcp.WithString("source_kind", mcp.Description("Source kind: 'file' for code evidence, 'user_feedback' for user corrections")),
+		mcp.WithString("node_key", mcp.Description("Node key (for target_kind=node)")),
+		mcp.WithString("edge_key", mcp.Description("Edge key (for target_kind=edge)")),
+		mcp.WithString("repo_name", mcp.Description("Repository name")),
+		mcp.WithString("file_path", mcp.Description("File path")),
+		mcp.WithString("commit_sha", mcp.Description("Commit SHA")),
+		mcp.WithNumber("line_start", mcp.Description("Start line number")),
+		mcp.WithNumber("line_end", mcp.Description("End line number")),
+		mcp.WithNumber("confidence", mcp.Description("Confidence [0,1]")),
+		mcp.WithString("polarity", mcp.Description("Evidence polarity: positive (default) or negative. Use negative to explicitly record that a relationship was confirmed removed.")),
+		mcp.WithNumber("revision_id", mcp.Description("Revision ID for this evidence")),
+		mcp.WithString("assertion", mcp.Description("JSON assertion object describing what was observed (e.g. {\"package\": \"@foo/bar\", \"sections\": [\"dependencies\"]})")),
+		mcp.WithString("assertion_kind", mcp.Description("Assertion kind: manifest_dependency, import_specifier, call_expression, decorator, yaml_key_exists, prisma_model, text_contains")),
+	)
+}
+
+func evidenceAddHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		extractorID := strParam(args, "extractor_id")
+		extractorVersion := strParam(args, "extractor_version")
+		if extractorID == "" {
+			return errorResult(fmt.Errorf("extractor_id is required")), nil
+		}
+		if extractorVersion == "" {
+			return errorResult(fmt.Errorf("extractor_version is required")), nil
+		}
+
+		input := validate.EvidenceInput{
+			TargetKind:       strParam(args, "target_kind"),
+			SourceKind:       strParam(args, "source_kind"),
+			RepoName:         strParam(args, "repo_name"),
+			FilePath:         strParam(args, "file_path"),
+			CommitSHA:        strParam(args, "commit_sha"),
+			ExtractorID:      extractorID,
+			ExtractorVersion: extractorVersion,
+			LineStart:        intParam(args, "line_start"),
+			LineEnd:          intParam(args, "line_end"),
+			Confidence:       float64Param(args, "confidence"),
+			Polarity:         strParam(args, "polarity"),
+			RevisionID:       int64Param(args, "revision_id"),
+			Assertion:        strParam(args, "assertion"),
+			AssertionKind:    strParam(args, "assertion_kind"),
+		}
+
+		nodeKey := strParam(args, "node_key")
+		edgeKey := strParam(args, "edge_key")
+
+		var id int64
+		var err error
+		switch input.TargetKind {
+		case "node":
+			if nodeKey == "" {
+				return errorResult(fmt.Errorf("node_key is required when target_kind=node")), nil
+			}
+			id, err = g.AddNodeEvidence(nodeKey, input)
+		case "edge":
+			if edgeKey == "" {
+				return errorResult(fmt.Errorf("edge_key is required when target_kind=edge")), nil
+			}
+			id, err = g.AddEdgeEvidence(edgeKey, input)
+		default:
+			return errorResult(fmt.Errorf("target_kind must be 'node' or 'edge'")), nil
+		}
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"evidence_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_evidence_verify
+// ---------------------------------------------------------------------------
+
+func evidenceVerifyTool() mcp.Tool {
+	return mcp.NewTool("chronicle_evidence_verify",
+		mcp.WithDescription("Mechanically verify stale evidence in a file using native parsers and tree-sitter. Checks whether evidence assertions still hold without the agent re-reading the file. Auto-repairs moved locators. Returns per-evidence results. Call this on files returned by invalidate_changed before deciding whether to re-read them."),
+		mcp.WithString("file_path", mcp.Required(), mcp.Description("File path to verify evidence for")),
+		mcp.WithNumber("revision_id", mcp.Description("Current revision ID (for tracking)")),
+		mcp.WithString("domain", mcp.Description("Domain key")),
+	)
+}
+
+func evidenceVerifyHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filePath := strParam(args, "file_path")
+		if filePath == "" {
+			return errorResult(fmt.Errorf("file_path is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+
+		result, err := g.VerifyFileEvidence(filePath, revisionID, domain)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_resolve_review
+// ---------------------------------------------------------------------------
+
+func resolveReviewTool() mcp.Tool {
+	return mcp.NewTool("chronicle_resolve_review",
+		mcp.WithDescription("Resolve a needs_review edge or node. Use after mechanical verification identifies edges that lost all evidence. Resolution options: confirmed_valid (edge still exists, provide new positive evidence with assertion), confirmed_removed (edge gone, requires negative evidence with checked_scope), replaced_by (dependency moved, requires replacement_target_key), deferred (will check later, requires reason)."),
+		mcp.WithString("target_kind", mcp.Required(), mcp.Description("Target kind: edge or node")),
+		mcp.WithString("target_key", mcp.Required(), mcp.Description("Edge key or node key to resolve")),
+		mcp.WithString("resolution", mcp.Required(), mcp.Description("Resolution: confirmed_valid, confirmed_removed, replaced_by, deferred")),
+		mcp.WithString("reason", mcp.Required(), mcp.Description("Reason for the resolution")),
+		mcp.WithString("evidence", mcp.Description("JSON evidence object (required for confirmed_valid, confirmed_removed, replaced_by)")),
+		mcp.WithString("replacement_target_key", mcp.Description("New edge/node key that replaces this one (required for replaced_by)")),
+		mcp.WithNumber("revision_id", mcp.Description("Current revision ID")),
+	)
+}
+
+func resolveReviewHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		targetKind := strParam(args, "target_kind")
+		targetKey := strParam(args, "target_key")
+		resolution := strParam(args, "resolution")
+		reason := strParam(args, "reason")
+		evidenceJSON := strParam(args, "evidence")
+		replacementKey := strParam(args, "replacement_target_key")
+		revisionID := int64Param(args, "revision_id")
+
+		if targetKind == "" || targetKey == "" || resolution == "" || reason == "" {
+			return errorResult(fmt.Errorf("target_kind, target_key, resolution, and reason are all required")), nil
+		}
+
+		result, err := g.ResolveReview(targetKind, targetKey, resolution, reason, evidenceJSON, replacementKey, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_file_groups
+// ---------------------------------------------------------------------------
+
+func fileGroupsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_file_groups",
+		mcp.WithDescription("Full project file tree — every directory with its files. Small dirs show filenames, large dirs show extension counts. Build files (package.json, .csproj, go.mod, etc.) are always listed by name. Use this to understand project structure, identify technologies, and find build boundaries."),
+	)
+}
+
+func fileGroupsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		rootDir := graph.ProjectRoot()
+		tree, total, err := graph.BuildFileTree(rootDir)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{
+			"tree":        tree,
+			"total_files": total,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_discover_files
+// ---------------------------------------------------------------------------
+
+func discoverFilesTool() mcp.Tool {
+	return mcp.NewTool("chronicle_discover_files",
+		mcp.WithDescription("Discover all architecture-relevant files in the project. Returns categorized file list (manifests, schemas, services, controllers, resolvers, gateways, modules, configs, clients, async handlers). Creates scan obligations for each file — finalize will warn about any unprocessed files. Call this BEFORE scanning to get the complete file list."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("votes_needed", mcp.Description("How many independent extraction passes per file (default 1; user may choose any N, e.g. 3 or 5)")),
+		mcp.WithString("scope", mcp.Description("Lab: JSON array of globs; obligations limited to files matching scope AND manifest include")),
+	)
+}
+
+func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+		if revisionID == 0 || domain == "" {
+			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
+		}
+
+		// Parse votes_needed early — needed for obligation multiplication
+		votesNeeded := int(int64Param(args, "votes_needed"))
+		if votesNeeded < 1 {
+			votesNeeded = 1
+		}
+
+		// Load manifest for scan config + per-file domain assignment
+		rootDir := graph.ProjectRoot()
+		var m *manifest.Manifest
+		if loaded, err := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); err == nil {
+			m = loaded
+		}
+
+		// Lab: apply base_domain manifest inheritance for synthetic domains
+		labCfg, _ := g.Store().LabConfigForRevision(revisionID)
+		if labCfg.BaseDomain != "" && m != nil {
+			if !m.ReplaceDomainsWithClone(labCfg.BaseDomain, domain) {
+				return errorResult(fmt.Errorf("base_domain %q not found in manifest", labCfg.BaseDomain)), nil
+			}
+		}
+
+		// Parse optional scope filter — accepts a JSON-encoded string OR a raw []any array.
+		var scope []string
+		switch sv := args["scope"].(type) {
+		case []any:
+			// Caller passed a native JSON array (e.g. from tool-call parsing).
+			for _, v := range sv {
+				if s, ok := v.(string); ok && s != "" {
+					scope = append(scope, s)
+				}
+			}
+		case string:
+			if sv != "" {
+				if err := json.Unmarshal([]byte(sv), &scope); err != nil {
+					return errorResult(fmt.Errorf("scope must be a JSON array of globs: %w", err)), nil
+				}
+			}
+		}
+
+		result, err := g.DiscoverFilesOpts(rootDir, domain, revisionID, m, graph.DiscoverOpts{VotesNeeded: votesNeeded, Scope: scope})
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		scanCfg := (*manifest.ScanConfig)(nil)
+		if m != nil {
+			merged := m.MergedScanConfig()
+			scanCfg = &merged
+		}
+		if scanCfg == nil || (len(scanCfg.Include) == 0 && len(scanCfg.Exclude) == 0) {
+			// Block: don't scan without a manifest — too many files, wastes tokens
+			if result.TotalFiles > 200 {
+				return jsonResult(map[string]any{
+					"error":       "No scan config found. Call chronicle_save_manifest first to define scan.include/exclude patterns.",
+					"total_files": result.TotalFiles,
+					"hint":        "Use chronicle_file_groups to see directory structure, then save a manifest with scan.include targeting architecture files only.",
+				}), nil
+			}
+			result.ScanConfig = map[string]any{
+				"warning": "No scan.include/exclude in chronicle.domain.yaml. ALL git-tracked files returned. Consider adding scan config to manifest.",
+			}
+		}
+
+		// NOTE: Repository/service node creation from manifest removed in v2.
+		// The scan pipeline (Task 4) will create domain-scoped nodes per file.
+
+		// Total obligations = files * votes (scan run tracks obligations, not unique files)
+		totalObligations := result.TotalFiles
+		if votesNeeded > 1 {
+			totalObligations = result.TotalFiles * votesNeeded
+		}
+
+		// Create or update scan run — transition to confirm_scope (checkpoint)
+		var activeRunID int64
+		run, _ := g.Store().GetActiveScanRun(domain)
+		if run == nil {
+			runID, err := g.Store().CreateScanRun(revisionID, domain, votesNeeded)
+			if err != nil {
+				return errorResult(fmt.Errorf("create scan run: %w", err)), nil
+			}
+			if err := g.Store().TransitionScanRun(runID, "confirm_scope", totalObligations); err != nil {
+				return errorResult(fmt.Errorf("transition to confirm_scope: %w", err)), nil
+			}
+			activeRunID = runID
+		} else {
+			if err := g.Store().TransitionScanRun(run.RunID, "confirm_scope", totalObligations); err != nil {
+				return errorResult(fmt.Errorf("transition to confirm_scope: %w", err)), nil
+			}
+			activeRunID = run.RunID
+		}
+
+		// Lab autopilot: mark scan run so it bypasses interactive checkpoints
+		if labCfg.Autopilot && activeRunID > 0 {
+			_ = g.Store().SetScanRunAutopilot(activeRunID)
+		}
+
+		// Return summary (not full file list — can be huge)
+		response := map[string]any{
+			"domain":            domain,
+			"total_files":       result.TotalFiles,
+			"total_obligations": totalObligations,
+			"total_git_files":   result.TotalGit,
+			"excluded":          result.Excluded,
+			"by_directory":      result.ByDirectory,
+			"by_extension":      result.ByExtension,
+			"votes_needed":      votesNeeded,
+			"scope":             scope,
+			"estimated_reads":   totalObligations,
+			"scan_config":       result.ScanConfig,
+		}
+		// Only include file list if small enough
+		if result.TotalFiles <= 50 {
+			response["files"] = result.Files
+		} else {
+			response["files_hint"] = fmt.Sprintf("%d files discovered. Use chronicle_scan_next_file to process them.", result.TotalFiles)
+		}
+		return jsonResult(response), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_scan_confirm
+// ---------------------------------------------------------------------------
+
+func scanConfirmTool() mcp.Tool {
+	return mcp.NewTool("chronicle_scan_confirm",
+		mcp.WithDescription("Confirm a scan checkpoint. When scan_next_file returns a checkpoint (action='confirm'), show it to the user and call this tool with their answer to proceed. The scan is blocked until confirmed."),
+		mcp.WithNumber("scan_run_id", mcp.Required(), mcp.Description("Scan run ID from the checkpoint response")),
+		mcp.WithString("checkpoint_id", mcp.Required(), mcp.Description("Checkpoint ID (e.g. 'scope')")),
+		mcp.WithString("answer", mcp.Required(), mcp.Description("User's answer (e.g. 'yes', 'adjust scope')")),
+	)
+}
+
+func scanConfirmHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		runID := int64Param(args, "scan_run_id")
+		checkpointID := strParam(args, "checkpoint_id")
+		answer := strParam(args, "answer")
+
+		if runID == 0 || checkpointID == "" || answer == "" {
+			return errorResult(fmt.Errorf("scan_run_id, checkpoint_id, and answer are required")), nil
+		}
+
+		out, err := applyCheckpointAnswer(g, runID, checkpointID, answer)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(out), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_scan_next_file
+// ---------------------------------------------------------------------------
+
+func scanNextFileTool() mcp.Tool {
+	return mcp.NewTool("chronicle_scan_next_file",
+		mcp.WithDescription("Get the next scan action. Returns what to do: extract files, resolve, trace flows, or done. Call in a loop until done=true. MCP controls the workflow — just follow the action."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func scanNextFileHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		domain := strParam(req.GetArguments(), "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+
+		// Load manifest for tech + infrastructure + candidate boundaries
+		var tech []string
+		var infra []manifest.InfraEntry
+		var candidates []string
+		if m, err := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); err == nil {
+			tech = m.Tech
+			infra = m.Infrastructure
+			// Derive candidate service boundaries from include patterns
+			for _, d := range m.Domains {
+				for _, pattern := range d.Scan.Include {
+					// Extract top-level directory from pattern (e.g. "tom-api/**" → "tom-api")
+					parts := strings.SplitN(pattern, "/", 2)
+					if len(parts) > 0 && parts[0] != "**" && parts[0] != "*" {
+						candidates = append(candidates, parts[0])
+					}
+				}
+			}
+		}
+
+		action, err := g.ScanNextAction(domain, tech...)
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Lab autopilot: auto-answer checkpoints instead of blocking.
+		// Bounded loop — a misconfigured answer that doesn't transition
+		// (needs_answer) must not spin forever.
+		for i := 0; i < 4 && action != nil && action.Checkpoint != nil; i++ {
+			run, rerr := g.Store().GetActiveScanRun(domain)
+			if rerr != nil || run == nil {
+				break
+			}
+			labCfg, lerr := g.Store().LabConfigForRevision(run.RevisionID)
+			if lerr != nil || !labCfg.Autopilot {
+				break
+			}
+			answer, ok := labCfg.Answers[action.Checkpoint.ID]
+			if !ok {
+				answer = "proceed"
+			}
+			out, aerr := applyCheckpointAnswer(g, run.RunID, action.Checkpoint.ID, answer)
+			if aerr != nil {
+				// Unknown checkpoint id — record it and stop; never block silently.
+				_, _ = g.Store().AddDiscovery(store.Discovery{
+					DomainKey:   domain,
+					Category:    "unknown_pattern",
+					Severity:    "warning",
+					Title:       fmt.Sprintf("autopilot: unknown checkpoint %q", action.Checkpoint.ID),
+					Description: fmt.Sprintf("autopilot: unknown checkpoint %q (answer %q): %v", action.Checkpoint.ID, answer, aerr),
+					Source:      "system",
+					Confidence:  1.0,
+				})
+				break
+			}
+			_ = g.Store().AppendScanRunAutoConfirm(run.RunID, action.Checkpoint.ID, answer)
+			if status, _ := out["status"].(string); status == "needs_answer" || status == "needs_change" {
+				action.Reason = fmt.Sprintf("autopilot: answer %q for checkpoint %q returned %s — fix the answers map", answer, action.Checkpoint.ID, status)
+				break
+			}
+			if status, _ := out["status"].(string); status == "skipped" {
+				return jsonResult(map[string]any{
+					"domain": domain,
+					"action": "none",
+					"done":   true,
+					"reason": "autopilot: flow tracing skipped, scan complete — finalize with snapshot_create + stale_mark",
+				}), nil
+			}
+			action, err = g.ScanNextAction(domain, tech...)
+			if err != nil {
+				return errorResult(err), nil
+			}
+		}
+
+		if len(infra) > 0 {
+			action.Infrastructure = infra
+		}
+		if len(candidates) > 0 {
+			action.CandidateBoundaries = candidates
+		}
+		return jsonResult(action), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_file_extracted
+// ---------------------------------------------------------------------------
+
+func fileExtractedTool() mcp.Tool {
+	return mcp.NewTool("chronicle_file_extracted",
+		mcp.WithDescription("Report extraction results for a single file. Called by scan agents after reading a file."),
+		mcp.WithString("file_path", mcp.Required(), mcp.Description("File path that was processed")),
+		mcp.WithString("status", mcp.Required(), mcp.Description("Result status: extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed")),
+		mcp.WithString("from_type", mcp.Description("File's role: 'module' (wires components), 'controller' (defines endpoints), omit for provider (default)")),
+		mcp.WithString("facts", mcp.Description("JSON array of extracted facts (for status=extracted)")),
+		mcp.WithString("error_message", mcp.Description("Error description (for status=failed)")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("obligation_id", mcp.Description("Obligation ID from scan_next_file response. Marks this obligation as completed.")),
+		mcp.WithString("vote_group", mcp.Description("Vote group ID (for multi-agent voting mode)")),
+		mcp.WithNumber("vote_index", mcp.Description("Vote index within group (1, 2, 3...)")),
+	)
+}
+
+func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		filePath := strParam(args, "file_path")
+		status := strParam(args, "status")
+		fromType := strParam(args, "from_type")
+		factsJSON := strParam(args, "facts")
+		errorMsg := strParam(args, "error_message")
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+		voteGroup := strParam(args, "vote_group")
+		voteIndex := int(int64Param(args, "vote_index"))
+		obligationID := int64Param(args, "obligation_id")
+
+		if filePath == "" || status == "" || revisionID == 0 || domain == "" {
+			return errorResult(fmt.Errorf("file_path, status, revision_id, and domain are required")), nil
+		}
+
+		// Both voting and normal mode: write to DB.
+		// In voting mode, vote_group + vote_index are stored so mergeVotedExtractions
+		// can combine them during resolve.
+		var id int64
+		var err error
+		if voteGroup != "" {
+			id, err = g.SaveFileExtractionWithVote(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg, "llm_vote", voteGroup, voteIndex)
+		} else {
+			id, err = g.SaveFileExtraction(revisionID, domain, filePath, status, fromType, factsJSON, errorMsg)
+		}
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Satisfy obligations + update progress
+		_ = g.SatisfyFileObligation(revisionID, filePath)
+		if voteGroup != "" {
+			if obligationID > 0 {
+				_ = g.Store().SatisfyObligationByID(obligationID)
+			}
+		} else {
+			_ = g.Store().SatisfyObligation(revisionID, "scan_file", filePath)
+			_ = g.Store().SatisfyObligation(revisionID, "trace_flow", filePath)
+			if obligationID > 0 {
+				_ = g.Store().SatisfyObligationByID(obligationID)
+			}
+		}
+		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
+			g.Store().IncrementScanRunExtracted(run.RunID)
+		}
+
+		return jsonResult(map[string]any{
+			"extraction_id": id,
+			"file_path":     filePath,
+			"status":        status,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_resolve_extractions
+// ---------------------------------------------------------------------------
+
+func resolveExtractionsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_resolve_extractions",
+		mcp.WithDescription("Resolve all pending file extractions into graph nodes, edges, and evidence. Call after all scan agents have reported their findings. MCP builds the graph from collected facts — deduplicates entities, resolves cross-file references, creates evidence with assertions. Returns what was created and what needs review."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithBoolean("allow_degraded", mcp.Description("If true, resolve when each open file has at least one extraction (marks remaining obligations skipped). Interactive scans only.")),
+	)
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_import_extractions — reads JSON files from .depbot/tmp/ and imports to DB
+// ---------------------------------------------------------------------------
+
+func importExtractionsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_import_extractions",
+		mcp.WithDescription("Import all extraction JSON files from .depbot/tmp/ into the database. Call this after all extraction agents finish. Single-writer — no DB contention."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+	)
+}
+
+func importExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		revisionID := int64Param(args, "revision_id")
+
+		tmpDir := filepath.Join(paths.DirAt(graph.ProjectRoot()), "tmp")
+
+		entries, err := os.ReadDir(tmpDir)
+		if err != nil {
+			return errorResult(fmt.Errorf("read tmp dir: %w", err)), nil
+		}
+
+		imported := 0
+		errors := 0
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+
+			data, err := os.ReadFile(filepath.Join(tmpDir, entry.Name()))
+			if err != nil {
+				errors++
+				continue
+			}
+
+			var ext struct {
+				FilePath   string `json:"file_path"`
+				Status     string `json:"status"`
+				FromType   string `json:"from_type"`
+				Facts      string `json:"facts"`
+				Error      string `json:"error"`
+				RevisionID int64  `json:"revision_id"`
+				Domain     string `json:"domain"`
+				VoteGroup  string `json:"vote_group"`
+				VoteIndex  int    `json:"vote_index"`
+			}
+			if err := json.Unmarshal(data, &ext); err != nil {
+				errors++
+				continue
+			}
+
+			// Use revision_id from the request, not from the file (in case of mismatch)
+			rev := revisionID
+			if rev == 0 {
+				rev = ext.RevisionID
+			}
+			dom := domain
+			if dom == "" {
+				dom = ext.Domain
+			}
+
+			role := "single"
+			if ext.VoteGroup != "" {
+				role = "llm_vote"
+			}
+
+			_, err = g.SaveFileExtractionWithVote(rev, dom, ext.FilePath, ext.Status, ext.FromType, ext.Facts, ext.Error, role, ext.VoteGroup, ext.VoteIndex)
+			if err != nil {
+				errors++
+				// Log first few errors for debugging
+				if errors <= 3 {
+					fmt.Fprintf(os.Stderr, "import error: %s: %v\n", ext.FilePath, err)
+				}
+				continue
+			}
+
+			// Satisfy obligations
+			_ = g.SatisfyFileObligation(rev, ext.FilePath)
+			_ = g.Store().SatisfyObligation(rev, "scan_file", ext.FilePath)
+			_ = g.Store().SatisfyObligation(rev, "trace_flow", ext.FilePath)
+
+			imported++
+		}
+
+		// Increment scan run progress
+		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
+			for i := 0; i < imported; i++ {
+				g.Store().IncrementScanRunExtracted(run.RunID)
+			}
+		}
+
+		// Clean up tmp dir after successful import
+		if errors == 0 {
+			os.RemoveAll(tmpDir)
+		}
+
+		return jsonResult(map[string]any{
+			"imported": imported,
+			"errors":   errors,
+			"dir":      tmpDir,
+		}), nil
+	}
+}
+
+func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		domain := strParam(args, "domain")
+
+		if revisionID == 0 || domain == "" {
+			return errorResult(fmt.Errorf("revision_id and domain are required")), nil
+		}
+
+		allowDegraded := boolParam(args, "allow_degraded")
+		result, err := g.ResolveExtractionsWithOptions(domain, revisionID, graph.ResolveOptions{AllowDegraded: allowDegraded})
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Transition scan run based on current phase
+		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
+			switch run.Phase {
+			case "phase1_resolve":
+				resolvedCount := result.ExtractionsResolved
+				if resolvedCount == 0 {
+					if n, err := g.CountResolvedExtractions(revisionID, domain); err == nil {
+						resolvedCount = n
+					}
+				}
+				_ = g.Store().SetScanRunResolved(run.RunID, resolvedCount)
+				if err := g.Store().TransitionScanRun(run.RunID, "phase1_review", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to phase1_review: %w", err)), nil
+				}
+			case "endpoint_reconcile":
+				if err := g.Store().TransitionScanRun(run.RunID, "phase2_select", 0); err != nil {
+					return errorResult(fmt.Errorf("transition to phase2_select: %w", err)), nil
+				}
+			case "phase2_resolve":
+				if err := g.Store().CompleteScanRun(run.RunID); err != nil {
+					return errorResult(fmt.Errorf("complete scan run: %w", err)), nil
+				}
+			}
+		}
+
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_import_all
+// ---------------------------------------------------------------------------
+
+func importAllTool() mcp.Tool {
+	return mcp.NewTool("chronicle_import_all",
+		mcp.WithDescription("Import nodes, edges, evidence. Valid items are written; invalid items are skipped and returned in 'rejected' array with error details and suggested fixes. Check 'rejected' in the response — if non-empty, fix and re-import the rejected items. KEEP PAYLOADS SMALL — max ~15 nodes per call."),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
+		mcp.WithString("payload", mcp.Required(), mcp.Description("JSON string containing nodes, edges, and evidence arrays")),
+		mcp.WithBoolean("dry_run", mcp.Description("If true, validate the entire payload without writing. Returns errors and suggested fixes.")),
+	)
+}
+
+func importAllHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+		payloadStr := strParam(args, "payload")
+		if payloadStr == "" {
+			return errorResult(fmt.Errorf("payload is required")), nil
+		}
+
+		var payload graph.ImportPayload
+		if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
+			return errorResult(fmt.Errorf("invalid payload JSON: %w", err)), nil
+		}
+
+		// Dry run mode: validate only, no writes
+		if boolParam(args, "dry_run") {
+			result, err := g.ImportAllDryRun(payload, revisionID)
+			if err != nil {
+				return errorResult(err), nil
+			}
+			return jsonResult(result), nil
+		}
+
+		// Warn on large payloads — Claude should stream smaller batches
+		if len(payloadStr) > 15000 {
+			result, err := g.ImportAll(payload, revisionID)
+			if err != nil {
+				return errorResult(err), nil
+			}
+			resp := map[string]any{
+				"nodes_created":    result.NodesCreated,
+				"edges_created":    result.EdgesCreated,
+				"evidence_created": result.EvidenceCreated,
+				"warning":          fmt.Sprintf("Payload was %dKB — please use smaller batches (< 15 nodes per call). Read one file, import immediately, move on.", len(payloadStr)/1024),
+			}
+			if len(result.Rejected) > 0 {
+				resp["rejected"] = result.Rejected
+			}
+			return jsonResult(resp), nil
+		}
+
+		result, err := g.ImportAll(payload, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// view_url helpers (view algebra V2)
+// ---------------------------------------------------------------------------
+
+// keyDomain extracts the domain segment of a canonical node key
+// (layer:type:domain:qualified_name).
+func keyDomain(key string) string {
+	parts := strings.SplitN(key, ":", 4)
+	if len(parts) == 4 {
+		return parts[2]
+	}
+	return ""
+}
+
+// viewSpecURL encodes a ViewSpec into a dashboard deep link:
+// <adminBase>/#v/<base64url(compact spec JSON)>. The #v route is the V3
+// frontend; emitting the URL now is forward-compatible.
+func viewSpecURL(spec viewmodel.ViewSpec) string {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/#v/%s", adminBaseURL(), base64.RawURLEncoding.EncodeToString(data))
+}
+
+// withViewURL re-shapes a struct result into a generic map and appends
+// view_url — the equivalent diagram of the query result. The original
+// fields are untouched.
+func withViewURL(result any, spec viewmodel.ViewSpec) any {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return result
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return result
+	}
+	m["view_url"] = viewSpecURL(spec)
+	return m
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_query_deps
+// ---------------------------------------------------------------------------
+
+func queryDepsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_query_deps",
+		mcp.WithDescription("Query forward dependencies — what does this node depend on? BFS traversal of outgoing edges. Accepts name or full node_key. Result includes view_url — a dashboard deep link to the equivalent dependency diagram (forward-looking #v route)."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'OrderService')")),
+		mcp.WithString("derivation", mcp.Description("Comma-separated derivation kinds to follow")),
+		mcp.WithNumber("depth", mcp.Description("Maximum BFS depth (default 3)")),
+	)
+}
+
+func queryDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		nodeKey, err := resolveKey(g, strParam(args, "node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		depth := intParam(args, "depth")
+		if depth == 0 {
+			depth = 3
+		}
+		var derivationFilter []string
+		if d := strParam(args, "derivation"); d != "" {
+			for _, part := range strings.Split(d, ",") {
+				part = strings.TrimSpace(part)
+				if part != "" {
+					derivationFilter = append(derivationFilter, part)
+				}
+			}
+		}
+
+		nodes, err := g.QueryDeps(nodeKey, depth, derivationFilter)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{
+			"nodes":    nodes,
+			"view_url": viewSpecURL(viewmodel.PresetSpec("deps", keyDomain(nodeKey), nodeKey)),
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_query_reverse_deps
+// ---------------------------------------------------------------------------
+
+func queryReverseDepsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_query_reverse_deps",
+		mcp.WithDescription("Query reverse dependencies — who depends on this node? BFS traversal of incoming edges. Accepts name or full node_key."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'SocketService')")),
+		mcp.WithString("derivation", mcp.Description("Comma-separated derivation kinds to follow")),
+		mcp.WithNumber("depth", mcp.Description("Maximum BFS depth (default 3)")),
+	)
+}
+
+func queryReverseDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		nodeKey, err := resolveKey(g, strParam(args, "node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		depth := intParam(args, "depth")
+		if depth == 0 {
+			depth = 3
+		}
+		var derivationFilter []string
+		if d := strParam(args, "derivation"); d != "" {
+			for _, part := range strings.Split(d, ",") {
+				part = strings.TrimSpace(part)
+				if part != "" {
+					derivationFilter = append(derivationFilter, part)
+				}
+			}
+		}
+
+		nodes, err := g.QueryReverseDeps(nodeKey, depth, derivationFilter)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(nodes), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_query_stats
+// ---------------------------------------------------------------------------
+
+func queryStatsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_query_stats",
+		mcp.WithDescription("Get aggregate graph statistics for a domain: node/edge counts, breakdown by layer, edge type, derivation kind, active vs stale. Use to verify scan completeness."),
+		mcp.WithString("domain", mcp.Description("Domain key (empty = all domains)")),
+	)
+}
+
+func queryStatsHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+
+		stats, err := g.QueryStats(domain)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(stats), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_snapshot_create
+// ---------------------------------------------------------------------------
+
+func snapshotCreateTool() mcp.Tool {
+	return mcp.NewTool("chronicle_snapshot_create",
+		mcp.WithDescription("Record a point-in-time snapshot after a scan completes. Captures node and edge counts. Call after chronicle_import_all and chronicle_stale_mark to close the scan lifecycle."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID")),
+		mcp.WithNumber("node_count", mcp.Required(), mcp.Description("Node count")),
+		mcp.WithNumber("edge_count", mcp.Required(), mcp.Description("Edge count")),
+		mcp.WithString("kind", mcp.Description("Snapshot kind (full or incremental)")),
+	)
+}
+
+func snapshotCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+		kind := strParam(args, "kind")
+		if kind == "" {
+			kind = "full"
+		}
+
+		snap := store.SnapshotRow{
+			RevisionID: revisionID,
+			DomainKey:  domain,
+			Kind:       kind,
+			NodeCount:  intParam(args, "node_count"),
+			EdgeCount:  intParam(args, "edge_count"),
+		}
+		id, err := g.Store().CreateSnapshot(snap)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"snapshot_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_stale_mark
+// ---------------------------------------------------------------------------
+
+func staleMarkTool() mcp.Tool {
+	return mcp.NewTool("chronicle_stale_mark",
+		mcp.WithDescription("Mark nodes and edges not seen in the current revision as stale. Call after import to flag entities from previous scans that were not re-imported. Stale entities remain queryable but are flagged."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Revision ID threshold")),
+	)
+}
+
+func staleMarkHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+
+		staleNodes, err := g.Store().MarkStaleNodes(domain, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		staleEdges, err := g.Store().MarkStaleEdges(domain, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{
+			"stale_nodes": staleNodes,
+			"stale_edges": staleEdges,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_invalidate_changed
+// ---------------------------------------------------------------------------
+
+func invalidateChangedTool() mcp.Tool {
+	return mcp.NewTool("chronicle_invalidate_changed",
+		mcp.WithDescription("Mark evidence from changed files as stale, auto-verify assertions using native parsers and tree-sitter, and recalculate trust scores. Returns auto_verified results (what was mechanically confirmed) and needs_claude (files the agent must re-read). Most evidence is re-verified mechanically, without agent intervention."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+		mcp.WithString("changed_files", mcp.Required(), mcp.Description("JSON array of changed file paths")),
+	)
+}
+
+func invalidateChangedHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+		filesJSON := strParam(args, "changed_files")
+		if filesJSON == "" {
+			return errorResult(fmt.Errorf("changed_files is required")), nil
+		}
+
+		var files []string
+		if err := json.Unmarshal([]byte(filesJSON), &files); err != nil {
+			return errorResult(fmt.Errorf("changed_files must be a JSON array: %w", err)), nil
+		}
+
+		result, err := g.InvalidateChanged(domain, revisionID, files)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_finalize_incremental_scan
+// ---------------------------------------------------------------------------
+
+func finalizeIncrementalScanTool() mcp.Tool {
+	return mcp.NewTool("chronicle_finalize_incremental_scan",
+		mcp.WithDescription("Complete an incremental scan. Returns scan_status (clean/review_required/incomplete), revalidated/stale/contradicted counts, needs_review_edges (edges that lost all evidence), rejected_evidence (assertions that failed verification — extractor hallucinations), uncovered_files, and obligation summary. If scan_status is not 'clean', the agent must resolve the listed issues."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithNumber("revision_id", mcp.Required(), mcp.Description("Current revision ID")),
+	)
+}
+
+func finalizeIncrementalScanHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		revisionID := int64Param(args, "revision_id")
+		if revisionID == 0 {
+			return errorResult(fmt.Errorf("revision_id is required")), nil
+		}
+
+		// Hard block: reject if unresolved extractions exist
+		unresolved, _ := g.Store().ListUnresolvedExtractions(revisionID, domain)
+		if len(unresolved) > 0 {
+			return jsonResult(map[string]any{
+				"error":            "Cannot finalize: unresolved extractions exist",
+				"blocked":          true,
+				"unresolved_count": len(unresolved),
+				"required_action":  "Call chronicle_resolve_extractions first.",
+			}), nil
+		}
+
+		result, err := g.FinalizeIncrementalScan(domain, revisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_query_path
+// ---------------------------------------------------------------------------
+
+func queryPathTool() mcp.Tool {
+	return mcp.NewTool("chronicle_query_path",
+		mcp.WithDescription("Find paths between two nodes. Traverses through Kafka/message topics automatically (producer → topic → consumer). Default mode 'directed' follows data flow. Use 'connected' for undirected exploration. Structural edges (CONTAINS) excluded by default. Returns top-k paths ranked by path score. Result includes view_url — a dashboard deep link to the equivalent path diagram (forward-looking #v route)."),
+		mcp.WithString("from_node_key", mcp.Required(), mcp.Description("Source node key OR name (e.g. 'ArenaService')")),
+		mcp.WithString("to_node_key", mcp.Required(), mcp.Description("Target node key OR name (e.g. 'SpectatorService')")),
+		mcp.WithNumber("max_depth", mcp.Description("Max depth (default 6)")),
+		mcp.WithNumber("top_k", mcp.Description("Max paths (default 3)")),
+		mcp.WithString("mode", mcp.Description("directed or connected (default directed)")),
+		mcp.WithString("derivation", mcp.Description("Comma-separated derivation filter")),
+	)
+}
+
+func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		maxDepth := intParam(args, "max_depth")
+		if maxDepth == 0 {
+			maxDepth = 6
+		}
+		topK := intParam(args, "top_k")
+		if topK == 0 {
+			topK = 3
+		}
+		mode := strParam(args, "mode")
+		if mode == "" {
+			mode = "directed"
+		}
+		var filter []string
+		if d := strParam(args, "derivation"); d != "" {
+			for _, s := range strings.Split(d, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					filter = append(filter, s)
+				}
+			}
+		}
+		fromKey, err := resolveKey(g, strParam(args, "from_node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		toKey, err := resolveKey(g, strParam(args, "to_node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		result, err := g.QueryPath(fromKey, toKey, graph.PathOptions{
+			MaxDepth: maxDepth, TopK: topK, Mode: mode, DerivationFilter: filter,
+		})
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		pathSpec := viewmodel.ViewSpec{
+			Scope:  viewmodel.ScopeSpec{Domain: keyDomain(fromKey), Nodes: []string{fromKey, toKey}},
+			Expand: &viewmodel.ExpandSpec{Mode: "path"},
+			Group:  viewmodel.GroupSpec{By: "none"},
+			Layout: viewmodel.LayoutSpec{Preset: "path"},
+		}
+		return jsonResult(withViewURL(result, pathSpec)), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_impact
+// ---------------------------------------------------------------------------
+
+func impactTool() mcp.Tool {
+	return mcp.NewTool("chronicle_impact",
+		mcp.WithDescription("Analyze blast radius of a node change. Reverse dependency traversal with forward expansion to find affected endpoints and topics. Returns impacted components (with impact_score) and affected API surface. Trust scores >= 80. If result is empty or small, graph may be incomplete — search code. Result includes view_url — a dashboard deep link to the equivalent impact diagram (forward-looking #v route)."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key OR name (e.g. 'OrderService' or 'data:model:orders:order')")),
+		mcp.WithNumber("depth", mcp.Description("Max depth (default 4)")),
+		mcp.WithString("derivation", mcp.Description("Comma-separated derivation filter")),
+		mcp.WithNumber("min_score", mcp.Description("Minimum impact score (default 0.1)")),
+		mcp.WithNumber("top_k", mcp.Description("Max results (default 50)")),
+	)
+}
+
+func impactHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		depth := intParam(args, "depth")
+		if depth == 0 {
+			depth = 4
+		}
+		topK := intParam(args, "top_k")
+		if topK == 0 {
+			topK = 50
+		}
+		minScore := float64Param(args, "min_score")
+		var filter []string
+		if d := strParam(args, "derivation"); d != "" {
+			for _, s := range strings.Split(d, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					filter = append(filter, s)
+				}
+			}
+		}
+		nodeKey, err := resolveKey(g, strParam(args, "node_key"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		result, err := g.QueryImpact(nodeKey, graph.ImpactOptions{
+			MaxDepth: depth, MinScore: minScore, TopK: topK, DerivationFilter: filter,
+		})
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		return jsonResult(withViewURL(result, viewmodel.PresetSpec("impact", keyDomain(nodeKey), nodeKey))), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_schema
+// ---------------------------------------------------------------------------
+
+func schemaTool() mcp.Tool {
+	return mcp.NewTool("chronicle_schema",
+		mcp.WithDescription("Get the canonical type system: layers, node types, edge types with from/to layer constraints. This is the single source of truth for what's valid. Call before scanning or when unsure about valid types."),
+		mcp.WithString("from_layer", mcp.Description("Filter edge types to those allowing this from_layer")),
+		mcp.WithString("to_layer", mcp.Description("Filter edge types to those allowing this to_layer")),
+		mcp.WithString("include", mcp.Description("Comma-separated sections to include: edges, nodes, layers. Default: all")),
+	)
+}
+
+func schemaHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		fromLayer := strParam(args, "from_layer")
+		toLayer := strParam(args, "to_layer")
+		includeStr := strParam(args, "include")
+
+		var include []string
+		if includeStr != "" {
+			for _, part := range strings.Split(includeStr, ",") {
+				include = append(include, strings.TrimSpace(part))
+			}
+		}
+
+		schema := g.Registry().ToSchemaJSON(fromLayer, toLayer, include)
+		return jsonResult(schema), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_extraction_guide
+// ---------------------------------------------------------------------------
+
+func extractionGuideTool() mcp.Tool {
+	return mcp.NewTool("chronicle_extraction_guide",
+		mcp.WithDescription("Get the extraction methodology guide. Call this before scanning to learn HOW to extract entities and relationships. For valid types and constraints, call chronicle_schema()."),
+		mcp.WithString("technology", mcp.Description("DEPRECATED — ignored. Use chronicle_extraction_hints for framework-specific tips.")),
+	)
+}
+
+// technologyDeprecationWarned tracks whether the deprecation warning has been emitted this session.
+var technologyDeprecationWarned bool
+
+func extractionGuideHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		tech := strParam(req.GetArguments(), "technology")
+		if tech != "" && !technologyDeprecationWarned {
+			technologyDeprecationWarned = true
+			// Log deprecation but still return the universal guide
+			fmt.Fprintf(os.Stderr, "[chronicle] DEPRECATION: extraction_guide technology=%q param ignored. Use chronicle_schema() for types and chronicle_extraction_hints(technology=%q) for framework tips.\n", tech, tech)
+		}
+		guide := ExtractionGuide("")
+		return mcp.NewToolResultText(guide), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_extraction_hints
+// ---------------------------------------------------------------------------
+
+func extractionHintsTool() mcp.Tool {
+	return mcp.NewTool("chronicle_extraction_hints",
+		mcp.WithDescription("Get optional framework-specific tips for mapping code patterns to Chronicle concepts. NOT authoritative — for valid types, call chronicle_schema()."),
+		mcp.WithString("technology", mcp.Required(), mcp.Description("Framework: nestjs, prisma, openapi, django, spring, etc.")),
+	)
+}
+
+func extractionHintsHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		tech := strParam(req.GetArguments(), "technology")
+		hints := ExtractionHints(tech)
+		return mcp.NewToolResultText(hints), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_instruction_packs
+// ---------------------------------------------------------------------------
+
+func instructionPacksTool() mcp.Tool {
+	return mcp.NewTool("chronicle_instruction_packs",
+		mcp.WithDescription("List available instruction packs for scan agents. Returns pack metadata (id, type, description, triggers) without content. Use chronicle_get_instruction_pack to fetch content."),
+	)
+}
+
+func instructionPacksHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var result []map[string]any
+
+		// Core packs (always loaded — no match section needed)
+		for _, p := range prompts.AllPacks() {
+			result = append(result, map[string]any{
+				"id":          p.ID,
+				"type":        "core",
+				"description": p.Description,
+				"always_load": true,
+			})
+		}
+
+		// Built-in technology packs — include match sections for agent decision
+		for _, tp := range prompts.ListBuiltinTechPacks() {
+			entry := map[string]any{
+				"id":     tp.ID,
+				"type":   "builtin",
+				"source": "builtin",
+			}
+			if tp.Match != "" {
+				entry["match"] = tp.Match
+			}
+			result = append(result, entry)
+		}
+
+		// Project-level packs from .depbot/packs/
+		if g != nil {
+			packIDs, _ := g.Store().ListPackFiles()
+			for _, slug := range packIDs {
+				entry := map[string]any{
+					"id":     slug,
+					"type":   "project",
+					"source": ".depbot/packs/",
+				}
+				// Try to extract match section from project pack
+				if content, err := g.Store().LoadPackFile(slug); err == nil {
+					if match := prompts.ExtractMatchSection(content); match != "" {
+						entry["match"] = match
+					}
+				}
+				result = append(result, entry)
+			}
+		}
+
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_get_instruction_pack
+// ---------------------------------------------------------------------------
+
+func getInstructionPackTool() mcp.Tool {
+	return mcp.NewTool("chronicle_get_instruction_pack",
+		mcp.WithDescription("Fetch the full content of an instruction pack by ID. Use when additional framework/language instructions are needed during scanning."),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Pack ID from chronicle_instruction_packs (e.g. 'framework/nestjs', 'orm/prisma')")),
+	)
+}
+
+func getInstructionPackHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := strParam(req.GetArguments(), "id")
+
+		// Special: pack authoring guide
+		if id == "guide/pack_authoring" {
+			return jsonResult(map[string]any{
+				"id":      "guide/pack_authoring",
+				"type":    "guide",
+				"content": prompts.PackAuthoringGuide,
+			}), nil
+		}
+
+		// Check core packs
+		pack, ok := prompts.GetPack(id)
+		if ok {
+			return jsonResult(map[string]any{
+				"id":      pack.ID,
+				"type":    pack.Type,
+				"content": pack.Content,
+			}), nil
+		}
+
+		// 1. Project-level packs (.depbot/packs/) — highest priority
+		if g != nil {
+			content, err := g.Store().LoadPackFile(id)
+			if err == nil && content != "" {
+				return jsonResult(map[string]any{
+					"id":      id,
+					"type":    "project",
+					"source":  "project (.depbot/packs/)",
+					"content": content,
+				}), nil
+			}
+		}
+
+		// 2. Built-in technology packs — fallback defaults
+		if content, ok := prompts.GetTechPackContent(id); ok {
+			return jsonResult(map[string]any{
+				"id":      id,
+				"type":    "builtin",
+				"content": content,
+			}), nil
+		}
+
+		// 3. Legacy: check custom packs in settings table (migration compat)
+		if g != nil {
+			custom, err := g.Store().GetSetting("custom_pack_" + id)
+			if err == nil && custom != "" {
+				return jsonResult(map[string]any{
+					"id":      id,
+					"type":    "custom",
+					"content": custom,
+					"hint":    "This pack is stored in the database. Re-save it to migrate to .depbot/packs/",
+				}), nil
+			}
+		}
+
+		return mcp.NewToolResultText(`{"error":"unknown instruction pack: ` + id + `"}`), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_save_custom_pack
+// ---------------------------------------------------------------------------
+
+func saveCustomPackTool() mcp.Tool {
+	return mcp.NewTool("chronicle_save_custom_pack",
+		mcp.WithDescription("Save a custom instruction pack for this project. The pack will be used during scanning to guide extraction agents. Use chronicle_get_instruction_pack(id='guide/pack_authoring') for the authoring guide."),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Pack ID (e.g. 'custom/django', 'custom/spring-boot')")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Pack content in markdown format")),
+	)
+}
+
+func saveCustomPackHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := strParam(req.GetArguments(), "id")
+		content := strParam(req.GetArguments(), "content")
+
+		if id == "" || content == "" {
+			return mcp.NewToolResultText(`{"error":"id and content are required"}`), nil
+		}
+
+		// Validate ID
+		if idErr := prompts.ValidatePackID(id); idErr != "" {
+			return jsonResult(map[string]any{"error": idErr}), nil
+		}
+
+		// Validate: packs must not introduce unknown fact kinds
+		invalidKinds := prompts.ValidateCustomPack(content)
+		if len(invalidKinds) > 0 {
+			return jsonResult(map[string]any{
+				"error":         "pack introduces unknown fact kinds",
+				"invalid_kinds": invalidKinds,
+				"hint":          "Only use allowed kinds: endpoint, injects, provides, calls_service, calls_endpoint, uses_model, http_call, model, enum, model_relation, produces, consumes, import",
+			}), nil
+		}
+
+		// Save to .depbot/packs/{slug}.md
+		err := g.Store().SavePackFile(id, content)
+		if err != nil {
+			return mcp.NewToolResultText(`{"error":"failed to save: ` + err.Error() + `"}`), nil
+		}
+
+		return jsonResult(map[string]any{
+			"status": "saved",
+			"id":     id,
+			"path":   g.Store().PacksDir(),
+			"hint":   "Pack saved to .depbot/packs/. Add '" + id + "' to manifest tech list to load it during scans.",
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_scan_status
+// ---------------------------------------------------------------------------
+
+func scanStatusTool() mcp.Tool {
+	return mcp.NewTool("chronicle_scan_status",
+		mcp.WithDescription("Get the current graph state for a domain. Returns last revision, graph statistics (node/edge counts by layer and type), and last snapshot. Use this before scanning to decide whether to do a full or incremental scan."),
+		mcp.WithString("domain", mcp.Description("Domain key (from chronicle.domain.yaml). If omitted, returns a message to check the manifest.")),
+	)
+}
+
+func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		domain := strParam(req.GetArguments(), "domain")
+
+		// Check if this is a fresh project (no nodes at all)
+		allNodes, _ := g.Store().ListNodes(store.NodeFilter{})
+		isFirstRun := len(allNodes) == 0
+
+		if domain == "" {
+			// Try to detect domain from existing nodes or manifest
+			if len(allNodes) > 0 {
+				domain = allNodes[0].DomainKey
+			}
+		}
+
+		result := map[string]any{
+			"domain":  domain,
+			"version": version.Version,
+			"build":   version.BuildHash,
+		}
+
+		if isFirstRun {
+			result["onboarding"] = map[string]any{
+				"is_first_run": true,
+				"message":      "This project has never been scanned. I recommend running an onboarding scan.",
+				"ask_user":     "Would you like me to scan this project and build a knowledge graph? I'll discover the project structure, extract data models, code dependencies, and API surface.",
+				"if_yes":       "Call chronicle_command(command='scan') to start the full scan.",
+			}
+			// Also include admin dashboard URL
+			port := adminPortValue
+			if port == 0 {
+				port = 4200
+			}
+			result["admin_dashboard"] = fmt.Sprintf("http://localhost:%d", port)
+			return jsonResult(result), nil
+		}
+
+		if domain != "" {
+			rev, err := g.Store().GetLatestRevision(domain)
+			if err != nil {
+				result["last_revision"] = nil
+			} else {
+				result["last_revision"] = rev
+				// Git freshness check — compare last scan SHA with current HEAD.
+				if freshness := checkGitFreshness(rev.GitAfterSHA); freshness != nil {
+					result["freshness"] = freshness
+				}
+			}
+
+			stats, err := g.QueryStats(domain)
+			if err == nil {
+				result["graph_stats"] = stats
+			}
+
+			snap, err := g.Store().GetLatestSnapshot(domain)
+			if err == nil {
+				result["last_snapshot"] = snap
+			}
+
+			// Check discoveries
+			discoveries, _ := g.Store().ListDiscoveries(domain, "")
+			result["pending_discoveries"] = len(discoveries)
+
+			// Check glossary
+			terms, _ := g.Store().GetGlossary(domain)
+			result["glossary_terms"] = len(terms)
+		}
+
+		port := adminPortValue
+		if port == 0 {
+			port = 4200
+		}
+		result["admin_dashboard"] = fmt.Sprintf("http://localhost:%d", port)
+
+		return jsonResult(result), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_scan_pool_status
+// ---------------------------------------------------------------------------
+
+func scanPoolStatusTool() mcp.Tool {
+	return mcp.NewTool("chronicle_scan_pool_status",
+		mcp.WithDescription("Get scan worker pool status. Read-only — does not claim work. Returns remaining, claimable, in-progress counts and spawn recommendations."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func scanPoolStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		domain := strParam(req.GetArguments(), "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+
+		run, err := g.Store().GetActiveScanRun(domain)
+		if err != nil || run == nil {
+			// A finished scan must satisfy the wave-loop exit condition
+			// (wave_complete, nothing claimable, nothing in progress) instead
+			// of erroring — agents can't otherwise tell "done" from "missing".
+			if last, lerr := g.Store().GetLatestScanRun(domain); lerr == nil && last != nil && last.Status == "completed" {
+				return jsonResult(map[string]any{
+					"state":           "scan_complete",
+					"wave_complete":   true,
+					"claimable_now":   0,
+					"in_progress":     0,
+					"remaining_total": 0,
+					"revision_id":     last.RevisionID,
+					"message":         "The last scan for this domain completed — the graph is ready to query. Do not start extraction waves. For changed files use chronicle_command(command=\"update\").",
+				}), nil
+			}
+			return errorResult(fmt.Errorf("no active scan run for domain %s — start one via chronicle_command(command=\"scan\")", domain)), nil
+		}
+
+		scanStatus, err := g.BuildScanRunStatus(run, "scan_file")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		status := scanStatus.Obligations
+
+		batchSize := graph.DefaultBatchSize
+		maxWorkers := graph.MaxSpawnWorkers
+		spawnCount := (status.ClaimableNow + batchSize - 1) / batchSize
+		if spawnCount > maxWorkers {
+			spawnCount = maxWorkers
+		}
+		if spawnCount < 0 {
+			spawnCount = 0
+		}
+
+		allObligations, _ := g.Store().ListAllObligations(run.RevisionID)
+		parentFactCount := 0
+		exts, _ := g.Store().ListExtractions(run.RevisionID, domain)
+		for _, ext := range exts {
+			if strings.Contains(ext.FactsJSON, `"parent"`) {
+				parentFactCount++
+			}
+		}
+
+		return jsonResult(map[string]any{
+			"phase":                  run.Phase,
+			"scan_mode":              scanStatus.ScanMode,
+			"remaining_total":        status.RemainingTotal,
+			"claimable_now":          status.ClaimableNow,
+			"in_progress":            status.InProgress,
+			"completed":              status.Completed,
+			"failed":                 status.Failed,
+			"expired":                status.Expired,
+			"oldest_in_progress_sec": status.OldestInProgressSec,
+			"claim_ttl_minutes":      status.ClaimTTLMinutes,
+			"spawn_count":            spawnCount,
+			"batch_size":             batchSize,
+			"max_wave_limit":         graph.ServerMaxWave,
+			"votes_needed":           run.VotesNeeded,
+			"scan_run_id":            run.RunID,
+			"revision_id":            run.RevisionID,
+			"total_obligations":      len(allObligations),
+			"extractions":            scanStatus.Extractions,
+			"graph":                  scanStatus.Graph,
+			"quality_warnings":       scanStatus.QualityWarnings,
+			"review_candidates":      scanStatus.ReviewCandidates,
+			"parent_facts":           parentFactCount,
+			"resolved_extractions":   run.Resolved,
+			"ready_to_resolve":       scanStatus.ReadyToResolve,
+			"wave_complete":          scanStatus.WaveComplete,
+		}), nil
+	}
+}
+
+// checkGitFreshness compares a stored SHA with current HEAD.
+// Returns nil if up-to-date or git unavailable.
+func checkGitFreshness(lastSHA string) map[string]any {
+	if lastSHA == "" {
+		return map[string]any{
+			"status":  "unknown",
+			"message": "No SHA recorded in last revision. Run chronicle update to establish baseline.",
+		}
+	}
+
+	// Get current HEAD
+	head, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		return nil // not a git repo or git not available — skip
+	}
+	currentSHA := strings.TrimSpace(string(head))
+
+	if currentSHA == lastSHA {
+		return map[string]any{
+			"status":  "fresh",
+			"message": "Graph is up to date with HEAD.",
+		}
+	}
+
+	// Count commits between last scan and HEAD
+	countOut, err := exec.Command("git", "rev-list", "--count", lastSHA+".."+currentSHA).Output()
+	if err != nil {
+		// lastSHA may not exist (rebased, shallow clone)
+		return map[string]any{
+			"status":     "stale",
+			"message":    "Graph is behind HEAD. Last scan SHA not found in history.",
+			"suggestion": "Run chronicle update to rescan changed files.",
+		}
+	}
+	count := strings.TrimSpace(string(countOut))
+
+	// Get changed files count
+	filesOut, _ := exec.Command("git", "diff", "--name-only", lastSHA+".."+currentSHA).Output()
+	files := strings.Split(strings.TrimSpace(string(filesOut)), "\n")
+	fileCount := 0
+	if len(files) > 0 && files[0] != "" {
+		fileCount = len(files)
+	}
+
+	return map[string]any{
+		"status":         "stale",
+		"commits_behind": count,
+		"files_changed":  fileCount,
+		"last_scan_sha":  lastSHA[:min(len(lastSHA), 7)],
+		"current_head":   currentSHA[:7],
+		"suggestion":     "Run chronicle update to rescan " + count + " commits (" + fmt.Sprintf("%d", fileCount) + " files changed).",
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_save_manifest
+// ---------------------------------------------------------------------------
+
+func saveManifestTool() mcp.Tool {
+	return mcp.NewTool("chronicle_save_manifest",
+		mcp.WithDescription("Save the domain manifest (chronicle.domain.yaml). Use after auto-discovering the project structure — identify repos, tech stack, and domain name, then save. Auto-discover the structure; never ask the user to manually edit this file."),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Full YAML content for chronicle.domain.yaml")),
+	)
+}
+
+func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		content := strParam(req.GetArguments(), "content")
+		if content == "" {
+			return errorResult(fmt.Errorf("content is required")), nil
+		}
+		path := manifestFilePath
+		if path == "" {
+			path = filepath.Join(paths.Dir(), "chronicle.domain.yaml")
+		}
+		os.MkdirAll(paths.Dir(), 0755)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return errorResult(err), nil
+		}
+
+		// After saving, load the manifest and create infra nodes in the graph.
+		if m, err := manifest.LoadFile(path); err == nil {
+			domainKey := ""
+			if len(m.Domains) > 0 {
+				domainKey = m.Domains[0].Name
+			}
+			for _, infra := range m.Infrastructure {
+				g.Store().UpsertNode(store.NodeRow{
+					NodeKey:   infra.InfraNodeKey(),
+					Layer:     "infra",
+					NodeType:  infra.Type,
+					DomainKey: domainKey,
+					Name:      infra.Name,
+					Status:    "active",
+				})
+			}
+		}
+
+		return jsonResult(map[string]string{"status": "saved", "path": path}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_reset_db
+// ---------------------------------------------------------------------------
+
+func resetDBTool() mcp.Tool {
+	return mcp.NewTool("chronicle_reset_db",
+		mcp.WithDescription("Reset the database — drops all tables and recreates the schema. Use when schema has changed or you want a clean re-scan. All existing graph data will be lost."),
+	)
+}
+
+func resetDBHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if err := g.Store().ResetDB(); err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]string{"status": "reset", "message": "Database reset. All tables recreated. Ready for fresh scan."}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_report_discovery
+// ---------------------------------------------------------------------------
+
+func reportDiscoveryTool() mcp.Tool {
+	return mcp.NewTool("chronicle_report_discovery",
+		mcp.WithDescription("Report a discovery about the codebase. Use this when you learn something new during analysis that should be remembered for future scans. Categories: 'pattern' (new code pattern), 'correction' (previous extraction was wrong), 'insight' (user told you something), 'missing_edge' (relationship exists but wasn't captured), 'unknown_pattern' (code pattern you don't know how to classify)."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithString("category", mcp.Required(), mcp.Description("pattern, correction, insight, missing_edge, unknown_pattern")),
+		mcp.WithString("title", mcp.Required(), mcp.Description("Short title for the discovery")),
+		mcp.WithString("description", mcp.Required(), mcp.Description("Detailed description of what was discovered")),
+		mcp.WithString("source", mcp.Description("Who made this discovery: claude, user, system (default: claude)")),
+		mcp.WithNumber("confidence", mcp.Description("How confident 0-1 (default: 0.5)")),
+		mcp.WithString("related_nodes", mcp.Description("JSON array of related node_keys")),
+	)
+}
+
+func reportDiscoveryHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		source := strParam(args, "source")
+		if source == "" {
+			// Default to the connected client's identity (claude-code, codex,
+			// cursor, ...) — discoveries must not all read as "claude".
+			source = ConnectedClient()
+		}
+		if source == "" {
+			source = "agent"
+		}
+		conf := float64Param(args, "confidence")
+		if conf == 0 {
+			conf = 0.5
+		}
+		relatedNodes := strParam(args, "related_nodes")
+		if relatedNodes == "" {
+			relatedNodes = "[]"
+		}
+		id, err := g.Store().AddDiscovery(store.Discovery{
+			DomainKey:    strParam(args, "domain"),
+			Category:     strParam(args, "category"),
+			Title:        strParam(args, "title"),
+			Description:  strParam(args, "description"),
+			Source:       source,
+			Confidence:   conf,
+			RelatedNodes: relatedNodes,
+		})
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"discovery_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_get_discoveries
+// ---------------------------------------------------------------------------
+
+func getDiscoveriesTool() mcp.Tool {
+	return mcp.NewTool("chronicle_get_discoveries",
+		mcp.WithDescription("Get previous discoveries about this codebase. Call this before scanning to learn from past analysis sessions — corrections, patterns, insights from the user, and unknown patterns that need investigation."),
+		mcp.WithString("domain", mcp.Description("Domain key (optional, filters by domain)")),
+		mcp.WithString("category", mcp.Description("Filter by category: pattern, correction, insight, missing_edge, unknown_pattern")),
+	)
+}
+
+func getDiscoveriesHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		discoveries, err := g.Store().ListDiscoveries(strParam(args, "domain"), strParam(args, "category"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(discoveries), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_admin_url
+// ---------------------------------------------------------------------------
+
+func adminURLTool() mcp.Tool {
+	return mcp.NewTool("chronicle_admin_url",
+		mcp.WithDescription("Get the admin dashboard URL. The dashboard shows the knowledge graph, MCP request log, discoveries, and scan metrics in a web browser."),
+	)
+}
+
+func adminURLHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		port := adminPortValue
+		if port == 0 {
+			port = 4200
+		}
+		url := fmt.Sprintf("http://localhost:%d", port)
+		return jsonResult(map[string]any{
+			"url":     url,
+			"port":    port,
+			"message": fmt.Sprintf("Admin dashboard is running at %s — open in browser to see the knowledge graph, MCP requests, discoveries, and scan metrics.", url),
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_define_term
+// ---------------------------------------------------------------------------
+
+func defineTermTool() mcp.Tool {
+	return mcp.NewTool("chronicle_define_term",
+		mcp.WithDescription("Define or update a domain language term. Use this to build the project's ubiquitous language glossary. Include anti-patterns to detect naming violations in the codebase."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithString("term", mcp.Required(), mcp.Description("The canonical term (e.g. 'Order', 'Merchant', 'User')")),
+		mcp.WithString("description", mcp.Required(), mcp.Description("What this term means in the domain")),
+		mcp.WithString("context", mcp.Description("Bounded context (e.g. 'ordering', 'payments', 'auth')")),
+		mcp.WithString("aliases", mcp.Description("JSON array of acceptable aliases: [\"Purchase\", \"Booking\"]")),
+		mcp.WithString("anti_patterns", mcp.Description("JSON array of names that should NOT be used: [\"Buy\", \"Transaction\"]")),
+		mcp.WithString("examples", mcp.Description("JSON array of correct usage examples: [\"OrderService\", \"OrderResolver\"]")),
+	)
+}
+
+func defineTermHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		t := store.DomainTerm{
+			DomainKey:   strParam(args, "domain"),
+			Term:        strParam(args, "term"),
+			Description: strParam(args, "description"),
+			Context:     strParam(args, "context"),
+		}
+		// Parse JSON arrays
+		if s := strParam(args, "aliases"); s != "" {
+			json.Unmarshal([]byte(s), &t.Aliases)
+		}
+		if s := strParam(args, "anti_patterns"); s != "" {
+			json.Unmarshal([]byte(s), &t.AntiPatterns)
+		}
+		if s := strParam(args, "examples"); s != "" {
+			json.Unmarshal([]byte(s), &t.Examples)
+		}
+		id, err := g.Store().UpsertTerm(t)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"term_id": id, "term": t.Term}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_get_glossary
+// ---------------------------------------------------------------------------
+
+func getGlossaryTool() mcp.Tool {
+	return mcp.NewTool("chronicle_get_glossary",
+		mcp.WithDescription("Get the domain language glossary. Returns all defined terms with their aliases, anti-patterns, and descriptions. Use this to understand the project's ubiquitous language."),
+		mcp.WithString("domain", mcp.Description("Domain key (optional)")),
+	)
+}
+
+func getGlossaryHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		terms, err := g.Store().GetGlossary(strParam(req.GetArguments(), "domain"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(terms), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_check_language
+// ---------------------------------------------------------------------------
+
+func checkLanguageTool() mcp.Tool {
+	return mcp.NewTool("chronicle_check_language",
+		mcp.WithDescription("Check the knowledge graph for domain language violations. Scans all node names against anti-patterns defined in the glossary. Returns warnings for naming inconsistencies."),
+		mcp.WithString("domain", mcp.Description("Domain key (optional)")),
+	)
+}
+
+func checkLanguageHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		violations, err := g.Store().CheckLanguage(strParam(req.GetArguments(), "domain"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		if violations == nil {
+			violations = []store.LanguageViolation{}
+		}
+		return jsonResult(map[string]any{
+			"violations": violations,
+			"total":      len(violations),
+			"clean":      len(violations) == 0,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_mcp_identity — distinctive MCP build fingerprint
+// ---------------------------------------------------------------------------
+
+func mcpIdentityTool() mcp.Tool {
+	return mcp.NewTool("chronicle_mcp_identity",
+		mcp.WithDescription("Return the running Chronicle MCP server identity: release codename, capability fingerprint, and scan-contract flags. Call before every scan to verify the MCP binary is current — not just semver."),
+	)
+}
+
+func mcpIdentityHandler() server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		version.StampBuildTime()
+		payload := version.IdentityMap()
+		payload["connected_client"] = ConnectedClient()
+		return jsonResult(payload), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_command — unified command executor
+// ---------------------------------------------------------------------------
+
+func commandTool() mcp.Tool {
+	return mcp.NewTool("chronicle_command",
+		mcp.WithDescription("Execute a Chronicle command. Available commands: scan, query, data, language, impact, deps, path, services, status, version, help. The user may type '/chronicle-scan' or 'chronicle scan' — call this tool with the command name."),
+		mcp.WithString("command", mcp.Required(), mcp.Description("Command name: scan, query, data, language, impact, deps, path, services, status, version, help")),
+	)
+}
+
+func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		cmd := strParam(req.GetArguments(), "command")
+
+		if cmd == "version" || cmd == "mcp" || cmd == "mcp-version" || cmd == "mcp_version" {
+			version.StampBuildTime()
+			payload := version.IdentityMap()
+			payload["command"] = "version"
+			payload["message"] = "Show the banner to the user. Compare release_codename and fingerprint before scanning."
+			return jsonResult(payload), nil
+		}
+
+		// Check for custom override in project settings
+		instructions := ""
+		if customGuideStore != nil {
+			if custom, err := customGuideStore.GetSetting("prompt_" + cmd); err == nil && custom != "" {
+				instructions = custom
+			}
+		}
+		if instructions == "" && cmd == "scan" && !clientSupportsSubagents() {
+			// No Task tool on this client (Codex, Cursor, ...) — serve the
+			// solo workflow: same pool mechanics, agent extracts itself.
+			instructions = soloScanCommand()
+		}
+		if instructions == "" {
+			var ok bool
+			instructions, ok = CommandInstructions[cmd]
+			if !ok {
+				instructions = CommandInstructions["help"]
+			}
+		}
+		return jsonResult(map[string]any{
+			"command":      cmd,
+			"instructions": instructions,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_diagram_create
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// chronicle_diagram_build
+// ---------------------------------------------------------------------------
+
+func diagramBuildTool() mcp.Tool {
+	return mcp.NewTool("chronicle_diagram_build",
+		mcp.WithDescription(`Build a live diagram through the unified view-model engine. PRIMARY mode: provide view_spec — a full view-algebra ViewSpec evaluated by BuildView. Alternative: node_keys — nodes are resolved from the graph DB and lifted to a C3-shaped custom selection (components + internal edges + boundary). Returns session URL.
+
+Modes (priority order):
+- View algebra (primary): provide view_spec — {"scope":{"domain":"...","service"|"nodes"|"flow":...},"expand":{"direction":"out|in|both","depth":N,"edges":[...],"mode":"neighbors|path"},"filter":{...},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset":"c1|c2|c3|deps|impact|path|custom"}}. expand.mode "path" needs scope.nodes=[A,B] and traces the shortest path.
+- Graph-backed: provide node_keys — viewmodel.BuildSelection resolves nodes, discovers internal edges and one-hop boundary edges.
+- Legacy view model: provide explicit nodes + edges — stored as a legacy session for the old card viewer.
+
+Node kinds: service, endpoint, model, domain, infrastructure, external, topic, queue, database
+Edge kinds: http, async, data, structural`),
+		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
+		mcp.WithString("domain", mcp.Description("Domain key used to scope node resolution for node_keys, and the default scope.domain for view_spec (optional — empty means all domains)")),
+		mcp.WithString("view_spec", mcp.Description("Full ViewSpec JSON (view algebra: scope/expand/filter/group/collapse/layout). Takes priority over node_keys.")),
+		mcp.WithString("nodes", mcp.Description("LEGACY: JSON array of DiagramNode: [{\"key\":\"...\",\"label\":\"...\",\"kind\":\"domain|infrastructure|external|service|...\",\"source_key\":\"optional\",\"domain\":\"optional\"}]")),
+		mcp.WithString("edges", mcp.Description("LEGACY: JSON array of DiagramEdge: [{\"from\":\"node_key\",\"to\":\"node_key\",\"label\":\"HTTP\",\"kind\":\"http|async|data|structural\"}]")),
+		mcp.WithString("node_keys", mcp.Description("JSON array of graph node_key strings to resolve from DB. Edges auto-discovered.")),
+		mcp.WithString("groups", mcp.Description("JSON object: {\"field\":\"domain|layer|kind\"}")),
+		mcp.WithString("steps", mcp.Description("JSON array of DiagramStep: [{\"title\":\"...\",\"description\":\"...\",\"highlights\":{\"node_key\":\"#color\"},\"notes\":{\"node_key\":\"text\"}}]")),
+		mcp.WithString("annotations", mcp.Description("JSON object: {\"node_key\":{\"note\":\"text\",\"highlight\":\"#color\"}}")),
+		mcp.WithString("hide_edges", mcp.Description("LEGACY: JSON array: [{\"from\":\"key1\",\"to\":\"key2\",\"edge_type\":\"OPTIONAL\"}]")),
+	)
+}
+
+// adminBaseURL returns the absolute base URL of the admin dashboard,
+// matching the URL construction used by chronicle_admin_url.
+func adminBaseURL() string {
+	port := adminPortValue
+	if port == 0 {
+		port = 4200
+	}
+	return fmt.Sprintf("http://localhost:%d", port)
+}
+
+// selectionProjection lifts a View into the legacy Selection shape so the
+// current session renderer (which reads .selection) can draw view_spec
+// sessions until the V3 viewmodel renderer lands. Best-effort: groups are
+// included as components too, because with collapse=true the collapsed
+// edges reference group keys.
+func selectionProjection(v *viewmodel.View, title string) *viewmodel.Selection {
+	sel := &viewmodel.Selection{Level: "custom", Title: title, Missing: v.Missing}
+	for _, grp := range v.Groups {
+		sel.Components = append(sel.Components, viewmodel.Component{
+			Key: grp.Key, Name: grp.Name, Type: grp.Kind,
+		})
+	}
+	for _, n := range v.Nodes {
+		sel.Components = append(sel.Components, viewmodel.Component{
+			Key: n.Key, Name: n.Name, Type: n.Type,
+			Endpoints: n.Endpoints, UsesModels: n.UsesModels,
+		})
+	}
+	for _, e := range v.Edges {
+		sel.InternalEdges = append(sel.InternalEdges, viewmodel.InternalEdge{
+			From: e.From, To: e.To, Kind: strings.ToLower(e.Kind),
+		})
+	}
+	if v.Boundary != nil {
+		sel.Boundary = viewmodel.Boundary{Outgoing: v.Boundary.Out, Incoming: v.Boundary.In}
+	}
+	return sel
+}
+
+// newDiagramSessionID generates a short session id (same scheme the admin
+// /api/diagram/build endpoint used: last 8 hex chars of UnixNano).
+func newDiagramSessionID() string {
+	id := fmt.Sprintf("%x", time.Now().UnixNano())
+	if len(id) > 8 {
+		id = id[len(id)-8:]
+	}
+	return id
+}
+
+func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		title := strParam(args, "title")
+		if title == "" {
+			return errorResult(fmt.Errorf("title is required")), nil
+		}
+		domain := strParam(args, "domain")
+
+		// Parse all JSON string parameters (backward-compatible input shape).
+		parsed := map[string]any{}
+		for _, field := range []string{"nodes", "edges", "node_keys", "steps", "hide_edges", "groups", "annotations"} {
+			if raw := strParam(args, field); raw != "" {
+				var v any
+				if err := json.Unmarshal([]byte(raw), &v); err != nil {
+					return errorResult(fmt.Errorf("invalid %s JSON: %w", field, err)), nil
+				}
+				parsed[field] = v
+			}
+		}
+
+		var nodeKeys []string
+		if raw := strParam(args, "node_keys"); raw != "" {
+			if err := json.Unmarshal([]byte(raw), &nodeKeys); err != nil {
+				return errorResult(fmt.Errorf("invalid node_keys JSON: %w", err)), nil
+			}
+		}
+
+		viewSpecRaw := strParam(args, "view_spec")
+
+		_, hasNodes := parsed["nodes"]
+		if viewSpecRaw == "" && len(nodeKeys) == 0 && !hasNodes {
+			return errorResult(fmt.Errorf("at least one of 'view_spec', 'node_keys' or 'nodes' is required")), nil
+		}
+
+		sessionID := newDiagramSessionID()
+		url := fmt.Sprintf("%s/#c4/s/%s", adminBaseURL(), sessionID)
+
+		var session map[string]any
+		var nodeCount, edgeCount int
+		missing := []string{}
+
+		if viewSpecRaw != "" {
+			// PRIMARY path: full view-algebra spec → BuildView. The session
+			// stores the View under "view" AND a best-effort Selection
+			// projection under "selection" so the current renderer (which
+			// reads .selection) can draw it until the V3 renderer lands.
+			var spec viewmodel.ViewSpec
+			if err := json.Unmarshal([]byte(viewSpecRaw), &spec); err != nil {
+				return errorResult(fmt.Errorf("invalid view_spec JSON: %w", err)), nil
+			}
+			if spec.Scope.Domain == "" {
+				spec.Scope.Domain = domain
+			}
+			view, err := viewmodel.BuildView(g.Store(), spec)
+			if err != nil {
+				return errorResult(fmt.Errorf("build view: %w", err)), nil
+			}
+			level := spec.Layout.Preset
+			if level == "" {
+				level = "custom"
+			}
+			session = map[string]any{
+				"kind":      "viewmodel",
+				"level":     level,
+				"title":     title,
+				"domain":    spec.Scope.Domain,
+				"view":      view,
+				"selection": selectionProjection(view, title),
+			}
+			nodeCount = len(view.Nodes) + len(view.Groups)
+			edgeCount = len(view.Edges)
+			if view.Missing != nil {
+				missing = view.Missing
+			}
+		} else if len(nodeKeys) > 0 {
+			// node_keys path: selection sugar over the view-model engine.
+			// Keeps writing the "selection"-shaped session the current
+			// frontend renderer reads.
+			sel, err := viewmodel.BuildSelection(g.Store(), domain, nodeKeys, title)
+			if err != nil {
+				return errorResult(fmt.Errorf("build selection: %w", err)), nil
+			}
+			session = map[string]any{
+				"kind":      "viewmodel",
+				"level":     "custom",
+				"title":     title,
+				"domain":    domain,
+				"selection": sel,
+			}
+			nodeCount = len(sel.Components)
+			edgeCount = len(sel.InternalEdges)
+			if sel.Missing != nil {
+				missing = sel.Missing
+			}
+		} else {
+			// LEGACY path: explicit nodes/edges view model, wrapped so the
+			// frontend can fall back to the old card renderer.
+			now := time.Now().UTC().Format(time.RFC3339)
+			session = map[string]any{
+				"kind":       "legacy",
+				"id":         sessionID,
+				"title":      title,
+				"domain":     domain,
+				"created_at": now,
+				"updated_at": now,
+			}
+			for _, f := range []string{"nodes", "edges", "groups", "hide_edges"} {
+				if v, ok := parsed[f]; ok {
+					session[f] = v
+				}
+			}
+			if nodes, ok := parsed["nodes"].([]any); ok {
+				nodeCount = len(nodes)
+			}
+			if edges, ok := parsed["edges"].([]any); ok {
+				edgeCount = len(edges)
+			}
+		}
+
+		// Pass through annotations/steps in both modes.
+		if v, ok := parsed["annotations"]; ok {
+			session["annotations"] = v
+		}
+		if v, ok := parsed["steps"]; ok {
+			session["steps"] = v
+		}
+
+		data, err := json.Marshal(session)
+		if err != nil {
+			return errorResult(fmt.Errorf("marshal session: %w", err)), nil
+		}
+		// Session-scoped on purpose: diagrams live in the process registry,
+		// not SQLite — a server restart clears the Live Session tab.
+		diagrams.Default.Save(sessionID, title, string(data))
+
+		return jsonResult(map[string]any{
+			"session_id": sessionID,
+			"url":        url,
+			"node_count": nodeCount,
+			"edge_count": edgeCount,
+			"missing":    missing,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_salience_explain
+// ---------------------------------------------------------------------------
+
+func salienceExplainTool() mcp.Tool {
+	return mcp.NewTool("chronicle_salience_explain",
+		mcp.WithDescription("Explain why a node renders the way it does on diagrams: the resolved tier/render_mode at a diagram level plus the layer-by-layer salience trace (type policy, role claim + confidence, path noise class, boundary promotion). Use when a node is unexpectedly hidden or shown."),
+		mcp.WithString("node_key", mcp.Required(), mcp.Description("Node key to explain")),
+		mcp.WithString("level", mcp.Description("Diagram level: default|c2|c3|focus|data|... (default: default)")),
+	)
+}
+
+func salienceExplainHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		nodeKey := strParam(args, "node_key")
+		if nodeKey == "" {
+			return errorResult(fmt.Errorf("node_key is required")), nil
+		}
+		ex, err := viewmodel.ExplainSalience(g.Store(), nodeKey, strParam(args, "level"))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(ex), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_domain_list
+// ---------------------------------------------------------------------------
+
+func domainListTool() mcp.Tool {
+	return mcp.NewTool("chronicle_domain_list",
+		mcp.WithDescription("List all domains in the knowledge graph with metadata. Returns domain name and node count. Use to understand project structure before building overview diagrams."),
+	)
+}
+
+func domainListHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		domains, err := g.Store().GetDomains()
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		result := make([]map[string]any, 0, len(domains))
+		for _, d := range domains {
+			nodes, err := g.Store().ListNodes(store.NodeFilter{Domain: d, Status: "active"})
+			if err != nil {
+				continue
+			}
+			result = append(result, map[string]any{
+				"domain":     d,
+				"node_count": len(nodes),
+			})
+		}
+
+		return jsonResult(map[string]any{"domains": result, "count": len(result)}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_resolve_context
+// ---------------------------------------------------------------------------
+
+func resolveContextTool() mcp.Tool {
+	return mcp.NewTool("chronicle_resolve_context",
+		mcp.WithDescription("Resolve the main knowledge context for a domain. Call this at the start of a conversation to determine which context to use for queries. Returns the context matching the 'main' git ref."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func resolveContextHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+
+		c, err := g.Store().GetContextByRef(domain, "main")
+		if err != nil {
+			return jsonResult(map[string]any{
+				"context": nil,
+				"message": "No context found. Run chronicle scan first.",
+			}), nil
+		}
+		return jsonResult(map[string]any{
+			"context_id":       c.ContextID,
+			"context_name":     c.Name,
+			"head_revision_id": c.HeadRevisionID,
+			"head_commit_sha":  c.HeadCommitSHA,
+			"status":           c.Status,
+		}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_context_list
+// ---------------------------------------------------------------------------
+
+func contextListTool() mcp.Tool {
+	return mcp.NewTool("chronicle_context_list",
+		mcp.WithDescription("List all knowledge contexts for a domain. Returns contexts with their status, head revision, and git ref."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+	)
+}
+
+func contextListHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+
+		contexts, err := g.Store().ListContexts(domain)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(contexts), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_context_create
+// ---------------------------------------------------------------------------
+
+func contextCreateTool() mcp.Tool {
+	return mcp.NewTool("chronicle_context_create",
+		mcp.WithDescription("Create a new knowledge context for a domain. Use this to create branch-specific contexts for isolated graph work. Optionally fork from an existing context by providing base_context_id and base_revision_id."),
+		mcp.WithString("domain", mcp.Required(), mcp.Description("Domain key")),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Context name (e.g. 'main', 'feature/auth-refactor')")),
+		mcp.WithString("git_ref", mcp.Required(), mcp.Description("Git ref this context tracks (e.g. 'main', 'feature/auth')")),
+		mcp.WithNumber("base_context_id", mcp.Description("Context ID to fork from (optional)")),
+		mcp.WithNumber("base_revision_id", mcp.Description("Revision ID to fork from (optional)")),
+	)
+}
+
+func contextCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		domain := strParam(args, "domain")
+		name := strParam(args, "name")
+		gitRef := strParam(args, "git_ref")
+		if domain == "" {
+			return errorResult(fmt.Errorf("domain is required")), nil
+		}
+		if name == "" {
+			return errorResult(fmt.Errorf("name is required")), nil
+		}
+		if gitRef == "" {
+			return errorResult(fmt.Errorf("git_ref is required")), nil
+		}
+
+		baseContextID := int64Param(args, "base_context_id")
+		baseRevisionID := int64Param(args, "base_revision_id")
+
+		id, err := g.Store().CreateContext(domain, name, gitRef, baseContextID, baseRevisionID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"context_id": id}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_context_archive
+// ---------------------------------------------------------------------------
+
+func contextArchiveTool() mcp.Tool {
+	return mcp.NewTool("chronicle_context_archive",
+		mcp.WithDescription("Archive a knowledge context. Archived contexts are no longer active but their data is preserved. Use when a branch is merged or abandoned."),
+		mcp.WithNumber("context_id", mcp.Required(), mcp.Description("Context ID to archive")),
+	)
+}
+
+func contextArchiveHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		contextID := int64Param(args, "context_id")
+		if contextID == 0 {
+			return errorResult(fmt.Errorf("context_id is required")), nil
+		}
+
+		err := g.Store().ArchiveContext(contextID)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(map[string]any{"archived": true}), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chronicle_changelog_query
+// ---------------------------------------------------------------------------
+
+func changelogQueryTool() mcp.Tool {
+	return mcp.NewTool("chronicle_changelog_query",
+		mcp.WithDescription("Query the changelog for a context. Returns a list of changes (node/edge creates, updates, deletes) with optional filters on entity key and revision range. Use to see what changed between revisions."),
+		mcp.WithNumber("context_id", mcp.Required(), mcp.Description("Context ID to query changelog for")),
+		mcp.WithString("entity_key", mcp.Description("Filter by entity key (node_key or edge_key)")),
+		mcp.WithNumber("from_revision", mcp.Description("Include only changes from this revision onward")),
+		mcp.WithNumber("to_revision", mcp.Description("Include only changes up to this revision")),
+	)
+}
+
+func changelogQueryHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		contextID := int64Param(args, "context_id")
+		if contextID == 0 {
+			return errorResult(fmt.Errorf("context_id is required")), nil
+		}
+
+		entityKey := strParam(args, "entity_key")
+		fromRevision := int64Param(args, "from_revision")
+		toRevision := int64Param(args, "to_revision")
+
+		entries, err := g.Store().QueryChangelog(contextID, entityKey, fromRevision, toRevision)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(entries), nil
+	}
+}

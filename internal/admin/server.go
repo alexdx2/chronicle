@@ -20,7 +20,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/diagrams"
-	"github.com/alexdx2/chronicle-core/internal/mcp"
+	mcp "github.com/alexdx2/chronicle-core/mcpserver"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
