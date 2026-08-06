@@ -17,11 +17,11 @@ import (
 	"sync"
 
 	dashboard "github.com/alexdx2/chronicle-core/admin"
+	"github.com/alexdx2/chronicle-core/diagrams"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
-	"github.com/alexdx2/chronicle-core/diagrams"
-	mcp "github.com/alexdx2/chronicle-core/mcpserver"
 	"github.com/alexdx2/chronicle-core/manifest"
+	mcp "github.com/alexdx2/chronicle-core/mcpserver"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
