@@ -26,11 +26,33 @@ import (
 
 var manifestFilePath string
 var adminPortValue int
+var adminURLNote string
 var liveCheckEnabled bool
+
+// AdminPortNone marks "no admin dashboard runs in this process" — hosts that
+// serve the toolset without starting the dashboard (chronicle-pro's
+// single-repo serve, `mcp serve --no-admin`) set it so chronicle_admin_url and
+// chronicle_scan_status report the truth instead of a default URL.
+const AdminPortNone = -1
 
 func SetManifestPath(p string) { manifestFilePath = p }
 func SetAdminPort(p int)       { adminPortValue = p }
 func SetLiveCheck(v bool)      { liveCheckEnabled = v }
+
+// SetAdminURLNote sets an extra sentence appended to the "no dashboard
+// running" message under AdminPortNone. Embedding hosts use it to point at
+// their own way of starting a dashboard (e.g. `chronicle-pro admin`).
+func SetAdminURLNote(s string) { adminURLNote = s }
+
+// adminUnavailableMessage is what the admin-URL surfaces say under
+// AdminPortNone: honest about the absence, plus the host's pointer if set.
+func adminUnavailableMessage() string {
+	msg := "No admin dashboard is running in this mode."
+	if adminURLNote != "" {
+		msg += " " + adminURLNote
+	}
+	return msg
+}
 
 // NewServer creates a new MCP server exposing all graph operations as tools.
 func NewServer(g *graph.Graph) *server.MCPServer {
@@ -1943,12 +1965,8 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 				"ask_user":     "Would you like me to scan this project and build a knowledge graph? I'll discover the project structure, extract data models, code dependencies, and API surface.",
 				"if_yes":       "Call chronicle_command(command='scan') to start the full scan.",
 			}
-			// Also include admin dashboard URL
-			port := adminPortValue
-			if port == 0 {
-				port = 4200
-			}
-			result["admin_dashboard"] = fmt.Sprintf("http://localhost:%d", port)
+			// Also include admin dashboard state (URL, or honest absence)
+			result["admin_dashboard"] = adminDashboardField()
 			return jsonResult(result), nil
 		}
 
@@ -1983,11 +2001,7 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 			result["glossary_terms"] = len(terms)
 		}
 
-		port := adminPortValue
-		if port == 0 {
-			port = 4200
-		}
-		result["admin_dashboard"] = fmt.Sprintf("http://localhost:%d", port)
+		result["admin_dashboard"] = adminDashboardField()
 
 		return jsonResult(result), nil
 	}
@@ -2294,6 +2308,12 @@ func adminURLTool() mcp.Tool {
 
 func adminURLHandler() server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if adminPortValue == AdminPortNone {
+			return jsonResult(map[string]any{
+				"running": false,
+				"message": adminUnavailableMessage(),
+			}), nil
+		}
 		port := adminPortValue
 		if port == 0 {
 			port = 4200
@@ -2501,13 +2521,25 @@ Edge kinds: http, async, data, structural`),
 }
 
 // adminBaseURL returns the absolute base URL of the admin dashboard,
-// matching the URL construction used by chronicle_admin_url.
+// matching the URL construction used by chronicle_admin_url. Under
+// AdminPortNone it still resolves to the default port — diagram-session URLs
+// need SOME base, and the default is where a later-started dashboard listens.
 func adminBaseURL() string {
 	port := adminPortValue
-	if port == 0 {
+	if port <= 0 {
 		port = 4200
 	}
 	return fmt.Sprintf("http://localhost:%d", port)
+}
+
+// adminDashboardField is what chronicle_scan_status reports as
+// "admin_dashboard": the URL when a dashboard runs (or core's default), the
+// honest no-dashboard message under AdminPortNone.
+func adminDashboardField() string {
+	if adminPortValue == AdminPortNone {
+		return adminUnavailableMessage()
+	}
+	return adminBaseURL()
 }
 
 // selectionProjection lifts a View into the legacy Selection shape so the

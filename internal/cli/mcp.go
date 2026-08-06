@@ -95,7 +95,14 @@ func newMCPCmd() *cobra.Command {
 				adminPort = portFromPath(cwd)
 			}
 
-			mcpserver.SetAdminPort(adminPort)
+			if noAdmin {
+				// No dashboard in this process — chronicle_admin_url must not
+				// claim one is running.
+				mcpserver.SetAdminPort(mcpserver.AdminPortNone)
+				mcpserver.SetAdminURLNote("Restart with `chronicle mcp serve` (without --no-admin) to get one.")
+			} else {
+				mcpserver.SetAdminPort(adminPort)
+			}
 
 			if !noAdmin {
 				srv := admin.NewServer(g, g.Store(), adminPort, manifestPath, false, projectPath)
