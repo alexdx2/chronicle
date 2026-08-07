@@ -109,6 +109,12 @@ type ImportEvidence struct {
 	Confidence       float64 `json:"confidence,omitempty"`
 	Polarity         string  `json:"polarity,omitempty"`
 	Metadata         string  `json:"metadata,omitempty"`
+	// Assertion-based verification — an extractor's claim about the target
+	// (e.g. the module string in an import specifier), checked mechanically
+	// against the source file at creation time. See validate.EvidenceInput.
+	Assertion        string `json:"assertion,omitempty"`
+	AssertionKind    string `json:"assertion_kind,omitempty"`
+	AssertionVersion string `json:"assertion_version,omitempty"`
 }
 
 // ImportAlias describes an alias to import for a node.
@@ -435,6 +441,9 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				Polarity:         ev.Polarity,
 				RevisionID:       revisionID,
 				Metadata:         string(ev.Metadata),
+				Assertion:        ev.Assertion,
+				AssertionKind:    ev.AssertionKind,
+				AssertionVersion: ev.AssertionVersion,
 			}
 
 			switch ev.TargetKind {

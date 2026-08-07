@@ -370,3 +370,38 @@ func TestImportAutoEvidenceForFilelessNodes(t *testing.T) {
 		t.Fatalf("import left %d nodes without evidence", n)
 	}
 }
+
+// TestImportAll_EvidenceAssertions verifies that import-payload evidence
+// carrying an assertion (module identity claimed by an extractor, e.g. an
+// import specifier) is plumbed through ImportAll into the stored evidence
+// row, and that ListEvidenceByAssertionKind can retrieve it by assertion_kind
+// alone (pro's package index has no domain to filter on).
+func TestImportAll_EvidenceAssertions(t *testing.T) {
+	g, _ := newTestGraph(t) // package's existing helper
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: "code:provider:d:consumer", Layer: "code", NodeType: "provider", DomainKey: "d", Name: "consumer"},
+			{NodeKey: "code:provider:d:auth-client", Layer: "code", NodeType: "provider", DomainKey: "d", Name: "auth-client"},
+		},
+		Edges: []ImportEdge{{FromNodeKey: "code:provider:d:consumer", ToNodeKey: "code:provider:d:auth-client", EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code"}},
+		Evidence: []ImportEvidence{{
+			TargetKind: "edge",
+			EdgeKey:    "code:provider:d:consumer->code:provider:d:auth-client:INJECTS",
+			SourceKind: "file", FilePath: "src/consumer.ts", ExtractorID: "t", ExtractorVersion: "1",
+			Confidence:    0.9,
+			Assertion:     `{"module":"@okeep/auth-client"}`,
+			AssertionKind: "import_specifier",
+		}},
+	}
+	revID, _ := g.Store().CreateRevision("d", "", "t", "manual", "full", "{}")
+	if _, err := g.ImportAll(payload, revID); err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	rows, err := g.Store().ListEvidenceByAssertionKind("import_specifier")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("want 1 import_specifier row, got %d err %v", len(rows), err)
+	}
+	if rows[0].Assertion != `{"module":"@okeep/auth-client"}` || rows[0].EdgeID == 0 {
+		t.Fatalf("assertion/edge not persisted: %+v", rows[0])
+	}
+}

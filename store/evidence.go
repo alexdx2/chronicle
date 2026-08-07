@@ -302,6 +302,15 @@ func (s *Store) ListEvidenceBySourceKind(sourceKind string) ([]EvidenceRow, erro
 	return s.queryEvidence("source_kind = ?", sourceKind)
 }
 
+// ListEvidenceByAssertionKind returns all evidence rows carrying the given
+// assertion_kind (across all nodes/edges/domains). Used by pro's package
+// index to recover npm identities from import assertions. Full scan —
+// graph_evidence has no assertion_kind index and okeep-scale tables
+// (~9k rows) don't need one.
+func (s *Store) ListEvidenceByAssertionKind(assertionKind string) ([]EvidenceRow, error) {
+	return s.queryEvidence("assertion_kind = ?", assertionKind)
+}
+
 func (s *Store) queryEvidence(where string, arg any) ([]EvidenceRow, error) {
 	q := `
 		SELECT evidence_id, target_kind,

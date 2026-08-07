@@ -26,6 +26,17 @@ type PathEdge struct {
 	Derivation string `json:"derivation"`
 }
 
+// PathJump marks a repo or identity boundary crossed while walking a Path —
+// e.g. a package-stitched edge where FromRepo and ToRepo differ. Populated
+// by pro's package-stitching resolver; core only carries the shape.
+type PathJump struct {
+	Index    int    `json:"index"` // position in Edges where the jump happened
+	Kind     string `json:"kind"`  // "package" | "identity"
+	FromRepo string `json:"from_repo,omitempty"`
+	ToRepo   string `json:"to_repo,omitempty"`
+	Detail   string `json:"detail,omitempty"` // e.g. package name or resolution method
+}
+
 // Path represents a single path from source to destination.
 type Path struct {
 	Nodes     []string   `json:"nodes"`
@@ -33,6 +44,7 @@ type Path struct {
 	Depth     int        `json:"depth"`
 	PathScore float64    `json:"path_score"`
 	PathCost  float64    `json:"path_cost"`
+	Jumps     []PathJump `json:"jumps,omitempty"`
 }
 
 // PathResult contains all paths found between two nodes.

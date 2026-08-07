@@ -23,6 +23,12 @@ type DepNode struct {
 	ResolutionAliasKind string         `json:"resolution_alias_kind,omitempty"`
 	ResolutionAlias     string         `json:"resolution_alias,omitempty"`
 	AmbiguousCandidates []AmbiguousRef `json:"ambiguous_candidates,omitempty"`
+	// Package identity — set by pro's package-stitching index when a node
+	// was matched (or synthesized) via a package-manager identity rather
+	// than a plain node lookup.
+	PackageIdentity   string  `json:"package_identity,omitempty"` // "explicit"|"evidence_inferred"
+	PackageConfidence float64 `json:"package_confidence,omitempty"`
+	SourceEvidenceID  int64   `json:"source_evidence_id,omitempty"`
 }
 
 // Stats holds aggregate counts for a domain.
