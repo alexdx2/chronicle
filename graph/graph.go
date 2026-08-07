@@ -42,6 +42,14 @@ type Graph struct {
 	// nodes in the post-pass if the target is still external after merging.
 	pendingExtEndpoints []pendingExtEndpoint
 
+	// domainOwnHosts is computed once at the start of ResolveExtractions
+	// (before any fact is processed) from the domain's manifest-derived
+	// "infra" and "service" nodes — the hosts the domain considers its own
+	// network. isExternalHost consults it to decide whether an http_call
+	// target is a same-domain peer or a genuine third-party boundary.
+	// See isExternalHost for the full classification rule.
+	domainOwnHosts map[string]bool
+
 	// evidenceErr records the first evidence-write failure on a void path
 	// (ensureNodeID → ensureNode) during ResolveExtractions. Evidence writes
 	// journal events; silently dropping a failure inside a tx that then

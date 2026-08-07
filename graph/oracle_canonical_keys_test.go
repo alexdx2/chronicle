@@ -39,15 +39,21 @@ func TestNormalizePascalCase_UpperSnakeSurvives(t *testing.T) {
 func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 	g, s, revID := setupTestGraph(t)
 	// Every fact family that mints a key of its own shape must be here, or the
-	// oracle certifies only the families it happens to cover: http_call mints
-	// service:external_system from a dotted host, declares_service mints
-	// service:service from a dotted/Pascal declared name (.csproj, package.json).
+	// oracle certifies only the families it happens to cover: http_call to a
+	// dotted host mints service:external_system (Task 5: a real third-party
+	// FQDN never materializes a domain-internal contract:endpoint node — see
+	// oracle_external_urls_test.go); http_call to a bare/undeclared
+	// internal-shaped host still mints service:external_system AND its
+	// post-pass contract:endpoint (cross-repo federation candidate);
+	// declares_service mints service:service from a dotted/Pascal declared
+	// name (.csproj, package.json).
 	facts := `[
 		{"kind":"endpoint","method":"GET","target":"/invoices/[invoiceId]/lines"},
 		{"kind":"injects","to":"SESSION_COOKIE_STORE"},
 		{"kind":"injects","to":"S3Client"},
 		{"kind":"import","symbols":["X"],"to":"@okeep/ui/button"},
 		{"kind":"http_call","method":"POST","target":"https://hooks.example.com/battles"},
+		{"kind":"http_call","method":"POST","target":"http://battle-svc/battles"},
 		{"kind":"declares_service","to":"Spectators.Api"},
 		{"kind":"declares_service","to":"ScoreboardApi"}
 	]`
@@ -79,7 +85,10 @@ func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 		"code:provider:testapp:s3-client",
 		"code:provider:testapp:@okeep/ui",
 		"service:external_system:testapp:hooks-example-com",
-		// The http_call post-pass materializes the external endpoint too.
+		// Bare/undeclared internal-shaped host (no dot) — the http_call
+		// post-pass still materializes its endpoint (Task 5: isExternalHost
+		// only routes dotted, unmatched hosts to the external-only path).
+		"service:external_system:testapp:battle-svc",
 		"contract:endpoint:testapp:post:/battles",
 		"service:service:testapp:spectators-api",
 		"service:service:testapp:scoreboard-api",

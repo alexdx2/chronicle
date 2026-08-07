@@ -156,10 +156,15 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
 			host = parts[3]
 		}
 
-		// Find evidence to get original URL
+		// Find evidence to get original URL and method. The http_call handler
+		// (resolveOneFact) already writes the fact's method into the same
+		// evidence assertion JSON as "method" — that's the simplest honest
+		// source (no edge-metadata read-modify-write needed): read it back
+		// here instead of hardcoding "GET". Default to "GET" only when no
+		// evidence carried a method at all (e.g. an older/degraded fact).
 		evidence, _ := g.store.ListEvidenceByEdge(e.EdgeID)
 		targetURL := ""
-		method := "GET"
+		method := ""
 		for _, ev := range evidence {
 			var assertion map[string]any
 			if json.Unmarshal([]byte(ev.Assertion), &assertion) == nil {
@@ -170,7 +175,19 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
 				} else if sub, ok := assertion["substring"].(string); ok {
 					targetURL = sub
 				}
+				if m, ok := assertion["method"].(string); ok && m != "" {
+					method = m
+				}
 			}
+		}
+		if method == "" {
+			method = "GET"
+		}
+		// calls_service noise: an unresolved service-locator string like
+		// "SupportOutbox" has no URL shape at all (no scheme, no slash, no
+		// dot) — it's not an HTTP call and doesn't belong in HTTP reconcile.
+		if !looksURLShaped(targetURL) {
+			continue
 		}
 		path := extractPathFromURL(targetURL)
 
@@ -348,6 +365,11 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	allScanned, _ := g.store.ListExtractions(revisionID, domainKey)
 	g.scanFileIndex = buildScanFileIndex(allScanned)
 	defer func() { g.scanFileIndex = scanFileIndex{} }()
+
+	// Snapshot the domain's own hosts (manifest infra + declared services)
+	// once, before any http_call fact is classified — see isExternalHost.
+	g.domainOwnHosts = g.ownHostsForDomain(domainKey)
+	defer func() { g.domainOwnHosts = nil }()
 
 	// Phase 2: Create nodes and edges from facts
 	type pendingParentFact struct {
@@ -706,6 +728,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if strings.HasPrefix(cleanCallTarget(fact.Target), "grpc") {
 			callMethod = "GRPC"
 		}
+		// Host-aware classification (Task 5): a genuine third-party host
+		// (dotted FQDN matching nothing in the domain's own network) never
+		// gets to pretend it's a domain-internal contract — it stays an
+		// external_system boundary with no endpoint materialization. See
+		// isExternalHost for the full rule.
+		external := isExternalHost(g.domainOwnHosts, fact.Target)
 
 		// Check if hostname matches a known service via DNS alias
 		var toNodeKey string
@@ -725,8 +753,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
 			// Remember the endpoint reference: if the host is still external
 			// after the merge pass, the post-pass materializes the endpoint
-			// as a boundary node so the contract path isn't lost.
-			if p := extractPathFromURL(fact.Target); p != "" {
+			// as a boundary node so the contract path isn't lost. Only for
+			// internal-shaped hosts — a real third party's path (Telegram's
+			// "/bot<token>/sendMessage") is not this domain's contract.
+			if p := extractPathFromURL(fact.Target); p != "" && !external {
 				g.pendingExtEndpoints = append(g.pendingExtEndpoints, pendingExtEndpoint{
 					FromNodeKey: fromNodeKey, FromNodeID: fromID,
 					ToNodeKey: toNodeKey, Method: callMethod, Path: p,
@@ -772,8 +802,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		counts.evidence++
 
-		// Also create CALLS_ENDPOINT edge if we can extract a path from the URL
-		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" {
+		// Also create CALLS_ENDPOINT edge if we can extract a path from the URL —
+		// but never for a genuine external host: matching a third-party call's
+		// path onto a domain-internal endpoint node would misrepresent it as
+		// a local contract (and would also hide it from FindUnmatchedHTTPCalls
+		// via hasEndpoint, silently dropping it from HTTP reconcile).
+		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" && !external {
 			epNodeKey, _ := normalizeEndpointKey(domainKey, callMethod, endpointPath)
 			// Only create edge if the endpoint node already exists (was exposed by another file)
 			if epID, err2 := g.store.GetNodeIDByKey(epNodeKey); err2 == nil {
@@ -3497,6 +3531,18 @@ func extractPathFromURL(url string) string {
 	return ""
 }
 
+// looksURLShaped reports whether s carries any of the shape markers of a URL
+// or path — a scheme, a slash, or a dot. FindUnmatchedHTTPCalls uses it to
+// drop calls_service rows whose target is an unresolved service-locator
+// string (e.g. "SupportOutbox") rather than an actual HTTP call: such a
+// string has none of these markers, so it isn't URL-shaped at all.
+func looksURLShaped(s string) bool {
+	if s == "" {
+		return false
+	}
+	return strings.Contains(s, "://") || strings.Contains(s, "/") || strings.Contains(s, ".")
+}
+
 // joinRoutePath joins a controller prefix and a route segment into a normalized path.
 // Strips surrounding slashes from each part, then reassembles with a leading slash.
 func joinRoutePath(prefix, route string) string {
@@ -3617,6 +3663,106 @@ func envVarServiceName(host string) (string, bool) {
 		return strings.ToLower(strings.Join(segs, "-")), true
 	}
 	return "", false
+}
+
+// ownHostsForDomain builds the set of hostnames the domain considers its own
+// network: the host portion of every manifest "infrastructure" address, plus
+// every declared "service" name — both already materialized as graph nodes
+// during discover (chronicle.domain.yaml → infra:*/service:service:* nodes),
+// so no manifest object needs to be threaded into the resolver. isExternalHost
+// consults this set to tell a same-domain peer from a genuine third party.
+func (g *Graph) ownHostsForDomain(domainKey string) map[string]bool {
+	hosts := map[string]bool{}
+	addHost := func(h string) {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h != "" {
+			hosts[h] = true
+			hosts[flattenName(h)] = true
+		}
+	}
+
+	services, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "service"})
+	for _, s := range services {
+		addHost(s.Name)
+	}
+
+	infras, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: "infra"})
+	for _, n := range infras {
+		addHost(n.Name)
+		// node key shape: "infra:{type}:{address-or-name}" (InfraEntry.InfraNodeKey) —
+		// pull the address's host the same way an http_call target is parsed.
+		parts := strings.SplitN(n.NodeKey, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		addr := parts[2]
+		for _, prefix := range []string{"https://", "http://", "grpc://", "grpcs://"} {
+			addr = strings.TrimPrefix(addr, prefix)
+		}
+		if idx := strings.Index(addr, "/"); idx >= 0 {
+			addr = addr[:idx]
+		}
+		if idx := strings.Index(addr, ":"); idx > 0 {
+			addr = addr[:idx]
+		}
+		addHost(addr)
+	}
+	return hosts
+}
+
+// isExternalHost decides whether an http_call fact's target points outside
+// the domain's own network — a genuine third party that must stay an
+// external_system boundary — or is internal-shaped and eligible for the
+// existing endpoint-materialization / CALLS_ENDPOINT matching path.
+//
+// The rule (documented per the Task 5 brief):
+//   - No scheme (a relative URL like "/jerry/status", or a bare template with
+//     no host) → internal: it targets the calling service itself.
+//   - The resolved host — after stripping scheme/port and, for a template
+//     reference like "${TOM_API_URL}", resolving it via envVarServiceName —
+//     matches one of ownHosts (a declared service name or a manifest infra
+//     address) → internal.
+//   - Otherwise, a host containing a dot (a real DNS FQDN — api.telegram.org,
+//     comms.twilio.com) that matched nothing internal → EXTERNAL. Real
+//     third-party APIs are almost always addressed by a multi-label public
+//     domain; err on the side of external here per the brief, even though a
+//     service that calls its own public FQDN would also be misclassified —
+//     see the Task 5 report's self-review for that case and its mitigation
+//     (declare the host in chronicle.domain.yaml infrastructure/services).
+//   - Otherwise (a bare short hostname with no dot, unmatched — the classic
+//     docker-compose/k8s in-cluster DNS shape) → internal-shaped: treated as
+//     an undeclared same-domain peer / cross-repo federation candidate, same
+//     as before this change.
+func isExternalHost(ownHosts map[string]bool, target string) bool {
+	clean := cleanCallTarget(target)
+	hasScheme := false
+	for _, prefix := range []string{"https://", "http://", "grpc://", "grpcs://"} {
+		if strings.HasPrefix(clean, prefix) {
+			hasScheme = true
+			clean = strings.TrimPrefix(clean, prefix)
+			break
+		}
+	}
+	if !hasScheme {
+		return false // relative URL / unwrapped template — same service
+	}
+
+	host := clean
+	if idx := strings.Index(host, "/"); idx >= 0 {
+		host = host[:idx]
+	}
+	if idx := strings.Index(host, ":"); idx > 0 && !strings.Contains(host[idx:], "}") {
+		host = host[:idx]
+	}
+
+	name := strings.ToLower(host)
+	if resolved, ok := envVarServiceName(host); ok {
+		name = strings.ToLower(resolved)
+	}
+	if ownHosts[name] || ownHosts[flattenName(name)] {
+		return false
+	}
+	return strings.Contains(host, ".")
 }
 
 // buildDependencyAssertion picks the right assertion kind based on file extension.
