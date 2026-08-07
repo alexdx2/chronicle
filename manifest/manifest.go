@@ -3,7 +3,7 @@ package manifest
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -247,12 +247,12 @@ func domainMatchesFile(d DomainEntry, filePath string) bool {
 		return false
 	}
 	for _, pattern := range d.Scan.Exclude {
-		if matchGlob(filePath, pattern) {
+		if MatchGlob(filePath, pattern) {
 			return false
 		}
 	}
 	for _, pattern := range d.Scan.Include {
-		if matchGlob(filePath, pattern) {
+		if MatchGlob(filePath, pattern) {
 			return true
 		}
 	}
@@ -299,41 +299,54 @@ func (m *Manifest) MergedScanConfig() ScanConfig {
 	return merged
 }
 
-// matchGlob matches a file path against a glob pattern with ** support.
-// Copied from graph/discover.go to avoid circular imports.
-func matchGlob(filePath, pattern string) bool {
-	if strings.Contains(pattern, "**") {
-		parts := strings.SplitN(pattern, "**", 2)
-		prefix := strings.TrimSuffix(parts[0], "/")
-		suffix := ""
-		if len(parts) > 1 {
-			suffix = strings.TrimPrefix(parts[1], "/")
-		}
+// MatchGlob matches a file path against a glob pattern with segment-wise
+// "**" semantics: the pattern is split on "/"; a "**" segment matches zero
+// or more whole path segments — at the start, in the middle, or at the end
+// of the pattern; every other segment matches exactly one path segment via
+// path.Match. There is no basename fallback: a pattern with no "**" and no
+// "/" (e.g. "config.json") matches only a root-level file of that exact
+// name, never the same basename at any depth — any-depth intent must be
+// spelled "**/config.json".
+//
+// The single sole exception was fixed here, not carved out: the old
+// implementation split on the FIRST "**" only and matched everything after
+// it against filepath.Base(filePath) — so a second "**" later in the
+// pattern (e.g. "**/__tests__/**") survived as literal, un-evaluated text
+// compared against a basename that can never contain "/". That made
+// "**/__tests__/**" structurally incapable of ever matching anything.
+func MatchGlob(filePath, pattern string) bool {
+	return matchSegs(strings.Split(filePath, "/"), strings.Split(pattern, "/"))
+}
 
-		if prefix == "" {
-			if suffix == "" {
-				return true
-			}
-			matched, _ := filepath.Match(suffix, filepath.Base(filePath))
-			return matched
-		}
+// matchSegs recursively matches path segments against pattern segments.
+// A "**" pattern segment consumes zero or more path segments (tried
+// greedily from zero upward, backtracking via recursion); any other
+// pattern segment must consume exactly one path segment and match it via
+// path.Match (which never crosses a "/" — each segment is already split).
+func matchSegs(pathSegs, patSegs []string) bool {
+	if len(patSegs) == 0 {
+		return len(pathSegs) == 0
+	}
 
-		if !strings.HasPrefix(filePath, prefix+"/") && filePath != prefix {
-			return false
-		}
-
-		if suffix == "" {
+	if patSegs[0] == "**" {
+		// "**" matches zero segments here...
+		if matchSegs(pathSegs, patSegs[1:]) {
 			return true
 		}
-
-		matched, _ := filepath.Match(suffix, filepath.Base(filePath))
-		return matched
+		// ...or one-or-more, by consuming a segment and retrying "**"
+		// against the rest of the path.
+		if len(pathSegs) == 0 {
+			return false
+		}
+		return matchSegs(pathSegs[1:], patSegs)
 	}
 
-	matched, _ := filepath.Match(pattern, filePath)
-	if matched {
-		return true
+	if len(pathSegs) == 0 {
+		return false
 	}
-	matched, _ = filepath.Match(pattern, filepath.Base(filePath))
-	return matched
+	matched, _ := path.Match(patSegs[0], pathSegs[0])
+	if !matched {
+		return false
+	}
+	return matchSegs(pathSegs[1:], patSegs[1:])
 }

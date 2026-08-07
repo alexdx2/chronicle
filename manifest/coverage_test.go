@@ -112,8 +112,8 @@ func TestMatchGlob(t *testing.T) {
 		{"a/b.ts", "a/*.ts", true},
 	}
 	for _, c := range cases {
-		if got := matchGlob(c.file, c.pat); got != c.want {
-			t.Errorf("matchGlob(%q, %q)=%v want %v", c.file, c.pat, got, c.want)
+		if got := MatchGlob(c.file, c.pat); got != c.want {
+			t.Errorf("MatchGlob(%q, %q)=%v want %v", c.file, c.pat, got, c.want)
 		}
 	}
 }

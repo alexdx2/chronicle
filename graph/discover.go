@@ -97,7 +97,7 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 		var scoped []string
 		for _, f := range filtered {
 			for _, pattern := range opts.Scope {
-				if matchGlob(f, pattern) {
+				if manifest.MatchGlob(f, pattern) {
 					scoped = append(scoped, f)
 					break
 				}
@@ -316,7 +316,7 @@ var alwaysExclude = []string{
 func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
 	// Always-exclude patterns (safety net)
 	for _, pattern := range alwaysExclude {
-		if matchGlob(filePath, pattern) {
+		if manifest.MatchGlob(filePath, pattern) {
 			return false
 		}
 	}
@@ -327,7 +327,7 @@ func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
 
 	// Check excludes first
 	for _, pattern := range cfg.Exclude {
-		if matchGlob(filePath, pattern) {
+		if manifest.MatchGlob(filePath, pattern) {
 			return false
 		}
 	}
@@ -339,60 +339,11 @@ func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
 
 	// Must match at least one include
 	for _, pattern := range cfg.Include {
-		if matchGlob(filePath, pattern) {
+		if manifest.MatchGlob(filePath, pattern) {
 			return true
 		}
 	}
 	return false
-}
-
-// matchGlob matches a file path against a glob pattern with ** support.
-// "api/src/**/*.ts" matches "api/src/services/order.service.ts"
-// "**/package.json" matches "api/package.json" and "packages/x/package.json"
-// "docker-compose*.yml" matches "docker-compose.yml" and "docker-compose.dev.yml"
-func matchGlob(filePath, pattern string) bool {
-	// Split pattern on ** to get prefix and suffix
-	if strings.Contains(pattern, "**") {
-		parts := strings.SplitN(pattern, "**", 2)
-		prefix := strings.TrimSuffix(parts[0], "/")
-		suffix := ""
-		if len(parts) > 1 {
-			suffix = strings.TrimPrefix(parts[1], "/")
-		}
-
-		// ** at start means "anywhere in path"
-		if prefix == "" {
-			if suffix == "" {
-				return true
-			}
-			// Match suffix against filename
-			matched, _ := filepath.Match(suffix, filepath.Base(filePath))
-			return matched
-		}
-
-		// Prefix must match start of path
-		if !strings.HasPrefix(filePath, prefix+"/") && filePath != prefix {
-			return false
-		}
-
-		// No suffix means "everything under prefix"
-		if suffix == "" {
-			return true
-		}
-
-		// Suffix: match against filename (most common: *.ts, *.json)
-		matched, _ := filepath.Match(suffix, filepath.Base(filePath))
-		return matched
-	}
-
-	// No ** — try exact filepath.Match
-	matched, _ := filepath.Match(pattern, filePath)
-	if matched {
-		return true
-	}
-	// Also try against just the filename for patterns like "Dockerfile"
-	matched, _ = filepath.Match(pattern, filepath.Base(filePath))
-	return matched
 }
 
 // registryValidInfraType maps common manifest spellings onto registered infra
