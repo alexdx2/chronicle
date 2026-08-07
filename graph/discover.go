@@ -48,6 +48,24 @@ type DiscoverResult struct {
 	ScanConfig   map[string]any    `json:"scan_config"`
 }
 
+// ErrNoScanConfig is returned by DiscoverFilesOpts when the resolved scan
+// config has neither include nor exclude patterns and the discovered file
+// count exceeds the safety cap (200). SQ-Contract 4: this refusal used to be
+// decided by the MCP handler AFTER DiscoverFilesOpts had already written
+// obligations, infra nodes, service nodes, and evidence — an invalid/absent
+// config left those writes orphaned (only chronicle_reset_db could clear
+// them). The decision moves here, before any write, using the same
+// ScanConfigFor(domainKey)-with-fallback config the discovery loop itself
+// resolved — so CLI and MCP callers both get atomicity, and there is no
+// second, disagreeing MergedScanConfig computed downstream.
+type ErrNoScanConfig struct {
+	TotalFiles int
+}
+
+func (e *ErrNoScanConfig) Error() string {
+	return fmt.Sprintf("no scan config found and %d files discovered (limit 200) — call chronicle_save_manifest first to define scan.include/exclude patterns", e.TotalFiles)
+}
+
 // DiscoverOpts controls optional parameters for DiscoverFilesOpts.
 type DiscoverOpts struct {
 	// VotesNeeded is the number of independent extraction passes per file (default 1).
@@ -145,113 +163,147 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 		}
 	}
 
+	// SQ-Contract 4: validate fully, then write once. This gate used to run
+	// in the MCP handler AFTER this function had already written obligations,
+	// infra, and service nodes — see ErrNoScanConfig's doc comment. It runs
+	// here now, before any write, against the exact scanCfg the discovery
+	// loop above already resolved.
+	if scanCfg == nil || (len(scanCfg.Include) == 0 && len(scanCfg.Exclude) == 0) {
+		if result.TotalFiles > 200 {
+			return nil, &ErrNoScanConfig{TotalFiles: result.TotalFiles}
+		}
+	}
+
 	// Resolve votes_needed (default 1)
 	vn := opts.VotesNeeded
 	if vn < 1 {
 		vn = 1
 	}
 
-	// Create scan_file obligations for each discovered file — per-file domain from manifest
-	// When votes_needed > 1, create N obligations per file with vote metadata
-	for _, f := range filtered {
-		if revisionID > 0 {
-			domain := domainKey
-			if m != nil {
-				domain = m.DomainForFile(f)
+	if revisionID > 0 {
+		if err := g.store.WithTx(func(tx *store.Store) error {
+			g2 := *g
+			g2.store = tx
+
+			// Idempotent re-run: a second discover_files call for the same
+			// revision replaces its obligations instead of appending
+			// duplicates (scan_obligations has no UNIQUE constraint, and the
+			// original insert errors were discarded, so re-runs piled up
+			// rows silently).
+			if _, err := tx.DeleteObligationsForRevision(revisionID); err != nil {
+				return fmt.Errorf("clear prior obligations for revision %d: %w", revisionID, err)
 			}
-			if vn <= 1 {
-				// votes=1: single obligation, no vote metadata (existing behavior)
-				g.store.CreateObligation(revisionID, domain, "scan_file", f, "git-tracked, matches scan config")
-			} else {
-				// votes>1: create N obligations per file with vote metadata
-				hash := sha256.Sum256([]byte(f))
-				shortHash := hex.EncodeToString(hash[:6]) // 12 hex chars
-				voteGroup := fmt.Sprintf("%d:%s:%s", revisionID, domain, shortHash)
-				for i := 1; i <= vn; i++ {
-					g.store.CreateObligationWithVote(revisionID, domain, "scan_file", f, "git-tracked, matches scan config", voteGroup, i)
+
+			// Create scan_file obligations for each discovered file —
+			// per-file domain from manifest. When votes_needed > 1, create N
+			// obligations per file with vote metadata.
+			for _, f := range filtered {
+				domain := domainKey
+				if m != nil {
+					domain = m.DomainForFile(f)
+				}
+				if vn <= 1 {
+					// votes=1: single obligation, no vote metadata (existing behavior)
+					if _, err := tx.CreateObligation(revisionID, domain, "scan_file", f, "git-tracked, matches scan config"); err != nil {
+						return fmt.Errorf("create obligation for %s: %w", f, err)
+					}
+				} else {
+					// votes>1: create N obligations per file with vote metadata
+					hash := sha256.Sum256([]byte(f))
+					shortHash := hex.EncodeToString(hash[:6]) // 12 hex chars
+					voteGroup := fmt.Sprintf("%d:%s:%s", revisionID, domain, shortHash)
+					for i := 1; i <= vn; i++ {
+						if _, err := tx.CreateObligationWithVote(revisionID, domain, "scan_file", f, "git-tracked, matches scan config", voteGroup, i); err != nil {
+							return fmt.Errorf("create obligation (vote %d) for %s: %w", i, f, err)
+						}
+					}
 				}
 			}
-		}
-	}
 
-	// Create infrastructure nodes from manifest. They belong to the SCAN's
-	// domain — consulting m.Domains[0] used to stamp the domain DISPLAY name
-	// ("Tom and Jerry") as domain_key when the manifest key was absent.
-	if m != nil && revisionID > 0 {
-		for _, infra := range m.Infrastructure {
-			// SQ-Contract 3: one spelling per key. These raw store.UpsertNode
-			// calls bypass ensureNodeID, so they must canonicalize here or the
-			// manifest becomes a second writer with its own spelling. The
-			// key's type segment and the node_type column must agree, so
-			// both come from the same registryValidInfraType mapping.
-			validType := registryValidInfraType(g.reg, infra.Type)
-			keyEntry := infra
-			keyEntry.Type = validType
-			nodeKey := canonicalNodeKey(keyEntry.InfraNodeKey(domainKey))
-			// Infra nodes must be born with the scan's revision on both
-			// first/last-seen — left at the zero value, last_seen_revision_id
-			// (0) is less than every real revision, so the FIRST
-			// chronicle_stale_mark call after any scan marked every manifest
-			// infra node stale forever, regardless of whether it was still
-			// declared.
-			g.store.UpsertNode(store.NodeRow{
-				NodeKey:  nodeKey,
-				Layer:    "infra",
-				NodeType: validType,
-				// QualifiedName carries the RAW address/name verbatim (pre
-				// dash-folding) — ownHostsForDomain reads it instead of
-				// reverse-parsing NodeKey, whose name segment is
-				// canonicalized (port colon -> dash, dots/case folded by
-				// validate.NormalizeNodeKey) and can no longer be turned
-				// back into a bare hostname for isExternalHost matching.
-				QualifiedName:       infra.AddressOrName(),
-				DomainKey:           domainKey,
-				Name:                infra.Name,
-				Status:              "active",
-				FirstSeenRevisionID: revisionID,
-				LastSeenRevisionID:  revisionID,
-			})
-			if err := g.addCreationEvidence(nodeKey, revisionID, infra.Name,
-				filepath.Join(paths.ConfiguredDir(), "chronicle.domain.yaml"), "chronicle:manifest", "manifest_key"); err != nil {
-				return nil, err
+			if m == nil {
+				return nil
 			}
-		}
-	}
 
-	// Create service nodes from manifest — ONLY explicitly declared ones.
-	// Inferred services (from include-glob path segments) are not evidence:
-	// real service nodes come from declares_service facts (package.json,
-	// .csproj) during resolve.
-	if m != nil && revisionID > 0 {
-		services := m.Services
-		for _, svc := range services {
-			svcDomain := domainKey
-			if len(m.Domains) > 0 && m.Domains[0].Key != "" {
-				svcDomain = m.Domains[0].Key
+			// Create infrastructure nodes from manifest. They belong to the
+			// SCAN's domain — consulting m.Domains[0] used to stamp the
+			// domain DISPLAY name ("Tom and Jerry") as domain_key when the
+			// manifest key was absent.
+			for _, infra := range m.Infrastructure {
+				// SQ-Contract 3: one spelling per key. These raw store.UpsertNode
+				// calls bypass ensureNodeID, so they must canonicalize here or the
+				// manifest becomes a second writer with its own spelling. The
+				// key's type segment and the node_type column must agree, so
+				// both come from the same registryValidInfraType mapping.
+				validType := registryValidInfraType(g.reg, infra.Type)
+				keyEntry := infra
+				keyEntry.Type = validType
+				nodeKey := canonicalNodeKey(keyEntry.InfraNodeKey(domainKey))
+				// Infra nodes must be born with the scan's revision on both
+				// first/last-seen — left at the zero value, last_seen_revision_id
+				// (0) is less than every real revision, so the FIRST
+				// chronicle_stale_mark call after any scan marked every manifest
+				// infra node stale forever, regardless of whether it was still
+				// declared.
+				tx.UpsertNode(store.NodeRow{
+					NodeKey:  nodeKey,
+					Layer:    "infra",
+					NodeType: validType,
+					// QualifiedName carries the RAW address/name verbatim (pre
+					// dash-folding) — ownHostsForDomain reads it instead of
+					// reverse-parsing NodeKey, whose name segment is
+					// canonicalized (port colon -> dash, dots/case folded by
+					// validate.NormalizeNodeKey) and can no longer be turned
+					// back into a bare hostname for isExternalHost matching.
+					QualifiedName:       infra.AddressOrName(),
+					DomainKey:           domainKey,
+					Name:                infra.Name,
+					Status:              "active",
+					FirstSeenRevisionID: revisionID,
+					LastSeenRevisionID:  revisionID,
+				})
+				if err := g2.addCreationEvidence(nodeKey, revisionID, infra.Name,
+					filepath.Join(paths.ConfiguredDir(), "chronicle.domain.yaml"), "chronicle:manifest", "manifest_key"); err != nil {
+					return err
+				}
 			}
-			// SQ-Contract 3: the resolver's calls_service/declares_service
-			// lookups canonicalize their key (resolve_extractions.go), so a
-			// manifest key spelled "tom.api" or "TomApi" must be stored under
-			// the same canonical "tom-api" — otherwise the lookup misses and
-			// resolve mints a twin for a service the manifest already declared.
-			nodeKey := canonicalNodeKey("service:service:" + svcDomain + ":" + svc.Key)
-			g.store.UpsertNode(store.NodeRow{
-				NodeKey:            nodeKey,
-				Layer:              "service",
-				NodeType:           "service",
-				DomainKey:          svcDomain,
-				Name:               svc.Key,
-				Status:             "active",
-				LastSeenRevisionID: revisionID,
-				Confidence:         1.0,
-				Freshness:          1.0,
-				TrustScore:         1.0,
-				Metadata:           "{}",
-			})
-			if err := g.addCreationEvidence(nodeKey, revisionID, svc.Key,
-				filepath.Join(paths.ConfiguredDir(), "chronicle.domain.yaml"), "chronicle:manifest", "manifest_key"); err != nil {
-				return nil, err
+
+			// Create service nodes from manifest — ONLY explicitly declared ones.
+			// Inferred services (from include-glob path segments) are not evidence:
+			// real service nodes come from declares_service facts (package.json,
+			// .csproj) during resolve.
+			for _, svc := range m.Services {
+				svcDomain := domainKey
+				if len(m.Domains) > 0 && m.Domains[0].Key != "" {
+					svcDomain = m.Domains[0].Key
+				}
+				// SQ-Contract 3: the resolver's calls_service/declares_service
+				// lookups canonicalize their key (resolve_extractions.go), so a
+				// manifest key spelled "tom.api" or "TomApi" must be stored under
+				// the same canonical "tom-api" — otherwise the lookup misses and
+				// resolve mints a twin for a service the manifest already declared.
+				nodeKey := canonicalNodeKey("service:service:" + svcDomain + ":" + svc.Key)
+				tx.UpsertNode(store.NodeRow{
+					NodeKey:            nodeKey,
+					Layer:              "service",
+					NodeType:           "service",
+					DomainKey:          svcDomain,
+					Name:               svc.Key,
+					Status:             "active",
+					LastSeenRevisionID: revisionID,
+					Confidence:         1.0,
+					Freshness:          1.0,
+					TrustScore:         1.0,
+					Metadata:           "{}",
+				})
+				if err := g2.addCreationEvidence(nodeKey, revisionID, svc.Key,
+					filepath.Join(paths.ConfiguredDir(), "chronicle.domain.yaml"), "chronicle:manifest", "manifest_key"); err != nil {
+					return err
+				}
 			}
+
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	}
 

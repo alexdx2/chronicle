@@ -40,6 +40,19 @@ func (s *Store) CreateObligation(revisionID int64, domainKey, obligationType, ta
 	return res.LastInsertId()
 }
 
+// DeleteObligationsForRevision removes every scan obligation for a revision.
+// Discovery calls this before re-creating obligations so a second
+// discover_files call on the same revision replaces the set instead of
+// appending duplicates (scan_obligations has no UNIQUE constraint — without
+// this, insert errors were silently discarded and re-runs piled up rows).
+func (s *Store) DeleteObligationsForRevision(revisionID int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM scan_obligations WHERE revision_id = ?`, revisionID)
+	if err != nil {
+		return 0, fmt.Errorf("DeleteObligationsForRevision: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // CreateObligationWithVote inserts a new scan obligation with vote group and index.
 func (s *Store) CreateObligationWithVote(revisionID int64, domainKey, obligationType, targetKey, reason, voteGroup string, voteIndex int) (int64, error) {
 	res, err := s.db.Exec(`

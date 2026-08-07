@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -707,6 +708,18 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 		result, err := g.DiscoverFilesOpts(rootDir, domain, revisionID, m, graph.DiscoverOpts{VotesNeeded: votesNeeded, Scope: scope})
 		if err != nil {
+			// SQ-Contract 4: the >200-files-no-config refusal now lives in
+			// DiscoverFilesOpts (config is known there, and it runs BEFORE
+			// any write — CLI and MCP both get atomicity). The handler keeps
+			// shaping the same error JSON it always returned.
+			var noCfg *graph.ErrNoScanConfig
+			if errors.As(err, &noCfg) {
+				return jsonResult(map[string]any{
+					"error":       "No scan config found. Call chronicle_save_manifest first to define scan.include/exclude patterns.",
+					"total_files": noCfg.TotalFiles,
+					"hint":        "Use chronicle_file_groups to see directory structure, then save a manifest with scan.include targeting architecture files only.",
+				}), nil
+			}
 			return errorResult(err), nil
 		}
 
@@ -716,14 +729,6 @@ func discoverFilesHandler(g *graph.Graph) server.ToolHandlerFunc {
 			scanCfg = &merged
 		}
 		if scanCfg == nil || (len(scanCfg.Include) == 0 && len(scanCfg.Exclude) == 0) {
-			// Block: don't scan without a manifest — too many files, wastes tokens
-			if result.TotalFiles > 200 {
-				return jsonResult(map[string]any{
-					"error":       "No scan config found. Call chronicle_save_manifest first to define scan.include/exclude patterns.",
-					"total_files": result.TotalFiles,
-					"hint":        "Use chronicle_file_groups to see directory structure, then save a manifest with scan.include targeting architecture files only.",
-				}), nil
-			}
 			result.ScanConfig = map[string]any{
 				"warning": "No scan.include/exclude in chronicle.domain.yaml. ALL git-tracked files returned. Consider adding scan config to manifest.",
 			}
