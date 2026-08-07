@@ -56,9 +56,9 @@ func (v *TSImportVerifier) Verify(fileContent []byte, assertion json.RawMessage,
 	defer cursor.Close()
 
 	type importMatch struct {
-		line     int
-		endLine  int
-		module   string
+		line       int
+		endLine    int
+		module     string
 		importNode *sitter.Node
 	}
 
@@ -89,7 +89,7 @@ func (v *TSImportVerifier) Verify(fileContent []byte, assertion json.RawMessage,
 	// Find imports matching our module
 	var matchingImports []importMatch
 	for _, im := range imports {
-		if im.module == a.Module {
+		if im.module == a.Module || strings.HasPrefix(im.module, a.Module+"/") {
 			matchingImports = append(matchingImports, im)
 		}
 	}

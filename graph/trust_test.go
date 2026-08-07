@@ -348,6 +348,18 @@ func TestRejectionExclusion(t *testing.T) {
 	})
 }
 
+func TestPositiveConfidence_SkipsMissing(t *testing.T) {
+	rows := []store.EvidenceRow{{
+		EvidencePolarity:   "positive",
+		EvidenceStatus:     "valid",
+		VerificationStatus: "missing",
+		Confidence:         0.9,
+	}}
+	if got := PositiveConfidence(rows); got != 0 {
+		t.Fatalf("missing assertion must not add positive confidence; got %f", got)
+	}
+}
+
 func TestCorroborationCrossesLLMCap(t *testing.T) {
 	// Two LLM rows at 0.6 plus one AST row at 0.6:
 	// combined = 1 - (1-0.6)^3 = 0.936, structural tier present → capped at 0.85.

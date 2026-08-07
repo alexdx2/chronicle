@@ -149,7 +149,7 @@ func effectiveRowConfidence(e store.EvidenceRow) float64 {
 }
 
 // PositiveConfidence computes combined confidence from valid/revalidated positive evidence.
-// Rows whose verification_status is "rejected" do not count as positive evidence.
+// Rows whose verification_status is "rejected" or "missing" do not count as positive evidence.
 // Verified rows contribute at least verifiedConfidenceFloor (see effectiveRowConfidence).
 func PositiveConfidence(evidence []store.EvidenceRow) float64 {
 	var confidences []float64
@@ -160,7 +160,7 @@ func PositiveConfidence(evidence []store.EvidenceRow) float64 {
 		if e.EvidenceStatus != "valid" && e.EvidenceStatus != "revalidated" {
 			continue
 		}
-		if e.VerificationStatus == "rejected" {
+		if e.VerificationStatus == "rejected" || e.VerificationStatus == "missing" {
 			continue
 		}
 		confidences = append(confidences, effectiveRowConfidence(e))
