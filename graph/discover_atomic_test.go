@@ -224,3 +224,103 @@ func TestDiscoverFiles_ValidConfigWritesObligationsInfraServices(t *testing.T) {
 		t.Error("expected creation evidence for infra/service nodes")
 	}
 }
+
+// Review finding 1 (Critical): DeleteObligationsForRevision (pre-fix) deleted
+// EVERY obligation type for the revision, not just scan_file. Two other
+// obligation types are created against the SAME live revision_id by other
+// pipeline stages: verify_file (chronicle_invalidate_changed,
+// graph/invalidation.go) and trace_flow (phase-2 flow tracing,
+// graph/scan_workflow.go). Re-discovering the same revision (invalidate then
+// re-discover, or a mid-scan re-discover after phase 2) silently deleted
+// those unrelated obligations. Only scan_file obligations should be
+// replaced by a re-discovery; other types must survive untouched.
+func TestDiscoverFiles_ReDiscoveryOnlyReplacesScanFileObligations(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	tmpDir := gitFixtureRepo(t)
+
+	m := &manifest.Manifest{Domains: []manifest.DomainEntry{
+		{Name: "testapp", Scan: manifest.ScanConfig{Include: []string{"src/**"}}},
+	}}
+
+	if _, err := g.DiscoverFilesOpts(tmpDir, "testapp", revID, m, DiscoverOpts{}); err != nil {
+		t.Fatalf("first discover: %v", err)
+	}
+
+	// Obligations another pipeline stage created against this same revision,
+	// outside of discover_files entirely.
+	if _, err := s.CreateObligation(revID, "testapp", "verify_file", "src/a.ts", "stale evidence from changed files"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateObligation(revID, "testapp", "trace_flow", "src/a.ts", "trigger file — trace business flow"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-discovering the same revision must only replace scan_file
+	// obligations.
+	if _, err := g.DiscoverFilesOpts(tmpDir, "testapp", revID, m, DiscoverOpts{}); err != nil {
+		t.Fatalf("second discover: %v", err)
+	}
+
+	all, err := s.ListAllObligations(revID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byType := map[string]int{}
+	for _, o := range all {
+		byType[o.ObligationType]++
+	}
+	if byType["verify_file"] != 1 {
+		t.Errorf("verify_file obligations = %d, want 1 (must survive scan_file re-discovery)", byType["verify_file"])
+	}
+	if byType["trace_flow"] != 1 {
+		t.Errorf("trace_flow obligations = %d, want 1 (must survive scan_file re-discovery)", byType["trace_flow"])
+	}
+	if byType["scan_file"] == 0 {
+		t.Error("scan_file obligations = 0, want > 0 (re-discovery must still (re)create them)")
+	}
+}
+
+// Review finding 2 (Important): UpsertNode's error return was discarded
+// inside the new transaction. Concrete path: an infra/service entry whose
+// immutable fields (layer/node_type/domain_key) changed underneath a live
+// node key — UpsertNode's own conflict check (store/nodes.go) rejects the
+// write, but the old code ignored the error, then addCreationEvidence
+// attached evidence + a trust recompute to the WRONG (stale, pre-existing)
+// node, and the transaction still committed with DiscoverFilesOpts
+// returning nil error. UpsertNode errors must fail the tx, same as
+// CreateObligation already does.
+func TestDiscoverFiles_UpsertNodeConflictFailsTransaction(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	tmpDir := gitFixtureRepo(t)
+
+	m := &manifest.Manifest{
+		Domains:  []manifest.DomainEntry{{Name: "testapp", Scan: manifest.ScanConfig{Include: []string{"src/**"}}}},
+		Services: []manifest.ServiceEntry{{Key: "orders-api", Path: "src"}},
+	}
+
+	// Pre-create a node under the exact key discovery will try to upsert for
+	// the service entry above, but with a conflicting immutable field
+	// (layer) — the simplest deterministic conflict UpsertNode's own check
+	// allows (store/nodes.go: existingLayer != n.Layer -> conflict error).
+	conflictKey := canonicalNodeKey("service:service:testapp:orders-api")
+	if _, err := s.UpsertNode(store.NodeRow{
+		NodeKey:   conflictKey,
+		Layer:     "infra", // discovery's service write wants Layer "service" -> mismatch
+		NodeType:  "infrastructure",
+		DomainKey: "testapp",
+		Name:      "orders-api",
+		Status:    "active",
+	}); err != nil {
+		t.Fatalf("pre-create conflicting node: %v", err)
+	}
+
+	before := snapshotCounts(t, s)
+
+	if _, err := g.DiscoverFilesOpts(tmpDir, "testapp", revID, m, DiscoverOpts{}); err == nil {
+		t.Fatal("want error from UpsertNode conflict, got nil (partial write silently committed)")
+	}
+
+	if diff := diffCounts(before, snapshotCounts(t, s)); diff != "" {
+		t.Fatalf("DB changed despite UpsertNode conflict — tx should roll back entirely:\n%s", diff)
+	}
+}

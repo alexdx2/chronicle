@@ -40,15 +40,20 @@ func (s *Store) CreateObligation(revisionID int64, domainKey, obligationType, ta
 	return res.LastInsertId()
 }
 
-// DeleteObligationsForRevision removes every scan obligation for a revision.
-// Discovery calls this before re-creating obligations so a second
-// discover_files call on the same revision replaces the set instead of
-// appending duplicates (scan_obligations has no UNIQUE constraint — without
-// this, insert errors were silently discarded and re-runs piled up rows).
-func (s *Store) DeleteObligationsForRevision(revisionID int64) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM scan_obligations WHERE revision_id = ?`, revisionID)
+// DeleteScanFileObligationsForRevision removes only this revision's
+// scan_file obligations. Discovery calls this before re-creating scan_file
+// obligations so a second discover_files call on the same revision replaces
+// that set instead of appending duplicates (scan_obligations has no UNIQUE
+// constraint — without this, insert errors were silently discarded and
+// re-runs piled up rows). Scoped to obligation_type = 'scan_file' —
+// verify_file (chronicle_invalidate_changed) and trace_flow (phase-2 flow
+// tracing) obligations are created against the same revision_id by other
+// pipeline stages and must survive a re-discovery untouched; an
+// unscoped delete previously wiped those too.
+func (s *Store) DeleteScanFileObligationsForRevision(revisionID int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM scan_obligations WHERE revision_id = ? AND obligation_type = 'scan_file'`, revisionID)
 	if err != nil {
-		return 0, fmt.Errorf("DeleteObligationsForRevision: %w", err)
+		return 0, fmt.Errorf("DeleteScanFileObligationsForRevision: %w", err)
 	}
 	return res.RowsAffected()
 }

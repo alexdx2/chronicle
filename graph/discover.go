@@ -186,12 +186,15 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 			g2.store = tx
 
 			// Idempotent re-run: a second discover_files call for the same
-			// revision replaces its obligations instead of appending
-			// duplicates (scan_obligations has no UNIQUE constraint, and the
-			// original insert errors were discarded, so re-runs piled up
-			// rows silently).
-			if _, err := tx.DeleteObligationsForRevision(revisionID); err != nil {
-				return fmt.Errorf("clear prior obligations for revision %d: %w", revisionID, err)
+			// revision replaces its scan_file obligations instead of
+			// appending duplicates (scan_obligations has no UNIQUE
+			// constraint, and the original insert errors were discarded, so
+			// re-runs piled up rows silently). Scoped to obligation_type =
+			// 'scan_file' only — verify_file (chronicle_invalidate_changed)
+			// and trace_flow (phase-2 flow tracing) obligations live on the
+			// same revision_id and must not be deleted by a re-discovery.
+			if _, err := tx.DeleteScanFileObligationsForRevision(revisionID); err != nil {
+				return fmt.Errorf("clear prior scan_file obligations for revision %d: %w", revisionID, err)
 			}
 
 			// Create scan_file obligations for each discovered file —
@@ -244,7 +247,7 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 				// chronicle_stale_mark call after any scan marked every manifest
 				// infra node stale forever, regardless of whether it was still
 				// declared.
-				tx.UpsertNode(store.NodeRow{
+				if _, err := tx.UpsertNode(store.NodeRow{
 					NodeKey:  nodeKey,
 					Layer:    "infra",
 					NodeType: validType,
@@ -260,7 +263,9 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 					Status:              "active",
 					FirstSeenRevisionID: revisionID,
 					LastSeenRevisionID:  revisionID,
-				})
+				}); err != nil {
+					return fmt.Errorf("upsert infra node %s: %w", nodeKey, err)
+				}
 				if err := g2.addCreationEvidence(nodeKey, revisionID, infra.Name,
 					filepath.Join(paths.ConfiguredDir(), "chronicle.domain.yaml"), "chronicle:manifest", "manifest_key"); err != nil {
 					return err
@@ -282,7 +287,7 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 				// the same canonical "tom-api" — otherwise the lookup misses and
 				// resolve mints a twin for a service the manifest already declared.
 				nodeKey := canonicalNodeKey("service:service:" + svcDomain + ":" + svc.Key)
-				tx.UpsertNode(store.NodeRow{
+				if _, err := tx.UpsertNode(store.NodeRow{
 					NodeKey:            nodeKey,
 					Layer:              "service",
 					NodeType:           "service",
@@ -294,7 +299,9 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 					Freshness:          1.0,
 					TrustScore:         1.0,
 					Metadata:           "{}",
-				})
+				}); err != nil {
+					return fmt.Errorf("upsert service node %s: %w", nodeKey, err)
+				}
 				if err := g2.addCreationEvidence(nodeKey, revisionID, svc.Key,
 					filepath.Join(paths.ConfiguredDir(), "chronicle.domain.yaml"), "chronicle:manifest", "manifest_key"); err != nil {
 					return err
