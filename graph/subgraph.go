@@ -89,6 +89,12 @@ func (g *Graph) Subgraph(rootKey string, opts SubgraphOptions) (*SubgraphResult,
 					return nil, fmt.Errorf("Subgraph edges: %w", err)
 				}
 				for _, e := range edges {
+					// SQ-Contract 2 axis 2: subgraph admits declared
+					// dependencies (code+manifest) but excludes peer-only
+					// edges by default.
+					if !IsDeclaredDep(e) {
+						continue
+					}
 					cands = append(cands, cand{edge: e, next: e.ToNodeID})
 				}
 			}
@@ -98,6 +104,9 @@ func (g *Graph) Subgraph(rootKey string, opts SubgraphOptions) (*SubgraphResult,
 					return nil, fmt.Errorf("Subgraph edges: %w", err)
 				}
 				for _, e := range edges {
+					if !IsDeclaredDep(e) {
+						continue
+					}
 					cands = append(cands, cand{edge: e, next: e.FromNodeID})
 				}
 			}

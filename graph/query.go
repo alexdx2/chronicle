@@ -29,6 +29,9 @@ type DepNode struct {
 	PackageIdentity   string  `json:"package_identity,omitempty"` // "explicit"|"evidence_inferred"
 	PackageConfidence float64 `json:"package_confidence,omitempty"`
 	SourceEvidenceID  int64   `json:"source_evidence_id,omitempty"`
+	// DependencySource is the dependency_source of the edge that reached this
+	// node (SQ-Contract 2 axis 2). Empty for the start node itself.
+	DependencySource string `json:"dependency_source,omitempty"`
 }
 
 // Stats holds aggregate counts for a domain.
@@ -105,6 +108,12 @@ func (g *Graph) traverseDeps(nodeKey string, maxDepth int, derivationFilter []st
 				continue
 			}
 
+			// SQ-Contract 2 axis 2: deps/reverse_deps admit declared
+			// dependencies (code+manifest) but exclude peer-only edges.
+			if !IsDeclaredDep(edge) {
+				continue
+			}
+
 			var nextID int64
 			if reverse {
 				nextID = edge.FromNodeID
@@ -125,14 +134,15 @@ func (g *Graph) traverseDeps(nodeKey string, maxDepth int, derivationFilter []st
 
 			nextDepth := item.depth + 1
 			result = append(result, DepNode{
-				NodeKey:    node.NodeKey,
-				Name:       node.Name,
-				Layer:      node.Layer,
-				NodeType:   node.NodeType,
-				Depth:      nextDepth,
-				TrustScore: node.TrustScore,
-				Freshness:  node.Freshness,
-				Status:     node.Status,
+				NodeKey:          node.NodeKey,
+				Name:             node.Name,
+				Layer:            node.Layer,
+				NodeType:         node.NodeType,
+				Depth:            nextDepth,
+				TrustScore:       node.TrustScore,
+				Freshness:        node.Freshness,
+				Status:           node.Status,
+				DependencySource: edge.DependencySource,
 			})
 
 			queue = append(queue, queueItem{nodeID: nextID, depth: nextDepth})

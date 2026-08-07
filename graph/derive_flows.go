@@ -46,6 +46,7 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 	if err != nil {
 		return err
 	}
+	exposeEdges = filterRuntimeEdges(exposeEdges)
 
 	// Collect all active INJECTS edges.
 	injectEdges, err := g.store.ListEdges(store.EdgeFilter{
@@ -55,6 +56,7 @@ func (g *Graph) DeriveFlows(domainKey string, revisionID int64) error {
 	if err != nil {
 		return err
 	}
+	injectEdges = filterRuntimeEdges(injectEdges)
 
 	// Build a node-ID → node_key + layer lookup (code-layer nodes for injection closure).
 	// We need this because graph.UpsertEdge stores IDs but not keys in edge rows.

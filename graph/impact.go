@@ -150,6 +150,15 @@ func (g *Graph) QueryImpact(changedNodeKey string, opts ImpactOptions) (*ImpactR
 				continue
 			}
 
+			// SQ-Contract 2 axis 2: impact math is runtime-only — a
+			// manifest-declared (not code-evidenced) dependency is not proof
+			// the target is actually used, so it must not carry blast radius.
+			// (Structural/non-dependency edges like HAS_FIELD never set
+			// dependency_source, so this is a no-op for the field-mode hop.)
+			if !IsRuntimeDep(edge) {
+				continue
+			}
+
 			nextID := edge.FromNodeID
 			if visited[nextID] {
 				continue
@@ -290,6 +299,11 @@ func (g *Graph) collectAffectedSurface(changedNodeID int64, impacts []ImpactEntr
 		for _, e := range edges {
 			category, ok := surfaceEdgeTypes[e.EdgeType]
 			if !ok {
+				continue
+			}
+			// SQ-Contract 2 axis 2: affected surface is runtime-only, same
+			// rule as QueryImpact above.
+			if !IsRuntimeDep(e) {
 				continue
 			}
 			targetNode, err := g.store.GetNodeByID(e.ToNodeID)

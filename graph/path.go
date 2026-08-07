@@ -42,6 +42,10 @@ type PathEdge struct {
 	To         string `json:"to"`
 	EdgeType   string `json:"type"`
 	Derivation string `json:"derivation"`
+	// DependencySource is the edge's dependency_source (SQ-Contract 2 axis 2),
+	// e.g. "code" or "manifest". Empty for edges that never set it (defaults
+	// to code semantics — see IsRuntimeDep/IsDeclaredDep).
+	DependencySource string `json:"dependency_source,omitempty"`
 }
 
 // PathJump marks a repo or identity boundary crossed while walking a Path —
@@ -227,6 +231,12 @@ func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult,
 				continue
 			}
 
+			// SQ-Contract 2 axis 2: path admits declared dependencies
+			// (code+manifest) but excludes peer-only edges by default.
+			if !IsDeclaredDep(e) {
+				continue
+			}
+
 			// Skip cycles.
 			if cur.visited[neighborID] {
 				continue
@@ -254,10 +264,11 @@ func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult,
 			}
 
 			pe := PathEdge{
-				From:       edgeFrom,
-				To:         edgeTo,
-				EdgeType:   e.EdgeType,
-				Derivation: e.DerivationKind,
+				From:             edgeFrom,
+				To:               edgeTo,
+				EdgeType:         e.EdgeType,
+				Derivation:       e.DerivationKind,
+				DependencySource: e.DependencySource,
 			}
 
 			newVisited := make(map[int64]bool, len(cur.visited)+1)
