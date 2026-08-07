@@ -59,10 +59,20 @@ func (e InfraEntry) AddressOrName() string {
 // they stamp onto the node_type column, so key and column agree.
 //
 // A ':' inside the address or name (host:port, e.g. "kafka:9092") is
-// replaced with '-' in the name segment: NormalizeNodeKey splits on the
-// FIRST three colons only, so an unreplaced port would fold into this
-// segment's tail on the first parse but be indistinguishable from an
-// already-dashed key on the second — not a fixed point of the normalizer.
+// replaced with '-' in the name segment so the port colon doesn't fold into
+// the wrong segment when the key is later split on ':'.
+//
+// The raw string returned here is NOT guaranteed to be a fixed point of
+// validate.NormalizeNodeKey — only the port-colon fold above is applied. A
+// dotted address ("kafka-events.internal:9092" -> raw
+// "kafka-events.internal-9092" after the port fold) still has its dot
+// folded to a dash by NormalizeNodeKey's qualified-name pass, and an
+// uppercase type/name is still lowercased; normalizing the raw result a
+// second time changes it. Every caller MUST wrap the return value in
+// graph.CanonicalNodeKey (which calls validate.NormalizeNodeKey) before
+// storing or looking it up — the WRAPPED form, not this raw one, is the
+// actual fixed point SQ-Contract 3 requires. All current writers
+// (graph/discover.go, mcpserver's save_manifest handler) already do this.
 func (e InfraEntry) InfraNodeKey(domainKey string) string {
 	id := strings.ReplaceAll(e.AddressOrName(), ":", "-")
 	return "infra:" + e.Type + ":" + domainKey + ":" + id

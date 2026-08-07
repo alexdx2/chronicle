@@ -603,3 +603,146 @@ func TestImportAllEvidenceHonesty_RejectedNodeDoesNotUnstaleViaEvidence(t *testi
 		t.Errorf("node un-staled via evidence attached to a rejected node upsert: status = %q, want stale", after.Status)
 	}
 }
+
+// Edge-side analogue of TestImportAllEvidenceHonesty_RejectedNodeDoesNot
+// UnstaleViaEvidence. The rejectedEdgeKeys guard (graph/import.go,
+// explicit-evidence loop and both auto-evidence loops) exists because
+// AddEdgeEvidence resolves by key against the STORE, not the payload: if a
+// STALE edge with the same key survived from an earlier revision, an
+// evidence "attach" for a key THIS payload itself rejected would land on
+// that stale edge, and RecalculateEdgeTrust -> UpdateEdgeTrust sets
+// active=1 for any non-removed/non-contradicted status — un-staling an edge
+// nobody re-validated this scan. Non-vacuous by construction: an explicit
+// edge_key collision with a pre-existing stale edge (a bare "rejected, no
+// collision" version of this test would pass even without the guard, since
+// AddEdgeEvidence errors on a key nothing was ever stored under).
+func TestImportAllEvidenceHonesty_RejectedEdgeEvidenceNotCounted(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID1 := makeRevision(t, g)
+
+	const (
+		fromKey  = "flow:use_case:test-domain:order"
+		toKey    = "flow:use_case:test-domain:payment"
+		edgeType = "TRANSITIONS_TO" // valid flow->flow edge type
+	)
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: fromKey, Layer: "flow", NodeType: "use_case", DomainKey: "test-domain", Name: "PlaceOrder",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertNode from: %v", err)
+	}
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: toKey, Layer: "flow", NodeType: "use_case", DomainKey: "test-domain", Name: "ProcessPayment",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertNode to: %v", err)
+	}
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: fromKey, ToNodeKey: toKey, EdgeType: edgeType, DerivationKind: "hard",
+		FromLayer: "flow", ToLayer: "flow",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertEdge: %v", err)
+	}
+	existingEdgeKey := validate.BuildEdgeKey(fromKey, toKey, edgeType)
+
+	// Edge not re-seen at rev2 -> goes stale (active=0).
+	revID2, err := g.store.CreateRevision("test-domain", "abc123", "def456", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision rev2: %v", err)
+	}
+	if _, err := g.store.MarkStaleEdges("test-domain", revID2); err != nil {
+		t.Fatalf("MarkStaleEdges: %v", err)
+	}
+	before, err := g.store.GetEdgeByKey(existingEdgeKey)
+	if err != nil {
+		t.Fatalf("GetEdgeByKey: %v", err)
+	}
+	if before.Active {
+		t.Fatalf("fixture invalid: edge active = true before the honesty-under-test import, want stale (inactive)")
+	}
+
+	// rev3 payload redeclares the SAME edge_key EXPLICITLY (a real payload
+	// does this to reference a known edge) but with an edge_type the
+	// registry has never heard of — UpsertEdge rejects it, yet the payload
+	// also carries evidence "for" that exact key.
+	revID3, err := g.store.CreateRevision("test-domain", "def456", "ghi789", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision rev3: %v", err)
+	}
+	payload := ImportPayload{
+		Edges: []ImportEdge{
+			{EdgeKey: existingEdgeKey, FromNodeKey: fromKey, ToNodeKey: toKey, EdgeType: "NOT_A_REAL_EDGE_TYPE"},
+		},
+		Evidence: []ImportEvidence{
+			{TargetKind: "edge", EdgeKey: existingEdgeKey, SourceKind: "file", ExtractorID: "t", ExtractorVersion: "1"},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID3)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if result.EdgesCreated != 0 {
+		t.Errorf("EdgesCreated = %d, want 0", result.EdgesCreated)
+	}
+	if len(result.Rejected) != 1 || result.Rejected[0].Kind != "edge" {
+		t.Fatalf("Rejected = %+v, want exactly 1 edge rejection", result.Rejected)
+	}
+	if result.EvidenceCreated != 0 {
+		t.Errorf("EvidenceCreated = %d, want 0 — the only evidence in the payload targets an edge key this same payload rejected", result.EvidenceCreated)
+	}
+
+	after, err := g.store.GetEdgeByKey(existingEdgeKey)
+	if err != nil {
+		t.Fatalf("GetEdgeByKey after: %v", err)
+	}
+	if after.Active {
+		t.Errorf("edge un-staled (active=true) via evidence attached to a rejected edge upsert, want still inactive (stale)")
+	}
+}
+
+// Control for the same rule: evidence targeting an edge key that is NOT part
+// of this payload (a pre-existing edge from an earlier import) keeps today's
+// attach-by-key behavior — the honesty guard only withholds evidence from
+// keys THIS payload itself rejected.
+func TestImportAllEvidenceHonesty_PreexistingEdgeNotInPayloadStillAttaches(t *testing.T) {
+	g := setupGraph(t)
+	revID1 := makeRevision(t, g)
+
+	const fromKey = "code:controller:test-domain:nodea"
+	const toKey = "code:provider:test-domain:nodeb"
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: fromKey, Layer: "code", NodeType: "controller", DomainKey: "test-domain", Name: "NodeA",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertNode from: %v", err)
+	}
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: toKey, Layer: "code", NodeType: "provider", DomainKey: "test-domain", Name: "NodeB",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertNode to: %v", err)
+	}
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: fromKey, ToNodeKey: toKey, EdgeType: "INJECTS", DerivationKind: "hard",
+		FromLayer: "code", ToLayer: "code",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertEdge: %v", err)
+	}
+	existingEdgeKey := validate.BuildEdgeKey(fromKey, toKey, "INJECTS")
+
+	revID2, err := g.store.CreateRevision("test-domain", "abc123", "def456", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision rev2: %v", err)
+	}
+
+	payload := ImportPayload{
+		Evidence: []ImportEvidence{
+			{TargetKind: "edge", EdgeKey: existingEdgeKey, SourceKind: "file", ExtractorID: "t", ExtractorVersion: "1"},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID2)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if result.EvidenceCreated != 1 {
+		t.Errorf("EvidenceCreated = %d, want 1 — evidence for a pre-existing edge outside this payload keeps today's attach-by-key behavior", result.EvidenceCreated)
+	}
+}

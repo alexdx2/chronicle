@@ -2202,9 +2202,22 @@ func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 		// After saving, load the manifest and create infra nodes in the graph.
 		if m, err := manifest.LoadFile(path); err == nil {
+			// Prefer the canonical graph domain key (.Key); fall back to the
+			// DISPLAY name (.Name) only when .Key is empty (list-format
+			// manifests without an explicit key). Same rule as the two other
+			// correct readers of this field: graph/discover.go's svcDomain
+			// and internal/admin/server.go's domainFromManifest. Using .Name
+			// unconditionally here made GetLatestRevision miss the revision
+			// that exists under .Key (silently keeping infra nodes at
+			// revision 0 on every re-save) and minted infra keys with a
+			// display-string domain segment that discover.go's writer for
+			// the same manifest entry never produces.
 			domainKey := ""
 			if len(m.Domains) > 0 {
-				domainKey = m.Domains[0].Name
+				domainKey = m.Domains[0].Key
+				if domainKey == "" {
+					domainKey = m.Domains[0].Name
+				}
 			}
 			// Infra nodes need a revision stamped so they can survive
 			// chronicle_stale_mark (last_seen_revision_id must not stay 0).

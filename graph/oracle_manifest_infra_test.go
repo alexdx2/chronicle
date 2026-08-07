@@ -15,38 +15,65 @@ import (
 // validation. InfraNodeKey now takes the scan's domainKey and always
 // produces 4 segments. A ':' inside the address/name (host:port, e.g.
 // "kafka:9092") is replaced with '-' in the name segment — SplitN(key, ":",
-// 4) would otherwise fold the port into the domain segment's tail and the
-// key would not survive NormalizeNodeKey unchanged.
+// 4) would otherwise fold the port into the domain segment's tail.
+//
+// Task 6 review truthfulness fix: InfraNodeKey's own raw output is NOT a
+// GENERAL fixed point of NormalizeNodeKey — it only folds the port colon.
+// A dotted address still has its dot folded to a dash by NormalizeNodeKey's
+// qualified-name pass (see the "dotted address" case below), so raw !=
+// wantKey's normalized form for that case. What every writer (discover.go,
+// mcpserver's save_manifest handler) actually stores is the CanonicalNodeKey-
+// wrapped form, and THAT is the fixed point SQ-Contract 3 requires — this
+// test asserts fixed-point-ness of the wrapped form, not the raw one.
 func TestInfraNodeKey_FixedPointsOfNormalizeNodeKey(t *testing.T) {
 	cases := []struct {
-		name    string
-		entry   manifest.InfraEntry
-		domain  string
-		wantKey string
+		name          string
+		entry         manifest.InfraEntry
+		domain        string
+		wantKey       string // raw InfraNodeKey() output
+		wantCanonical string // wantKey run through CanonicalNodeKey — what gets stored
 	}{
 		{
-			name:    "fly-app type, dash-only name, no address",
-			entry:   manifest.InfraEntry{Name: "moj-serwis", Type: "fly-app"},
-			domain:  "auto",
-			wantKey: "infra:fly-app:auto:moj-serwis",
+			name:          "fly-app type, dash-only name, no address",
+			entry:         manifest.InfraEntry{Name: "moj-serwis", Type: "fly-app"},
+			domain:        "auto",
+			wantKey:       "infra:fly-app:auto:moj-serwis",
+			wantCanonical: "infra:fly-app:auto:moj-serwis",
 		},
 		{
-			name:    "broker with host:port address",
-			entry:   manifest.InfraEntry{Name: "kafka", Type: "broker", Address: "kafka:9092"},
-			domain:  "testapp",
-			wantKey: "infra:broker:testapp:kafka-9092",
+			name:          "broker with host:port address",
+			entry:         manifest.InfraEntry{Name: "kafka", Type: "broker", Address: "kafka:9092"},
+			domain:        "testapp",
+			wantKey:       "infra:broker:testapp:kafka-9092",
+			wantCanonical: "infra:broker:testapp:kafka-9092",
 		},
 		{
-			name:    "no address, name itself carries host:port",
-			entry:   manifest.InfraEntry{Name: "kafka:9092", Type: "message_broker"},
-			domain:  "test-domain",
-			wantKey: "infra:message_broker:test-domain:kafka-9092",
+			name:          "no address, name itself carries host:port",
+			entry:         manifest.InfraEntry{Name: "kafka:9092", Type: "message_broker"},
+			domain:        "test-domain",
+			wantKey:       "infra:message_broker:test-domain:kafka-9092",
+			wantCanonical: "infra:message_broker:test-domain:kafka-9092",
 		},
 		{
-			name:    "plain type/name, nothing to fold",
-			entry:   manifest.InfraEntry{Name: "redis", Type: "cache"},
-			domain:  "orders",
-			wantKey: "infra:cache:orders:redis",
+			name:          "plain type/name, nothing to fold",
+			entry:         manifest.InfraEntry{Name: "redis", Type: "cache"},
+			domain:        "orders",
+			wantKey:       "infra:cache:orders:redis",
+			wantCanonical: "infra:cache:orders:redis",
+		},
+		{
+			// The case that disproves the raw-output-is-a-fixed-point claim:
+			// InfraNodeKey only folds the port colon ("internal:9092" ->
+			// "internal-9092"). The dot in "kafka-events.internal" survives
+			// into the raw output untouched, but NormalizeNodeKey's
+			// qualified-name pass (validate.NormalizeName) treats '.' as a
+			// word separator same as '-', so it folds too on the FIRST real
+			// normalization — raw != canonical for this entry.
+			name:          "dotted address — raw output is NOT the fixed point, the CanonicalNodeKey-wrapped form is",
+			entry:         manifest.InfraEntry{Name: "events-kafka", Type: "broker", Address: "kafka-events.internal:9092"},
+			domain:        "test-domain",
+			wantKey:       "infra:broker:test-domain:kafka-events.internal-9092",
+			wantCanonical: "infra:broker:test-domain:kafka-events-internal-9092",
 		},
 	}
 
@@ -56,12 +83,23 @@ func TestInfraNodeKey_FixedPointsOfNormalizeNodeKey(t *testing.T) {
 			if key != c.wantKey {
 				t.Fatalf("InfraNodeKey(%q) = %q, want %q", c.domain, key, c.wantKey)
 			}
-			norm, err := validate.NormalizeNodeKey(key)
-			if err != nil {
-				t.Fatalf("InfraNodeKey(%q) = %q does not parse as a valid node key: %v", c.domain, key, err)
+
+			canonical := canonicalNodeKey(key) // the form every writer actually stores
+			if canonical != c.wantCanonical {
+				t.Errorf("CanonicalNodeKey(InfraNodeKey(%q)) = %q, want %q", c.domain, canonical, c.wantCanonical)
 			}
-			if norm != key {
-				t.Errorf("InfraNodeKey(%q) = %q is not a fixed point of NormalizeNodeKey; normalized = %q", c.domain, key, norm)
+
+			// The WRAPPED (canonical) form must be a fixed point of
+			// NormalizeNodeKey — normalizing it again must not change it.
+			// This is the actual SQ-Contract 3 guarantee; the raw
+			// InfraNodeKey() output above is not guaranteed to have it (see
+			// the dotted-address case, where key != canonical).
+			reNorm, err := validate.NormalizeNodeKey(canonical)
+			if err != nil {
+				t.Fatalf("canonical key %q does not parse as a valid node key: %v", canonical, err)
+			}
+			if reNorm != canonical {
+				t.Errorf("canonical key %q is not a fixed point of NormalizeNodeKey; re-normalized = %q", canonical, reNorm)
 			}
 		})
 	}
