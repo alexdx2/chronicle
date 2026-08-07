@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -72,15 +73,21 @@ func TestIsExternalHost_Rule(t *testing.T) {
 // TestOracleExternalURLs_OwnPublicHostStaysInternal is the Task 5 self-review
 // case: a service that calls its OWN public FQDN (not just a bare in-cluster
 // service name) must not be misclassified external, as long as that host is
-// declared in chronicle.domain.yaml infrastructure — materialized here as the
-// "infra" node discover.go would create from the manifest. With the host
+// declared in chronicle.domain.yaml infrastructure — materialized here the
+// way discover.go actually creates a manifest infra node (Task 6: 4-segment
+// canonical key, raw address preserved on QualifiedName so
+// ownHostsForDomain can recover the bare host from it). With the host
 // declared, the call still gets its contract:endpoint materialized like any
 // other internal call.
 func TestOracleExternalURLs_OwnPublicHostStaysInternal(t *testing.T) {
 	g, s, revID := setupTestGraph(t)
+	entry := manifest.InfraEntry{Name: "public-gateway", Type: "infrastructure", Address: "api.mycompany.com:443"}
 	s.UpsertNode(store.NodeRow{
-		NodeKey: "infra:gateway:api.mycompany.com:443", Layer: "infra", NodeType: "infra",
-		DomainKey: "testapp", Name: "public-gateway", Status: "active", LastSeenRevisionID: revID,
+		NodeKey:       canonicalNodeKey(entry.InfraNodeKey("testapp")),
+		Layer:         "infra",
+		NodeType:      "infrastructure",
+		QualifiedName: entry.AddressOrName(),
+		DomainKey:     "testapp", Name: entry.Name, Status: "active", LastSeenRevisionID: revID,
 	})
 
 	facts := `[{"kind":"http_call","method":"POST","target":"https://api.mycompany.com/webhook/self"}]`

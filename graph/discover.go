@@ -181,15 +181,35 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 		for _, infra := range m.Infrastructure {
 			// SQ-Contract 3: one spelling per key. These raw store.UpsertNode
 			// calls bypass ensureNodeID, so they must canonicalize here or the
-			// manifest becomes a second writer with its own spelling.
-			nodeKey := canonicalNodeKey(infra.InfraNodeKey())
+			// manifest becomes a second writer with its own spelling. The
+			// key's type segment and the node_type column must agree, so
+			// both come from the same registryValidInfraType mapping.
+			validType := registryValidInfraType(g.reg, infra.Type)
+			keyEntry := infra
+			keyEntry.Type = validType
+			nodeKey := canonicalNodeKey(keyEntry.InfraNodeKey(domainKey))
+			// Infra nodes must be born with the scan's revision on both
+			// first/last-seen — left at the zero value, last_seen_revision_id
+			// (0) is less than every real revision, so the FIRST
+			// chronicle_stale_mark call after any scan marked every manifest
+			// infra node stale forever, regardless of whether it was still
+			// declared.
 			g.store.UpsertNode(store.NodeRow{
-				NodeKey:   nodeKey,
-				Layer:     "infra",
-				NodeType:  registryValidInfraType(g.reg, infra.Type),
-				DomainKey: domainKey,
-				Name:      infra.Name,
-				Status:    "active",
+				NodeKey:  nodeKey,
+				Layer:    "infra",
+				NodeType: validType,
+				// QualifiedName carries the RAW address/name verbatim (pre
+				// dash-folding) — ownHostsForDomain reads it instead of
+				// reverse-parsing NodeKey, whose name segment is
+				// canonicalized (port colon -> dash, dots/case folded by
+				// validate.NormalizeNodeKey) and can no longer be turned
+				// back into a bare hostname for isExternalHost matching.
+				QualifiedName:       infra.AddressOrName(),
+				DomainKey:           domainKey,
+				Name:                infra.Name,
+				Status:              "active",
+				FirstSeenRevisionID: revisionID,
+				LastSeenRevisionID:  revisionID,
 			})
 			if err := g.addCreationEvidence(nodeKey, revisionID, infra.Name,
 				filepath.Join(paths.ConfiguredDir(), "chronicle.domain.yaml"), "chronicle:manifest", "manifest_key"); err != nil {
@@ -395,4 +415,14 @@ func registryValidInfraType(reg *registry.Registry, t string) string {
 		return mapped
 	}
 	return "infrastructure"
+}
+
+// RegistryValidInfraType exposes registryValidInfraType to writers outside
+// this package (mcpserver's save_manifest handler mints infra nodes of its
+// own — the historical bug there was skipping this mapping entirely, storing
+// the raw manifest type on node_type while discover.go stored the mapped
+// one, so the same infra entry disagreed with itself depending on which
+// writer touched it last).
+func RegistryValidInfraType(reg *registry.Registry, t string) string {
+	return registryValidInfraType(reg, t)
 }

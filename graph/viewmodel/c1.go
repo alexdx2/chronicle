@@ -165,7 +165,12 @@ func BuildC1Manifest(st *store.Store, domain, manifestPath string) (*C1, error) 
 			case "cache":
 				used = false // no direct evidence from graph without extra metadata
 			}
-			key := inf.InfraNodeKey()
+			// Display-only: no registry here to map inf.Type onto a
+			// registry-valid type the way discover.go/save_manifest do, so
+			// this key may not byte-match the stored node's key when the
+			// manifest type needed mapping (e.g. "kafka" -> "broker"). Good
+			// enough for the C1 diagram label; not used as a store lookup.
+			key := inf.InfraNodeKey(domain)
 			infra = append(infra, Infra{
 				Key:  key,
 				Name: inf.Name,

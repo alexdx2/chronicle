@@ -2206,16 +2206,41 @@ func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
 			if len(m.Domains) > 0 {
 				domainKey = m.Domains[0].Name
 			}
+			// Infra nodes need a revision stamped so they can survive
+			// chronicle_stale_mark (last_seen_revision_id must not stay 0).
+			// save_manifest runs before the first discover pass for a brand
+			// new domain, so there may be no revision yet — keep 0 in that
+			// case and let discover.go's later pass (which always has a real
+			// revisionID) stamp it. If a revision already exists, use the
+			// latest one so a re-save after scanning stays honest too.
+			var revisionID int64
+			if rev, err := g.Store().GetLatestRevision(domainKey); err == nil {
+				revisionID = rev.RevisionID
+			}
+			reg := g.Registry()
 			for _, infra := range m.Infrastructure {
 				// Same canonical spelling discover.go writes — this handler is
 				// the other writer of manifest infra nodes (SQ-Contract 3).
+				// It historically skipped registryValidInfraType and stored
+				// the raw manifest type on node_type; unify on the same
+				// mapping discover.go uses so the key's type segment and the
+				// node_type column agree no matter which writer ran last.
+				validType := graph.RegistryValidInfraType(reg, infra.Type)
+				keyEntry := infra
+				keyEntry.Type = validType
 				g.Store().UpsertNode(store.NodeRow{
-					NodeKey:   graph.CanonicalNodeKey(infra.InfraNodeKey()),
-					Layer:     "infra",
-					NodeType:  infra.Type,
-					DomainKey: domainKey,
-					Name:      infra.Name,
-					Status:    "active",
+					NodeKey:  graph.CanonicalNodeKey(keyEntry.InfraNodeKey(domainKey)),
+					Layer:    "infra",
+					NodeType: validType,
+					// Raw address/name verbatim — see discover.go's infra
+					// loop for why ownHostsForDomain needs this instead of
+					// NodeKey's canonicalized name segment.
+					QualifiedName:       infra.AddressOrName(),
+					DomainKey:           domainKey,
+					Name:                infra.Name,
+					Status:              "active",
+					FirstSeenRevisionID: revisionID,
+					LastSeenRevisionID:  revisionID,
 				})
 			}
 		}

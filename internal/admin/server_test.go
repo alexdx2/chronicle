@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 )
@@ -140,9 +141,12 @@ func TestHandleGraphEmitsTrustScore(t *testing.T) {
 // NodeKeys, which the writers (discover.go, mcpserver/server.go) canonicalize
 // via graph.CanonicalNodeKey. A manifest address that isn't already
 // lowercase-kebab (e.g. "MyRedis.Internal:6379") stored as
-// "infra:cache:myredis.internal:6379" but was looked up as
-// "infra:cache:MyRedis.Internal:6379" — the lookup missed and the
-// USES_INFRA edge silently vanished from the dashboard.
+// "infra:cache:test:myredis.internal-6379" but was looked up as
+// "infra:cache:test:MyRedis.Internal-6379" — the lookup missed and the
+// USES_INFRA edge silently vanished from the dashboard. (Task 6 later moved
+// InfraNodeKey to a 4-segment layer:type:domain:name shape — the domain
+// segment here is "test", matching the manifest domain / infra node's
+// DomainKey below.)
 func TestHandleGraph_UsesInfraEdgeSurvivesNonCanonicalManifestAddress(t *testing.T) {
 	dir := t.TempDir()
 	s, err := store.Open(filepath.Join(dir, "test.db"))
@@ -177,7 +181,7 @@ infrastructure:
 	}
 
 	// Infra node stored the way discover.go now writes it: canonicalized.
-	rawKey := "infra:cache:MyRedis.Internal:6379"
+	rawKey := manifest.InfraEntry{Name: "MyRedis", Type: "cache", Address: "MyRedis.Internal:6379"}.InfraNodeKey("test")
 	canonicalKey := graph.CanonicalNodeKey(rawKey)
 	if canonicalKey == rawKey {
 		t.Fatalf("fixture invalid: raw key %q is already canonical, test would not catch a raw lookup", rawKey)

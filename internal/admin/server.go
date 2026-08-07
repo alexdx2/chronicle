@@ -1095,7 +1095,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, infra := range m.Infrastructure {
-			infraID, ok := infraIDs[graph.CanonicalNodeKey(infra.InfraNodeKey())]
+			infraID, ok := resolveInfraNodeID(infraIDs, infra, graphDomainKeys)
 			if !ok {
 				continue
 			}
@@ -1107,7 +1107,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				et := "USES_INFRA"
 				edgeList = append(edgeList, map[string]any{
 					"edge_id":      virtualEdgeID,
-					"edge_key":     "service:container:" + dk + "->" + infra.InfraNodeKey() + ":" + et,
+					"edge_key":     "service:container:" + dk + "->" + infra.InfraNodeKey(dk) + ":" + et,
 					"from_node_id": cID, "to_node_id": infraID,
 					"edge_type": et, "derivation": "hard",
 					"confidence": 1.0, "trust_score": 1.0, "active": true,
@@ -1426,7 +1426,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		// Also: all backend services use shared infra from manifest
 		for _, infra := range m.Infrastructure {
-			infraID, ok := infraIDs[graph.CanonicalNodeKey(infra.InfraNodeKey())]
+			infraID, ok := resolveInfraNodeID(infraIDs, infra, graphDomainKeys)
 			if !ok {
 				continue
 			}
@@ -1570,6 +1570,22 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	hierarchy := buildHierarchy(nodeList, edgeList)
 	httpJSON(w, map[string]any{"nodes": nodeList, "edges": edgeList, "edgeCategories": s.mergedEdgeCategories(), "hierarchy": hierarchy})
+}
+
+// resolveInfraNodeID finds the graph node ID for a manifest infra entry.
+// Infra entries are declared once at the manifest's top level — they carry
+// no domain of their own — but discover.go/save_manifest stamp the SCANNING
+// domain's key into the 4-segment InfraNodeKey (SQ-Contract 3's
+// layer:type:domain:name shape). A reader here doesn't know which domain
+// wrote a given entry, so it probes every domain key actually present in
+// this graph and takes the first match.
+func resolveInfraNodeID(infraIDs map[string]int64, infra manifest.InfraEntry, graphDomainKeys map[string]bool) (int64, bool) {
+	for dk := range graphDomainKeys {
+		if id, ok := infraIDs[graph.CanonicalNodeKey(infra.InfraNodeKey(dk))]; ok {
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 func (s *Server) handleGraphDomains(w http.ResponseWriter, r *http.Request) {

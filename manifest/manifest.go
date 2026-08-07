@@ -35,14 +35,37 @@ type InfraEntry struct {
 	Description string `yaml:"description,omitempty"`
 }
 
-// InfraNodeKey returns the graph node key for this infrastructure entry.
-// Format: infra:{type}:{address} or infra:{type}:{name} if no address.
-func (e InfraEntry) InfraNodeKey() string {
-	id := e.Address
-	if id == "" {
-		id = e.Name
+// AddressOrName returns the connection address when declared, else the
+// display name — the identifier InfraNodeKey folds (dashed) into its name
+// segment. Exposed so writers can also stash it verbatim on a node's
+// QualifiedName column: InfraNodeKey's own segment is canonicalized (port
+// colon -> dash, and validate.NormalizeNodeKey further folds dots/case), so
+// it can no longer be reverse-parsed back into a bare hostname the way
+// graph.ownHostsForDomain needs for isExternalHost matching.
+func (e InfraEntry) AddressOrName() string {
+	if e.Address != "" {
+		return e.Address
 	}
-	return "infra:" + e.Type + ":" + id
+	return e.Name
+}
+
+// InfraNodeKey returns the graph node key for this infrastructure entry.
+// Format: infra:{type}:{domainKey}:{name-or-address} — the 4-segment
+// layer:type:domain:qualified_name shape validate.NormalizeNodeKey requires
+// (SQ-Contract 3). The previous 3-segment "infra:{type}:{address}" put the
+// host in the domain slot; it never parsed, so import_all's edge validation
+// could never see these nodes at all. Callers own registry validity for the
+// type segment (registryValidInfraType) and must pass the SAME mapped value
+// they stamp onto the node_type column, so key and column agree.
+//
+// A ':' inside the address or name (host:port, e.g. "kafka:9092") is
+// replaced with '-' in the name segment: NormalizeNodeKey splits on the
+// FIRST three colons only, so an unreplaced port would fold into this
+// segment's tail on the first parse but be indistinguishable from an
+// already-dashed key on the second — not a fixed point of the normalizer.
+func (e InfraEntry) InfraNodeKey(domainKey string) string {
+	id := strings.ReplaceAll(e.AddressOrName(), ":", "-")
+	return "infra:" + e.Type + ":" + domainKey + ":" + id
 }
 
 type ServiceEntry struct {

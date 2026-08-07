@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 )
 
 func basePayload() ImportPayload {
@@ -427,5 +428,178 @@ func TestImportAll_EvidenceAssertions(t *testing.T) {
 	}
 	if rows[0].Assertion != `{"module":"@okeep/auth-client"}` || rows[0].EdgeID == 0 {
 		t.Fatalf("assertion/edge not persisted: %+v", rows[0])
+	}
+}
+
+// Task 6 field defect #3: ImportAll reported evidence_created > 0 even when
+// EVERY node in the payload was rejected — the explicit-evidence loop
+// resolves node_key/edge_key against the store, not against this payload's
+// own (rejected) rows, so it silently attached to nothing or, worse, to a
+// pre-existing node sharing that key (see the un-stale regression below).
+// The rule: evidence whose target key appears in result.Rejected is SKIPPED
+// entirely — not created, not counted.
+func TestImportAllEvidenceHonesty_AllNodesRejectedEvidenceNotCounted(t *testing.T) {
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: "code:controller:test-domain:a", Layer: "bogus-layer", NodeType: "controller", DomainKey: "test-domain", Name: "A"},
+		},
+		Evidence: []ImportEvidence{
+			{TargetKind: "node", NodeKey: "code:controller:test-domain:a", SourceKind: "file", ExtractorID: "t", ExtractorVersion: "1"},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if result.NodesCreated != 0 {
+		t.Errorf("NodesCreated = %d, want 0", result.NodesCreated)
+	}
+	if len(result.Rejected) != 1 {
+		t.Fatalf("Rejected = %d, want 1", len(result.Rejected))
+	}
+	if result.EvidenceCreated != 0 {
+		t.Errorf("EvidenceCreated = %d, want 0 — the only evidence in the payload targets a node this same payload rejected", result.EvidenceCreated)
+	}
+}
+
+// Control for the same rule: a mixed payload where ONE node is rejected and
+// ONE is valid must still count the valid node's evidence — the honesty fix
+// must not become a blanket evidence freeze on any payload that has a
+// rejection in it.
+func TestImportAllEvidenceHonesty_MixedPayloadOnlyValidNodeEvidenceCounts(t *testing.T) {
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: "code:controller:test-domain:valid", Layer: "code", NodeType: "controller", DomainKey: "test-domain", Name: "Valid"},
+			{NodeKey: "code:controller:test-domain:invalid", Layer: "bogus-layer", NodeType: "controller", DomainKey: "test-domain", Name: "Invalid"},
+		},
+		Evidence: []ImportEvidence{
+			{TargetKind: "node", NodeKey: "code:controller:test-domain:valid", SourceKind: "file", ExtractorID: "t", ExtractorVersion: "1"},
+			{TargetKind: "node", NodeKey: "code:controller:test-domain:invalid", SourceKind: "file", ExtractorID: "t", ExtractorVersion: "1"},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if result.NodesCreated != 1 {
+		t.Errorf("NodesCreated = %d, want 1", result.NodesCreated)
+	}
+	if len(result.Rejected) != 1 {
+		t.Fatalf("Rejected = %d, want 1", len(result.Rejected))
+	}
+	if result.EvidenceCreated != 1 {
+		t.Errorf("EvidenceCreated = %d, want 1 (only the valid node's evidence)", result.EvidenceCreated)
+	}
+}
+
+// Evidence targeting a key that is NOT part of this payload (a pre-existing
+// node from an earlier import) keeps today's attach-by-key behavior — the
+// honesty fix only withholds evidence from keys THIS payload itself rejected.
+func TestImportAllEvidenceHonesty_PreexistingNodeNotInPayloadStillAttaches(t *testing.T) {
+	g := setupGraph(t)
+	revID1 := makeRevision(t, g)
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: "code:controller:test-domain:existing", Layer: "code", NodeType: "controller",
+		DomainKey: "test-domain", Name: "Existing",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertNode: %v", err)
+	}
+	revID2, err := g.store.CreateRevision("test-domain", "abc123", "def456", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision rev2: %v", err)
+	}
+
+	payload := ImportPayload{
+		Evidence: []ImportEvidence{
+			{TargetKind: "node", NodeKey: "code:controller:test-domain:existing", SourceKind: "file", ExtractorID: "t", ExtractorVersion: "1"},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID2)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if result.EvidenceCreated != 1 {
+		t.Errorf("EvidenceCreated = %d, want 1 — evidence for a node outside this payload keeps today's attach-by-key behavior", result.EvidenceCreated)
+	}
+}
+
+// Regression for the exact field report: a rejected node upsert (conflicting
+// node_type for an existing key) must not let explicit evidence for that
+// same key attach to whatever node already lives under it — AddNodeEvidence
+// resolves by key against the STORE, and RecalculateNodeTrust derives status
+// from the evidence it finds, so an evidence attach can flip a stale node
+// back to active even though this payload's write for that key was rejected.
+// A session used exactly this side effect to un-stale nodes it never
+// actually re-validated.
+func TestImportAllEvidenceHonesty_RejectedNodeDoesNotUnstaleViaEvidence(t *testing.T) {
+	g := setupGraph(t)
+	revID1 := makeRevision(t, g)
+
+	const key = "code:controller:test-domain:legacy"
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: key, Layer: "code", NodeType: "controller",
+		DomainKey: "test-domain", Name: "Legacy",
+	}, revID1); err != nil {
+		t.Fatalf("seed UpsertNode: %v", err)
+	}
+
+	// Node not re-seen at rev2 — goes stale.
+	revID2, err := g.store.CreateRevision("test-domain", "abc123", "def456", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision rev2: %v", err)
+	}
+	if _, err := g.store.MarkStaleNodes("test-domain", revID2); err != nil {
+		t.Fatalf("MarkStaleNodes: %v", err)
+	}
+	before, err := g.store.GetNodeByKey(key)
+	if err != nil {
+		t.Fatalf("GetNodeByKey: %v", err)
+	}
+	if before.Status != "stale" {
+		t.Fatalf("fixture invalid: node status = %q before the honesty-under-test import, want stale", before.Status)
+	}
+
+	// rev3 payload redeclares the same key under a conflicting node_type
+	// (immutable-fields mismatch -> UpsertNode rejects it) but also carries
+	// explicit evidence "for" that key.
+	revID3, err := g.store.CreateRevision("test-domain", "def456", "ghi789", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision rev3: %v", err)
+	}
+	payload := ImportPayload{
+		Nodes: []ImportNode{
+			{NodeKey: key, Layer: "code", NodeType: "provider", DomainKey: "test-domain", Name: "Legacy"},
+		},
+		Evidence: []ImportEvidence{
+			{TargetKind: "node", NodeKey: key, SourceKind: "file", ExtractorID: "t", ExtractorVersion: "1"},
+		},
+	}
+
+	result, err := g.ImportAll(payload, revID3)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if len(result.Rejected) != 1 {
+		t.Fatalf("Rejected = %d, want 1 (immutable node_type conflict)", len(result.Rejected))
+	}
+	if result.EvidenceCreated != 0 {
+		t.Errorf("EvidenceCreated = %d, want 0", result.EvidenceCreated)
+	}
+
+	after, err := g.store.GetNodeByKey(key)
+	if err != nil {
+		t.Fatalf("GetNodeByKey after: %v", err)
+	}
+	if after.Status != "stale" {
+		t.Errorf("node un-staled via evidence attached to a rejected node upsert: status = %q, want stale", after.Status)
 	}
 }

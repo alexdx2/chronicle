@@ -157,19 +157,19 @@ func TestInfrastructure(t *testing.T) {
 	if kafka.Address != "kafka-events.internal:9092" {
 		t.Errorf("infra[0].address = %q, want %q", kafka.Address, "kafka-events.internal:9092")
 	}
-	if kafka.InfraNodeKey() != "infra:broker:kafka-events.internal:9092" {
-		t.Errorf("infra[0].InfraNodeKey() = %q, want %q", kafka.InfraNodeKey(), "infra:broker:kafka-events.internal:9092")
+	if kafka.InfraNodeKey("test-domain") != "infra:broker:test-domain:kafka-events.internal-9092" {
+		t.Errorf("infra[0].InfraNodeKey(\"test-domain\") = %q, want %q", kafka.InfraNodeKey("test-domain"), "infra:broker:test-domain:kafka-events.internal-9092")
 	}
 
 	redis := m.Infrastructure[1]
-	if redis.InfraNodeKey() != "infra:cache:redis.internal:6379" {
-		t.Errorf("infra[1].InfraNodeKey() = %q, want %q", redis.InfraNodeKey(), "infra:cache:redis.internal:6379")
+	if redis.InfraNodeKey("test-domain") != "infra:cache:test-domain:redis.internal-6379" {
+		t.Errorf("infra[1].InfraNodeKey(\"test-domain\") = %q, want %q", redis.InfraNodeKey("test-domain"), "infra:cache:test-domain:redis.internal-6379")
 	}
 }
 
 func TestInfraNodeKeyNoAddress(t *testing.T) {
 	e := InfraEntry{Name: "my-kafka", Type: "broker"}
-	if e.InfraNodeKey() != "infra:broker:my-kafka" {
-		t.Errorf("InfraNodeKey() = %q, want %q", e.InfraNodeKey(), "infra:broker:my-kafka")
+	if e.InfraNodeKey("test-domain") != "infra:broker:test-domain:my-kafka" {
+		t.Errorf("InfraNodeKey(\"test-domain\") = %q, want %q", e.InfraNodeKey("test-domain"), "infra:broker:test-domain:my-kafka")
 	}
 }

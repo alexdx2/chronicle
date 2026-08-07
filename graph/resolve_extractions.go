@@ -3689,13 +3689,14 @@ func (g *Graph) ownHostsForDomain(domainKey string) map[string]bool {
 	infras, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: "infra"})
 	for _, n := range infras {
 		addHost(n.Name)
-		// node key shape: "infra:{type}:{address-or-name}" (InfraEntry.InfraNodeKey) —
-		// pull the address's host the same way an http_call target is parsed.
-		parts := strings.SplitN(n.NodeKey, ":", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		addr := parts[2]
+		// The raw address/name lives on QualifiedName (manifest.InfraEntry.
+		// AddressOrName, stamped verbatim by discover.go/save_manifest) —
+		// NOT NodeKey. NodeKey's name segment is canonicalized (port colon
+		// folded to a dash by InfraNodeKey, then dots/case folded by
+		// validate.NormalizeNodeKey), so it can no longer be reverse-parsed
+		// into a bare hostname the way an http_call target is; pull the
+		// address's host from QualifiedName the same way instead.
+		addr := n.QualifiedName
 		for _, prefix := range []string{"https://", "http://", "grpc://", "grpcs://"} {
 			addr = strings.TrimPrefix(addr, prefix)
 		}

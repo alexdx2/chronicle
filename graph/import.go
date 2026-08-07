@@ -323,6 +323,22 @@ func containsStr(slice []string, item string) bool {
 func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResult, error) {
 	var result ImportResult
 
+	// Keys rejected by THIS payload's own node/edge upserts. Evidence
+	// (explicit or auto-generated) targeting one of these keys must be
+	// skipped entirely — not created, not counted — even though
+	// AddNodeEvidence/AddEdgeEvidence resolve by key against the STORE and
+	// so would happily attach to a node that survives from an earlier
+	// revision under the same key. That attach isn't harmless: it runs
+	// RecalculateNodeTrust, which derives node status from the evidence it
+	// finds, and can flip a stale node back to active even though this
+	// payload's write for that key was rejected. A session used exactly
+	// this side effect to un-stale nodes it never actually re-validated.
+	// Keys that are NOT part of this payload (pre-existing, untouched) keep
+	// today's attach-by-key behavior — this set only ever grows from
+	// rejections recorded below, in this same payload.
+	rejectedNodeKeys := map[string]bool{}
+	rejectedEdgeKeys := map[string]bool{}
+
 	err := g.store.WithTx(func(tx *store.Store) error {
 		txGraph := New(tx, g.reg)
 
@@ -351,6 +367,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 					Kind:  "node",
 					Error: fmt.Sprintf("node[%d]: %v", i, err),
 				})
+				rejectedNodeKeys[n.NodeKey] = true
 				continue
 			}
 			result.NodesCreated++
@@ -366,6 +383,10 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 			if toLayer == "" {
 				toLayer = layerFromKey(e.ToNodeKey)
 			}
+			edgeKey := e.EdgeKey
+			if edgeKey == "" {
+				edgeKey = validate.BuildEdgeKey(e.FromNodeKey, e.ToNodeKey, e.EdgeType)
+			}
 			input := validate.EdgeInput{
 				EdgeKey:          e.EdgeKey,
 				FromNodeKey:      e.FromNodeKey,
@@ -380,6 +401,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				DependencySource: e.DependencySource,
 			}
 			if _, err := txGraph.UpsertEdge(input, revisionID); err != nil {
+				rejectedEdgeKeys[edgeKey] = true
 				rejected := RejectedItem{
 					Index: i,
 					Kind:  "edge",
@@ -453,14 +475,14 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 
 			switch ev.TargetKind {
 			case "node":
-				if ev.NodeKey == "" {
+				if ev.NodeKey == "" || rejectedNodeKeys[ev.NodeKey] {
 					continue
 				}
 				if _, err := txGraph.AddNodeEvidence(ev.NodeKey, evInput); err != nil {
 					continue
 				}
 			case "edge":
-				if ev.EdgeKey == "" {
+				if ev.EdgeKey == "" || rejectedEdgeKeys[ev.EdgeKey] {
 					continue
 				}
 				if _, err := txGraph.AddEdgeEvidence(ev.EdgeKey, evInput); err != nil {
@@ -481,7 +503,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 			}
 		}
 		for _, n := range payload.Nodes {
-			if explicitNodeEvidence[n.NodeKey] {
+			if explicitNodeEvidence[n.NodeKey] || rejectedNodeKeys[n.NodeKey] {
 				continue
 			}
 			evInput := validate.EvidenceInput{
@@ -526,7 +548,7 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 			if edgeKey == "" {
 				edgeKey = validate.BuildEdgeKey(e.FromNodeKey, e.ToNodeKey, e.EdgeType)
 			}
-			if explicitEdgeEvidence[edgeKey] {
+			if explicitEdgeEvidence[edgeKey] || rejectedEdgeKeys[edgeKey] {
 				continue
 			}
 			// Use from_node's file as evidence source if available
