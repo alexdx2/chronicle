@@ -148,6 +148,20 @@ func effectiveRowConfidence(e store.EvidenceRow) float64 {
 	return e.Confidence
 }
 
+// EffectiveRowConfidence is the exported form of effectiveRowConfidence: the
+// confidence a single evidence row is actually worth, floored at the
+// structural tier once the row has been mechanically verified.
+//
+// It exists because the stored confidence column is the ASSERTER's number and
+// verification never rewrites it — a reverified row can still read 0.1 on
+// disk while every trust computation treats it as verifiedConfidenceFloor.
+// Anything outside this package that derives a confidence from a raw evidence
+// row (Pro's package tier, for one) must go through here, or the same edge
+// gets two different confidences depending on who is asked.
+func EffectiveRowConfidence(row store.EvidenceRow) float64 {
+	return effectiveRowConfidence(row)
+}
+
 // PositiveConfidence computes combined confidence from valid/revalidated positive evidence.
 // Rows whose verification_status is "rejected" or "missing" do not count as positive evidence.
 // Verified rows contribute at least verifiedConfidenceFloor (see effectiveRowConfidence).
