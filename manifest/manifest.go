@@ -12,6 +12,12 @@ import (
 type ScanConfig struct {
 	Include []string `yaml:"include,omitempty"`
 	Exclude []string `yaml:"exclude,omitempty"`
+	// IncludeDevDeps opts this domain into manifest dependency extraction for
+	// devDependencies entries (SQ-Contract 2 axis 1 section policy). Default
+	// false: dev tooling deps are skipped entirely — most devDependencies are
+	// build/test tooling, not architecture, and the default should hide noise
+	// rather than show it.
+	IncludeDevDeps bool `yaml:"include_dev_deps,omitempty"`
 }
 
 type DomainEntry struct {

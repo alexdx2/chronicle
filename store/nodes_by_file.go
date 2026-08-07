@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -110,4 +112,42 @@ func (s *Store) NodeKeysByFilePaths(paths []string) (map[string][]string, error)
 	}
 
 	return result, nil
+}
+
+// GetServiceNodeByFilePath returns the active service-layer node whose
+// file_path exactly matches filePath within domain — the declares_service
+// node minted from the SAME manifest file. Used to attach workspace-aware
+// manifest facts (e.g. dependency edges from a package.json) to the
+// package/service they belong to, instead of a generic per-file code node.
+// Returns ErrNotFound (wrapped) when no such node exists — callers fall back
+// to the file's code:module node in that case.
+func (s *Store) GetServiceNodeByFilePath(domain, filePath string) (*NodeRow, error) {
+	if filePath == "" {
+		return nil, fmt.Errorf("GetServiceNodeByFilePath: empty file path: %w", ErrNotFound)
+	}
+	const q = `
+		SELECT node_id, node_key, layer, node_type, domain_key, name,
+		       COALESCE(qualified_name,''), COALESCE(repo_name,''), COALESCE(file_path,''),
+		       COALESCE(lang,''), COALESCE(owner_key,''), COALESCE(environment,''),
+		       COALESCE(visibility,''), status,
+		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata
+		FROM graph_nodes
+		WHERE domain_key = ? AND layer = 'service' AND file_path = ? AND status = 'active'
+		  AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		ORDER BY node_id DESC LIMIT 1
+	`
+	r := &NodeRow{}
+	err := s.db.QueryRow(q, domain, filePath).Scan(
+		&r.NodeID, &r.NodeKey, &r.Layer, &r.NodeType, &r.DomainKey, &r.Name,
+		&r.QualifiedName, &r.RepoName, &r.FilePath, &r.Lang, &r.OwnerKey,
+		&r.Environment, &r.Visibility, &r.Status,
+		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("GetServiceNodeByFilePath domain=%q file=%q: %w", domain, filePath, ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetServiceNodeByFilePath domain=%q file=%q: %w", domain, filePath, err)
+	}
+	return r, nil
 }

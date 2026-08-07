@@ -41,6 +41,12 @@ These are NOT optional. If the file matches a role below, you MUST check for the
 Files: package.json, go.mod, pyproject.toml, pom.xml, build.gradle, Cargo.toml
 CHECK: Does this file confirm a deployable service/application boundary?
 IF YES: emit `declares_service` with the package/application name.
+THEN (package.json only): for each entry in `dependencies`, `optionalDependencies`,
+and `peerDependencies` (and `devDependencies` only when the scan manifest sets
+`include_dev_deps`), emit `dependency` with `section` set to the section it
+came from. Skip obvious tooling — the resolver filters
+infrastructure/architectural deps too, so don't spend effort hand-excluding
+lodash-style utilities.
 
 ## Schema / contract files
 Files: *.prisma, *.graphql, *.proto, *.avro, openapi.yaml
@@ -189,6 +195,18 @@ Each independently deployable unit should have exactly one `declares_service` fa
 
 DO NOT emit declares_service from controllers, services, modules, or any source code file.
 DO NOT emit declares_service for shared libraries or packages without server entrypoints.
+
+## Manifest dependency
+
+```json
+{"kind":"dependency","to":"@okeep/ui","section":"dependencies"}
+```
+
+`section` ∈ `dependencies` | `optionalDependencies` | `peerDependencies` | `devDependencies` — defaults to `dependencies` when omitted.
+ONLY emit from package.json for entries actually listed under `dependencies`, `optionalDependencies`, `peerDependencies`, or `devDependencies`.
+`to` = the dependency's package name exactly as it appears as the object key (e.g. `"@okeep/ui"`, `"lodash"`).
+
+DO NOT emit `dependency` from source code files — a source-level import is an `import` fact, not a manifest fact.
 
 ## Events / messaging
 

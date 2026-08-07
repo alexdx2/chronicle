@@ -32,6 +32,7 @@ type Fact struct {
 	Origin     string   `json:"origin,omitempty"`      // fact provenance: "ast", "ast+llm", or "" (llm default) — set by unionFacts
 	Note       string   `json:"note,omitempty"`        // agent uncertainty/note
 	Reason     string   `json:"reason,omitempty"`      // reason for relationship (e.g. parent container justification)
+	Section    string   `json:"section,omitempty"`     // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
 	// Flow-specific fields
 	FlowName   string   `json:"flow_name,omitempty"`   // use case name (e.g. "Tom attacks Jerry")
 	Trigger    string   `json:"trigger,omitempty"`      // what triggers this flow (endpoint, event, cron)
@@ -58,6 +59,14 @@ var frameworkInjectDenylist = map[string]bool{
 // ResolveOptions controls obligation gating before resolve.
 type ResolveOptions struct {
 	AllowDegraded bool `json:"allow_degraded"`
+	// IncludeDevDeps mirrors the domain's manifest scan.include_dev_deps
+	// (SQ-Contract 2 axis 1 section policy): when false (default), "dependency"
+	// facts whose section is devDependencies are skipped entirely. The caller
+	// (mcpserver) reads this off the loaded chronicle.domain.yaml the same way
+	// discovery reads scan.include/exclude, then passes just the bool through
+	// — the resolver has no other use for the manifest today, so it doesn't
+	// need the whole object.
+	IncludeDevDeps bool `json:"include_dev_deps"`
 }
 
 // ResolveExtractionsResult is returned by ResolveExtractions.
@@ -365,7 +374,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 			if fact.FromType == "" {
 				fact.FromType = fileNodeType
 			}
-			created, unresolved, err := g.resolveOneFact(domainKey, revisionID, ff.filePath, fact, knownEntities)
+			created, unresolved, err := g.resolveOneFact(domainKey, revisionID, ff.filePath, fact, knownEntities, opts.IncludeDevDeps)
 			if err != nil {
 				return nil, fmt.Errorf("resolving %s fact in %s: %w", fact.Kind, ff.filePath, err)
 			}
@@ -387,7 +396,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 
 	// Second pass: parent facts that failed on file ordering.
 	for _, pf := range parentRetries {
-		created, unresolved, err := g.resolveOneFact(domainKey, revisionID, pf.filePath, pf.fact, knownEntities)
+		created, unresolved, err := g.resolveOneFact(domainKey, revisionID, pf.filePath, pf.fact, knownEntities, opts.IncludeDevDeps)
 		if err != nil {
 			return nil, fmt.Errorf("resolving %s fact in %s: %w", pf.fact.Kind, pf.filePath, err)
 		}
@@ -489,7 +498,7 @@ func (g *Graph) collectKnownEntities(allFiles []fileFacts) map[string]bool {
 	return entities
 }
 
-func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath string, fact Fact, _ map[string]bool) (createdCounts, *UnresolvedRef, error) {
+func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath string, fact Fact, _ map[string]bool, includeDevDeps bool) (createdCounts, *UnresolvedRef, error) {
 	var counts createdCounts
 	// Evidence extractor identity follows the fact's provenance: AST-derived or
 	// AST-corroborated facts emit "chronicle-ast", pure-LLM facts "chronicle-scan".
@@ -612,18 +621,49 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		counts.evidence++
 
 	case "dependency":
+		// Section policy (SQ-Contract 2 axis 1): dependencies/optionalDependencies
+		// → "manifest"; peerDependencies → "manifest_peer"; devDependencies →
+		// skipped entirely unless the domain's scan config opted in. Default the
+		// section on the fact itself so buildDependencyAssertion's evidence
+		// records the SAME section this routing decision was made on.
+		if fact.Section == "" {
+			fact.Section = "dependencies"
+		}
+		if fact.Section == "devDependencies" && !includeDevDeps {
+			return counts, nil, nil
+		}
+
 		// Filter: skip infrastructure and architectural deps
 		if !ShouldTrackDependency(fact.To) {
 			return counts, nil, nil
 		}
 
+		dependencySource := "manifest"
+		if fact.Section == "peerDependencies" {
+			dependencySource = "manifest_peer"
+		}
+
 		// Pick assertion kind based on file type
 		assertionKind, assertion := buildDependencyAssertion(filePath, fact)
 
+		// Workspace-aware from-node: a manifest dependency edge originates at
+		// the OWNING package's service node — the declares_service node minted
+		// from this SAME package.json file — not a generic per-file code node.
+		// A monorepo's packages/foo/package.json "dependencies" describe what
+		// @okeep/foo depends on, not what the manifest file itself depends on.
+		// Falls back to the file's code:module node when no service node
+		// claims this file path (e.g. the manifest never emitted declares_service).
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
-		toNodeKey := canonicalNodeKey("code:module:" + domainKey + ":" + normalizePackageName(fact.To))
-
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		if svc, err := g.store.GetServiceNodeByFilePath(domainKey, filePath); err == nil && svc != nil {
+			fromNodeKey = svc.NodeKey
+			fromID = svc.NodeID
+		}
+
+		// To-node: the SAME package node shape code imports produce (SQ-Contract
+		// 1) — one node per package whether it's reached via a source import or
+		// a manifest dependency entry.
+		toNodeKey := typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":DEPENDS_ON"
@@ -633,6 +673,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			EdgeType: "DEPENDS_ON", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
+			DependencySource: dependencySource,
 		})
 		if err == nil {
 			counts.edges++
@@ -2474,8 +2515,19 @@ func normalizeFacts(raw string) string {
 				}
 			}
 		case "dependency":
-			// Normalize "dependency" to "import" — agents confuse npm deps with imports
-			fact["kind"] = "import"
+			// Normalize "dependency" to "import" — agents confuse npm deps with
+			// imports. EXCEPT: a manifest dependency fact (Task 4, SQ-Contract 2)
+			// carries `section` (dependencies/optionalDependencies/peerDependencies/
+			// devDependencies) — only package.json entries set it, per
+			// fact_schema.md's "Manifest dependency" template — and MUST reach
+			// resolveOneFact's own "dependency" case, which is what turns section
+			// into dependency_source and resolves the workspace-owning service
+			// node. Rewriting it to "import" here would silently route every
+			// manifest dependency fact through plain import handling instead,
+			// making the whole feature dead code.
+			if _, hasSection := fact["section"]; !hasSection {
+				fact["kind"] = "import"
+			}
 		case "depends_on":
 			// Normalize "depends_on" to "injects" — agents mean constructor injection
 			fact["kind"] = "injects"
@@ -3568,9 +3620,18 @@ func buildDependencyAssertion(filePath string, fact Fact) (assertionKind string,
 	ext := strings.ToLower(filePath)
 	switch {
 	case strings.HasSuffix(ext, ".json"):
+		// Single actual section (SQ-Contract 2 axis 1): the evidence records
+		// WHERE in the manifest this dependency was declared, not every
+		// section it could theoretically appear in. Callers that already
+		// defaulted fact.Section (the resolveOneFact "dependency" case) pass
+		// it through as-is; a caller that didn't gets "dependencies" here too.
+		section := fact.Section
+		if section == "" {
+			section = "dependencies"
+		}
 		a, _ := json.Marshal(map[string]any{
 			"package":  fact.To,
-			"sections": []string{"dependencies", "devDependencies", "peerDependencies"},
+			"sections": []string{section},
 		})
 		return "manifest_dependency", string(a)
 	case strings.HasSuffix(ext, ".ts") || strings.HasSuffix(ext, ".tsx") ||

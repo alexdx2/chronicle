@@ -1127,7 +1127,18 @@ func resolveExtractionsHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		allowDegraded := boolParam(args, "allow_degraded")
-		result, err := g.ResolveExtractionsWithOptions(domain, revisionID, graph.ResolveOptions{AllowDegraded: allowDegraded})
+
+		// Load manifest for scan.include_dev_deps the same way discovery loads
+		// it for scan.include/exclude (mcpserver/server.go:678) — the resolver
+		// itself stays manifest-agnostic and only sees the derived bool.
+		includeDevDeps := false
+		if m, err := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); err == nil {
+			if cfg, ok := m.ScanConfigFor(domain); ok {
+				includeDevDeps = cfg.IncludeDevDeps
+			}
+		}
+
+		result, err := g.ResolveExtractionsWithOptions(domain, revisionID, graph.ResolveOptions{AllowDegraded: allowDegraded, IncludeDevDeps: includeDevDeps})
 		if err != nil {
 			return errorResult(err), nil
 		}
