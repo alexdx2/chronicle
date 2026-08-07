@@ -127,6 +127,40 @@ func TestGraphUpsertEdgeValid(t *testing.T) {
 	}
 }
 
+func TestGraphUpsertEdgeDependencySource(t *testing.T) {
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: "code:controller:test-domain:nodea", Layer: "code", NodeType: "controller",
+		DomainKey: "test-domain", Name: "NodeA",
+	}, revID); err != nil {
+		t.Fatalf("UpsertNode A: %v", err)
+	}
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: "code:provider:test-domain:nodeb", Layer: "code", NodeType: "provider",
+		DomainKey: "test-domain", Name: "NodeB",
+	}, revID); err != nil {
+		t.Fatalf("UpsertNode B: %v", err)
+	}
+
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: "code:controller:test-domain:nodea", ToNodeKey: "code:provider:test-domain:nodeb",
+		EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code",
+		DependencySource: "manifest",
+	}, revID); err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	got, err := g.store.GetEdgeByKey("code:controller:test-domain:nodea->code:provider:test-domain:nodeb:INJECTS")
+	if err != nil {
+		t.Fatalf("GetEdgeByKey: %v", err)
+	}
+	if got.DependencySource != "manifest" {
+		t.Errorf("DependencySource = %q, want manifest", got.DependencySource)
+	}
+}
+
 func TestGraphUpsertEdgeRawKeysMatchNormalizedNodes(t *testing.T) {
 	// Regression for the 2026-07-04 debug-journal bug: nodes are stored under
 	// normalized keys (tom.weapon.equipped → tom-weapon-equipped), so an edge

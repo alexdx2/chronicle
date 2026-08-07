@@ -68,7 +68,7 @@ const diffNodesQ = `
 
 const diffEdgesQ = `
 	SELECT edge_key, edge_type, derivation_kind, active,
-	       COALESCE(from_node_key,''), COALESCE(to_node_key,'')
+	       COALESCE(from_node_key,''), COALESCE(to_node_key,''), dependency_source
 	FROM graph_edges
 	WHERE (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
 	ORDER BY edge_key`

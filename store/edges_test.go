@@ -56,6 +56,84 @@ func TestUpsertEdgeUpdate(t *testing.T) {
 	}
 }
 
+// TestUpsertEdgeDependencySourceRoundTrip proves dependency_source survives
+// write → GetEdgeByKey → ListEdges → ListEdges(EdgeFilter{DependencySourceIn}).
+// This is the exact shape of bug the repo already shipped once for
+// verification_status: a column added to the DDL and one writer but never
+// wired into EdgeRow or any SELECT, so the value was invisible everywhere
+// except the raw table.
+func TestUpsertEdgeDependencySourceRoundTrip(t *testing.T) {
+	s := openTestStore(t)
+	revID, n1, n2 := seedNodes(t, s)
+	e := makeEdgeRow("edge:calls:oc:os", n1, n2, revID)
+	e.DependencySource = "manifest"
+	if _, err := s.UpsertEdge(e); err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	got, err := s.GetEdgeByKey("edge:calls:oc:os")
+	if err != nil {
+		t.Fatalf("GetEdgeByKey: %v", err)
+	}
+	if got.DependencySource != "manifest" {
+		t.Errorf("GetEdgeByKey DependencySource = %q, want manifest", got.DependencySource)
+	}
+
+	all, err := s.ListEdges(EdgeFilter{})
+	if err != nil {
+		t.Fatalf("ListEdges: %v", err)
+	}
+	found := false
+	for _, r := range all {
+		if r.EdgeKey == "edge:calls:oc:os" {
+			found = true
+			if r.DependencySource != "manifest" {
+				t.Errorf("ListEdges DependencySource = %q, want manifest", r.DependencySource)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("edge not found in ListEdges")
+	}
+
+	filtered, err := s.ListEdges(EdgeFilter{DependencySourceIn: []string{"manifest"}})
+	if err != nil {
+		t.Fatalf("ListEdges DependencySourceIn: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].EdgeKey != "edge:calls:oc:os" {
+		t.Fatalf("ListEdges DependencySourceIn=[manifest] = %+v, want exactly edge:calls:oc:os", filtered)
+	}
+
+	filteredOut, err := s.ListEdges(EdgeFilter{DependencySourceIn: []string{"code"}})
+	if err != nil {
+		t.Fatalf("ListEdges DependencySourceIn code: %v", err)
+	}
+	for _, r := range filteredOut {
+		if r.EdgeKey == "edge:calls:oc:os" {
+			t.Fatal("manifest edge leaked into DependencySourceIn=[code] filter")
+		}
+	}
+}
+
+// TestUpsertEdgeDependencySourceDefaultsToCode: callers that build EdgeRow
+// directly without setting DependencySource (every existing resolver call
+// site in graph/resolve_extractions.go does this) must still get the
+// SQ-Contract 2 default, not an empty string outside the closed enum.
+func TestUpsertEdgeDependencySourceDefaultsToCode(t *testing.T) {
+	s := openTestStore(t)
+	revID, n1, n2 := seedNodes(t, s)
+	if _, err := s.UpsertEdge(makeEdgeRow("edge:calls:oc:os", n1, n2, revID)); err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+	got, err := s.GetEdgeByKey("edge:calls:oc:os")
+	if err != nil {
+		t.Fatalf("GetEdgeByKey: %v", err)
+	}
+	if got.DependencySource != "code" {
+		t.Errorf("DependencySource = %q, want code (default)", got.DependencySource)
+	}
+}
+
 func TestListEdgesByFrom(t *testing.T) {
 	s := openTestStore(t)
 	revID, n1, n2 := seedNodes(t, s)

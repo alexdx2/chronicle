@@ -114,7 +114,7 @@ func (s *Store) bootstrapEdges() (int, error) {
 		       e.active, COALESCE(e.metadata,'{}'),
 		       COALESCE(NULLIF(e.from_node_key,''), fn.node_key, ''),
 		       COALESCE(NULLIF(e.to_node_key,''), tn.node_key, ''),
-		       COALESCE(e.last_seen_revision_id,0)
+		       COALESCE(e.last_seen_revision_id,0), e.dependency_source
 		FROM graph_edges e
 		LEFT JOIN graph_nodes fn ON fn.node_id = e.from_node_id
 		LEFT JOIN graph_nodes tn ON tn.node_id = e.to_node_id
@@ -129,7 +129,8 @@ func (s *Store) bootstrapEdges() (int, error) {
 		var er EdgeRow
 		var active int
 		if err := rows.Scan(&er.EdgeKey, &er.EdgeType, &er.DerivationKind, &er.ContextKey,
-			&active, &er.Metadata, &er.FromNodeKey, &er.ToNodeKey, &er.LastSeenRevisionID); err != nil {
+			&active, &er.Metadata, &er.FromNodeKey, &er.ToNodeKey, &er.LastSeenRevisionID,
+			&er.DependencySource); err != nil {
 			return 0, fmt.Errorf("bootstrap edges scan: %w", err)
 		}
 		if er.FromNodeKey == "" || er.ToNodeKey == "" {

@@ -53,17 +53,31 @@ type EdgeInput struct {
 	ContextKey     string
 	Confidence     float64
 	Metadata       string
+	// DependencySource is SQ-Contract 2 axis 1: how the edge was derived.
+	// Empty defaults to "code"; must be one of code|manifest|manifest_peer.
+	DependencySource string
 }
 
 type ValidatedEdge struct {
-	EdgeKey        string
-	FromNodeKey    string
-	ToNodeKey      string
-	EdgeType       string
-	DerivationKind string
-	ContextKey     string
-	Confidence     float64
-	Metadata       string
+	EdgeKey          string
+	FromNodeKey      string
+	ToNodeKey        string
+	EdgeType         string
+	DerivationKind   string
+	ContextKey       string
+	Confidence       float64
+	Metadata         string
+	DependencySource string
+}
+
+// validDependencySources is the SQ-Contract 2 axis 1 closed enum. Enforced in
+// Go rather than a SQLite CHECK constraint — see store.go migrate() comment
+// on the dependency_source column ALTER (a CHECK would force SQLite to
+// recreate the graph_edges table).
+var validDependencySources = map[string]bool{
+	"code":          true,
+	"manifest":      true,
+	"manifest_peer": true,
 }
 
 type EvidenceInput struct {
@@ -165,6 +179,13 @@ func ValidateEdgeInput(input EdgeInput, reg *registry.Registry) (*ValidatedEdge,
 	if input.DerivationKind == "" {
 		input.DerivationKind = "hard" // default
 	}
+	dependencySource := input.DependencySource
+	if dependencySource == "" {
+		dependencySource = "code" // default — SQ-Contract 2 axis 1
+	}
+	if !validDependencySources[dependencySource] {
+		return nil, fmt.Errorf("validation: invalid dependency_source %q", dependencySource)
+	}
 
 	// Format-check the endpoint keys (layer:type:domain:name) without
 	// rewriting them: nodes exist in two storage styles — validate-normalized
@@ -214,14 +235,15 @@ func ValidateEdgeInput(input EdgeInput, reg *registry.Registry) (*ValidatedEdge,
 	}
 
 	return &ValidatedEdge{
-		EdgeKey:        edgeKey,
-		FromNodeKey:    input.FromNodeKey,
-		ToNodeKey:      input.ToNodeKey,
-		EdgeType:       input.EdgeType,
-		DerivationKind: input.DerivationKind,
-		ContextKey:     input.ContextKey,
-		Confidence:     confidence,
-		Metadata:       metadata,
+		EdgeKey:          edgeKey,
+		FromNodeKey:      input.FromNodeKey,
+		ToNodeKey:        input.ToNodeKey,
+		EdgeType:         input.EdgeType,
+		DerivationKind:   input.DerivationKind,
+		ContextKey:       input.ContextKey,
+		Confidence:       confidence,
+		Metadata:         metadata,
+		DependencySource: dependencySource,
 	}, nil
 }
 

@@ -134,6 +134,37 @@ func TestBootstrapJournalReplayMatchesLive(t *testing.T) {
 	}
 }
 
+// TestBootstrapJournalPreservesDependencySource: a manifest-derived edge that
+// predates the journal must survive bootstrap (table → journal event) and
+// replay (journal event → fresh table) with dependency_source intact. This is
+// the "field-by-field reconstruction" trap: EvEdgeUpsert rebuilds EdgeRow from
+// event fields, and a field missing from that reconstruction silently resets
+// to the type's zero value on replay.
+func TestBootstrapJournalPreservesDependencySource(t *testing.T) {
+	s := buildPreJournalStore(t)
+	const edgeKey = "code:module:dom:a->code:module:dom:b:IMPORTS"
+	if err := s.Exec(`UPDATE graph_edges SET dependency_source = 'manifest' WHERE edge_key = '` + edgeKey + `'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.BootstrapJournal(); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := openJournalTestStore(t)
+	if _, err := fresh.ReplayJournal(filepath.Join(s.Dir(), "events")); err != nil {
+		t.Fatal(err)
+	}
+
+	var got string
+	if err := fresh.QueryRowScan(`SELECT dependency_source FROM graph_edges WHERE edge_key = '`+edgeKey+`'`, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "manifest" {
+		t.Errorf("replayed dependency_source = %q, want manifest", got)
+	}
+}
+
 func TestBootstrapJournalBackfillsEvidenceUID(t *testing.T) {
 	s := buildPreJournalStore(t)
 	// Simulate a legacy row without a uid.

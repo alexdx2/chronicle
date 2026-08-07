@@ -167,6 +167,61 @@ func TestValidateEdgeInput_BadEdgeType(t *testing.T) {
 	}
 }
 
+func TestValidateEdgeInput_DependencySourceDefaultsToCode(t *testing.T) {
+	reg := loadTestRegistry(t)
+	input := EdgeInput{
+		FromNodeKey:    "code:controller:orders:orderscontroller",
+		ToNodeKey:      "code:provider:orders:ordersservice",
+		EdgeType:       "INJECTS",
+		DerivationKind: "hard",
+		FromLayer:      "code",
+		ToLayer:        "code",
+	}
+	result, err := ValidateEdgeInput(input, reg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DependencySource != "code" {
+		t.Errorf("DependencySource = %q, want code (default)", result.DependencySource)
+	}
+}
+
+func TestValidateEdgeInput_DependencySourceValidEnumValue(t *testing.T) {
+	reg := loadTestRegistry(t)
+	input := EdgeInput{
+		FromNodeKey:      "code:controller:orders:orderscontroller",
+		ToNodeKey:        "code:provider:orders:ordersservice",
+		EdgeType:         "INJECTS",
+		DerivationKind:   "hard",
+		FromLayer:        "code",
+		ToLayer:          "code",
+		DependencySource: "manifest_peer",
+	}
+	result, err := ValidateEdgeInput(input, reg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DependencySource != "manifest_peer" {
+		t.Errorf("DependencySource = %q, want manifest_peer", result.DependencySource)
+	}
+}
+
+func TestValidateEdgeInput_BadDependencySource(t *testing.T) {
+	reg := loadTestRegistry(t)
+	input := EdgeInput{
+		FromNodeKey:      "code:controller:orders:orderscontroller",
+		ToNodeKey:        "code:provider:orders:ordersservice",
+		EdgeType:         "INJECTS",
+		DerivationKind:   "hard",
+		FromLayer:        "code",
+		ToLayer:          "code",
+		DependencySource: "bogus",
+	}
+	if _, err := ValidateEdgeInput(input, reg); err == nil {
+		t.Fatal("expected error for invalid dependency_source")
+	}
+}
+
 func TestValidateEdgeInput_LayerMismatch(t *testing.T) {
 	reg := loadTestRegistry(t)
 	input := EdgeInput{

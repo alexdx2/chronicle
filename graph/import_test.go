@@ -297,6 +297,30 @@ func TestImportAllDomainAlias(t *testing.T) {
 	}
 }
 
+func TestImportAllEdgeDependencySource(t *testing.T) {
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+
+	payload := basePayload()
+	payload.Edges[0].DependencySource = "manifest_peer"
+
+	result, err := g.ImportAll(payload, revID)
+	if err != nil {
+		t.Fatalf("ImportAll: %v", err)
+	}
+	if result.EdgesCreated != 1 {
+		t.Fatalf("EdgesCreated = %d, want 1", result.EdgesCreated)
+	}
+
+	got, err := g.store.GetEdgeByKey("code:controller:test-domain:nodea->code:provider:test-domain:nodeb:INJECTS")
+	if err != nil {
+		t.Fatalf("GetEdgeByKey: %v", err)
+	}
+	if got.DependencySource != "manifest_peer" {
+		t.Errorf("DependencySource = %q, want manifest_peer", got.DependencySource)
+	}
+}
+
 func TestImportAllIdempotent(t *testing.T) {
 	g := setupGraph(t)
 	revID := makeRevision(t, g)

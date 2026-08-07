@@ -42,6 +42,9 @@ type ImportEdge struct {
 	ContextKey     string  `json:"context_key,omitempty"`
 	Confidence     float64 `json:"confidence,omitempty"`
 	Metadata       FlexString `json:"metadata,omitempty"`
+	// DependencySource is SQ-Contract 2 axis 1 (code|manifest|manifest_peer).
+	// Empty defaults to "code" — see validate.ValidateEdgeInput.
+	DependencySource string `json:"dependency_source,omitempty"`
 }
 
 // FlexString accepts both JSON string and object for metadata fields.
@@ -212,15 +215,16 @@ func (g *Graph) ImportAllDryRun(payload ImportPayload, revisionID int64) (*DryRu
 		}
 
 		input := validate.EdgeInput{
-			EdgeKey:        e.EdgeKey,
-			FromNodeKey:    e.FromNodeKey,
-			ToNodeKey:      e.ToNodeKey,
-			EdgeType:       e.EdgeType,
-			DerivationKind: e.DerivationKind,
-			FromLayer:      fromLayer,
-			ToLayer:        toLayer,
-			Confidence:     e.Confidence,
-			Metadata:       string(e.Metadata),
+			EdgeKey:          e.EdgeKey,
+			FromNodeKey:      e.FromNodeKey,
+			ToNodeKey:        e.ToNodeKey,
+			EdgeType:         e.EdgeType,
+			DerivationKind:   e.DerivationKind,
+			FromLayer:        fromLayer,
+			ToLayer:          toLayer,
+			Confidence:       e.Confidence,
+			Metadata:         string(e.Metadata),
+			DependencySource: e.DependencySource,
 		}
 		if _, err := validate.ValidateEdgeInput(input, g.reg); err != nil {
 			result.Valid = false
@@ -363,16 +367,17 @@ func (g *Graph) ImportAll(payload ImportPayload, revisionID int64) (*ImportResul
 				toLayer = layerFromKey(e.ToNodeKey)
 			}
 			input := validate.EdgeInput{
-				EdgeKey:        e.EdgeKey,
-				FromNodeKey:    e.FromNodeKey,
-				ToNodeKey:      e.ToNodeKey,
-				EdgeType:       e.EdgeType,
-				DerivationKind: e.DerivationKind,
-				FromLayer:      fromLayer,
-				ToLayer:        toLayer,
-				ContextKey:     e.ContextKey,
-				Confidence:     e.Confidence,
-				Metadata:       string(e.Metadata),
+				EdgeKey:          e.EdgeKey,
+				FromNodeKey:      e.FromNodeKey,
+				ToNodeKey:        e.ToNodeKey,
+				EdgeType:         e.EdgeType,
+				DerivationKind:   e.DerivationKind,
+				FromLayer:        fromLayer,
+				ToLayer:          toLayer,
+				ContextKey:       e.ContextKey,
+				Confidence:       e.Confidence,
+				Metadata:         string(e.Metadata),
+				DependencySource: e.DependencySource,
 			}
 			if _, err := txGraph.UpsertEdge(input, revisionID); err != nil {
 				rejected := RejectedItem{

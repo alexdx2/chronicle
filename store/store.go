@@ -224,6 +224,11 @@ func (s *Store) migrate() error {
 		`ALTER TABLE graph_edges ADD COLUMN from_node_key TEXT`,
 		`ALTER TABLE graph_edges ADD COLUMN to_node_key TEXT`,
 		`ALTER TABLE graph_edges ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'unverified'`,
+		// SQ-Contract 2 axis 1: how the edge was derived — code (AST/evidence),
+		// manifest (dependencies/optionalDependencies), manifest_peer (peerDependencies).
+		// Closed enum enforced in Go (validate.ValidateEdgeInput), not a DB CHECK —
+		// a CHECK constraint would force SQLite to recreate the table on ALTER.
+		`ALTER TABLE graph_edges ADD COLUMN dependency_source TEXT NOT NULL DEFAULT 'code'`,
 		// Evidence gets stable identity + context
 		`ALTER TABLE graph_evidence ADD COLUMN evidence_uid TEXT`,
 		`ALTER TABLE graph_evidence ADD COLUMN context_id INTEGER`,
@@ -543,7 +548,8 @@ CREATE TABLE IF NOT EXISTS graph_edges (
                            CHECK (freshness >= 0 AND freshness <= 1),
   trust_score            REAL NOT NULL DEFAULT 1.0
                            CHECK (trust_score >= 0 AND trust_score <= 1),
-  metadata               TEXT NOT NULL DEFAULT '{}'
+  metadata               TEXT NOT NULL DEFAULT '{}',
+  dependency_source      TEXT NOT NULL DEFAULT 'code'
 );
 
 CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_node_id);

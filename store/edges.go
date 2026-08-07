@@ -28,6 +28,10 @@ type EdgeRow struct {
 	ValidFromRevisionID int64   `json:"valid_from_revision_id,omitempty"`
 	ValidToRevisionID   int64   `json:"valid_to_revision_id,omitempty"`
 	ContextID           int64   `json:"context_id,omitempty"`
+	// DependencySource is SQ-Contract 2 axis 1: how the edge was derived —
+	// "code" (AST/evidence), "manifest" (dependencies/optionalDependencies),
+	// "manifest_peer" (peerDependencies). Closed enum, default "code".
+	DependencySource string `json:"dependency_source"`
 }
 
 // EdgeFilter holds optional filters for ListEdges.
@@ -37,6 +41,9 @@ type EdgeFilter struct {
 	EdgeType       string
 	DerivationKind string
 	Active         *bool
+	// DependencySourceIn restricts results to edges whose dependency_source is
+	// one of the given values (SQL `dependency_source IN (...)`). Empty = no filter.
+	DependencySourceIn []string
 }
 
 // UpsertEdge inserts or updates an edge by edge_key.
@@ -61,6 +68,11 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 		}
 		e.ToNodeKey = n.NodeKey
 	}
+	// SQ-Contract 2 default: callers that don't set DependencySource (every
+	// existing resolver call site predates this column) get "code" — the
+	// enum is enforced in Go, not a DB CHECK, so this is the only place the
+	// default is guaranteed to apply.
+	e.DependencySource = defaultStr(e.DependencySource, "code")
 
 	const selQ = `SELECT edge_id FROM graph_edges WHERE edge_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0) ORDER BY edge_id DESC LIMIT 1`
 	var existingID int64
@@ -80,14 +92,15 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 			INSERT INTO graph_edges
 			  (edge_key, from_node_id, to_node_id, edge_type, derivation_kind, context_key,
 			   active, first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
-			   from_node_key, to_node_key, valid_from_revision_id, context_id)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			   from_node_key, to_node_key, valid_from_revision_id, context_id, dependency_source)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		`
 		res, err := s.db.Exec(insQ,
 			e.EdgeKey, e.FromNodeID, e.ToNodeID, e.EdgeType, e.DerivationKind,
 			nullableStr(e.ContextKey), activeInt,
 			e.FirstSeenRevisionID, e.LastSeenRevisionID, e.Confidence, e.Freshness, e.TrustScore, e.Metadata,
 			nullableStr(e.FromNodeKey), nullableStr(e.ToNodeKey), nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ContextID),
+			e.DependencySource,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("UpsertEdge insert: %w", err)
@@ -112,14 +125,15 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 			INSERT INTO graph_edges
 			  (edge_key, from_node_id, to_node_id, edge_type, derivation_kind, context_key,
 			   active, first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
-			   from_node_key, to_node_key, valid_from_revision_id, context_id)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			   from_node_key, to_node_key, valid_from_revision_id, context_id, dependency_source)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		`
 		res, err := s.db.Exec(insQ,
 			e.EdgeKey, e.FromNodeID, e.ToNodeID, e.EdgeType, e.DerivationKind,
 			nullableStr(e.ContextKey), activeInt,
 			e.FirstSeenRevisionID, e.LastSeenRevisionID, e.Confidence, e.Freshness, e.TrustScore, e.Metadata,
 			nullableStr(e.FromNodeKey), nullableStr(e.ToNodeKey), nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ContextID),
+			e.DependencySource,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("UpsertEdge versioned insert: %w", err)
@@ -135,13 +149,13 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 	const updQ = `
 		UPDATE graph_edges
 		SET derivation_kind=?, context_key=?, active=?, last_seen_revision_id=?,
-		    confidence=?, freshness=?, trust_score=?, metadata=?,
+		    confidence=?, freshness=?, trust_score=?, metadata=?, dependency_source=?,
 		    from_node_key=COALESCE(?,from_node_key), to_node_key=COALESCE(?,to_node_key)
 		WHERE edge_id=?
 	`
 	_, err = s.db.Exec(updQ,
 		e.DerivationKind, nullableStr(e.ContextKey), activeInt,
-		e.LastSeenRevisionID, e.Confidence, e.Freshness, e.TrustScore, e.Metadata,
+		e.LastSeenRevisionID, e.Confidence, e.Freshness, e.TrustScore, e.Metadata, e.DependencySource,
 		nullableStr(e.FromNodeKey), nullableStr(e.ToNodeKey),
 		existingID,
 	)
@@ -171,6 +185,7 @@ func edgeEventFields(e EdgeRow) map[string]any {
 	f := map[string]any{
 		"from": e.FromNodeKey, "to": e.ToNodeKey, "edge_type": e.EdgeType,
 		"derivation_kind": e.DerivationKind, "active": e.Active,
+		"dependency_source": e.DependencySource,
 	}
 	if e.ContextKey != "" {
 		f["context_key"] = e.ContextKey
@@ -188,7 +203,8 @@ func (s *Store) GetEdgeByKey(key string) (*EdgeRow, error) {
 		       COALESCE(context_key,''), active,
 		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
 		       COALESCE(from_node_key,''), COALESCE(to_node_key,''),
-		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0), COALESCE(context_id,0)
+		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0), COALESCE(context_id,0),
+		       dependency_source
 		FROM graph_edges WHERE edge_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
 		ORDER BY edge_id DESC LIMIT 1
 	`
@@ -200,6 +216,7 @@ func (s *Store) GetEdgeByKey(key string) (*EdgeRow, error) {
 		&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 		&r.FromNodeKey, &r.ToNodeKey,
 		&r.ValidFromRevisionID, &r.ValidToRevisionID, &r.ContextID,
+		&r.DependencySource,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("GetEdgeByKey %q: %w", key, ErrNotFound)
@@ -218,7 +235,8 @@ func (s *Store) ListEdges(f EdgeFilter) ([]EdgeRow, error) {
 		       COALESCE(context_key,''), active,
 		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
 		       COALESCE(from_node_key,''), COALESCE(to_node_key,''),
-		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0), COALESCE(context_id,0)
+		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0), COALESCE(context_id,0),
+		       dependency_source
 		FROM graph_edges
 	`
 	// Always filter to current (non-closed) rows.
@@ -248,6 +266,14 @@ func (s *Store) ListEdges(f EdgeFilter) ([]EdgeRow, error) {
 		conds = append(conds, "active = ?")
 		args = append(args, v)
 	}
+	if len(f.DependencySourceIn) > 0 {
+		placeholders := make([]string, len(f.DependencySourceIn))
+		for i, ds := range f.DependencySourceIn {
+			placeholders[i] = "?"
+			args = append(args, ds)
+		}
+		conds = append(conds, "dependency_source IN ("+strings.Join(placeholders, ",")+")")
+	}
 	base += " WHERE " + strings.Join(conds, " AND ")
 	base += " ORDER BY edge_key"
 
@@ -267,6 +293,7 @@ func (s *Store) ListEdges(f EdgeFilter) ([]EdgeRow, error) {
 			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 			&r.FromNodeKey, &r.ToNodeKey,
 			&r.ValidFromRevisionID, &r.ValidToRevisionID, &r.ContextID,
+			&r.DependencySource,
 		); err != nil {
 			return nil, fmt.Errorf("ListEdges scan: %w", err)
 		}
@@ -469,7 +496,7 @@ func (s *Store) GetEdgesWithNoValidEvidence(domainKey string) ([]EdgeRow, error)
 		SELECT e.edge_id, e.edge_key, e.from_node_id, e.to_node_id, e.edge_type,
 		       e.derivation_kind, COALESCE(e.context_key,''), e.active,
 		       COALESCE(e.first_seen_revision_id,0), COALESCE(e.last_seen_revision_id,0),
-		       e.confidence, e.freshness, e.trust_score, e.metadata
+		       e.confidence, e.freshness, e.trust_score, e.metadata, e.dependency_source
 		FROM graph_edges e
 		LEFT JOIN graph_nodes n ON e.from_node_id = n.node_id
 		WHERE (n.domain_key = ? OR ? = '')
@@ -497,7 +524,7 @@ func (s *Store) GetEdgesWithNoValidEvidence(domainKey string) ([]EdgeRow, error)
 		if err := rows.Scan(&r.EdgeID, &r.EdgeKey, &r.FromNodeID, &r.ToNodeID, &r.EdgeType,
 			&r.DerivationKind, &r.ContextKey, &r.Active,
 			&r.FirstSeenRevisionID, &r.LastSeenRevisionID,
-			&r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata); err != nil {
+			&r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata, &r.DependencySource); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -523,7 +550,8 @@ func (s *Store) GetEdgesBetweenNodes(nodeIDs []int64) ([]EdgeRow, error) {
 		       COALESCE(context_key,''), active,
 		       first_seen_revision_id, last_seen_revision_id, confidence, freshness, trust_score, metadata,
 		       COALESCE(from_node_key,''), COALESCE(to_node_key,''),
-		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0), COALESCE(context_id,0)
+		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0), COALESCE(context_id,0),
+		       dependency_source
 		FROM graph_edges
 		WHERE (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
 		  AND from_node_id IN (%s)
@@ -555,6 +583,7 @@ func (s *Store) GetEdgesBetweenNodes(nodeIDs []int64) ([]EdgeRow, error) {
 			&r.FirstSeenRevisionID, &r.LastSeenRevisionID, &r.Confidence, &r.Freshness, &r.TrustScore, &r.Metadata,
 			&r.FromNodeKey, &r.ToNodeKey,
 			&r.ValidFromRevisionID, &r.ValidToRevisionID, &r.ContextID,
+			&r.DependencySource,
 		); err != nil {
 			return nil, fmt.Errorf("GetEdgesBetweenNodes scan: %w", err)
 		}

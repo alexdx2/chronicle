@@ -204,6 +204,7 @@ func (g *Graph) UpsertEdge(input validate.EdgeInput, revisionID int64) (int64, e
 		Freshness:           1.0,
 		TrustScore:          confidence,
 		Metadata:            ve.Metadata,
+		DependencySource:    ve.DependencySource,
 	}
 	id, err := g.store.UpsertEdge(row)
 	if err != nil {

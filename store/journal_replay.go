@@ -247,6 +247,7 @@ func (s *Store) applyJournalEvent(ev flushedEvent) error {
 			Metadata:    defaultStr(str("metadata"), "{}"),
 			FromNodeKey: str("from"), ToNodeKey: str("to"),
 			Confidence: 1.0, Freshness: 1.0, TrustScore: 1.0,
+			DependencySource: str("dependency_source"),
 		})
 		return err
 
