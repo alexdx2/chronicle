@@ -48,11 +48,11 @@ func TestR8_ProvidesViaImportMap_TwoServicesSameProviderName(t *testing.T) {
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
 
-	moduleKey := "code:module:testapp:svc-a/src/svc-a.module"
+	moduleKey := "code:module:testapp:svc-a/src/svc-a-module"
 	// PrismaService from svc-a's own path (import resolved to this exact path)
-	svcAKey := "code:provider:testapp:svc-a/src/common/prisma.service"
+	svcAKey := "code:provider:testapp:svc-a/src/common/prisma-service"
 	// svc-b's node must NOT appear as a CONTAINS target
-	svcBKey := "code:provider:testapp:svc-b/src/common/prisma.service"
+	svcBKey := "code:provider:testapp:svc-b/src/common/prisma-service"
 
 	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
 	found := map[string]bool{}
@@ -70,7 +70,7 @@ func TestR8_ProvidesViaImportMap_TwoServicesSameProviderName(t *testing.T) {
 	}
 
 	// Must not create a phantom stem-based node
-	phantomKey := "code:provider:testapp:prisma.service"
+	phantomKey := "code:provider:testapp:prisma-service"
 	if _, err := s.GetNodeIDByKey(phantomKey); err == nil {
 		t.Errorf("R8: phantom stem node %s must not be created", phantomKey)
 	}
@@ -103,9 +103,9 @@ func TestR8_ProvidesViaImportMap_ControllerResolvesFromImport(t *testing.T) {
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
 
-	moduleKey := "code:module:testapp:svc-a/src/tom/tom.module"
-	controllerKey := "code:controller:testapp:svc-a/src/tom/tom.controller"
-	serviceKey := "code:provider:testapp:svc-a/src/tom/tom.service"
+	moduleKey := "code:module:testapp:svc-a/src/tom/tom-module"
+	controllerKey := "code:controller:testapp:svc-a/src/tom/tom-controller"
+	serviceKey := "code:provider:testapp:svc-a/src/tom/tom-service"
 
 	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
 	found := map[string]bool{}
@@ -144,13 +144,13 @@ func TestR8_ProvidesWithoutImport_FallsBackToScanIndex(t *testing.T) {
 	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
 	found := false
 	for _, e := range edges {
-		if strings.Contains(e.ToNodeKey, "battle.guard") {
+		if strings.Contains(e.ToNodeKey, "battle-guard") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("R8 fallback: expected module CONTAINS battle.guard via scan-index; got %v", edges)
+		t.Errorf("R8 fallback: expected module CONTAINS battle-guard via scan-index; got %v", edges)
 	}
 }
 
@@ -180,9 +180,9 @@ func TestProvidesFact_CreatesContainsEdges(t *testing.T) {
 		t.Fatal("expected edges from provides facts")
 	}
 
-	moduleKey := "code:module:testapp:src/arena/arena.module"
-	controllerKey := "code:controller:testapp:src/arena/arena.controller"
-	serviceKey := "code:provider:testapp:src/arena/arena.service"
+	moduleKey := "code:module:testapp:src/arena/arena-module"
+	controllerKey := "code:controller:testapp:src/arena/arena-controller"
+	serviceKey := "code:provider:testapp:src/arena/arena-service"
 
 	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
 	found := map[string]bool{}
@@ -213,7 +213,7 @@ func TestProvides_ZeroFactFile_ResolvesFromScanIndex(t *testing.T) {
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
 
-	guardKey := "code:provider:testapp:src/arena/battle.guard"
+	guardKey := "code:provider:testapp:src/arena/battle-guard"
 	if _, err := s.GetNodeIDByKey(guardKey); err != nil {
 		t.Fatalf("expected node for zero-fact guard file, key %s", guardKey)
 	}
@@ -221,13 +221,13 @@ func TestProvides_ZeroFactFile_ResolvesFromScanIndex(t *testing.T) {
 	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
 	found := false
 	for _, e := range edges {
-		if strings.Contains(e.ToNodeKey, "battle.guard") {
+		if strings.Contains(e.ToNodeKey, "battle-guard") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected module CONTAINS battle.guard, got %v", edges)
+		t.Errorf("expected module CONTAINS battle-guard, got %v", edges)
 	}
 }
 
@@ -245,8 +245,8 @@ func TestInjects_NoDuplicatePhantomWhenPathNodeExists(t *testing.T) {
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
 
-	serviceKey := "code:provider:testapp:src/arena/arena.service"
-	phantomKey := "code:provider:testapp:arena.service"
+	serviceKey := "code:provider:testapp:src/arena/arena-service"
+	phantomKey := "code:provider:testapp:arena-service"
 	if _, err := s.GetNodeIDByKey(phantomKey); err == nil {
 		t.Errorf("unexpected phantom provider node %s", phantomKey)
 	}

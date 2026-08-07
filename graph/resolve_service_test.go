@@ -93,8 +93,8 @@ func TestTopicCanonical_ExactMatch(t *testing.T) {
 	g.ResolveExtractions("myapp", revID)
 
 	key := g.resolveTopicKey("myapp", "order.created", revID)
-	if key != "contract:topic:myapp:order.created" {
-		t.Errorf("exact match key = %q, want contract:topic:myapp:order.created", key)
+	if key != "contract:topic:myapp:order-created" {
+		t.Errorf("exact match key = %q, want contract:topic:myapp:order-created", key)
 	}
 }
 

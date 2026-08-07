@@ -95,9 +95,9 @@ func TestResolveExtractions_OriginDrivesEvidenceExtractorID(t *testing.T) {
 
 	// Collect the import-evidence extractor ID per target service.
 	wantByStem := map[string]string{
-		"tom.service":    "chronicle-ast",  // origin "ast"
-		"jerry.service":  "chronicle-ast",  // origin "ast+llm"
-		"cheese.service": "chronicle-scan", // untagged → llm default
+		"tom-service":    "chronicle-ast",  // origin "ast"
+		"jerry-service":  "chronicle-ast",  // origin "ast+llm"
+		"cheese-service": "chronicle-scan", // untagged → llm default
 	}
 	gotByStem := map[string]string{}
 

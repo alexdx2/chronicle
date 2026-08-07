@@ -230,9 +230,9 @@ func TestL6_FullScanWithCustomPacks(t *testing.T) {
 	mustHaveNodes := []string{
 		"data:model:" + domain + ":cat",
 		"data:model:" + domain + ":mouse",
-		"data:model:" + domain + ":battleevent",
-		"data:enum:" + domain + ":catmood",
-		"data:enum:" + domain + ":battleresult",
+		"data:model:" + domain + ":battle-event",
+		"data:enum:" + domain + ":cat-mood",
+		"data:enum:" + domain + ":battle-result",
 	}
 	for _, nk := range mustHaveNodes {
 		if !nodeKeys[nk] {
@@ -246,17 +246,17 @@ func TestL6_FullScanWithCustomPacks(t *testing.T) {
 		from     string
 		to       string
 	}{
-		// Core scan edges (PascalCase normalized to dot-case by resolveInjectTarget)
-		{"INJECTS", "arena.controller", "arena.service"},
-		{"INJECTS", "arena.service", "battle-result.producer"},
-		{"PUBLISHES_TOPIC", "battle-result.producer", "battle-results"},
-		{"CONSUMES_TOPIC", "battle-result.consumer", "battle-results"},
-		{"USES_MODEL", "arena.service", "battleevent"},
+		// Core scan edges (every casing normalized to kebab, SQ-Contract 3)
+		{"INJECTS", "arena-controller", "arena-service"},
+		{"INJECTS", "arena-service", "battle-result-producer"},
+		{"PUBLISHES_TOPIC", "battle-result-producer", "battle-results"},
+		{"CONSUMES_TOPIC", "battle-result-consumer", "battle-results"},
+		{"USES_MODEL", "arena-service", "battle-event"},
 		// Custom pack enriched edges (Bull)
-		{"PUBLISHES_TOPIC", "battle.queue", "battle-queue:attack"},
-		{"CONSUMES_TOPIC", "battle.queue", "battle-queue:attack"},
+		{"PUBLISHES_TOPIC", "battle-queue", "battle-queue:attack"},
+		{"CONSUMES_TOPIC", "battle-queue", "battle-queue:attack"},
 		// Custom pack enriched edges (Socket.IO)
-		{"PUBLISHES_TOPIC", "battle.gateway", "battle-update"},
+		{"PUBLISHES_TOPIC", "battle-gateway", "battle-update"},
 	}
 
 	for _, me := range mustHaveEdges {

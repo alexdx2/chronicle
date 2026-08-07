@@ -545,12 +545,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// to avoid creating duplicate provider nodes for controllers.
 			toNodeKey = typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
 			if fact.ToType == "" || fact.ToType == "provider" {
-				ctrlKey := "code:controller:" + domainKey + ":" + strings.ToLower(toName)
+				ctrlKey := canonicalNodeKey("code:controller:" + domainKey + ":" + toName)
 				if _, err := g.store.GetNodeIDByKey(ctrlKey); err == nil {
 					toNodeKey = ctrlKey
 				}
 				dotCase := normalizePascalCase(toName)
-				altKey := "code:provider:" + domainKey + ":" + strings.ToLower(dotCase)
+				altKey := canonicalNodeKey("code:provider:" + domainKey + ":" + dotCase)
 				if _, err := g.store.GetNodeIDByKey(altKey); err == nil {
 					toNodeKey = altKey
 				}
@@ -621,7 +621,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertionKind, assertion := buildDependencyAssertion(filePath, fact)
 
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
-		toNodeKey := "code:module:" + domainKey + ":" + normalizePackageName(fact.To)
+		toNodeKey := canonicalNodeKey("code:module:" + domainKey + ":" + normalizePackageName(fact.To))
 
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
@@ -674,7 +674,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		if !resolved {
 			// No alias match — create external_system node
-			toNodeKey = "service:external_system:" + domainKey + ":" + strings.ToLower(targetName)
+			toNodeKey = canonicalNodeKey("service:external_system:" + domainKey + ":" + targetName)
 			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
 			// Remember the endpoint reference: if the host is still external
 			// after the merge pass, the post-pass materializes the endpoint
@@ -770,7 +770,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Add evidence to existing edge — don't create edges from call facts alone
 		if fact.Object != "" {
-			toNodeKey := "code:provider:" + domainKey + ":" + strings.ToLower(fact.Object)
+			toNodeKey := canonicalNodeKey("code:provider:" + domainKey + ":" + fact.Object)
 			edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
 			// Only add evidence to existing edge — don't create edges from call facts alone
 			_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
@@ -789,7 +789,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		// Capitalize first letter to match model node naming
 		candidateName := strings.ToUpper(fact.To[:1]) + fact.To[1:]
-		modelKey := "data:model:" + domainKey + ":" + strings.ToLower(candidateName)
+		modelKey := canonicalNodeKey("data:model:" + domainKey + ":" + candidateName)
 		if modelID, err := g.store.GetNodeIDByKey(modelKey); err == nil {
 			fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 			fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -875,12 +875,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 
 		// Try service layer first (service:service:domain:name)
-		svcKey := "service:service:" + domainKey + ":" + normalizePackageName(toName)
+		svcKey := canonicalNodeKey("service:service:" + domainKey + ":" + normalizePackageName(toName))
 		toNodeKey := svcKey
 		existingNode, _ := g.store.GetNodeByKey(svcKey)
 		if existingNode == nil {
 			// Fall back to code:provider
-			toNodeKey = "code:provider:" + domainKey + ":" + strings.ToLower(toName)
+			toNodeKey = canonicalNodeKey("code:provider:" + domainKey + ":" + toName)
 		}
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
 
@@ -920,7 +920,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Capitalize model name
 		modelName := strings.ToUpper(fact.To[:1]) + fact.To[1:]
-		modelKey := "data:model:" + domainKey + ":" + strings.ToLower(modelName)
+		modelKey := canonicalNodeKey("data:model:" + domainKey + ":" + modelName)
 		modelID := g.ensureNodeID(domainKey, revisionID, modelKey, modelName, "")
 
 		edgeKey := fromNodeKey + "->" + modelKey + ":USES_MODEL"
@@ -1246,7 +1246,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 	case "model":
 		// Data model — node + USES_MODEL edge from source file
-		nodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
+		nodeKey := canonicalNodeKey("data:model:" + domainKey + ":" + fact.To)
 		modelID := g.ensureNodeID(domainKey, revisionID, nodeKey, fact.To, "")
 
 		// prisma_model assertions only verify against Prisma schema syntax
@@ -1281,7 +1281,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 	case "enum":
 		// Enum/type defined in schema — data:enum node
-		nodeKey := "data:enum:" + domainKey + ":" + strings.ToLower(fact.To)
+		nodeKey := canonicalNodeKey("data:enum:" + domainKey + ":" + fact.To)
 		g.ensureNodeID(domainKey, revisionID, nodeKey, fact.To, "")
 		assertion, _ := json.Marshal(map[string]any{"enum": fact.To})
 		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
@@ -1298,18 +1298,18 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fact.From == "" || fact.To == "" {
 			return counts, nil, nil
 		}
-		fromNodeKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.From)
+		fromNodeKey := canonicalNodeKey("data:model:" + domainKey + ":" + fact.From)
 		// Determine target type: check if To is an enum (by fact.ToType or existing node)
 		var toNodeKey string
 		if fact.ToType == "enum" {
-			toNodeKey = "data:enum:" + domainKey + ":" + strings.ToLower(fact.To)
+			toNodeKey = canonicalNodeKey("data:enum:" + domainKey + ":" + fact.To)
 		} else {
 			// Check if an enum node already exists with this name
-			enumKey := "data:enum:" + domainKey + ":" + strings.ToLower(fact.To)
+			enumKey := canonicalNodeKey("data:enum:" + domainKey + ":" + fact.To)
 			if _, err := g.store.GetNodeIDByKey(enumKey); err == nil {
 				toNodeKey = enumKey
 			} else {
-				toNodeKey = "data:model:" + domainKey + ":" + strings.ToLower(fact.To)
+				toNodeKey = canonicalNodeKey("data:model:" + domainKey + ":" + fact.To)
 			}
 		}
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, fact.From, "")
@@ -1344,8 +1344,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fact.From == "" || fact.To == "" {
 			return counts, nil, nil
 		}
-		modelKey := "data:model:" + domainKey + ":" + strings.ToLower(fact.From)
-		fieldKey := "data:field:" + domainKey + ":" + validate.NormalizeName(fact.From) + "/" + validate.NormalizeName(fact.To)
+		modelKey := canonicalNodeKey("data:model:" + domainKey + ":" + fact.From)
+		fieldKey := canonicalNodeKey("data:field:" + domainKey + ":" + validate.NormalizeName(fact.From) + "/" + validate.NormalizeName(fact.To))
 		fieldName := fact.From + "." + fact.To
 
 		modelID := g.ensureNodeID(domainKey, revisionID, modelKey, fact.From, "")
@@ -1401,14 +1401,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fieldOwner == "" || fieldName == "" {
 			return counts, nil, nil
 		}
-		ownerKey := "data:model:" + domainKey + ":" + strings.ToLower(fieldOwner)
+		ownerKey := canonicalNodeKey("data:model:" + domainKey + ":" + fieldOwner)
 		if _, err := g.store.GetNodeIDByKey(ownerKey); err != nil {
 			// Unknown model — skip silently (agent hallucination guard).
 			return counts, nil, nil
 		}
 		usageFromKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		usageFromID := g.ensureNodeID(domainKey, revisionID, usageFromKey, inferNameFromPath(filePath), filePath)
-		fKey := "data:field:" + domainKey + ":" + validate.NormalizeName(fieldOwner) + "/" + validate.NormalizeName(fieldName)
+		fKey := canonicalNodeKey("data:field:" + domainKey + ":" + validate.NormalizeName(fieldOwner) + "/" + validate.NormalizeName(fieldName))
 		fID := g.ensureNodeID(domainKey, revisionID, fKey, fieldOwner+"."+fieldName, "")
 
 		usageEdgeType := "READS_FIELD"
@@ -1459,7 +1459,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			triggerPath = parts[1]
 		}
 		triggerKey, triggerName := normalizeEndpointKey(domainKey, triggerMethod, triggerPath)
-		flowKey := "flow:use_case:" + domainKey + ":" + strings.TrimPrefix(triggerKey, "contract:endpoint:"+domainKey+":")
+		flowKey := canonicalNodeKey("flow:use_case:" + domainKey + ":" + strings.TrimPrefix(triggerKey, "contract:endpoint:"+domainKey+":"))
 		if existing, gerr := g.store.GetNodeByKey(flowKey); gerr == nil && existing != nil {
 			// Claim the derived node: the traced name and file path win.
 			if existing.Name != fact.FlowName || existing.FilePath == "" {
@@ -1525,7 +1525,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Requirements → REQUIRES edges
 		flowID, _ := g.store.GetNodeIDByKey(flowKey)
 		for _, req := range fact.Requires {
-			reqKey := "code:provider:" + domainKey + ":" + strings.ToLower(req)
+			reqKey := canonicalNodeKey("code:provider:" + domainKey + ":" + req)
 			reqID := g.ensureNodeID(domainKey, revisionID, reqKey, req, "")
 			edgeKey := flowKey + "->" + reqKey + ":REQUIRES"
 			_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -1660,7 +1660,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			return counts, nil, nil
 		}
 		svcName := normalizePackageName(fact.To)
-		nodeKey := "service:service:" + domainKey + ":" + svcName
+		nodeKey := canonicalNodeKey("service:service:" + domainKey + ":" + svcName)
 
 		// Same flattened identity = same service: a .csproj declaring
 		// "ScoreboardApi" must attach to the manifest-declared
@@ -1729,9 +1729,14 @@ func (g *Graph) registerNodeAlias(nodeID int64, alias, aliasKind string) {
 //   - Names that differ alphabetically (adding/removing letters, e.g. "battle-result" vs
 //     "battle-results") are DISTINCT topics — no plural/singular fusion.
 //   - DO NOT remove version suffixes — order.created.v2 is a different topic.
+//
+// Since SQ-Contract 3 the canonical key rule already collapses the separator
+// variants ("battle.result" and "battle_result" both key as "battle-result").
+// The punctuation-stripping search below still earns its place: it also
+// catches a separator-less spelling ("battleresult") that no rule can split.
 func (g *Graph) resolveTopicKey(domainKey, topicName string, revisionID int64) string {
 	normalized := strings.ToLower(strings.ReplaceAll(topicName, " ", "-"))
-	canonicalKey := "contract:topic:" + domainKey + ":" + normalized
+	canonicalKey := canonicalNodeKey("contract:topic:" + domainKey + ":" + normalized)
 
 	// Check if exact key exists
 	if n, _ := g.store.GetNodeByKey(canonicalKey); n != nil {
@@ -1793,6 +1798,11 @@ func (g *Graph) findNodeByNameInDomain(domainKey, name string) *store.NodeRow {
 // If the exact key doesn't exist but a stem-based node with the same name does,
 // merges by updating the old node's key to the new path-based key.
 func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, filePath string) int64 {
+	// SQ-Contract 3: the single chokepoint every resolve-pipeline key flows
+	// through, so it is where the canonical spelling is enforced. Callers
+	// already build canonical keys via canonicalNodeKey; this is the guard
+	// that keeps a future caller from writing a second spelling.
+	nodeKey = canonicalNodeKey(nodeKey)
 	id, err := g.store.GetNodeIDByKey(nodeKey)
 	if err == nil {
 		// Patch FilePath if the existing node has none and we have one
@@ -1916,6 +1926,8 @@ func (g *Graph) addEdgeCreationEvidence(edgeKey string, revisionID int64, filePa
 }
 
 func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, filePath string) error {
+	// SQ-Contract 3 — same enforcement as ensureNodeID (see there).
+	nodeKey = canonicalNodeKey(nodeKey)
 	_, err := g.store.GetNodeIDByKey(nodeKey)
 	if err != nil {
 		parts := strings.SplitN(nodeKey, ":", 4)
@@ -2783,12 +2795,12 @@ func buildImportAssertion(fact Fact) map[string]any {
 
 func inferNodeKeyFromFile(domain, filePath string) string {
 	name := inferNameFromPath(filePath)
-	return "code:module:" + domain + ":" + strings.ToLower(name)
+	return canonicalNodeKey("code:module:" + domain + ":" + name)
 }
 
 func inferNodeKeyFromImport(domain, module string) string {
 	name := inferNameFromImport(module)
-	return "code:module:" + domain + ":" + strings.ToLower(name)
+	return canonicalNodeKey("code:module:" + domain + ":" + name)
 }
 
 // typedNodeKey creates a node key using the type provided by Claude in the fact.
@@ -2797,7 +2809,7 @@ func typedNodeKey(domain, name, nodeType string) string {
 	if nodeType == "" {
 		nodeType = "provider"
 	}
-	return "code:" + nodeType + ":" + domain + ":" + strings.ToLower(name)
+	return canonicalNodeKey("code:" + nodeType + ":" + domain + ":" + name)
 }
 
 func typedNodeKeyFromFile(domain, filePath, nodeType string) string {
@@ -2878,29 +2890,91 @@ func inferNameFromImport(module string) string {
 	return module
 }
 
-// normalizePascalCase converts PascalCase class names to dot-case file names
-// to match the file-based naming convention used by inferNameFromPath.
-// e.g. "ArenaService" → "arena.service", "BattleResultProducer" → "battle-result.producer"
+// normalizePascalCase converts a class-style identifier to the dot-case stem
+// inferNameFromPath produces for the file it lives in, so a name-based
+// reference and a path-based one land on the same node.
+//
+//	"ArenaService"         → "arena.service"
+//	"BattleResultProducer" → "battle.result.producer"
+//	"HTTPClient"           → "http.client"    (an acronym run is one word)
+//	"CONFIG_SERVICE"       → "config_service" (no camel boundary to split on)
+//	"already.lower"        → "already.lower"
+//
+// It splits on real word boundaries only: lower→upper, digit→upper, and the
+// last letter of an acronym run when an uppercase is followed by a lowercase.
+// Splitting on EVERY uppercase (the previous rule) shredded SCREAMING_SNAKE
+// identifiers one letter per word — "CONFIG_SERVICE" became
+// "c.o.n.f.i.g_.s.e.r.v.i.c.e".
+//
+// This is a NAME-level normalizer: the "_" and "." it leaves in place become
+// the canonical "-" when the key built from it passes through
+// canonicalNodeKey.
 func normalizePascalCase(name string) string {
-	if name == "" || !strings.ContainsAny(name[:1], "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-		return name // already lowercase or dot-case
+	if name == "" {
+		return name
 	}
+	// SCREAMING_SNAKE / SCREAMING: every rune is an uppercase boundary, so a
+	// case-split would shred it. There is no camel boundary here — lowercase
+	// it whole and keep the separators the author wrote.
+	if isUpperSnake(name) {
+		return strings.ToLower(name)
+	}
+	runes := []rune(name)
+	isUpper := func(r rune) bool { return r >= 'A' && r <= 'Z' }
+	isLower := func(r rune) bool { return r >= 'a' && r <= 'z' }
+	isDigit := func(r rune) bool { return r >= '0' && r <= '9' }
+
 	var parts []string
-	current := ""
-	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
-			if current != "" {
-				parts = append(parts, strings.ToLower(current))
+	current := make([]rune, 0, len(runes))
+	for i, r := range runes {
+		if i > 0 && isUpper(r) && len(current) > 0 {
+			prev := runes[i-1]
+			nextIsLower := i+1 < len(runes) && isLower(runes[i+1])
+			// "arenaService" / "v2Service" → boundary before the upper.
+			// "HTTPClient" → boundary at the C, the last upper before a lower.
+			if isLower(prev) || isDigit(prev) || (isUpper(prev) && nextIsLower) {
+				parts = append(parts, strings.ToLower(string(current)))
+				current = current[:0]
 			}
-			current = string(r)
-		} else {
-			current += string(r)
 		}
+		current = append(current, r)
 	}
-	if current != "" {
-		parts = append(parts, strings.ToLower(current))
+	if len(current) > 0 {
+		parts = append(parts, strings.ToLower(string(current)))
 	}
 	return strings.Join(parts, ".")
+}
+
+// isUpperSnake reports whether name carries no case information at all —
+// only uppercase letters, digits and separators (SESSION_COOKIE, ORDERS, V2).
+func isUpperSnake(name string) bool {
+	hasLetter := false
+	for _, r := range name {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasLetter = true
+		case r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	return hasLetter
+}
+
+// canonicalNodeKey returns key in the one spelling the whole system agrees on
+// (SQ-Contract 3, documented in validate.NormalizeNodeKey). Every key the
+// resolver mints OR looks up goes through here, so a key minted from a class
+// name and one minted from a file path are the same string, and an edge key
+// built from these strings names nodes that actually exist.
+//
+// A key that does not parse as layer:type:domain:qualified_name is returned
+// unchanged — the caller is building a prefix or a partial, and the existing
+// behaviour stands.
+func canonicalNodeKey(key string) string {
+	if norm, err := validate.NormalizeNodeKey(key); err == nil {
+		return norm
+	}
+	return key
 }
 
 // flattenName strips dots, dashes, underscores, slashes and lowercases for fuzzy comparison.
@@ -3109,7 +3183,7 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 	}
 	dotCase := normalizePascalCase(identity)
 	nodeType := inferNodeTypeFromClassName(className)
-	key := typedNodeKey(domainKey, strings.ToLower(dotCase), nodeType)
+	key := typedNodeKey(domainKey, dotCase, nodeType)
 	id := g.ensureNodeID(domainKey, revisionID, key, dotCase, "")
 	return key, id
 }
@@ -3237,11 +3311,11 @@ func (g *Graph) lookupClassNameTarget(domainKey string, revisionID int64, classN
 		flat,
 	}
 	for _, c := range candidates {
-		key := prefix + c
+		key := canonicalNodeKey(prefix + c)
 		if id, err := g.store.GetNodeIDByKey(key); err == nil {
 			return key, id
 		}
-		key = "code:controller:" + domainKey + ":" + c
+		key = canonicalNodeKey("code:controller:" + domainKey + ":" + c)
 		if id, err := g.store.GetNodeIDByKey(key); err == nil {
 			return key, id
 		}
@@ -3380,6 +3454,11 @@ func joinRoutePath(prefix, route string) string {
 // normalizeEndpointKey builds a consistent endpoint node key from method + path.
 // Format: "contract:endpoint:{domain}:{method}:{path}" where path preserves slashes.
 // This MUST be used by all code that creates or looks up endpoint nodes.
+//
+// The route shape is the one canonicalNodeKey preserves verbatim (SQ-Contract
+// 3, rule 1): "[invoiceId]" lowercases to "[invoiceid]" and keeps its brackets
+// as one path segment, so a reference normalized on the import_all side lands
+// on this very key.
 func normalizeEndpointKey(domainKey, method, path string) (nodeKey string, displayName string) {
 	method = strings.ToUpper(method)
 	if method == "" {
@@ -3391,7 +3470,7 @@ func normalizeEndpointKey(domainKey, method, path string) (nodeKey string, displ
 		path = "/" + path
 	}
 	displayName = method + " " + path
-	nodeKey = "contract:endpoint:" + domainKey + ":" + strings.ToLower(method+":"+path)
+	nodeKey = canonicalNodeKey("contract:endpoint:" + domainKey + ":" + strings.ToLower(method+":"+path))
 	return
 }
 

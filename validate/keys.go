@@ -60,8 +60,63 @@ func NormalizeName(name string) string {
 	return strings.Join(words, "-")
 }
 
-// NormalizeNodeKey enforces format: layer:type:domain:qualified_name
-// Lowercases, trims, strips leading/trailing slashes from qualified_name.
+// routeQualifiedName splits a method-prefixed route qualified_name into its
+// prefix and rooted path: "get:/orders/[orderId]" → ("get:", "/orders/[orderId]").
+// ok is false for anything else, including bare paths ("/a/b") and plain
+// identifiers — only the "<word>:/..." shape the endpoint/flow emitters mint
+// is treated as a route.
+func routeQualifiedName(qn string) (prefix, path string, ok bool) {
+	i := strings.Index(qn, ":")
+	if i <= 0 {
+		return "", "", false
+	}
+	for _, r := range qn[:i] {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return "", "", false
+		}
+	}
+	if !strings.HasPrefix(qn[i+1:], "/") {
+		return "", "", false
+	}
+	return qn[:i+1], qn[i+1:], true
+}
+
+// NormalizeNodeKey enforces format: layer:type:domain:qualified_name.
+//
+// # The canonical key rule (SQ-Contract 3)
+//
+// There is ONE spelling per key, and both writers agree on it: the import_all
+// path (graph.UpsertNode/UpsertEdge) and the resolve pipeline
+// (graph.ensureNodeID/ensureNode) both send every key through this function,
+// and every key either of them mints is a FIXED POINT of it — normalizing a
+// second time changes nothing. Anything else means two canonical forms for one
+// entity, and honest references get rejected.
+//
+// layer, type and domain are trimmed and lowercased. qualified_name is
+// normalized by shape:
+//
+//  1. Route shape — "<word>:/..." (a method prefix followed by a rooted path,
+//     e.g. "get:/invoices/[invoiceId]/lines"): lowercased VERBATIM, structure
+//     preserved. Punctuation is data in a route: "[invoiceId]", "{orderId}"
+//     and ":orderId" are each ONE path segment, and kebab-inserting a dash
+//     ("[invoice-id]") invents a route that exists nowhere in the source.
+//     Trailing slashes are trimmed; a root path stays "/".
+//  2. Everything else: split on "/", each segment through NormalizeName (any
+//     casing convention → lowercase kebab), rejoined. This is what collapses
+//     the several spellings of one identity onto one key — "OrdersService",
+//     "orders.service" and "orders_service" all key as "orders-service", which
+//     is exactly how a class-name reference finds the node minted from
+//     orders.service.ts. "@" passes through, so scoped package keys
+//     ("@okeep/ui") are fixed points; a leading/trailing "/" is stripped.
+//
+// Consequence worth naming: inside a bare identifier a dot is a word
+// separator, not part of the name — the npm package "socket.io" keys as
+// "socket-io". At this layer a bare "socket.io" is indistinguishable from the
+// file stem "arena.service", and preserving dots for one would break the
+// PascalCase↔dot-case convergence that rule 2 exists for. The true specifier
+// survives on the node's name and aliases, so only the key spelling is lossy.
 func NormalizeNodeKey(key string) (string, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -78,15 +133,24 @@ func NormalizeNodeKey(key string) (string, error) {
 	domain := strings.ToLower(strings.TrimSpace(parts[2]))
 	qualifiedName := strings.TrimSpace(parts[3])
 
+	// Rule 1: route-shaped qualified names keep their structure.
+	if prefix, path, ok := routeQualifiedName(qualifiedName); ok && layer != "" && nodeType != "" && domain != "" {
+		path = strings.TrimRight(path, "/")
+		if path == "" {
+			path = "/"
+		}
+		return layer + ":" + nodeType + ":" + domain + ":" + strings.ToLower(prefix+path), nil
+	}
+
 	qualifiedName = strings.Trim(qualifiedName, "/")
 
 	if layer == "" || nodeType == "" || domain == "" || qualifiedName == "" {
 		return "", fmt.Errorf("node_key %q has empty component", key)
 	}
 
-	// Normalize the qualified_name part — convert PascalCase/camelCase/dots/underscores
-	// to kebab-case so ArenaController, arena.controller, arenaController all map to same key.
-	// Preserve path separators (/) for file-path-based keys.
+	// Rule 2: convert PascalCase/camelCase/dots/underscores to kebab-case so
+	// ArenaController, arena.controller, arenaController all map to the same key.
+	// Preserve path separators (/) for file-path-based and scoped-package keys.
 	if strings.Contains(qualifiedName, "/") {
 		segments := strings.Split(qualifiedName, "/")
 		for i, seg := range segments {

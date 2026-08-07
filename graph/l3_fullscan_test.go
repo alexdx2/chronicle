@@ -270,15 +270,15 @@ func TestL3_FullScan_MockedLLM(t *testing.T) {
 	mustHaveNodes := []string{
 		// Models
 		"data:model:" + domain + ":cat",
-		"data:model:" + domain + ":catweapon",
+		"data:model:" + domain + ":cat-weapon",
 		"data:model:" + domain + ":mouse",
 		"data:model:" + domain + ":trap",
-		"data:model:" + domain + ":battleevent",
+		"data:model:" + domain + ":battle-event",
 		// Enums
-		"data:enum:" + domain + ":catmood",
-		"data:enum:" + domain + ":weapontype",
-		"data:enum:" + domain + ":trapeffect",
-		"data:enum:" + domain + ":battleresult",
+		"data:enum:" + domain + ":cat-mood",
+		"data:enum:" + domain + ":weapon-type",
+		"data:enum:" + domain + ":trap-effect",
+		"data:enum:" + domain + ":battle-result",
 	}
 	for _, nk := range mustHaveNodes {
 		if !nodeKeys[nk] {
@@ -299,29 +299,29 @@ func TestL3_FullScan_MockedLLM(t *testing.T) {
 		from     string // substring match in from_node_key (case-insensitive)
 		to       string // substring match in to_node_key (case-insensitive)
 	}{
-		// Controller -> Service INJECTS (PascalCase normalized to dot-case)
-		{"INJECTS", "tom.controller", "tom.service"},
-		{"INJECTS", "jerry.controller", "jerry.service"},
-		{"INJECTS", "arena.controller", "arena.service"},
-		{"INJECTS", "stats.controller", "spectator.service"},
+		// Controller -> Service INJECTS (every casing normalized to kebab, SQ-Contract 3)
+		{"INJECTS", "tom-controller", "tom-service"},
+		{"INJECTS", "jerry-controller", "jerry-service"},
+		{"INJECTS", "arena-controller", "arena-service"},
+		{"INJECTS", "stats-controller", "spectator-service"},
 		// Service -> PrismaService INJECTS
-		{"INJECTS", "tom.service", "prisma.service"},
-		{"INJECTS", "jerry.service", "prisma.service"},
-		{"INJECTS", "arena.service", "prisma.service"},
+		{"INJECTS", "tom-service", "prisma-service"},
+		{"INJECTS", "jerry-service", "prisma-service"},
+		{"INJECTS", "arena-service", "prisma-service"},
 		// ArenaService -> clients INJECTS
-		{"INJECTS", "arena.service", "tom.client"},
-		{"INJECTS", "arena.service", "jerry.client"},
-		{"INJECTS", "arena.service", "battle-result.producer"}, // fuzzy: BattleResultProducer → battle-result.producer
+		{"INJECTS", "arena-service", "tom-client"},
+		{"INJECTS", "arena-service", "jerry-client"},
+		{"INJECTS", "arena-service", "battle-result-producer"}, // fuzzy: BattleResultProducer → battle-result-producer
 		// Kafka
-		{"PUBLISHES_TOPIC", "battle-result.producer", "battle-results"},
-		{"CONSUMES_TOPIC", "battle-result.consumer", "battle-results"},
+		{"PUBLISHES_TOPIC", "battle-result-producer", "battle-results"},
+		{"CONSUMES_TOPIC", "battle-result-consumer", "battle-results"},
 		// Prisma relations
-		{"REFERENCES_MODEL", "cat", "catweapon"},
+		{"REFERENCES_MODEL", "cat", "cat-weapon"},
 		{"REFERENCES_MODEL", "mouse", "trap"},
 		// USES_MODEL
-		{"USES_MODEL", "tom.service", "cat"},
-		{"USES_MODEL", "jerry.service", "mouse"},
-		{"USES_MODEL", "arena.service", "battleevent"},
+		{"USES_MODEL", "tom-service", "cat"},
+		{"USES_MODEL", "jerry-service", "mouse"},
+		{"USES_MODEL", "arena-service", "battle-event"},
 	}
 
 	for _, me := range mustHaveEdges {
@@ -346,10 +346,10 @@ func TestL3_FullScan_MockedLLM(t *testing.T) {
 		to       string
 		reason   string
 	}{
-		{"USES_MODEL", "tom.service", "mouse", "TomService never touches Mouse"},
-		{"USES_MODEL", "jerry.service", "cat", "JerryService never touches Cat"},
-		{"USES_MODEL", "tom.service", "battleevent", "TomService doesn't use BattleEvent"},
-		{"PUBLISHES_TOPIC", "tom.service", "battle-results", "TomService doesn't publish Kafka"},
+		{"USES_MODEL", "tom-service", "mouse", "TomService never touches Mouse"},
+		{"USES_MODEL", "jerry-service", "cat", "JerryService never touches Cat"},
+		{"USES_MODEL", "tom-service", "battle-event", "TomService doesn't use BattleEvent"},
+		{"PUBLISHES_TOPIC", "tom-service", "battle-results", "TomService doesn't publish Kafka"},
 	}
 
 	for _, mne := range mustNotHaveEdges {

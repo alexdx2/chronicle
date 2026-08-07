@@ -548,8 +548,8 @@ func TestR7b_GatewayEmit_NoPublishesTopic(t *testing.T) {
 }
 
 // TestR7a_CallsService_PathKeyedNodeDropped verifies that a calls_service fact
-// targeting a class whose node is path-keyed (e.g. arena/arena.service → key has
-// dotted name) is still dropped as a local call.
+// targeting a class whose node is path-keyed (e.g. arena/arena.service.ts → key is
+// the canonical path form arena/arena-service) is still dropped as a local call.
 // lookupCodeNode uses key suffix matching to catch path-keyed nodes (their Names
 // contain slashes and are stored as lowercase file paths, not PascalCase).
 func TestR7a_CallsService_PathKeyedNodeDropped(t *testing.T) {
@@ -560,7 +560,7 @@ func TestR7a_CallsService_PathKeyedNodeDropped(t *testing.T) {
 	// arena.service.ts is scanned with real facts. The key is path-based;
 	// the Name contains a slash (not PascalCase, not dot-case placeholder).
 	s.UpsertNode(store.NodeRow{
-		NodeKey:            "code:provider:testapp:arena-api/src/arena/arena.service",
+		NodeKey:            "code:provider:testapp:arena-api/src/arena/arena-service",
 		Layer:              "code",
 		NodeType:           "provider",
 		DomainKey:          domain,
@@ -582,7 +582,7 @@ func TestR7a_CallsService_PathKeyedNodeDropped(t *testing.T) {
 		if !e.Active {
 			continue
 		}
-		if strings.Contains(e.ToNodeKey, "arenaservice") || strings.Contains(e.ToNodeKey, "arena.service") {
+		if strings.Contains(e.ToNodeKey, "arenaservice") || strings.Contains(e.ToNodeKey, "arena-service") {
 			t.Errorf("R7a: CALLS_SERVICE to local path-keyed node must be dropped; got %s", e.EdgeKey)
 		}
 	}
@@ -618,7 +618,7 @@ func TestR7b_Gateway_ClassifiedAsProvider(t *testing.T) {
 	nodes, _ := s.ListNodes(store.NodeFilter{Domain: domain})
 	var gatewayNode *store.NodeRow
 	for i := range nodes {
-		if strings.Contains(strings.ToLower(nodes[i].NodeKey), "battle.gateway") ||
+		if strings.Contains(strings.ToLower(nodes[i].NodeKey), "battle-gateway") ||
 			strings.Contains(strings.ToLower(nodes[i].NodeKey), "battlegateway") {
 			gatewayNode = &nodes[i]
 			break
@@ -633,7 +633,7 @@ func TestR7b_Gateway_ClassifiedAsProvider(t *testing.T) {
 
 	// The CONTAINS edge from the module must point to the same provider node
 	containsEdges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
-	moduleKey := "code:module:testapp:arena-api/src/arena/arena.module"
+	moduleKey := "code:module:testapp:arena-api/src/arena/arena-module"
 	foundContains := false
 	for _, e := range containsEdges {
 		if e.FromNodeKey == moduleKey && e.ToNodeKey == gatewayNode.NodeKey {
@@ -648,7 +648,7 @@ func TestR7b_Gateway_ClassifiedAsProvider(t *testing.T) {
 	// No controller node for BattleGateway should exist
 	for _, n := range nodes {
 		if n.NodeType == "controller" &&
-			(strings.Contains(strings.ToLower(n.NodeKey), "battle.gateway") ||
+			(strings.Contains(strings.ToLower(n.NodeKey), "battle-gateway") ||
 				strings.Contains(strings.ToLower(n.NodeKey), "battlegateway")) {
 			t.Errorf("R7b: controller node must not exist for WS gateway; got %s", n.NodeKey)
 		}

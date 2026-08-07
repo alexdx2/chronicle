@@ -91,9 +91,9 @@ func TestDefectA_ImportHandler_RelativePath_NoCrossServiceEdge(t *testing.T) {
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
 
-	moduleKey := "code:module:testapp:tom-api/src/tom/tom.module"
-	tomPrismaKey := "code:provider:testapp:tom-api/src/prisma/prisma.service"
-	arenaPrismaKey := "code:provider:testapp:arena-api/src/prisma/prisma.service"
+	moduleKey := "code:module:testapp:tom-api/src/tom/tom-module"
+	tomPrismaKey := "code:provider:testapp:tom-api/src/prisma/prisma-service"
+	arenaPrismaKey := "code:provider:testapp:arena-api/src/prisma/prisma-service"
 
 	allEdges, _ := s.ListEdges(store.EdgeFilter{})
 
@@ -143,7 +143,7 @@ func TestDefectA_ImportHandler_RelativePath_StemNodeNotCreated(t *testing.T) {
 	}
 
 	// Must NOT have a stem node for "prisma.service" (without path)
-	stemKey := "code:provider:testapp:prisma.service"
+	stemKey := "code:provider:testapp:prisma-service"
 	nodes, _ := s.ListNodes(store.NodeFilter{Domain: domain})
 	for _, n := range nodes {
 		if n.NodeKey == stemKey {
@@ -232,11 +232,11 @@ func TestDefectA_TwoServices_NoCrossServiceContains(t *testing.T) {
 	allEdges, _ := s.ListEdges(store.EdgeFilter{})
 	containsEdges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
 
-	tomModKey := "code:module:testapp:fixtures/tom-api/src/tom/tom.module"
-	tomCtrlKey := "code:controller:testapp:fixtures/tom-api/src/tom/tom.controller"
-	tomPrismaKey := "code:provider:testapp:fixtures/tom-api/src/prisma/prisma.service"
-	arenaModKey := "code:module:testapp:fixtures/arena-api/src/arena/arena.module"
-	arenaPrismaKey := "code:provider:testapp:fixtures/arena-api/src/prisma/prisma.service"
+	tomModKey := "code:module:testapp:fixtures/tom-api/src/tom/tom-module"
+	tomCtrlKey := "code:controller:testapp:fixtures/tom-api/src/tom/tom-controller"
+	tomPrismaKey := "code:provider:testapp:fixtures/tom-api/src/prisma/prisma-service"
+	arenaModKey := "code:module:testapp:fixtures/arena-api/src/arena/arena-module"
+	arenaPrismaKey := "code:provider:testapp:fixtures/arena-api/src/prisma/prisma-service"
 
 	// tom.module → tom's prisma must be ACTIVE
 	tomPrismaActive := false
@@ -349,8 +349,8 @@ func TestDefectB_ModuleControllerCONTAINS_StaysActive_WithSelfEdgeInput(t *testi
 		t.Fatalf("ResolveExtractions: %v", err)
 	}
 
-	moduleKey := "code:module:testapp:tom-api/src/tom/tom.module"
-	controllerKey := "code:controller:testapp:tom-api/src/tom/tom.controller"
+	moduleKey := "code:module:testapp:tom-api/src/tom/tom-module"
+	controllerKey := "code:controller:testapp:tom-api/src/tom/tom-controller"
 
 	allEdges, _ := s.ListEdges(store.EdgeFilter{})
 	containsEdges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONTAINS"})
@@ -397,7 +397,7 @@ func TestDefectB_FindNodeByNameInDomain_ExactNameMatch(t *testing.T) {
 		LastSeenRevisionID: revID,
 	})
 	s.UpsertNode(store.NodeRow{
-		NodeKey:            "code:module:testapp:tom-api/src/tom/tom.module",
+		NodeKey:            "code:module:testapp:tom-api/src/tom/tom-module",
 		Layer:              "code",
 		NodeType:           "module",
 		DomainKey:          domain,
