@@ -3,6 +3,7 @@ package graph
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -39,13 +40,13 @@ func boundaryPriority(filePath string) int {
 
 // DiscoverResult holds files found during project discovery.
 type DiscoverResult struct {
-	Files        []string          `json:"files"`
-	TotalFiles   int               `json:"total_files"`
-	TotalGit     int               `json:"total_git_files"`     // all git-tracked files before filtering
-	Excluded     int               `json:"excluded"`            // files excluded by patterns
-	ByDirectory  map[string]int    `json:"by_directory"`        // file count per top-level directory
-	ByExtension  map[string]int    `json:"by_extension"`        // file count per extension
-	ScanConfig   map[string]any    `json:"scan_config"`
+	Files       []string       `json:"files"`
+	TotalFiles  int            `json:"total_files"`
+	TotalGit    int            `json:"total_git_files"` // all git-tracked files before filtering
+	Excluded    int            `json:"excluded"`        // files excluded by patterns
+	ByDirectory map[string]int `json:"by_directory"`    // file count per top-level directory
+	ByExtension map[string]int `json:"by_extension"`    // file count per extension
+	ScanConfig  map[string]any `json:"scan_config"`
 }
 
 // ErrNoScanConfig is returned by DiscoverFilesOpts when the resolved scan
@@ -193,17 +194,44 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 			// 'scan_file' only — verify_file (chronicle_invalidate_changed)
 			// and trace_flow (phase-2 flow tracing) obligations live on the
 			// same revision_id and must not be deleted by a re-discovery.
-			if _, err := tx.DeleteScanFileObligationsForRevision(revisionID); err != nil {
+			//
+			// SATISFIED work survives, as long as the file is still in scope.
+			// A mid-scan re-discovery (widened scan config, a re-run after a
+			// crash) used to reset every already-extracted file back to
+			// "open" and re-ask the agent to read files it had just read.
+			// Files that dropped OUT of the discovered set lose their rows
+			// including the satisfied ones — they are no longer part of this
+			// scan, and a satisfied obligation for an out-of-scope file
+			// misreports the scan's scope.
+			satisfied, err := tx.SatisfiedScanFileTargets(revisionID)
+			if err != nil {
+				return fmt.Errorf("read satisfied scan_file obligations for revision %d: %w", revisionID, err)
+			}
+			keep := make([]string, 0, len(satisfied))
+			keptCount := make(map[string]int, len(satisfied))
+			for _, f := range filtered {
+				if n, ok := satisfied[f]; ok && n > 0 {
+					keep = append(keep, f)
+					keptCount[f] = n
+				}
+			}
+			if _, err := tx.DeleteScanFileObligationsForRevision(revisionID, keep); err != nil {
 				return fmt.Errorf("clear prior scan_file obligations for revision %d: %w", revisionID, err)
 			}
 
 			// Create scan_file obligations for each discovered file —
 			// per-file domain from manifest. When votes_needed > 1, create N
-			// obligations per file with vote metadata.
+			// obligations per file with vote metadata. A file whose satisfied
+			// rows were preserved above needs only the REMAINING votes (none
+			// at all in the common votes=1 case).
 			for _, f := range filtered {
 				domain := domainKey
 				if m != nil {
 					domain = m.DomainForFile(f)
+				}
+				needed := vn - keptCount[f]
+				if needed <= 0 {
+					continue
 				}
 				if vn <= 1 {
 					// votes=1: single obligation, no vote metadata (existing behavior)
@@ -211,11 +239,13 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 						return fmt.Errorf("create obligation for %s: %w", f, err)
 					}
 				} else {
-					// votes>1: create N obligations per file with vote metadata
+					// votes>1: create the outstanding N obligations with vote
+					// metadata. Vote indices continue after the preserved ones
+					// so a partially-voted file keeps distinct indices.
 					hash := sha256.Sum256([]byte(f))
 					shortHash := hex.EncodeToString(hash[:6]) // 12 hex chars
 					voteGroup := fmt.Sprintf("%d:%s:%s", revisionID, domain, shortHash)
-					for i := 1; i <= vn; i++ {
+					for i := keptCount[f] + 1; i <= vn; i++ {
 						if _, err := tx.CreateObligationWithVote(revisionID, domain, "scan_file", f, "git-tracked, matches scan config", voteGroup, i); err != nil {
 							return fmt.Errorf("create obligation (vote %d) for %s: %w", i, f, err)
 						}
@@ -263,6 +293,10 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 					Status:              "active",
 					FirstSeenRevisionID: revisionID,
 					LastSeenRevisionID:  revisionID,
+					// The raw declared type survives the lossy fold above —
+					// ownHostsForDomain needs it to keep a declared third
+					// party out of "our own network". See ManifestInfraMetadata.
+					Metadata: ManifestInfraMetadata(infra.Type),
 				}); err != nil {
 					return fmt.Errorf("upsert infra node %s: %w", nodeKey, err)
 				}
@@ -435,4 +469,86 @@ func registryValidInfraType(reg *registry.Registry, t string) string {
 // writer touched it last).
 func RegistryValidInfraType(reg *registry.Registry, t string) string {
 	return registryValidInfraType(reg, t)
+}
+
+// manifestInfraTypeKey is the node-metadata key carrying the RAW `type:`
+// string a manifest infrastructure entry declared, before
+// registryValidInfraType folds it onto a registered node type.
+//
+// It has to be preserved somewhere, because the fold is lossy in exactly the
+// way that matters: "external_api", "telephony", "llm" and "media-storage"
+// are none of them registered infra types, so all four land on the generic
+// "infrastructure" and become indistinguishable from a Kafka broker on the
+// node_type column. ownHostsForDomain has to tell them apart — an entry that
+// declares a third party must not fold that third party's host into "our own
+// network" (see isExternalInfraType).
+const manifestInfraTypeKey = "manifest_infra_type"
+
+// ManifestInfraMetadata builds the metadata JSON for a manifest-derived infra
+// node, stamping the raw declared type under manifestInfraTypeKey. Both
+// writers of infra nodes (this file's discover pass and mcpserver's
+// save_manifest handler) must use it, or the same entry means different
+// things depending on which writer ran last.
+func ManifestInfraMetadata(rawType string) string {
+	raw := strings.TrimSpace(rawType)
+	if raw == "" {
+		return "{}"
+	}
+	b, err := json.Marshal(map[string]string{manifestInfraTypeKey: raw})
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+// manifestInfraType reads the raw declared type back off a node's metadata.
+// Returns "" for nodes written before this was stamped (or by any other
+// writer) — an unknown raw type is treated as NOT external, which is the
+// pre-existing behavior.
+func manifestInfraType(metadata string) string {
+	if metadata == "" {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(metadata), &m); err != nil {
+		return ""
+	}
+	s, _ := m[manifestInfraTypeKey].(string)
+	return s
+}
+
+// externalInfraTypes are the manifest `type:` values that name a THIRD PARTY
+// rather than a piece of the domain's own network. Declaring
+// `type: external_api, address: https://api.telegram.org` says "we call
+// Telegram", not "we run Telegram" — the address belongs to someone else and
+// must keep classifying as external (isExternalHost).
+//
+// Both separator spellings are listed because manifests use either.
+var externalInfraTypes = map[string]bool{
+	"external_api":     true,
+	"external-api":     true,
+	"external_service": true,
+	"external-service": true,
+	"external":         true,
+	"third_party":      true,
+	"third-party":      true,
+	"saas":             true,
+	"telephony":        true,
+	"llm":              true,
+	"media-storage":    true,
+	"media_storage":    true,
+}
+
+// isExternalInfraType reports whether a raw manifest infra `type:` names a
+// third party (externalInfraTypes).
+//
+// Deliberately type-driven only — NOT "any https:// address with a public
+// TLD". isExternalHost documents declaring a host under
+// `infrastructure:`/`services:` as THE way to tell Chronicle that a public
+// FQDN really is yours; a scheme/TLD belt would quietly break that escape
+// hatch for every domain that fronts its own API on a public domain name.
+// An entry whose type says third party is excluded; everything else is
+// still trusted as declared.
+func isExternalInfraType(rawType string) bool {
+	return externalInfraTypes[strings.ToLower(strings.TrimSpace(rawType))]
 }

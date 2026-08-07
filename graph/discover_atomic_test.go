@@ -324,3 +324,89 @@ func TestDiscoverFiles_UpsertNodeConflictFailsTransaction(t *testing.T) {
 		t.Fatalf("DB changed despite UpsertNode conflict — tx should roll back entirely:\n%s", diff)
 	}
 }
+
+// A re-discovery must not throw away work the agent already did. The delete
+// above is unconditional in shape but not in content: a scan_file obligation
+// that is already SATISFIED, for a file the new discovery still finds, is
+// preserved. Without this, any mid-scan re-discover (the agent widened the
+// scan config, or re-ran discover_files after a crash) reset every extracted
+// file back to "open" and re-asked for files that had just been read.
+//
+// The other half of the rule is equally load-bearing: a satisfied row whose
+// file dropped OUT of the discovered set IS deleted — the file is no longer
+// in scope, and keeping its obligation would misreport what this scan
+// covered.
+func TestDiscoverFiles_ReDiscoveryPreservesSatisfiedObligations(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	tmpDir := makeTreeWithNFiles(t, 2)
+
+	wide := &manifest.Manifest{Domains: []manifest.DomainEntry{
+		{Name: "testapp", Scan: manifest.ScanConfig{Include: []string{"src/**"}}},
+	}}
+	if _, err := g.DiscoverFilesOpts(tmpDir, "testapp", revID, wide, DiscoverOpts{}); err != nil {
+		t.Fatalf("first discover: %v", err)
+	}
+
+	statuses := func() map[string]string {
+		t.Helper()
+		all, err := s.ListAllObligations(revID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for _, o := range all {
+			if o.ObligationType == "scan_file" {
+				out[o.TargetKey] = o.Status
+			}
+		}
+		return out
+	}
+
+	before := statuses()
+	if len(before) != 2 {
+		t.Fatalf("first discover created %d scan_file obligations, want 2: %v", len(before), before)
+	}
+
+	// The agent extracts one of the two files.
+	if err := s.SatisfyObligation(revID, "scan_file", "src/file_0.txt"); err != nil {
+		t.Fatalf("SatisfyObligation: %v", err)
+	}
+
+	// Re-discover with the SAME file set: the satisfied row survives, the
+	// open one is re-created.
+	if _, err := g.DiscoverFilesOpts(tmpDir, "testapp", revID, wide, DiscoverOpts{}); err != nil {
+		t.Fatalf("second discover: %v", err)
+	}
+	after := statuses()
+	if after["src/file_0.txt"] != "satisfied" {
+		t.Errorf("src/file_0.txt status after re-discovery = %q, want satisfied (work must not be reset)", after["src/file_0.txt"])
+	}
+	if after["src/file_1.txt"] != "open" {
+		t.Errorf("src/file_1.txt status after re-discovery = %q, want open", after["src/file_1.txt"])
+	}
+	all, _ := s.ListAllObligations(revID)
+	scanFiles := 0
+	for _, o := range all {
+		if o.ObligationType == "scan_file" {
+			scanFiles++
+		}
+	}
+	if scanFiles != 2 {
+		t.Errorf("scan_file obligations after re-discovery = %d, want 2 (no duplicate for the preserved file)", scanFiles)
+	}
+
+	// Re-discover with file_0 OUT of scope: its satisfied row goes with it.
+	narrow := &manifest.Manifest{Domains: []manifest.DomainEntry{
+		{Name: "testapp", Scan: manifest.ScanConfig{Include: []string{"src/file_1.txt"}}},
+	}}
+	if _, err := g.DiscoverFilesOpts(tmpDir, "testapp", revID, narrow, DiscoverOpts{}); err != nil {
+		t.Fatalf("third discover: %v", err)
+	}
+	narrowed := statuses()
+	if _, still := narrowed["src/file_0.txt"]; still {
+		t.Errorf("src/file_0.txt obligation survived leaving the discovered set: %v", narrowed)
+	}
+	if narrowed["src/file_1.txt"] != "open" {
+		t.Errorf("src/file_1.txt status = %q, want open", narrowed["src/file_1.txt"])
+	}
+}

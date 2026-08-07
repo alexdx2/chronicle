@@ -16,28 +16,28 @@ import (
 
 // Fact represents a single extracted observation from a source file.
 type Fact struct {
-	Kind       string   `json:"kind"`                  // import, call, decorator, http_call, dependency, model, enum, model_relation, endpoint, produces, consumes, flow, declares, parent
-	FromFile   string   `json:"from_file,omitempty"`   // source file (usually implicit from extraction context)
-	From       string   `json:"from,omitempty"`        // source entity name/identifier
-	FromType   string   `json:"from_type,omitempty"`   // node type of source: controller, provider, module, repository, service
-	To         string   `json:"to"`                    // target module/service/entity
-	ToType     string   `json:"to_type,omitempty"`     // node type of target: controller, provider, module, model, enum, topic, endpoint
-	Symbols    []string `json:"symbols,omitempty"`     // imported symbols
-	Method     string   `json:"method,omitempty"`      // HTTP method or called method name
-	Object     string   `json:"object,omitempty"`      // callee object
-	Decorator  string   `json:"decorator,omitempty"`   // decorator name
-	Target     string   `json:"target,omitempty"`      // URL or target identifier
-	Transport  string   `json:"transport,omitempty"`   // transport mechanism: "queue", "local", "kafka", etc.
-	Confidence float64  `json:"confidence,omitempty"`  // agent confidence [0,1]
-	Origin     string   `json:"origin,omitempty"`      // fact provenance: "ast", "ast+llm", or "" (llm default) — set by unionFacts
-	Note       string   `json:"note,omitempty"`        // agent uncertainty/note
-	Reason     string   `json:"reason,omitempty"`      // reason for relationship (e.g. parent container justification)
-	Section    string   `json:"section,omitempty"`     // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
+	Kind       string   `json:"kind"`                 // import, call, decorator, http_call, dependency, model, enum, model_relation, endpoint, produces, consumes, flow, declares, parent
+	FromFile   string   `json:"from_file,omitempty"`  // source file (usually implicit from extraction context)
+	From       string   `json:"from,omitempty"`       // source entity name/identifier
+	FromType   string   `json:"from_type,omitempty"`  // node type of source: controller, provider, module, repository, service
+	To         string   `json:"to"`                   // target module/service/entity
+	ToType     string   `json:"to_type,omitempty"`    // node type of target: controller, provider, module, model, enum, topic, endpoint
+	Symbols    []string `json:"symbols,omitempty"`    // imported symbols
+	Method     string   `json:"method,omitempty"`     // HTTP method or called method name
+	Object     string   `json:"object,omitempty"`     // callee object
+	Decorator  string   `json:"decorator,omitempty"`  // decorator name
+	Target     string   `json:"target,omitempty"`     // URL or target identifier
+	Transport  string   `json:"transport,omitempty"`  // transport mechanism: "queue", "local", "kafka", etc.
+	Confidence float64  `json:"confidence,omitempty"` // agent confidence [0,1]
+	Origin     string   `json:"origin,omitempty"`     // fact provenance: "ast", "ast+llm", or "" (llm default) — set by unionFacts
+	Note       string   `json:"note,omitempty"`       // agent uncertainty/note
+	Reason     string   `json:"reason,omitempty"`     // reason for relationship (e.g. parent container justification)
+	Section    string   `json:"section,omitempty"`    // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
 	// Flow-specific fields
-	FlowName   string   `json:"flow_name,omitempty"`   // use case name (e.g. "Tom attacks Jerry")
-	Trigger    string   `json:"trigger,omitempty"`      // what triggers this flow (endpoint, event, cron)
-	Steps      []string `json:"steps,omitempty"`        // ordered list of steps in the flow
-	Requires   []string `json:"requires,omitempty"`     // services/models this flow depends on
+	FlowName string   `json:"flow_name,omitempty"` // use case name (e.g. "Tom attacks Jerry")
+	Trigger  string   `json:"trigger,omitempty"`   // what triggers this flow (endpoint, event, cron)
+	Steps    []string `json:"steps,omitempty"`     // ordered list of steps in the flow
+	Requires []string `json:"requires,omitempty"`  // services/models this flow depends on
 }
 
 // frameworkInjectDenylist contains NestJS/Node framework plumbing names that
@@ -46,7 +46,7 @@ type Fact struct {
 // services. Add entries in lowercase; matching is case-insensitive.
 var frameworkInjectDenylist = map[string]bool{
 	"queue":         true, // Bull/BullMQ @InjectQueue token
-	"eventemitter2":  true, // NestJS event emitter adapter
+	"eventemitter2": true, // NestJS event emitter adapter
 	// .NET framework plumbing — runtime infrastructure, never application services.
 	"ihubcontext":          true, // SignalR push handle (the hub itself is resolved via IHubContext<XHub> type arg)
 	"iservicescopefactory": true,
@@ -71,16 +71,16 @@ type ResolveOptions struct {
 
 // ResolveExtractionsResult is returned by ResolveExtractions.
 type ResolveExtractionsResult struct {
-	FilesProcessed       int               `json:"files_processed"`
-	ExtractionsResolved  int               `json:"extractions_resolved"`
-	NodesCreated         int               `json:"nodes_created"`
-	EdgesCreated         int               `json:"edges_created"`
-	EvidenceCreated      int               `json:"evidence_created"`
-	Hygiene              GraphHygieneStats `json:"hygiene"`
-	QualityWarnings      []QualityWarning  `json:"quality_warnings,omitempty"`
-	Unresolved           []UnresolvedRef   `json:"unresolved,omitempty"`
-	Degraded             bool              `json:"degraded,omitempty"`
-	DegradedFiles        []string          `json:"degraded_files,omitempty"`
+	FilesProcessed      int               `json:"files_processed"`
+	ExtractionsResolved int               `json:"extractions_resolved"`
+	NodesCreated        int               `json:"nodes_created"`
+	EdgesCreated        int               `json:"edges_created"`
+	EvidenceCreated     int               `json:"evidence_created"`
+	Hygiene             GraphHygieneStats `json:"hygiene"`
+	QualityWarnings     []QualityWarning  `json:"quality_warnings,omitempty"`
+	Unresolved          []UnresolvedRef   `json:"unresolved,omitempty"`
+	Degraded            bool              `json:"degraded,omitempty"`
+	DegradedFiles       []string          `json:"degraded_files,omitempty"`
 }
 
 // UnresolvedRef is a reference that couldn't be automatically resolved.
@@ -95,13 +95,13 @@ type UnresolvedRef struct {
 // but couldn't be matched to a specific endpoint. Presented to the LLM
 // in the endpoint_reconcile phase so it can emit calls_endpoint facts.
 type UnmatchedHTTPCall struct {
-	FromNodeKey string   `json:"from_node_key"`         // the client node
-	FromName    string   `json:"from_name"`              // human-readable name
-	FromFile    string   `json:"from_file"`              // source file
-	TargetHost  string   `json:"target_host"`            // e.g. "tom-api"
-	TargetURL   string   `json:"target_url"`             // full URL from fact
-	Method      string   `json:"method"`                 // HTTP method
-	Path        string   `json:"path"`                   // extracted path from URL
+	FromNodeKey string `json:"from_node_key"` // the client node
+	FromName    string `json:"from_name"`     // human-readable name
+	FromFile    string `json:"from_file"`     // source file
+	TargetHost  string `json:"target_host"`   // e.g. "tom-api"
+	TargetURL   string `json:"target_url"`    // full URL from fact
+	Method      string `json:"method"`        // HTTP method
+	Path        string `json:"path"`          // extracted path from URL
 	// Endpoints is the NARROW candidate set: only endpoints exposed by
 	// controller(s) whose own directory matches TargetHost (Task 9 — the
 	// domain's full endpoint list used to be stamped here on every item,
@@ -450,6 +450,12 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	g.domainOwnHosts = g.ownHostsForDomain(domainKey)
 	defer func() { g.domainOwnHosts = nil }()
 
+	// Snapshot the packages this domain publishes itself (existing service
+	// nodes + every declares_service fact in this batch) before any
+	// dependency fact resolves its target — see ownPackagesForDomain.
+	g.domainOwnPackages = g.ownPackagesForDomain(domainKey, allFiles)
+	defer func() { g.domainOwnPackages = nil }()
+
 	// Phase 2: Create nodes and edges from facts
 	type pendingParentFact struct {
 		filePath string
@@ -767,10 +773,32 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			fromID = g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		}
 
-		// To-node: the SAME package node shape code imports produce (SQ-Contract
-		// 1) — one node per package whether it's reached via a source import or
-		// a manifest dependency entry.
-		toNodeKey := typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
+		// To-node, sibling-first: in a monorepo the dependency target is often
+		// a package THIS domain publishes (shared's @okeep/ui depends on
+		// shared's @okeep/tokens). Resolving blind minted a
+		// code:provider:<domain>:@okeep/tokens stub right next to the real
+		// service:service:<domain>:@okeep/tokens node the sibling's
+		// declares_service fact created — a twin, with the DEPENDS_ON edge
+		// landing on the stub, so no edge ever connected the two sibling
+		// packages. Mirrors the declares_service / calls_service lookup
+		// order: existing service node first, mint only on a miss.
+		//
+		// The lookup is against domainOwnPackages, not the store, because
+		// the sibling's declares_service fact may not have been resolved
+		// yet (file order is not guaranteed) — that snapshot already
+		// includes this batch's declarations. ensureNodeID creates the
+		// service node when it is the first to arrive; the sibling's own
+		// declares_service fact then updates it in place (same key, same
+		// layer/type) and attaches its file path and aliases.
+		var toNodeKey string
+		if svcKey, ok := g.domainOwnPackages[flattenName(fact.To)]; ok {
+			toNodeKey = svcKey
+		} else {
+			// Not ours: the SAME package node shape code imports produce
+			// (SQ-Contract 1) — one node per package whether it's reached
+			// via a source import or a manifest dependency entry.
+			toNodeKey = typedNodeKeyFromImport(domainKey, fact.To, fact.ToType)
+		}
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":DEPENDS_ON"
@@ -846,9 +874,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			FromNodeID:          fromID,
-			ToNodeID:            toID,
-			EdgeType: "CALLS_SERVICE", DerivationKind: "linked", Active: true,
+			FromNodeID: fromID,
+			ToNodeID:   toID,
+			EdgeType:   "CALLS_SERVICE", DerivationKind: "linked", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
@@ -1330,9 +1358,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONSUMES_TOPIC"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			FromNodeID:          fromID,
-			ToNodeID:            toID,
-			EdgeType: "CONSUMES_TOPIC", DerivationKind: "hard", Active: true,
+			FromNodeID: fromID,
+			ToNodeID:   toID,
+			EdgeType:   "CONSUMES_TOPIC", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
@@ -1383,9 +1411,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":EXPOSES_ENDPOINT"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			FromNodeID:          fromID,
-			ToNodeID:            toID,
-			EdgeType: "EXPOSES_ENDPOINT", DerivationKind: "hard", Active: true,
+			FromNodeID: fromID,
+			ToNodeID:   toID,
+			EdgeType:   "EXPOSES_ENDPOINT", DerivationKind: "hard", Active: true,
 			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
@@ -1803,8 +1831,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			reason = "parent container"
 		}
 		assertion, _ := json.Marshal(map[string]any{
-			"parent":  fact.To,
-			"reason":  reason,
+			"parent": fact.To,
+			"reason": reason,
 		})
 		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
@@ -2789,7 +2817,7 @@ func mergeVoteGroup(votes []store.ExtractionRow) store.ExtractionRow {
 	// Primary: vote by candidate_id (stable AST anchor)
 	// Secondary: vote by canonical fact key (fallback for free-form facts)
 	candidateVotes := map[string][]map[string]any{} // candidate_id → list of fact objects
-	freeformVotes := map[string][]map[string]any{}   // canonical_key → list of fact objects
+	freeformVotes := map[string][]map[string]any{}  // canonical_key → list of fact objects
 
 	for _, v := range votes {
 		normalized := normalizeFacts(v.FactsJSON)
@@ -3750,6 +3778,29 @@ func envVarServiceName(host string) (string, bool) {
 // during discover (chronicle.domain.yaml → infra:*/service:service:* nodes),
 // so no manifest object needs to be threaded into the resolver. isExternalHost
 // consults this set to tell a same-domain peer from a genuine third party.
+//
+// The rule for infra entries, and why it is not simply "every address":
+// `infrastructure:` is also where manifests declare the third-party APIs a
+// domain CALLS. shared and voice list
+//
+//   - name: telegram-bot-api
+//     type: external_api
+//     address: https://api.telegram.org
+//
+// Folding that address into own-hosts told isExternalHost that Telegram is
+// inside our own network, so an http_call to
+// "https://api.telegram.org/bot<token>/sendMessage" stopped being a boundary
+// and got a contract:endpoint node minted for someone else's URL — a
+// bot-token-shaped path in our own graph, which the hosts field invariant
+// forbids outright. Entries whose RAW declared type names a third party
+// (isExternalInfraType, read back from node metadata since the node_type
+// column has already been folded to the generic "infrastructure") contribute
+// neither their name nor their address here.
+//
+// Everything else is still trusted exactly as declared: declaring a host
+// under `infrastructure:` remains the documented way to tell Chronicle that
+// a public FQDN is genuinely yours (see isExternalHost) — just not with a
+// type that says otherwise.
 func (g *Graph) ownHostsForDomain(domainKey string) map[string]bool {
 	hosts := map[string]bool{}
 	addHost := func(h string) {
@@ -3767,6 +3818,11 @@ func (g *Graph) ownHostsForDomain(domainKey string) map[string]bool {
 
 	infras, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: "infra"})
 	for _, n := range infras {
+		// A declared third party is not our network — see this function's
+		// doc comment for the Telegram/Twilio case that made this a rule.
+		if isExternalInfraType(manifestInfraType(n.Metadata)) {
+			continue
+		}
 		addHost(n.Name)
 		// The raw address/name lives on QualifiedName (manifest.InfraEntry.
 		// AddressOrName, stamped verbatim by discover.go/save_manifest) —
@@ -3788,6 +3844,58 @@ func (g *Graph) ownHostsForDomain(domainKey string) map[string]bool {
 		addHost(addr)
 	}
 	return hosts
+}
+
+// ownPackagesForDomain builds the map the "dependency" fact handler uses to
+// tell an INTRA-repo dependency (a sibling package this same domain
+// publishes) from a third-party one: flattenName(package) → the canonical
+// service:service node key it must attach to.
+//
+// Two sources, because either one alone is incomplete:
+//   - the domain's existing active service nodes — packages declared by an
+//     earlier scan, or by the manifest;
+//   - every declares_service fact in the batch about to be resolved — a
+//     sibling package.json resolved AFTER the manifest that depends on it.
+//     File order within a resolve pass is not a contract (allFiles is sorted
+//     by fact-kind heuristics), so a store lookup at use time would resolve
+//     the same monorepo differently depending on which package.json happened
+//     to sort first.
+//
+// Keys are flattened (flattenName) to match findServiceByFlatName /
+// mergeExternalSystemsIntoServices: the same identity policy every other
+// service lookup in this file uses. Real scoped npm names keep their scope
+// in the flattened form ("@okeep/ui" → "okeepui"), so a dependency on
+// "@okeep/ui" cannot collide with a service plainly named "ui".
+func (g *Graph) ownPackagesForDomain(domainKey string, allFiles []fileFacts) map[string]string {
+	own := map[string]string{}
+	add := func(name, nodeKey string) {
+		flat := flattenName(name)
+		if flat == "" || nodeKey == "" {
+			return
+		}
+		if _, exists := own[flat]; !exists {
+			own[flat] = nodeKey
+		}
+	}
+
+	services, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: "service"})
+	for _, s := range services {
+		if s.NodeType != "service" || s.Status != "active" {
+			continue
+		}
+		add(s.Name, s.NodeKey)
+		add(s.NodeKey[strings.LastIndex(s.NodeKey, ":")+1:], s.NodeKey)
+	}
+
+	for _, ff := range allFiles {
+		for _, f := range ff.facts {
+			if f.Kind != "declares_service" || f.To == "" {
+				continue
+			}
+			add(f.To, canonicalNodeKey("service:service:"+domainKey+":"+normalizePackageName(f.To)))
+		}
+	}
+	return own
 }
 
 // isExternalHost decides whether an http_call fact's target points outside
@@ -3924,10 +4032,11 @@ func normalizePackageName(pkg string) string {
 // argument ("tom"), we strip the "Controller"/"Gateway" suffix and lowercase to recover
 // the conventional base path. If the value is already lowercase (e.g. "tom", "arena"),
 // it is returned unchanged.
-//   "tom"             → "tom"
-//   "TomController"   → "tom"
-//   "ArenaGateway"    → "arena"
-//   "api/v1"          → "api/v1"
+//
+//	"tom"             → "tom"
+//	"TomController"   → "tom"
+//	"ArenaGateway"    → "arena"
+//	"api/v1"          → "api/v1"
 func normalizeControllerBase(base string) string {
 	if base == "" {
 		return ""
@@ -3991,7 +4100,6 @@ func lookupCodeNode(g *Graph, domainKey, name string) bool {
 
 	return false
 }
-
 
 // findServiceByFlatName returns the active service node in the domain whose
 // flattened name (or key leaf) equals the flattened candidate, or nil.

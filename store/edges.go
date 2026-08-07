@@ -68,17 +68,33 @@ func (s *Store) UpsertEdge(e EdgeRow) (int64, error) {
 		}
 		e.ToNodeKey = n.NodeKey
 	}
-	// SQ-Contract 2 default: callers that don't set DependencySource (every
-	// existing resolver call site predates this column) get "code" — the
-	// enum is enforced in Go, not a DB CHECK, so this is the only place the
-	// default is guaranteed to apply.
-	e.DependencySource = defaultStr(e.DependencySource, "code")
-
-	const selQ = `SELECT edge_id FROM graph_edges WHERE edge_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0) ORDER BY edge_id DESC LIMIT 1`
+	const selQ = `SELECT edge_id, COALESCE(dependency_source,'') FROM graph_edges WHERE edge_key = ? AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0) ORDER BY edge_id DESC LIMIT 1`
 	var existingID int64
-	err := s.db.QueryRow(selQ, e.EdgeKey).Scan(&existingID)
+	var existingSource string
+	err := s.db.QueryRow(selQ, e.EdgeKey).Scan(&existingID, &existingSource)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("UpsertEdge lookup: %w", err)
+	}
+
+	// SQ-Contract 2 axis 1 default, applied AFTER the exists-check on
+	// purpose. "code" is what an absent value means for a BRAND NEW edge
+	// (every resolver call site predates this column). For an edge that
+	// already exists, absent means "the caller had nothing to say about the
+	// source" — so the stored value wins. Defaulting before the lookup made
+	// any re-upsert of an existing manifest edge without the field rewrite
+	// it to "code", which is a silent promotion from declared-only to
+	// runtime: chronicle_edge_upsert / import_all payloads written before
+	// the column existed re-import edges exactly that way, and impact then
+	// started traversing dependencies nobody proved are ever used.
+	//
+	// An EXPLICIT "code" from the caller still overwrites a stored
+	// "manifest" — that is a deliberate correction (the same dependency was
+	// found in real source), not a defaulting accident, and it is the only
+	// way to make one.
+	if errors.Is(err, sql.ErrNoRows) {
+		e.DependencySource = defaultStr(e.DependencySource, "code")
+	} else {
+		e.DependencySource = defaultStr(e.DependencySource, defaultStr(existingSource, "code"))
 	}
 
 	activeInt := 0

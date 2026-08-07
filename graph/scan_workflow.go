@@ -29,27 +29,36 @@ type FileWithAST struct {
 
 // ScanAction is what chronicle_scan_next_file returns to Claude.
 type ScanAction struct {
-	Domain       string         `json:"domain,omitempty"`        // ALWAYS included — agents MUST use this exact domain
-	ScanRunID    int64          `json:"scan_run_id,omitempty"`
-	Phase        string         `json:"phase"`
-	Action       string         `json:"action"` // start_scan, extract_files, call_resolve_extractions, discover_files, wait, trace_flow, none
-	Files        []string       `json:"files,omitempty"`         // simple file list (backward compat)
-	FilesWithAST []FileWithAST  `json:"files_with_ast,omitempty"` // files + pre-extracted AST facts
-	Blocked      bool           `json:"blocked,omitempty"`
-	Reason       string         `json:"reason,omitempty"`
-	Done         bool           `json:"done,omitempty"`
-	Progress     *ScanProgress  `json:"progress,omitempty"`
-	FactSchema   string         `json:"fact_schema,omitempty"`  // included with extract_files/trace_flow to guide agents
-	VotesNeeded  int            `json:"votes_needed,omitempty"` // how many LLM enrichment runs per file (0 or 1 = no voting)
-	GraphContext         *GraphContext          `json:"graph_context,omitempty"`      // phase 2 select — flat list of known entities
-	FlowContext          *FlowContext           `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
-	EndpointReconcile    []UnmatchedHTTPCall    `json:"endpoint_reconcile,omitempty"` // unmatched http_calls + narrow per-controller candidate endpoints for LLM matching
-	KnownEndpoints       []string               `json:"known_endpoints,omitempty"`    // full domain endpoint list, set ONCE here (not repeated per endpoint_reconcile item — see Task 9)
-	InstructionPacks *prompts.PackSelection `json:"instruction_packs,omitempty"` // loaded + available instruction packs
-	Infrastructure   []manifest.InfraEntry  `json:"infrastructure,omitempty"`    // from manifest — agents use to link topics to brokers
-	CandidateBoundaries []string            `json:"candidate_boundaries,omitempty"` // from manifest include patterns — hints, not truth
+	Domain            string              `json:"domain,omitempty"` // ALWAYS included — agents MUST use this exact domain
+	ScanRunID         int64               `json:"scan_run_id,omitempty"`
+	Phase             string              `json:"phase"`
+	Action            string              `json:"action"`                   // start_scan, extract_files, call_resolve_extractions, discover_files, wait, trace_flow, none
+	Files             []string            `json:"files,omitempty"`          // simple file list (backward compat)
+	FilesWithAST      []FileWithAST       `json:"files_with_ast,omitempty"` // files + pre-extracted AST facts
+	Blocked           bool                `json:"blocked,omitempty"`
+	Reason            string              `json:"reason,omitempty"`
+	Done              bool                `json:"done,omitempty"`
+	Progress          *ScanProgress       `json:"progress,omitempty"`
+	FactSchema        string              `json:"fact_schema,omitempty"`        // included with extract_files/trace_flow to guide agents
+	VotesNeeded       int                 `json:"votes_needed,omitempty"`       // how many LLM enrichment runs per file (0 or 1 = no voting)
+	GraphContext      *GraphContext       `json:"graph_context,omitempty"`      // phase 2 select — flat list of known entities
+	FlowContext       *FlowContext        `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
+	EndpointReconcile []UnmatchedHTTPCall `json:"endpoint_reconcile,omitempty"` // unmatched http_calls + narrow per-controller candidate endpoints for LLM matching
+	// KnownEndpoints is the full domain endpoint list, set ONCE here (not
+	// repeated per endpoint_reconcile item — see Task 9). Its JSON key is
+	// "domain_known_endpoints", NOT "known_endpoints": each
+	// endpoint_reconcile ITEM already carries a "known_endpoints" key with
+	// its own NARROW candidate set (UnmatchedHTTPCall.Endpoints), and two
+	// levels of the same payload spelling one key two different ways is a
+	// trap — an agent reading "known_endpoints" cannot tell which scope it
+	// landed on, and the narrow one is legitimately empty whenever no
+	// controller directory matched the call's host.
+	KnownEndpoints      []string               `json:"domain_known_endpoints,omitempty"`
+	InstructionPacks    *prompts.PackSelection `json:"instruction_packs,omitempty"`    // loaded + available instruction packs
+	Infrastructure      []manifest.InfraEntry  `json:"infrastructure,omitempty"`       // from manifest — agents use to link topics to brokers
+	CandidateBoundaries []string               `json:"candidate_boundaries,omitempty"` // from manifest include patterns — hints, not truth
 	// Checkpoint — when set, Claude MUST show this to user and call chronicle_scan_confirm
-	Checkpoint       *ScanCheckpoint        `json:"checkpoint,omitempty"`
+	Checkpoint *ScanCheckpoint `json:"checkpoint,omitempty"`
 }
 
 // ScanCheckpoint is a user-facing question that blocks scan progress.
@@ -71,12 +80,12 @@ type GraphContext struct {
 
 // FlowContext provides per-trigger-file enriched context for flow tracing.
 type FlowContext struct {
-	TriggerFile string           `json:"trigger_file"`
-	TriggerNode string           `json:"trigger_node"`            // node key
-	TriggerType string           `json:"trigger_type"`            // controller, provider
-	FilesToRead []string         `json:"files_to_read"`           // trigger + reachable files
-	Reachable   []ReachableNode  `json:"reachable"`               // graph neighborhood
-	ModelHint   string           `json:"model_hint,omitempty"`    // "use sonnet or better for flow tracing"
+	TriggerFile string          `json:"trigger_file"`
+	TriggerNode string          `json:"trigger_node"`         // node key
+	TriggerType string          `json:"trigger_type"`         // controller, provider
+	FilesToRead []string        `json:"files_to_read"`        // trigger + reachable files
+	Reachable   []ReachableNode `json:"reachable"`            // graph neighborhood
+	ModelHint   string          `json:"model_hint,omitempty"` // "use sonnet or better for flow tracing"
 }
 
 // ReachableNode is a node reachable from the trigger via INJECTS/CALLS edges.
@@ -177,9 +186,9 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 				ID:       "scope",
 				Question: "Ready to scan? Review the file count and confirm.",
 				Context: map[string]any{
-					"total_files":  run.TotalFiles,
-					"pending":     pending,
-					"votes_needed": run.VotesNeeded,
+					"total_files":     run.TotalFiles,
+					"pending":         pending,
+					"votes_needed":    run.VotesNeeded,
 					"estimated_reads": run.TotalFiles * run.VotesNeeded,
 				},
 				Options: []string{"yes", "adjust scope", "change votes"},
@@ -497,8 +506,9 @@ func (g *Graph) endpointReconcileAction(run *store.ScanRunRow) (*ScanAction, err
 		Action:    "reconcile_endpoints",
 		Reason: "Some HTTP calls could not be automatically matched to known endpoints. " +
 			"Review each unmatched call: its own known_endpoints lists the candidates from its target " +
-			"service's controller(s); the full domain endpoint list is also available once on this " +
-			"payload's known_endpoints field, for calls whose target didn't narrow to a controller. " +
+			"service's controller(s), and may be empty when the target didn't narrow to a controller. " +
+			"The full domain endpoint list is available once on this payload's domain_known_endpoints " +
+			"field — use it whenever an item's own known_endpoints is empty or has no match. " +
 			"Emit calls_endpoint facts for matches you can identify. " +
 			"For example, if a client calls /users/123 and the known endpoint is GET /users/:id, " +
 			"emit: {\"kind\": \"calls_endpoint\", \"from\": \"ClientName\", \"from_type\": \"provider\", \"target\": \"/users/:id\", \"method\": \"GET\"}. " +
@@ -624,7 +634,7 @@ func (g *Graph) phase2SelectAction(run *store.ScanRunRow) (*ScanAction, error) {
 		Phase: "phase2_confirm",
 		Data: map[string]any{
 			"trigger_files": len(triggerFiles),
-			"message":       fmt.Sprintf("Found %d trigger files for flow tracing. Awaiting user confirmation.",
+			"message": fmt.Sprintf("Found %d trigger files for flow tracing. Awaiting user confirmation.",
 				len(triggerFiles)),
 		},
 	})

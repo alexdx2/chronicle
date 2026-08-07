@@ -214,3 +214,50 @@ func TestReconcilePayloadShape_DomainScoped(t *testing.T) {
 		}
 	}
 }
+
+// TestReconcilePayloadKeysAreDistinct: the endpoint_reconcile payload carries
+// two endpoint lists at two different scopes, and they must not share a JSON
+// key. Per item, "known_endpoints" is the NARROW candidate set (only the
+// endpoints of controllers matching that call's target host) and is
+// legitimately empty when nothing narrowed; on the action payload,
+// "domain_known_endpoints" is the whole domain, once.
+//
+// Both spelled "known_endpoints" — the shape this branch shipped with —
+// leaves the agent unable to tell which scope it is reading, at exactly the
+// moment the narrow one is empty and it needs the wide one.
+func TestReconcilePayloadKeysAreDistinct(t *testing.T) {
+	action := &ScanAction{
+		Phase:  "endpoint_reconcile",
+		Action: "reconcile_endpoints",
+		EndpointReconcile: []UnmatchedHTTPCall{{
+			FromName: "UsersClient", TargetHost: "users-api", Method: "GET", Path: "/v1/users/usr-1",
+			Endpoints: nil, // narrow list empty — target didn't narrow to a controller
+		}},
+		KnownEndpoints: []string{"GET /v1/users", "GET /v1/users/:id"},
+	}
+	blob, err := json.Marshal(action)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(blob, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	wide, ok := decoded["domain_known_endpoints"].([]any)
+	if !ok || len(wide) != 2 {
+		t.Fatalf("action payload must expose the full domain list under \"domain_known_endpoints\"; got %v", decoded["domain_known_endpoints"])
+	}
+	if _, clash := decoded["known_endpoints"]; clash {
+		t.Errorf("action payload still has a top-level \"known_endpoints\" key — it collides with the per-item narrow list: %s", blob)
+	}
+
+	items, ok := decoded["endpoint_reconcile"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("endpoint_reconcile missing from payload: %s", blob)
+	}
+	item, _ := items[0].(map[string]any)
+	if _, ok := item["known_endpoints"]; !ok {
+		t.Errorf("per-item narrow list must stay under \"known_endpoints\": %s", blob)
+	}
+}

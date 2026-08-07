@@ -322,6 +322,52 @@ func TestImportAllEdgeDependencySource(t *testing.T) {
 	}
 }
 
+// TestImportAllEdgeDependencySourceSurvivesReimport is the agent-facing half
+// of the no-downgrade contract: chronicle_import_all / chronicle_edge_upsert
+// payloads written before dependency_source existed omit the field entirely,
+// and re-importing one used to rewrite a manifest edge to "code" — silently
+// promoting a declared-only dependency to a runtime one, which is exactly
+// what impact and the manifest_only package tier read.
+func TestImportAllEdgeDependencySourceSurvivesReimport(t *testing.T) {
+	g := setupGraph(t)
+	revID := makeRevision(t, g)
+	const edgeKey = "code:controller:test-domain:nodea->code:provider:test-domain:nodeb:INJECTS"
+
+	first := basePayload()
+	first.Edges[0].DependencySource = "manifest"
+	if _, err := g.ImportAll(first, revID); err != nil {
+		t.Fatalf("ImportAll first: %v", err)
+	}
+
+	// Re-import the SAME edge with no dependency_source at all.
+	second := basePayload()
+	if _, err := g.ImportAll(second, revID); err != nil {
+		t.Fatalf("ImportAll re-import: %v", err)
+	}
+	got, err := g.store.GetEdgeByKey(edgeKey)
+	if err != nil {
+		t.Fatalf("GetEdgeByKey: %v", err)
+	}
+	if got.DependencySource != "manifest" {
+		t.Fatalf("re-import without the field downgraded dependency_source to %q, want manifest", got.DependencySource)
+	}
+
+	// An EXPLICIT "code" is still an intentional override: the same
+	// dependency was found in real source, so it really is a runtime dep.
+	third := basePayload()
+	third.Edges[0].DependencySource = "code"
+	if _, err := g.ImportAll(third, revID); err != nil {
+		t.Fatalf("ImportAll explicit code: %v", err)
+	}
+	got, err = g.store.GetEdgeByKey(edgeKey)
+	if err != nil {
+		t.Fatalf("GetEdgeByKey: %v", err)
+	}
+	if got.DependencySource != "code" {
+		t.Errorf("explicit code override = %q, want code", got.DependencySource)
+	}
+}
+
 func TestImportAllIdempotent(t *testing.T) {
 	g := setupGraph(t)
 	revID := makeRevision(t, g)

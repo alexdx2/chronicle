@@ -2315,6 +2315,10 @@ func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
 				Status:              "active",
 				FirstSeenRevisionID: revisionID,
 				LastSeenRevisionID:  revisionID,
+				// Raw declared type, same as discover.go's loop: without it
+				// ownHostsForDomain cannot tell a declared third-party API
+				// from the domain's own infrastructure.
+				Metadata: graph.ManifestInfraMetadata(infra.Type),
 			})
 		}
 

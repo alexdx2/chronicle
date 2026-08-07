@@ -167,7 +167,13 @@ func TestValidateEdgeInput_BadEdgeType(t *testing.T) {
 	}
 }
 
-func TestValidateEdgeInput_DependencySourceDefaultsToCode(t *testing.T) {
+// An ABSENT dependency_source must survive validation as absent. Defaulting
+// it to "code" here erased the difference between "the caller said code" and
+// "the caller said nothing", and store.UpsertEdge — the only layer that knows
+// whether the edge already exists — then had no way to keep an existing
+// "manifest" instead of overwriting it. The "code" default now lives there,
+// applied on INSERT only.
+func TestValidateEdgeInput_DependencySourceAbsentStaysAbsent(t *testing.T) {
 	reg := loadTestRegistry(t)
 	input := EdgeInput{
 		FromNodeKey:    "code:controller:orders:orderscontroller",
@@ -181,8 +187,8 @@ func TestValidateEdgeInput_DependencySourceDefaultsToCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.DependencySource != "code" {
-		t.Errorf("DependencySource = %q, want code (default)", result.DependencySource)
+	if result.DependencySource != "" {
+		t.Errorf("DependencySource = %q, want \"\" (absent — store.UpsertEdge owns the default)", result.DependencySource)
 	}
 }
 

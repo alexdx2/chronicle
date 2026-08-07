@@ -233,3 +233,68 @@ func TestOracleManifestDeps_ManifestAndCodeImportProduceTwoEdges(t *testing.T) {
 		t.Fatalf("want 2 distinct from-nodes (service node vs code node), got: %v", fromKeys)
 	}
 }
+
+// TestOracleManifestDeps_SiblingPackageResolvesToServiceNode: inside one repo,
+// a dependency on a package the SAME domain publishes must land on that
+// sibling's service node — not on a freshly minted code:provider twin beside
+// it. shared's @okeep/ui depends on shared's @okeep/tokens; before the
+// sibling-first lookup the DEPENDS_ON edge pointed at a
+// code:provider:shared:@okeep/tokens stub while
+// service:service:shared:@okeep/tokens sat right next to it with no edge
+// between the two real packages at all.
+//
+// The tokens manifest is saved SECOND on purpose: file order inside a resolve
+// pass is decided by fact-kind heuristics, so the sibling's declares_service
+// fact is commonly resolved after the dependency that names it. Resolution
+// must not depend on which package.json happens to sort first.
+func TestOracleManifestDeps_SiblingPackageResolvesToServiceNode(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	g.SaveFileExtraction(revID, "testapp", "packages/ui/package.json", "extracted", "manifest",
+		`[{"kind":"declares_service","to":"@okeep/ui"},
+		  {"kind":"dependency","to":"@okeep/tokens","section":"dependencies"},
+		  {"kind":"dependency","to":"@stripe/stripe-js","section":"dependencies"}]`, "")
+	g.SaveFileExtraction(revID, "testapp", "packages/tokens/package.json", "extracted", "manifest",
+		`[{"kind":"declares_service","to":"@okeep/tokens"}]`, "")
+	if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+		t.Fatal(err)
+	}
+
+	// (a) no code-layer twin for the sibling package.
+	nodes, _ := s.ListNodes(store.NodeFilter{Domain: "testapp"})
+	for _, n := range nodes {
+		if n.Layer == "code" && n.Name == "@okeep/tokens" {
+			t.Errorf("minted a code-layer twin %q for a package this domain publishes", n.NodeKey)
+		}
+	}
+	if _, err := s.GetNodeByKey("service:service:testapp:@okeep/tokens"); err != nil {
+		t.Fatalf("sibling's service node missing: %v", err)
+	}
+
+	// (b) the DEPENDS_ON edge lands on the sibling's SERVICE node.
+	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	var siblingEdge *store.EdgeRow
+	for i, e := range edges {
+		if e.ToNodeKey == "service:service:testapp:@okeep/tokens" {
+			siblingEdge = &edges[i]
+		}
+	}
+	if siblingEdge == nil {
+		var got []string
+		for _, e := range edges {
+			got = append(got, e.FromNodeKey+" -> "+e.ToNodeKey)
+		}
+		t.Fatalf("no DEPENDS_ON edge onto the sibling service node; edges: %v", got)
+	}
+	if siblingEdge.FromNodeKey != "service:service:testapp:@okeep/ui" {
+		t.Errorf("sibling dependency originates at %q, want the owning package's service node", siblingEdge.FromNodeKey)
+	}
+	if siblingEdge.DependencySource != "manifest" {
+		t.Errorf("sibling dependency_source = %q, want manifest", siblingEdge.DependencySource)
+	}
+
+	// (c) a genuine third-party dependency still gets the package stub — the
+	// sibling lookup must not swallow every dependency into the service layer.
+	if _, err := s.GetNodeByKey("code:provider:testapp:@stripe/stripe-js"); err != nil {
+		t.Errorf("third-party dependency lost its package node: %v", err)
+	}
+}

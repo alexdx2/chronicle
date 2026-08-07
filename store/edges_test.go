@@ -134,6 +134,64 @@ func TestUpsertEdgeDependencySourceDefaultsToCode(t *testing.T) {
 	}
 }
 
+// TestUpsertEdgeDependencySourceNoSilentDowngrade: the "code" default applies
+// to NEW edges only. Re-upserting an existing manifest edge WITHOUT the field
+// used to rewrite it to "code" — a silent promotion from declared-only to
+// runtime, which is exactly what an agent re-importing a pre-column
+// import_all payload does. An explicit "code" from the caller is still an
+// intentional override and must land.
+func TestUpsertEdgeDependencySourceNoSilentDowngrade(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		initial string
+		second  string
+		want    string
+	}{
+		{"absent never downgrades manifest", "manifest", "", "manifest"},
+		{"absent never downgrades manifest_peer", "manifest_peer", "", "manifest_peer"},
+		{"explicit code is an intentional override", "manifest", "code", "code"},
+		{"explicit manifest still upgrades code", "code", "manifest", "manifest"},
+		{"absent on a code edge stays code", "code", "", "code"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTestStore(t)
+			revID, n1, n2 := seedNodes(t, s)
+
+			e := makeEdgeRow("edge:calls:oc:os", n1, n2, revID)
+			e.DependencySource = tc.initial
+			if _, err := s.UpsertEdge(e); err != nil {
+				t.Fatalf("UpsertEdge initial: %v", err)
+			}
+
+			// Second write of the SAME edge_key — the re-import shape.
+			again := makeEdgeRow("edge:calls:oc:os", n1, n2, revID)
+			again.DependencySource = tc.second
+			again.Confidence = 0.7
+			if _, err := s.UpsertEdge(again); err != nil {
+				t.Fatalf("UpsertEdge second: %v", err)
+			}
+
+			got, err := s.GetEdgeByKey("edge:calls:oc:os")
+			if err != nil {
+				t.Fatalf("GetEdgeByKey: %v", err)
+			}
+			if got.DependencySource != tc.want {
+				t.Errorf("after re-upsert with %q: DependencySource = %q, want %q", tc.second, got.DependencySource, tc.want)
+			}
+
+			// The journal must agree with the row: a replay that disagreed
+			// about dependency_source would silently rebuild a different graph.
+			filtered, err := s.ListEdges(EdgeFilter{DependencySourceIn: []string{tc.want}})
+			if err != nil {
+				t.Fatalf("ListEdges: %v", err)
+			}
+			if len(filtered) != 1 {
+				t.Errorf("ListEdges DependencySourceIn=[%s] returned %d rows, want 1", tc.want, len(filtered))
+			}
+		})
+	}
+}
+
 func TestListEdgesByFrom(t *testing.T) {
 	s := openTestStore(t)
 	revID, n1, n2 := seedNodes(t, s)

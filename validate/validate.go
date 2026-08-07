@@ -54,19 +54,29 @@ type EdgeInput struct {
 	Confidence     float64
 	Metadata       string
 	// DependencySource is SQ-Contract 2 axis 1: how the edge was derived.
-	// Empty defaults to "code"; must be one of code|manifest|manifest_peer.
+	// One of code|manifest|manifest_peer when set. Empty means ABSENT, not
+	// "code": validation passes it through untouched so store.UpsertEdge can
+	// tell "the caller said code" from "the caller said nothing" — see
+	// ValidatedEdge.DependencySource.
 	DependencySource string
 }
 
 type ValidatedEdge struct {
-	EdgeKey          string
-	FromNodeKey      string
-	ToNodeKey        string
-	EdgeType         string
-	DerivationKind   string
-	ContextKey       string
-	Confidence       float64
-	Metadata         string
+	EdgeKey        string
+	FromNodeKey    string
+	ToNodeKey      string
+	EdgeType       string
+	DerivationKind string
+	ContextKey     string
+	Confidence     float64
+	Metadata       string
+	// DependencySource is empty when the caller did not supply one. The
+	// "code" default is applied by store.UpsertEdge, and ONLY when inserting
+	// a new edge. Defaulting here instead meant an agent re-importing an
+	// existing manifest edge without the field — every import_all payload
+	// written before this column existed does exactly that — silently
+	// rewrote dependency_source from "manifest" to "code", promoting a
+	// declared-only dependency to a runtime one behind everyone's back.
 	DependencySource string
 }
 
@@ -179,11 +189,12 @@ func ValidateEdgeInput(input EdgeInput, reg *registry.Registry) (*ValidatedEdge,
 	if input.DerivationKind == "" {
 		input.DerivationKind = "hard" // default
 	}
+	// SQ-Contract 2 axis 1: validate the enum, but do NOT default an absent
+	// value here — an empty string must stay empty all the way to
+	// store.UpsertEdge, which is the only place that knows whether the edge
+	// already exists and therefore already has a source worth keeping.
 	dependencySource := input.DependencySource
-	if dependencySource == "" {
-		dependencySource = "code" // default — SQ-Contract 2 axis 1
-	}
-	if !validDependencySources[dependencySource] {
+	if dependencySource != "" && !validDependencySources[dependencySource] {
 		return nil, fmt.Errorf("validation: invalid dependency_source %q", dependencySource)
 	}
 

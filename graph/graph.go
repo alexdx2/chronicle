@@ -50,6 +50,19 @@ type Graph struct {
 	// See isExternalHost for the full classification rule.
 	domainOwnHosts map[string]bool
 
+	// domainOwnPackages maps flattenName(package) → the canonical
+	// service:service node key for every package THIS domain publishes:
+	// the service nodes already in the graph plus every declares_service
+	// fact in the batch being resolved. Computed once at the start of
+	// ResolveExtractions because file order decides nothing here — a
+	// monorepo's packages/ui/package.json is commonly resolved before
+	// packages/tokens/package.json declares @okeep/tokens, and a
+	// lookup-at-use-time would miss the sibling that has not been resolved
+	// yet. The "dependency" fact handler consults it so an intra-repo
+	// dependency lands on the sibling's real service node instead of
+	// minting a code:provider twin beside it.
+	domainOwnPackages map[string]string
+
 	// evidenceErr records the first evidence-write failure on a void path
 	// (ensureNodeID → ensureNode) during ResolveExtractions. Evidence writes
 	// journal events; silently dropping a failure inside a tx that then
@@ -280,30 +293,30 @@ func (g *Graph) AddNodeEvidence(nodeKey string, input validate.EvidenceInput) (i
 	}
 
 	row := store.EvidenceRow{
-		TargetKind:              "node",
-		NodeID:                  nodeID,
-		SourceKind:              input.SourceKind,
-		RepoName:                input.RepoName,
-		FilePath:                input.FilePath,
-		LineStart:               input.LineStart,
-		LineEnd:                 input.LineEnd,
-		ColumnStart:             input.ColumnStart,
-		ColumnEnd:               input.ColumnEnd,
-		Locator:                 input.Locator,
-		ExtractorID:             input.ExtractorID,
-		ExtractorVersion:        input.ExtractorVersion,
-		ASTRule:                 input.ASTRule,
-		SnippetHash:             input.SnippetHash,
-		CommitSHA:               input.CommitSHA,
-		Confidence:              confidence,
-		EvidencePolarity:        polarity,
-		ValidFromRevisionID:     input.RevisionID,
-		Assertion:               input.Assertion,
-		AssertionKind:           input.AssertionKind,
-		AssertionVersion:        input.AssertionVersion,
-		VerificationStatus:      verificationStatus,
-		VerificationReason:      verificationReason,
-		Metadata:                metadata,
+		TargetKind:          "node",
+		NodeID:              nodeID,
+		SourceKind:          input.SourceKind,
+		RepoName:            input.RepoName,
+		FilePath:            input.FilePath,
+		LineStart:           input.LineStart,
+		LineEnd:             input.LineEnd,
+		ColumnStart:         input.ColumnStart,
+		ColumnEnd:           input.ColumnEnd,
+		Locator:             input.Locator,
+		ExtractorID:         input.ExtractorID,
+		ExtractorVersion:    input.ExtractorVersion,
+		ASTRule:             input.ASTRule,
+		SnippetHash:         input.SnippetHash,
+		CommitSHA:           input.CommitSHA,
+		Confidence:          confidence,
+		EvidencePolarity:    polarity,
+		ValidFromRevisionID: input.RevisionID,
+		Assertion:           input.Assertion,
+		AssertionKind:       input.AssertionKind,
+		AssertionVersion:    input.AssertionVersion,
+		VerificationStatus:  verificationStatus,
+		VerificationReason:  verificationReason,
+		Metadata:            metadata,
 	}
 	id, err := g.store.AddEvidence(row)
 	if err != nil {
@@ -355,30 +368,30 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 	}
 
 	row := store.EvidenceRow{
-		TargetKind:              "edge",
-		EdgeID:                  edge.EdgeID,
-		SourceKind:              input.SourceKind,
-		RepoName:                input.RepoName,
-		FilePath:                input.FilePath,
-		LineStart:               input.LineStart,
-		LineEnd:                 input.LineEnd,
-		ColumnStart:             input.ColumnStart,
-		ColumnEnd:               input.ColumnEnd,
-		Locator:                 input.Locator,
-		ExtractorID:             input.ExtractorID,
-		ExtractorVersion:        input.ExtractorVersion,
-		ASTRule:                 input.ASTRule,
-		SnippetHash:             input.SnippetHash,
-		CommitSHA:               input.CommitSHA,
-		Confidence:              confidence,
-		EvidencePolarity:        polarity,
-		ValidFromRevisionID:     input.RevisionID,
-		Assertion:               input.Assertion,
-		AssertionKind:           input.AssertionKind,
-		AssertionVersion:        input.AssertionVersion,
-		VerificationStatus:      verificationStatus,
-		VerificationReason:      verificationReason,
-		Metadata:                metadata,
+		TargetKind:          "edge",
+		EdgeID:              edge.EdgeID,
+		SourceKind:          input.SourceKind,
+		RepoName:            input.RepoName,
+		FilePath:            input.FilePath,
+		LineStart:           input.LineStart,
+		LineEnd:             input.LineEnd,
+		ColumnStart:         input.ColumnStart,
+		ColumnEnd:           input.ColumnEnd,
+		Locator:             input.Locator,
+		ExtractorID:         input.ExtractorID,
+		ExtractorVersion:    input.ExtractorVersion,
+		ASTRule:             input.ASTRule,
+		SnippetHash:         input.SnippetHash,
+		CommitSHA:           input.CommitSHA,
+		Confidence:          confidence,
+		EvidencePolarity:    polarity,
+		ValidFromRevisionID: input.RevisionID,
+		Assertion:           input.Assertion,
+		AssertionKind:       input.AssertionKind,
+		AssertionVersion:    input.AssertionVersion,
+		VerificationStatus:  verificationStatus,
+		VerificationReason:  verificationReason,
+		Metadata:            metadata,
 	}
 	id, err := g.store.AddEvidence(row)
 	if err != nil {

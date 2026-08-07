@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -22,7 +23,7 @@ type ObligationRow struct {
 	ObligationType string `json:"obligation_type"` // verify_file, review_edge, review_node
 	TargetKey      string `json:"target_key"`      // file path or edge_key or node_key
 	Reason         string `json:"reason,omitempty"`
-	Status         string `json:"status"`       // open, satisfied, skipped, deferred
+	Status         string `json:"status"` // open, satisfied, skipped, deferred
 	DeferReason    string `json:"defer_reason,omitempty"`
 	CreatedAt      string `json:"created_at"`
 	ResolvedAt     string `json:"resolved_at,omitempty"`
@@ -40,18 +41,69 @@ func (s *Store) CreateObligation(revisionID int64, domainKey, obligationType, ta
 	return res.LastInsertId()
 }
 
-// DeleteScanFileObligationsForRevision removes only this revision's
-// scan_file obligations. Discovery calls this before re-creating scan_file
+// SatisfiedScanFileTargets returns, per file path, how many of this
+// revision's scan_file obligations are already satisfied. Discovery reads it
+// before a re-discovery so completed work can be preserved rather than
+// re-demanded (see DeleteScanFileObligationsForRevision).
+func (s *Store) SatisfiedScanFileTargets(revisionID int64) (map[string]int, error) {
+	rows, err := s.db.Query(`
+		SELECT target_key, COUNT(*) FROM scan_obligations
+		WHERE revision_id = ? AND obligation_type = 'scan_file' AND status = 'satisfied'
+		GROUP BY target_key
+	`, revisionID)
+	if err != nil {
+		return nil, fmt.Errorf("SatisfiedScanFileTargets: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]int{}
+	for rows.Next() {
+		var target string
+		var n int
+		if err := rows.Scan(&target, &n); err != nil {
+			return nil, fmt.Errorf("SatisfiedScanFileTargets scan: %w", err)
+		}
+		out[target] = n
+	}
+	return out, rows.Err()
+}
+
+// DeleteScanFileObligationsForRevision clears this revision's scan_file
 // obligations so a second discover_files call on the same revision replaces
 // that set instead of appending duplicates (scan_obligations has no UNIQUE
 // constraint — without this, insert errors were silently discarded and
-// re-runs piled up rows). Scoped to obligation_type = 'scan_file' —
-// verify_file (chronicle_invalidate_changed) and trace_flow (phase-2 flow
-// tracing) obligations are created against the same revision_id by other
-// pipeline stages and must survive a re-discovery untouched; an
-// unscoped delete previously wiped those too.
-func (s *Store) DeleteScanFileObligationsForRevision(revisionID int64) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM scan_obligations WHERE revision_id = ? AND obligation_type = 'scan_file'`, revisionID)
+// re-runs piled up rows).
+//
+// Two things it deliberately does NOT delete:
+//
+//   - Other obligation types. verify_file (chronicle_invalidate_changed) and
+//     trace_flow (phase-2 flow tracing) obligations are created against the
+//     same revision_id by other pipeline stages and must survive a
+//     re-discovery untouched; an unscoped delete previously wiped those too.
+//
+//   - SATISFIED rows whose target_key is in keepSatisfied — the file paths
+//     the new discovery still finds. A re-discovery mid-scan (the agent
+//     widened the scan config, or re-ran discover after a crash) used to
+//     reset every file already extracted back to "open", throwing away real
+//     work and re-asking the agent for files it had just read. Satisfied
+//     rows for files that VANISHED from the discovered set are still
+//     deleted: that file is no longer part of the scan, so an obligation
+//     claiming it was scanned is a lie about the current scope.
+//
+// keepSatisfied is the discovered-file set, not "everything satisfied":
+// callers pass the paths discovery just produced.
+func (s *Store) DeleteScanFileObligationsForRevision(revisionID int64, keepSatisfied []string) (int64, error) {
+	q := `DELETE FROM scan_obligations WHERE revision_id = ? AND obligation_type = 'scan_file'`
+	args := []any{revisionID}
+	if len(keepSatisfied) > 0 {
+		placeholders := make([]string, len(keepSatisfied))
+		for i, t := range keepSatisfied {
+			placeholders[i] = "?"
+			args = append(args, t)
+		}
+		q += ` AND NOT (status = 'satisfied' AND target_key IN (` + strings.Join(placeholders, ",") + `))`
+	}
+	res, err := s.db.Exec(q, args...)
 	if err != nil {
 		return 0, fmt.Errorf("DeleteScanFileObligationsForRevision: %w", err)
 	}
@@ -210,14 +262,14 @@ func (s *Store) ListOpenObligations(revisionID int64) ([]ObligationRow, error) {
 
 // PoolStatus holds aggregated counts for scan obligation pool monitoring.
 type PoolStatus struct {
-	RemainingTotal       int `json:"remaining_total"`
-	ClaimableNow         int `json:"claimable_now"`
-	InProgress           int `json:"in_progress"`
-	Completed            int `json:"completed"`
-	Failed               int `json:"failed"`
-	Expired              int `json:"expired"`
-	OldestInProgressSec  int `json:"oldest_in_progress_sec"`
-	ClaimTTLMinutes      int `json:"claim_ttl_minutes"`
+	RemainingTotal      int `json:"remaining_total"`
+	ClaimableNow        int `json:"claimable_now"`
+	InProgress          int `json:"in_progress"`
+	Completed           int `json:"completed"`
+	Failed              int `json:"failed"`
+	Expired             int `json:"expired"`
+	OldestInProgressSec int `json:"oldest_in_progress_sec"`
+	ClaimTTLMinutes     int `json:"claim_ttl_minutes"`
 }
 
 // MarkObligationFailed marks an open obligation as skipped and clears its claim.

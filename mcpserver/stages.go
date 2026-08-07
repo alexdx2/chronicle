@@ -302,9 +302,12 @@ var scanStages = []ScanStage{
 
   For each unmatched call, review its own known_endpoints list — the endpoints exposed
   by that call's target controller(s) — and emit calls_endpoint facts for matches you
-  can identify. If that narrow list doesn't contain the match (e.g. the target host
-  didn't resolve to a controller), check the top-level known_endpoints field on this
-  same response: it carries the FULL domain endpoint list once, as a fallback.
+  can identify. That narrow list is EMPTY whenever the target host didn't resolve to a
+  controller; when it is empty, or contains no match, use the top-level
+  domain_known_endpoints field on this same response: it carries the FULL domain
+  endpoint list once. The two keys are named differently on purpose — per-item
+  "known_endpoints" is the narrow candidate set, top-level "domain_known_endpoints" is
+  the whole domain.
   Write outbox JSON artifacts, then commit_scan_outbox.
 
   Example — unmatched call:

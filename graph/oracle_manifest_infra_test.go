@@ -286,3 +286,100 @@ func TestOwnHostsForDomain_RecoversDottedPortedInfraAddress(t *testing.T) {
 		t.Error("isExternalHost classified the domain's own infra address as external — regression in ownHostsForDomain's address recovery")
 	}
 }
+
+// Field invariant #6 (hosts): a manifest may declare the third-party APIs a
+// domain CALLS under `infrastructure:` — shared and voice list
+// api.telegram.org / api.twilio.com / api.openai.com with types like
+// external_api and telephony. ownHostsForDomain used to fold EVERY infra
+// address into "our own network", so isExternalHost classified Telegram as
+// internal and materializeExternalEndpoints minted a contract:endpoint node
+// for "/bot<token>/sendMessage" — someone else's URL, with a token-shaped
+// segment, presented as this domain's own contract.
+//
+// End-to-end through the real writer (DiscoverFilesOpts stamps the raw
+// manifest type on the infra node) and the real reader (ResolveExtractions →
+// ownHostsForDomain → isExternalHost).
+func TestOwnHostsForDomain_DeclaredThirdPartyStaysExternal(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+	tmpDir := gitFixtureRepo(t)
+
+	m := &manifest.Manifest{
+		Domains: []manifest.DomainEntry{{Key: "testapp", Name: "Test", Scan: manifest.ScanConfig{Include: []string{"src/**"}}}},
+		Infrastructure: []manifest.InfraEntry{
+			{Name: "telegram-bot-api", Type: "external_api", Address: "https://api.telegram.org"},
+			{Name: "twilio-messages-api", Type: "telephony", Address: "https://api.twilio.com"},
+			// A genuinely own piece of infrastructure, declared the same way:
+			// it must KEEP its own-host status. Declaring a host under
+			// `infrastructure:` stays the documented way to claim it.
+			{Name: "events-kafka", Type: "broker", Address: "kafka-events.internal:9092"},
+		},
+	}
+	if _, err := g.DiscoverFilesOpts(tmpDir, "testapp", revID, m, DiscoverOpts{VotesNeeded: 1}); err != nil {
+		t.Fatalf("DiscoverFilesOpts: %v", err)
+	}
+
+	own := g.ownHostsForDomain("testapp")
+	for _, host := range []string{"api.telegram.org", "api.twilio.com"} {
+		if own[host] {
+			t.Errorf("ownHostsForDomain claimed declared third-party host %q as our own network: %v", host, own)
+		}
+	}
+	if !own["kafka-events.internal"] {
+		t.Errorf("ownHostsForDomain dropped a genuinely own infra host: %v", own)
+	}
+	for _, target := range []string{
+		"https://api.telegram.org/bot<token>/sendMessage",
+		"https://api.twilio.com/2010-04-01/Accounts/AC/Messages.json",
+	} {
+		if !isExternalHost(own, target) {
+			t.Errorf("isExternalHost(%q) = false — a declared third-party API must stay a boundary", target)
+		}
+	}
+	if isExternalHost(own, "https://kafka-events.internal:9092/publish") {
+		t.Error("isExternalHost classified the domain's own declared infra address as external")
+	}
+
+	// End to end: no internal endpoint node may be minted for the bot URL.
+	facts := `[{"kind":"http_call","method":"POST","target":"https://api.telegram.org/bot<token>/sendMessage"}]`
+	if _, err := g.SaveFileExtraction(revID, "testapp", "src/a.ts", "extracted", "provider", facts, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Store().SatisfyObligation(revID, "scan_file", "src/a.ts"); err != nil {
+		t.Fatalf("SatisfyObligation: %v", err)
+	}
+	if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+		t.Fatal(err)
+	}
+	nodes, _ := g.Store().ListNodes(store.NodeFilter{Domain: "testapp"})
+	for _, n := range nodes {
+		if n.Layer == "contract" && n.NodeType == "endpoint" {
+			t.Errorf("endpoint node minted for a third-party URL: %s", n.NodeKey)
+		}
+	}
+}
+
+// isExternalInfraType is type-driven only: a public-looking https address is
+// NOT enough to disown a declared host, because declaring your own public
+// FQDN under `infrastructure:` is the documented mitigation isExternalHost
+// points people at.
+func TestIsExternalInfraType_TypeDrivenOnly(t *testing.T) {
+	external := []string{"external_api", "external-api", "External_API", "telephony", "llm", "media-storage", "third_party", "saas"}
+	for _, tp := range external {
+		if !isExternalInfraType(tp) {
+			t.Errorf("isExternalInfraType(%q) = false, want true", tp)
+		}
+	}
+	own := []string{"", "broker", "cache", "database", "queue", "fly-app", "message_broker", "k8s_service"}
+	for _, tp := range own {
+		if isExternalInfraType(tp) {
+			t.Errorf("isExternalInfraType(%q) = true — only third-party types are disowned", tp)
+		}
+	}
+	if got := manifestInfraType(ManifestInfraMetadata("external_api")); got != "external_api" {
+		t.Errorf("round-trip through node metadata = %q, want external_api", got)
+	}
+	if got := manifestInfraType(""); got != "" {
+		t.Errorf("manifestInfraType on a node written before this stamp = %q, want \"\" (treated as own, unchanged behavior)", got)
+	}
+}
