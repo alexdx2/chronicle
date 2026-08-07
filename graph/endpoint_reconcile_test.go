@@ -68,7 +68,7 @@ func TestEndpointReconcileFindsUnmatched(t *testing.T) {
 	}
 
 	// Now find unmatched calls
-	unmatched := g.FindUnmatchedHTTPCalls("myapp")
+	unmatched, _ := g.FindUnmatchedHTTPCalls("myapp")
 	t.Logf("Unmatched HTTP calls: %d", len(unmatched))
 	for _, u := range unmatched {
 		t.Logf("  from=%s target=%s path=%s known_endpoints=%v",
@@ -145,7 +145,7 @@ func TestEndpointReconcileLLMFix(t *testing.T) {
 	}
 
 	// Step 4: LLM sees the unmatched calls and known endpoints
-	unmatched := g.FindUnmatchedHTTPCalls("myapp")
+	unmatched, _ := g.FindUnmatchedHTTPCalls("myapp")
 	t.Logf("Unmatched: %d", len(unmatched))
 	for _, u := range unmatched {
 		t.Logf("  from=%s path=%s endpoints=%v", u.FromName, u.Path, u.Endpoints)

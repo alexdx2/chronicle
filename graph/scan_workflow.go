@@ -43,7 +43,8 @@ type ScanAction struct {
 	VotesNeeded  int            `json:"votes_needed,omitempty"` // how many LLM enrichment runs per file (0 or 1 = no voting)
 	GraphContext         *GraphContext          `json:"graph_context,omitempty"`      // phase 2 select — flat list of known entities
 	FlowContext          *FlowContext           `json:"flow_context,omitempty"`       // phase 2 extract — per-trigger enriched context
-	EndpointReconcile    []UnmatchedHTTPCall    `json:"endpoint_reconcile,omitempty"` // unmatched http_calls + candidate endpoints for LLM matching
+	EndpointReconcile    []UnmatchedHTTPCall    `json:"endpoint_reconcile,omitempty"` // unmatched http_calls + narrow per-controller candidate endpoints for LLM matching
+	KnownEndpoints       []string               `json:"known_endpoints,omitempty"`    // full domain endpoint list, set ONCE here (not repeated per endpoint_reconcile item — see Task 9)
 	InstructionPacks *prompts.PackSelection `json:"instruction_packs,omitempty"` // loaded + available instruction packs
 	Infrastructure   []manifest.InfraEntry  `json:"infrastructure,omitempty"`    // from manifest — agents use to link topics to brokers
 	CandidateBoundaries []string            `json:"candidate_boundaries,omitempty"` // from manifest include patterns — hints, not truth
@@ -481,7 +482,7 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 // endpointReconcileAction presents unmatched HTTP calls to the LLM
 // along with the list of known endpoints so it can emit calls_endpoint facts.
 func (g *Graph) endpointReconcileAction(run *store.ScanRunRow) (*ScanAction, error) {
-	unmatched := g.FindUnmatchedHTTPCalls(run.DomainKey)
+	unmatched, knownEndpoints := g.FindUnmatchedHTTPCalls(run.DomainKey)
 
 	if len(unmatched) == 0 {
 		// Nothing to reconcile — skip to phase2
@@ -495,11 +496,15 @@ func (g *Graph) endpointReconcileAction(run *store.ScanRunRow) (*ScanAction, err
 		Phase:     "endpoint_reconcile",
 		Action:    "reconcile_endpoints",
 		Reason: "Some HTTP calls could not be automatically matched to known endpoints. " +
-			"Review each unmatched call and emit calls_endpoint facts for matches you can identify. " +
+			"Review each unmatched call: its own known_endpoints lists the candidates from its target " +
+			"service's controller(s); the full domain endpoint list is also available once on this " +
+			"payload's known_endpoints field, for calls whose target didn't narrow to a controller. " +
+			"Emit calls_endpoint facts for matches you can identify. " +
 			"For example, if a client calls /users/123 and the known endpoint is GET /users/:id, " +
 			"emit: {\"kind\": \"calls_endpoint\", \"from\": \"ClientName\", \"from_type\": \"provider\", \"target\": \"/users/:id\", \"method\": \"GET\"}. " +
 			"Then call chronicle_resolve_extractions to apply your matches.",
 		EndpointReconcile: unmatched,
+		KnownEndpoints:    knownEndpoints,
 		Blocked:           true,
 	}, nil
 }

@@ -102,13 +102,67 @@ type UnmatchedHTTPCall struct {
 	TargetURL   string   `json:"target_url"`             // full URL from fact
 	Method      string   `json:"method"`                 // HTTP method
 	Path        string   `json:"path"`                   // extracted path from URL
-	Endpoints   []string `json:"known_endpoints"`        // endpoints exposed by the matched/similar service
+	// Endpoints is the NARROW candidate set: only endpoints exposed by
+	// controller(s) whose own directory matches TargetHost (Task 9 — the
+	// domain's full endpoint list used to be stamped here on every item,
+	// which blew up endpoint_reconcile payloads to O(endpoints × unmatched)
+	// — 422KB in the field. The full domain list is still available, once,
+	// on the surrounding action payload's KnownEndpoints sibling field.
+	Endpoints []string `json:"known_endpoints"`
+}
+
+// controllerHostToken recovers the directory-based host token a controller
+// node key implies: "code:controller:domain:tom-api/src/tom.controller" →
+// "tom-api" → flattened. This codebase's fixtures (and the real repos it
+// scans) name each service's top-level directory after its network
+// hostname, so this is enough to tell which controller(s) belong to an
+// unmatched call's target service without a separate topology edge.
+func controllerHostToken(controllerNodeKey string) string {
+	parts := strings.SplitN(controllerNodeKey, ":", 4)
+	if len(parts) < 4 {
+		return ""
+	}
+	path := parts[3]
+	if idx := strings.Index(path, "/"); idx >= 0 {
+		path = path[:idx]
+	}
+	return flattenName(path)
+}
+
+// narrowEndpointsForHost returns the endpoints exposed by controllers whose
+// directory token matches an unmatched call's target host — the narrow,
+// per-item candidate set (Task 9). Returns nil when no controller directory
+// matches; the domain's full endpoint list is still reachable once via
+// ActionPayload.KnownEndpoints, so an empty per-item list doesn't lose
+// context, it just stops repeating it on every item.
+func narrowEndpointsForHost(host string, controllerEndpoints map[string][]string) []string {
+	hostToken := flattenName(host)
+	if hostToken == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for ctrlKey, eps := range controllerEndpoints {
+		if controllerHostToken(ctrlKey) != hostToken {
+			continue
+		}
+		for _, ep := range eps {
+			if !seen[ep] {
+				seen[ep] = true
+				out = append(out, ep)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // FindUnmatchedHTTPCalls identifies http_call edges that have CALLS_SERVICE
-// but no corresponding CALLS_ENDPOINT. For each, it finds known endpoints
-// on the target service so the LLM can match them.
-func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
+// but no corresponding CALLS_ENDPOINT. For each, it finds the narrow set of
+// candidate endpoints on the target service so the LLM can match them. The
+// second return value is the full domain endpoint list, meant to be attached
+// ONCE to the surrounding action payload (not repeated per item).
+func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) ([]UnmatchedHTTPCall, []string) {
 	// Get all CALLS_SERVICE edges (from http_call facts)
 	callsServiceEdges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "CALLS_SERVICE"})
 	// Get all CALLS_ENDPOINT edges
@@ -134,11 +188,13 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
 		}
 	}
 
-	// Build flat list of all endpoint names for fallback
+	// Build flat list of all endpoint names in the domain — attached ONCE to
+	// the action payload (ActionPayload.KnownEndpoints), not per item.
 	allEndpoints := make([]string, 0, len(endpointNodes))
 	for _, ep := range endpointNodes {
 		allEndpoints = append(allEndpoints, ep.Name)
 	}
+	sort.Strings(allEndpoints)
 
 	var result []UnmatchedHTTPCall
 	for _, e := range callsServiceEdges {
@@ -199,10 +255,10 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) []UnmatchedHTTPCall {
 			TargetURL:   targetURL,
 			Method:      method,
 			Path:        path,
-			Endpoints:   allEndpoints,
+			Endpoints:   narrowEndpointsForHost(host, controllerEndpoints),
 		})
 	}
-	return result
+	return result, allEndpoints
 }
 
 // finalizeObligationsBeforeResolve enforces the obligation gate before graph resolve.

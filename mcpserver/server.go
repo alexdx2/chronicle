@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -624,22 +625,66 @@ func resolveReviewHandler(g *graph.Graph) server.ToolHandlerFunc {
 // chronicle_file_groups
 // ---------------------------------------------------------------------------
 
+const (
+	fileGroupsDefaultLimit = 200
+	fileGroupsMaxLimit     = 1000
+)
+
 func fileGroupsTool() mcp.Tool {
 	return mcp.NewTool("chronicle_file_groups",
-		mcp.WithDescription("Full project file tree — every directory with its files. Small dirs show filenames, large dirs show extension counts. Build files (package.json, .csproj, go.mod, etc.) are always listed by name. Use this to understand project structure, identify technologies, and find build boundaries."),
+		mcp.WithDescription("Project file tree, one directory per entry with its filenames. node_modules/dist/build/vendor and other always-excluded paths never appear. Paginated: pass limit (default 200 dirs, max 1000) and cursor (opaque, from the previous response's next_cursor) to page through large trees; next_cursor is \"\" on the last page. Response: {tree, total_files, total_dirs, next_cursor}. Use this to understand project structure, identify technologies, and find build boundaries."),
+		mcp.WithString("cursor", mcp.Description("Opaque pagination cursor from a previous response's next_cursor. Omit to start from the beginning.")),
+		mcp.WithNumber("limit", mcp.Description("Max directories to return in this page (default 200, capped at 1000).")),
 	)
 }
 
 func fileGroupsHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
 		rootDir := graph.ProjectRoot()
-		tree, total, err := graph.BuildFileTree(rootDir)
+		entries, totalFiles, err := graph.BuildFileTree(rootDir)
 		if err != nil {
 			return errorResult(err), nil
 		}
+
+		limit := int(int64Param(args, "limit"))
+		if limit <= 0 {
+			limit = fileGroupsDefaultLimit
+		}
+		if limit > fileGroupsMaxLimit {
+			limit = fileGroupsMaxLimit
+		}
+
+		startIdx := 0
+		if cursor := strParam(args, "cursor"); cursor != "" {
+			decoded, err := base64.StdEncoding.DecodeString(cursor)
+			if err != nil {
+				return errorResult(fmt.Errorf("invalid cursor: %w", err)), nil
+			}
+			afterPath := string(decoded)
+			// entries are sorted ascending by Path (BuildFileTree) — resume
+			// strictly after the last path returned on the previous page.
+			startIdx = sort.Search(len(entries), func(i int) bool {
+				return entries[i].Path > afterPath
+			})
+		}
+
+		endIdx := startIdx + limit
+		if endIdx > len(entries) {
+			endIdx = len(entries)
+		}
+		page := entries[startIdx:endIdx]
+
+		nextCursor := ""
+		if endIdx < len(entries) {
+			nextCursor = base64.StdEncoding.EncodeToString([]byte(page[len(page)-1].Path))
+		}
+
 		return jsonResult(map[string]any{
-			"tree":        tree,
-			"total_files": total,
+			"tree":        page,
+			"total_files": totalFiles,
+			"total_dirs":  len(entries),
+			"next_cursor": nextCursor,
 		}), nil
 	}
 }

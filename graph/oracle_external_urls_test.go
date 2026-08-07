@@ -34,7 +34,7 @@ func TestOracleExternalURLs_NeverInternalEndpoints(t *testing.T) {
 			t.Errorf("external URL materialized as INTERNAL endpoint: %s", n.NodeKey)
 		}
 	}
-	unmatched := g.FindUnmatchedHTTPCalls("testapp")
+	unmatched, _ := g.FindUnmatchedHTTPCalls("testapp")
 	for _, u := range unmatched {
 		if u.TargetHost == "SupportOutbox" || u.TargetURL == "SupportOutbox" {
 			t.Errorf("calls_service pseudo-target leaked into HTTP reconcile: %+v", u)

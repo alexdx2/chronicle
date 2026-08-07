@@ -284,12 +284,16 @@ var scanStages = []ScanStage{
   This means some HTTP calls could not be automatically matched to known endpoints
   (e.g. client calls /users/usr-abc-123 but the endpoint is GET /users/:id).
 
-  For each unmatched call, review the known_endpoints list and emit calls_endpoint facts
-  for matches you can identify. Write outbox JSON artifacts, then commit_scan_outbox.
+  For each unmatched call, review its own known_endpoints list — the endpoints exposed
+  by that call's target controller(s) — and emit calls_endpoint facts for matches you
+  can identify. If that narrow list doesn't contain the match (e.g. the target host
+  didn't resolve to a controller), check the top-level known_endpoints field on this
+  same response: it carries the FULL domain endpoint list once, as a fallback.
+  Write outbox JSON artifacts, then commit_scan_outbox.
 
   Example — unmatched call:
     from: "UsersClient", path: "/v1/users/usr-abc-123", method: "GET"
-    known_endpoints: ["GET /v1/users", "GET /v1/users/:id", "POST /v1/users"]
+    known_endpoints (per-item): ["GET /v1/users", "GET /v1/users/:id", "POST /v1/users"]
   → emit: {"kind": "calls_endpoint", "from": "UsersClient", "from_type": "provider", "target": "/v1/users/:id", "method": "GET"}
 
   Rules:

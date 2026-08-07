@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/alexdx2/chronicle-core/manifest"
 )
 
 type DirectoryGroup struct {
@@ -70,8 +72,25 @@ func GroupFilesByDirectory(rootDir string) ([]DirectoryGroup, int, error) {
 	return groups, total, nil
 }
 
-// BuildFileTree runs git ls-files and returns every directory with all its filenames.
-// The LLM reads the full tree and decides what's relevant.
+// isAlwaysExcludedPath reports whether a git-relative file path matches one
+// of the alwaysExclude patterns (node_modules, dist, build, vendor, etc. —
+// see discover.go). BuildFileTree uses this so those directories never
+// surface in chronicle_file_groups output, the same safety net discover
+// already applies to scan obligations.
+func isAlwaysExcludedPath(filePath string) bool {
+	for _, pattern := range alwaysExclude {
+		if manifest.MatchGlob(filePath, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// BuildFileTree runs git ls-files and returns every directory with all its
+// filenames, excluding alwaysExclude paths (node_modules, dist, vendor,
+// etc.). The LLM reads the tree and decides what's relevant. Entries are
+// sorted ascending by Path — callers (chronicle_file_groups) rely on this
+// stable order to paginate via an opaque path-based cursor.
 func BuildFileTree(rootDir string) ([]FileTreeEntry, int, error) {
 	cmd := exec.Command("git", "ls-files")
 	cmd.Dir = rootDir
@@ -87,6 +106,9 @@ func BuildFileTree(rootDir string) ([]FileTreeEntry, int, error) {
 		if line == "" {
 			continue
 		}
+		if isAlwaysExcludedPath(line) {
+			continue
+		}
 		total++
 		dir := filepath.Dir(line)
 		name := filepath.Base(line)
@@ -95,6 +117,7 @@ func BuildFileTree(rootDir string) ([]FileTreeEntry, int, error) {
 
 	var entries []FileTreeEntry
 	for dir, files := range dirMap {
+		sort.Strings(files)
 		entries = append(entries, FileTreeEntry{Path: dir, Files: files})
 	}
 
