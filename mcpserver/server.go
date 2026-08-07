@@ -1561,6 +1561,7 @@ func queryPathTool() mcp.Tool {
 		mcp.WithNumber("top_k", mcp.Description("Max paths (default 3)")),
 		mcp.WithString("mode", mcp.Description("directed or connected (default directed)")),
 		mcp.WithString("derivation", mcp.Description("Comma-separated derivation filter")),
+		mcp.WithString("structural", mcp.Description("Structural-edge policy: none | terminals | all (default terminals — CONTAINS allowed only adjacent to path endpoints)")),
 	)
 }
 
@@ -1588,6 +1589,15 @@ func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
 				}
 			}
 		}
+		structural := strParam(args, "structural")
+		if structural == "" {
+			structural = "terminals"
+		}
+		switch structural {
+		case "none", "terminals", "all":
+		default:
+			return errorResult(fmt.Errorf("structural must be none|terminals|all, got %q", structural)), nil
+		}
 		fromKey, err := resolveKey(g, strParam(args, "from_node_key"))
 		if err != nil {
 			return errorResult(err), nil
@@ -1597,7 +1607,7 @@ func queryPathHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 		result, err := g.QueryPath(fromKey, toKey, graph.PathOptions{
-			MaxDepth: maxDepth, TopK: topK, Mode: mode, DerivationFilter: filter,
+			MaxDepth: maxDepth, TopK: topK, Mode: mode, DerivationFilter: filter, Structural: structural,
 		})
 		if err != nil {
 			return errorResult(err), nil
