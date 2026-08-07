@@ -1690,6 +1690,13 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}, revisionID)
 		if err == nil && id > 0 {
 			counts.nodes++
+			// Publisher alias-on-create: the merge branch above registers the
+			// npm/declared name as an alias when attaching to an EXISTING
+			// service (:1671); a freshly created node must get the same
+			// alias immediately, not only if a later fact happens to merge
+			// into it — otherwise cross-repo consumers can't resolve this
+			// service by its declared name until some other fact re-merges it.
+			g.registerNodeAlias(id, fact.To, "name")
 		}
 		// Evidence-first invariant (spec §1.2): the declaring file (package.json,
 		// .csproj, …) is the evidence for this service node's existence.
@@ -2853,15 +2860,17 @@ func inferNameFromPath(filePath string) string {
 }
 
 func inferNameFromImport(module string) string {
-	// "@scope/package" → "package"
-	// "./local" → "local"
-	// "bare-module" → "bare-module"
-	if strings.HasPrefix(module, "@") {
-		parts := strings.SplitN(module, "/", 3)
-		if len(parts) >= 2 {
-			return parts[1]
-		}
+	// Package specifiers (SQ-Contract 1): identity is the package, not the
+	// import path — "@scope/package/sub" and "bare-module/sub" both resolve
+	// to the package root, scope kept verbatim.
+	// "@scope/package" → "@scope/package"
+	// "bare-module/sub" → "bare-module"
+	if pkg, _ := ParsePackageSpecifier(module); pkg != "" {
+		return pkg
 	}
+	// Relative specifiers are not packages — fall back to the last path
+	// segment as a bare stem (used for symbol-map fallback lookups).
+	// "./local" → "local"
 	if strings.HasPrefix(module, "./") || strings.HasPrefix(module, "../") {
 		parts := strings.Split(module, "/")
 		return parts[len(parts)-1]
@@ -3087,7 +3096,18 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 	}
 
 	// Last resort: create stem-based provider (may merge when file is processed later).
-	dotCase := normalizePascalCase(className)
+	// Package specifiers (SQ-Contract 1): an injects/provides target that is
+	// itself a package specifier (e.g. "@okeep/ui/button") must land on the
+	// package node, not a per-subpath node — route through the same parser
+	// the import handler uses so both fact kinds agree on one node per
+	// package. Ordinary class names ("ArenaService") have no "/" and no "@"
+	// prefix, so ParsePackageSpecifier returns them unchanged and this is a
+	// no-op for the common case.
+	identity := className
+	if pkg, _ := ParsePackageSpecifier(className); pkg != "" {
+		identity = pkg
+	}
+	dotCase := normalizePascalCase(identity)
 	nodeType := inferNodeTypeFromClassName(className)
 	key := typedNodeKey(domainKey, strings.ToLower(dotCase), nodeType)
 	id := g.ensureNodeID(domainKey, revisionID, key, dotCase, "")
@@ -3501,10 +3521,12 @@ func buildDependencyAssertion(filePath string, fact Fact) (assertionKind string,
 }
 
 func normalizePackageName(pkg string) string {
-	// "@scope/name" → "name"
+	// Package identity is the package (SQ-Contract 1) — scope is kept
+	// verbatim, no "/"→"-" mangling; keys tolerate "/" already.
+	// "@scope/name" → "@scope/name"
 	// "some-package" → "some-package"
 	name := inferNameFromImport(pkg)
-	return strings.ToLower(strings.ReplaceAll(name, "/", "-"))
+	return strings.ToLower(name)
 }
 
 // normalizeControllerBase converts a controller identifier to a URL route prefix.
