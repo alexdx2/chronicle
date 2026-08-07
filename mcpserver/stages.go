@@ -179,6 +179,22 @@ var scanStages = []ScanStage{
      - tech stack
      - infrastructure (with type and address)
      - instruction_packs list
+
+     Shape (the parser only recognizes "domains:" — never "domain:" singular
+     or "repositories:"; domains may be a map, shown here, or a list):
+       domains:
+         my-domain:
+           name: My Domain
+           description: What this domain covers
+           scan:
+             include:
+               - "src/**"
+             exclude:
+               - "**/node_modules/**"
+               - "**/__tests__/**"
+       tech: []
+       infrastructure: []
+       instruction_packs: []
   b. For each domain, call chronicle_revision_create(domain, after_sha=HEAD, mode="full", trigger="manual")
   c. Call chronicle_discover_files(revision_id, votes_needed=<touches from scan_mode>)
      A/B = 1, C/D = 3, or custom if user named a number

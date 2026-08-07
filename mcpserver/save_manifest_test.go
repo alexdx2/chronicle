@@ -1,9 +1,12 @@
 package mcpserver
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	mcplib "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/paths"
@@ -93,5 +96,56 @@ infrastructure:
 	}
 	if node.LastSeenRevisionID != wantRevID {
 		t.Errorf("LastSeenRevisionID = %d, want %d", node.LastSeenRevisionID, wantRevID)
+	}
+}
+
+// TestSaveManifestHandler_UnparsableManifest_ReturnsErrorNotSaved guards the
+// silent failure mode this handler used to have: it wrote the given content
+// to disk unconditionally, then tried `manifest.LoadFile` and swallowed a
+// LoadFile error with `if m, err := ...; err == nil { ... }` — the load
+// error was never surfaced to the caller, so the response always reported
+// {"status":"saved"} even for a manifest the parser rejects outright. A
+// content string spelled with the dead "domain:"/"repositories:" keys (the
+// exact shape the CLI's skeleton used to emit — see internal/cli/init.go)
+// parses into a Manifest with zero domains, which manifest.Load already
+// turns into a "domains is required" error. That error must reach the tool
+// caller as an error result, not get papered over as success.
+func TestSaveManifestHandler_UnparsableManifest_ReturnsErrorNotSaved(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	reg, err := registry.LoadDefaults()
+	if err != nil {
+		t.Fatalf("registry.LoadDefaults: %v", err)
+	}
+	g := graph.New(s, reg)
+
+	manifestPath := filepath.Join(dir, "chronicle.domain.yaml")
+	SetManifestPath(manifestPath)
+	t.Cleanup(func() { SetManifestPath("") })
+	paths.SetProjectRoot(dir)
+	t.Cleanup(func() { paths.SetProjectRoot("") })
+
+	content := "domain: my-domain\ndescription: \"\"\nrepositories:\n  - name: my-repo\n    path: .\n    tags: []\nowner: my-team\n"
+
+	var req mcplib.CallToolRequest
+	req.Params.Arguments = map[string]any{"content": content}
+	res, err := saveManifestHandler(g)(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler returned Go error: %v", err)
+	}
+	if !res.IsError {
+		text, _ := res.Content[0].(mcplib.TextContent)
+		t.Fatalf("want IsError=true for a singular domain:/repositories: manifest (0 domains), got IsError=false, text=%q", text.Text)
+	}
+	text, ok := res.Content[0].(mcplib.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Content[0])
+	}
+	if strings.Contains(text.Text, `"status":"saved"`) {
+		t.Errorf("error result must never report status:saved, got %q", text.Text)
 	}
 }

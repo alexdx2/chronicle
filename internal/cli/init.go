@@ -12,6 +12,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// manifestSkeleton is the starter chronicle.domain.yaml content written by
+// both `chronicle init` (this file) and ensureDepbotDir (root.go) when no
+// manifest exists yet. Single source of truth — the two call sites used to
+// carry independent copies of a "domain:"/"repositories:" shape that
+// manifest.Load (manifest/manifest.go) has never recognized: the parser only
+// understands a "domains:" key (map or list). That skeleton parsed into a
+// Manifest with zero domains, so a fresh project's manifest failed to load
+// with "domains is required" the moment anything tried to use it — and
+// saveManifestHandler used to swallow that error, reporting
+// {"status":"saved"} for a manifest that could never drive a scan.
+const manifestSkeleton = `# Chronicle Manifest — edit this file
+domains:
+  my-domain:
+    name: My Domain
+    description: What this domain covers
+    scan:
+      include:
+        - "src/**"
+      exclude:
+        - "**/node_modules/**"
+        - "**/__tests__/**"
+tech: []
+infrastructure: []
+instruction_packs: []
+`
+
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
@@ -36,16 +62,7 @@ func newInitCmd() *cobra.Command {
 
 			// Create manifest skeleton
 			if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-				skeleton := `# Chronicle Manifest — edit this file
-domain: my-domain
-description: ""
-repositories:
-  - name: my-repo
-    path: .
-    tags: []
-owner: my-team
-`
-				if err := os.WriteFile(manifestPath, []byte(skeleton), 0644); err != nil {
+				if err := os.WriteFile(manifestPath, []byte(manifestSkeleton), 0644); err != nil {
 					fmt.Fprintf(os.Stderr, "error writing manifest: %v\n", err)
 					os.Exit(1)
 				}

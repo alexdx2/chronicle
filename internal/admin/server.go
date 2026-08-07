@@ -342,8 +342,11 @@ func (s *Server) getStore() *store.Store {
 }
 
 // domainFromManifest reads the domain key from the manifest YAML file.
-// Supports both "domain: xxx" and "domains: [{key: xxx}]" formats.
-// Returns empty string if not found — no fallbacks.
+// Supports both "domains:" shapes manifest.Load recognizes — a map
+// ({key: {name: ...}}) or a list ([{name: ...}]) — never the singular
+// "domain:" key some older tooling used to emit; the parser has never
+// understood that spelling and a manifest written that way parses to zero
+// domains. Returns empty string if not found — no fallbacks.
 func (s *Server) domainFromManifest() string {
 	// Parse the manifest properly. The previous line-scanner grabbed the
 	// first "key:" line in the file — which in a services: section is a

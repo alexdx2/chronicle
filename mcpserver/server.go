@@ -2250,62 +2250,72 @@ func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		// After saving, load the manifest and create infra nodes in the graph.
-		if m, err := manifest.LoadFile(path); err == nil {
-			// Prefer the canonical graph domain key (.Key); fall back to the
-			// DISPLAY name (.Name) only when .Key is empty (list-format
-			// manifests without an explicit key). Same rule as the two other
-			// correct readers of this field: graph/discover.go's svcDomain
-			// and internal/admin/server.go's domainFromManifest. Using .Name
-			// unconditionally here made GetLatestRevision miss the revision
-			// that exists under .Key (silently keeping infra nodes at
-			// revision 0 on every re-save) and minted infra keys with a
-			// display-string domain segment that discover.go's writer for
-			// the same manifest entry never produces.
-			domainKey := ""
-			if len(m.Domains) > 0 {
-				domainKey = m.Domains[0].Key
-				if domainKey == "" {
-					domainKey = m.Domains[0].Name
-				}
+		// Load the manifest and create infra nodes in the graph. The file is
+		// already written at this point, but the RESPONSE must reflect
+		// whether it's actually usable — a LoadFile failure here used to be
+		// swallowed (`if m, err := ...; err == nil { ... }`), so a manifest
+		// spelled with dead keys (e.g. the old "domain:"/"repositories:" CLI
+		// skeleton — manifest.Load only recognizes "domains:") still got
+		// {"status":"saved"} back, and every downstream consumer (dashboards,
+		// scans) silently ran against zero domains.
+		m, err := manifest.LoadFile(path)
+		if err != nil {
+			return errorResult(fmt.Errorf("manifest saved to %s but failed to parse: %w", path, err)), nil
+		}
+
+		// Prefer the canonical graph domain key (.Key); fall back to the
+		// DISPLAY name (.Name) only when .Key is empty (list-format
+		// manifests without an explicit key). Same rule as the two other
+		// correct readers of this field: graph/discover.go's svcDomain
+		// and internal/admin/server.go's domainFromManifest. Using .Name
+		// unconditionally here made GetLatestRevision miss the revision
+		// that exists under .Key (silently keeping infra nodes at
+		// revision 0 on every re-save) and minted infra keys with a
+		// display-string domain segment that discover.go's writer for
+		// the same manifest entry never produces.
+		domainKey := ""
+		if len(m.Domains) > 0 {
+			domainKey = m.Domains[0].Key
+			if domainKey == "" {
+				domainKey = m.Domains[0].Name
 			}
-			// Infra nodes need a revision stamped so they can survive
-			// chronicle_stale_mark (last_seen_revision_id must not stay 0).
-			// save_manifest runs before the first discover pass for a brand
-			// new domain, so there may be no revision yet — keep 0 in that
-			// case and let discover.go's later pass (which always has a real
-			// revisionID) stamp it. If a revision already exists, use the
-			// latest one so a re-save after scanning stays honest too.
-			var revisionID int64
-			if rev, err := g.Store().GetLatestRevision(domainKey); err == nil {
-				revisionID = rev.RevisionID
-			}
-			reg := g.Registry()
-			for _, infra := range m.Infrastructure {
-				// Same canonical spelling discover.go writes — this handler is
-				// the other writer of manifest infra nodes (SQ-Contract 3).
-				// It historically skipped registryValidInfraType and stored
-				// the raw manifest type on node_type; unify on the same
-				// mapping discover.go uses so the key's type segment and the
-				// node_type column agree no matter which writer ran last.
-				validType := graph.RegistryValidInfraType(reg, infra.Type)
-				keyEntry := infra
-				keyEntry.Type = validType
-				g.Store().UpsertNode(store.NodeRow{
-					NodeKey:  graph.CanonicalNodeKey(keyEntry.InfraNodeKey(domainKey)),
-					Layer:    "infra",
-					NodeType: validType,
-					// Raw address/name verbatim — see discover.go's infra
-					// loop for why ownHostsForDomain needs this instead of
-					// NodeKey's canonicalized name segment.
-					QualifiedName:       infra.AddressOrName(),
-					DomainKey:           domainKey,
-					Name:                infra.Name,
-					Status:              "active",
-					FirstSeenRevisionID: revisionID,
-					LastSeenRevisionID:  revisionID,
-				})
-			}
+		}
+		// Infra nodes need a revision stamped so they can survive
+		// chronicle_stale_mark (last_seen_revision_id must not stay 0).
+		// save_manifest runs before the first discover pass for a brand
+		// new domain, so there may be no revision yet — keep 0 in that
+		// case and let discover.go's later pass (which always has a real
+		// revisionID) stamp it. If a revision already exists, use the
+		// latest one so a re-save after scanning stays honest too.
+		var revisionID int64
+		if rev, err := g.Store().GetLatestRevision(domainKey); err == nil {
+			revisionID = rev.RevisionID
+		}
+		reg := g.Registry()
+		for _, infra := range m.Infrastructure {
+			// Same canonical spelling discover.go writes — this handler is
+			// the other writer of manifest infra nodes (SQ-Contract 3).
+			// It historically skipped registryValidInfraType and stored
+			// the raw manifest type on node_type; unify on the same
+			// mapping discover.go uses so the key's type segment and the
+			// node_type column agree no matter which writer ran last.
+			validType := graph.RegistryValidInfraType(reg, infra.Type)
+			keyEntry := infra
+			keyEntry.Type = validType
+			g.Store().UpsertNode(store.NodeRow{
+				NodeKey:  graph.CanonicalNodeKey(keyEntry.InfraNodeKey(domainKey)),
+				Layer:    "infra",
+				NodeType: validType,
+				// Raw address/name verbatim — see discover.go's infra
+				// loop for why ownHostsForDomain needs this instead of
+				// NodeKey's canonicalized name segment.
+				QualifiedName:       infra.AddressOrName(),
+				DomainKey:           domainKey,
+				Name:                infra.Name,
+				Status:              "active",
+				FirstSeenRevisionID: revisionID,
+				LastSeenRevisionID:  revisionID,
+			})
 		}
 
 		return jsonResult(map[string]string{"status": "saved", "path": path}), nil

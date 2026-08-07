@@ -181,8 +181,7 @@ func ensureDepbotDir() {
 	os.MkdirAll(filepath.Dir(dbPath), 0755)
 
 	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
-		skeleton := "# Chronicle Manifest — edit this file\ndomain: my-domain\ndescription: \"\"\nrepositories:\n  - name: my-repo\n    path: .\n    tags: []\nowner: my-team\n"
-		os.WriteFile(manifestPath, []byte(skeleton), 0644)
+		os.WriteFile(manifestPath, []byte(manifestSkeleton), 0644)
 	}
 
 	// Write boundary: ordinary commands never modify wiring files
