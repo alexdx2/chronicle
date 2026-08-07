@@ -651,13 +651,19 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// from this SAME package.json file — not a generic per-file code node.
 		// A monorepo's packages/foo/package.json "dependencies" describe what
 		// @okeep/foo depends on, not what the manifest file itself depends on.
-		// Falls back to the file's code:module node when no service node
-		// claims this file path (e.g. the manifest never emitted declares_service).
-		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
-		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+		// Look up the service node FIRST and only mint the file's code:module
+		// node as a fallback on a miss — minting it unconditionally (the
+		// previous ordering) left a permanent edge-less orphan node behind on
+		// every manifest fact whose service node WAS found, since fromNodeKey
+		// gets overwritten below and nothing ever points at the discarded node.
+		var fromNodeKey string
+		var fromID int64
 		if svc, err := g.store.GetServiceNodeByFilePath(domainKey, filePath); err == nil && svc != nil {
 			fromNodeKey = svc.NodeKey
 			fromID = svc.NodeID
+		} else {
+			fromNodeKey = typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+			fromID = g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		}
 
 		// To-node: the SAME package node shape code imports produce (SQ-Contract

@@ -66,6 +66,25 @@ func TestOracleManifestDeps_WorkspaceOwnerAndSections(t *testing.T) {
 	if !gotUI || !gotTokens {
 		t.Fatalf("missing expected package edges, got to-keys: %v", bySource)
 	}
+
+	// (c) no orphan node: the from-node lookup must check
+	// GetServiceNodeByFilePath BEFORE minting a per-file code node, not
+	// after — otherwise a code:module/code:manifest node keyed off
+	// packages/foo/package.json gets created and abandoned (no edge ever
+	// points at it) every time the owning service node IS found. Exactly
+	// 3 active nodes should exist: the @okeep/foo service node plus the
+	// two package to-nodes (@okeep/ui, @okeep/tokens) — nothing else.
+	nodes, err := s.ListNodes(store.NodeFilter{Domain: "testapp", Status: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 3 {
+		var keys []string
+		for _, n := range nodes {
+			keys = append(keys, n.NodeKey)
+		}
+		t.Fatalf("want exactly 3 active nodes (service + 2 package to-nodes), got %d: %v", len(nodes), keys)
+	}
 }
 
 // Second oracle (brief step 1): devDependencies is skipped by DEFAULT, and
