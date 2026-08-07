@@ -201,14 +201,10 @@ func TestDiscoverFilesScopedToRequestedDomain(t *testing.T) {
 	}
 }
 
-// 2026-07-18 codex-fixture finding: manifest infra nodes landed in domain
-// "Tom and Jerry" (the DISPLAY name) with unregistered node type
-// "message_broker". Infra created during a scan belongs to the scan's domain
-// and must carry a registry-valid type.
-func TestDiscoverManifestInfraDomainAndType(t *testing.T) {
-	g := setupGraphDefaults(t)
-	revID := makeRevision(t, g)
-
+// gitFixtureRepo creates a one-file git repo discovery can walk and returns its
+// root. Discovery reads git ls-files, so a manifest test needs a real repo.
+func gitFixtureRepo(t *testing.T) string {
+	t.Helper()
 	tmpDir := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
@@ -231,6 +227,80 @@ func TestDiscoverManifestInfraDomainAndType(t *testing.T) {
 	}
 	run("add", ".")
 	run("commit", "-m", "c")
+	return tmpDir
+}
+
+// SQ-Contract 3 at the manifest writer. discover.go used to spell a manifest
+// service key verbatim ("service:service:d:tom.api") while the resolver's
+// calls_service lookup canonicalizes ("...:tom-api") — the lookup misses and a
+// second node is minted for one service. Both writers must spell it one way.
+func TestDiscoverManifestServiceKeyIsCanonical(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+	tmpDir := gitFixtureRepo(t)
+
+	m := &manifest.Manifest{
+		Domains:  []manifest.DomainEntry{{Key: "test-domain", Name: "Test", Scan: manifest.ScanConfig{Include: []string{"src/**"}}}},
+		Services: []manifest.ServiceEntry{{Key: "tom.api", Path: "src"}},
+	}
+	if _, err := g.DiscoverFilesOpts(tmpDir, "test-domain", revID, m, DiscoverOpts{VotesNeeded: 1}); err != nil {
+		t.Fatalf("DiscoverFilesOpts: %v", err)
+	}
+
+	const wantKey = "service:service:test-domain:tom-api"
+	if _, err := g.Store().GetNodeByKey(wantKey); err != nil {
+		rows, _ := g.Store().ListNodes(store.NodeFilter{Layer: "service"})
+		var got []string
+		for _, n := range rows {
+			got = append(got, n.NodeKey)
+		}
+		t.Fatalf("manifest service node not stored under canonical key %q; got %v", wantKey, got)
+	}
+
+	// The resolver must land on that same node, not mint a twin.
+	facts := `[{"kind":"calls_service","to":"tom.api"}]`
+	// src/a.ts is the file discovery created the obligation for — extract it and
+	// satisfy the obligation so the resolve gate opens.
+	if _, err := g.SaveFileExtraction(revID, "test-domain", "src/a.ts", "extracted", "provider", facts, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Store().SatisfyObligation(revID, "scan_file", "src/a.ts"); err != nil {
+		t.Fatalf("SatisfyObligation: %v", err)
+	}
+	if _, err := g.ResolveExtractions("test-domain", revID); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, _ := g.Store().ListNodes(store.NodeFilter{Layer: "service"})
+	var services []string
+	for _, n := range rows {
+		if n.NodeType == "service" {
+			services = append(services, n.NodeKey)
+		}
+	}
+	if len(services) != 1 || services[0] != wantKey {
+		t.Errorf("calls_service %q must resolve to the manifest node; service nodes = %v, want exactly [%s]", "tom.api", services, wantKey)
+	}
+
+	edges, _ := g.Store().ListEdges(store.EdgeFilter{EdgeType: "CALLS_SERVICE"})
+	if len(edges) == 0 {
+		t.Fatal("no CALLS_SERVICE edge — assertion would pass vacuously")
+	}
+	for _, e := range edges {
+		if e.ToNodeKey != wantKey {
+			t.Errorf("CALLS_SERVICE to_node_key = %q, want %q", e.ToNodeKey, wantKey)
+		}
+	}
+}
+
+// 2026-07-18 codex-fixture finding: manifest infra nodes landed in domain
+// "Tom and Jerry" (the DISPLAY name) with unregistered node type
+// "message_broker". Infra created during a scan belongs to the scan's domain
+// and must carry a registry-valid type.
+func TestDiscoverManifestInfraDomainAndType(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+	tmpDir := gitFixtureRepo(t)
 
 	m := &manifest.Manifest{
 		Domains: []manifest.DomainEntry{{Name: "Tom and Jerry", Scan: manifest.ScanConfig{Include: []string{"src/**"}}}},

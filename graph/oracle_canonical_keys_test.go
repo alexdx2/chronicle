@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -18,6 +19,12 @@ func TestNormalizePascalCase_UpperSnakeSurvives(t *testing.T) {
 		"BattleResultProducer": "battle.result.producer",
 		"HTTPClient":           "http.client",
 		"already.lower":        "already.lower",
+		// Digit→upper is a boundary on this side; validate.NormalizeName was
+		// taught the same boundary so both sides key "S3Client" as
+		// "s3-client" (see TestNormalizeName).
+		"S3Client":      "s3.client",
+		"V2Service":     "v2.service",
+		"Oauth2Service": "oauth2.service",
 	}
 	for in, want := range cases {
 		if got := normalizePascalCase(in); got != want {
@@ -31,10 +38,18 @@ func TestNormalizePascalCase_UpperSnakeSurvives(t *testing.T) {
 // [paramCase] lowercase differently than validate's kebab normalization.
 func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 	g, s, revID := setupTestGraph(t)
+	// Every fact family that mints a key of its own shape must be here, or the
+	// oracle certifies only the families it happens to cover: http_call mints
+	// service:external_system from a dotted host, declares_service mints
+	// service:service from a dotted/Pascal declared name (.csproj, package.json).
 	facts := `[
 		{"kind":"endpoint","method":"GET","target":"/invoices/[invoiceId]/lines"},
 		{"kind":"injects","to":"SESSION_COOKIE_STORE"},
-		{"kind":"import","symbols":["X"],"to":"@okeep/ui/button"}
+		{"kind":"injects","to":"S3Client"},
+		{"kind":"import","symbols":["X"],"to":"@okeep/ui/button"},
+		{"kind":"http_call","method":"POST","target":"https://hooks.example.com/battles"},
+		{"kind":"declares_service","to":"Spectators.Api"},
+		{"kind":"declares_service","to":"ScoreboardApi"}
 	]`
 	g.SaveFileExtraction(revID, "testapp", "src/api/invoices.ts", "extracted", "controller", facts, "")
 	if _, err := g.ResolveExtractions("testapp", revID); err != nil {
@@ -44,7 +59,9 @@ func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 	if len(nodes) == 0 {
 		t.Fatal("resolve produced no nodes — oracle would pass vacuously")
 	}
+	emitted := map[string]bool{}
 	for _, n := range nodes {
+		emitted[n.NodeKey] = true
 		norm, err := validate.NormalizeNodeKey(n.NodeKey)
 		if err != nil {
 			t.Errorf("emitted non-validating key %q: %v", n.NodeKey, err)
@@ -52,6 +69,28 @@ func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 		}
 		if norm != n.NodeKey {
 			t.Errorf("key %q is not a fixed point (normalizes to %q)", n.NodeKey, norm)
+		}
+	}
+	// Each family above must actually be present, or a handler that silently
+	// stopped emitting would leave its shape certified by an empty set.
+	for _, want := range []string{
+		"contract:endpoint:testapp:get:/invoices/[invoiceid]/lines",
+		"code:provider:testapp:session-cookie-store",
+		"code:provider:testapp:s3-client",
+		"code:provider:testapp:@okeep/ui",
+		"service:external_system:testapp:hooks-example-com",
+		// The http_call post-pass materializes the external endpoint too.
+		"contract:endpoint:testapp:post:/battles",
+		"service:service:testapp:spectators-api",
+		"service:service:testapp:scoreboard-api",
+	} {
+		if !emitted[want] {
+			var got []string
+			for k := range emitted {
+				got = append(got, k)
+			}
+			sort.Strings(got)
+			t.Errorf("fact family produced no node under %q; emitted %v", want, got)
 		}
 	}
 }
@@ -107,6 +146,9 @@ func TestOracleCanonicalKeys_ImportedReferenceHitsResolvedClass(t *testing.T) {
 	g, s, revID := setupTestGraph(t)
 	facts := `[
 		{"kind":"injects","to":"InvoiceService"},
+		{"kind":"injects","to":"S3Client"},
+		{"kind":"injects","to":"V2Service"},
+		{"kind":"injects","to":"Oauth2Service"},
 		{"kind":"model","to":"BattleEvent"}
 	]`
 	g.SaveFileExtraction(revID, "testapp", "src/api/invoices.controller.ts", "extracted", "controller", facts, "")
@@ -116,6 +158,12 @@ func TestOracleCanonicalKeys_ImportedReferenceHitsResolvedClass(t *testing.T) {
 	for _, raw := range []string{
 		"code:provider:testapp:InvoiceService",
 		"data:model:testapp:BattleEvent",
+		// Digit→upper: the resolver splits "S3Client" into "s3.client" →
+		// "s3-client". If NormalizeName does not split on the same boundary
+		// the reference normalizes to "s3client" and misses.
+		"code:provider:testapp:S3Client",
+		"code:provider:testapp:V2Service",
+		"code:provider:testapp:Oauth2Service",
 	} {
 		referenced, err := validate.NormalizeNodeKey(raw)
 		if err != nil {
@@ -128,6 +176,41 @@ func TestOracleCanonicalKeys_ImportedReferenceHitsResolvedClass(t *testing.T) {
 				got = append(got, n.NodeKey)
 			}
 			t.Errorf("normalized reference %q (from %q) matches no node; resolver emitted %v", referenced, raw, got)
+		}
+	}
+}
+
+// declares_service is the .csproj/package.json path: the extractor emits the
+// declared name as written ("ScoreboardApi", "Spectators.Api"). Pre-lowering it
+// before canonicalization gives "scoreboardapi" while the canonical spelling of
+// the same name is "scoreboard-api" — a key reference to the service then
+// misses, and a manifest-declared or cross-repo twin is minted instead.
+func TestOracleCanonicalKeys_ImportedReferenceHitsDeclaredService(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	facts := `[
+		{"kind":"declares_service","to":"ScoreboardApi"},
+		{"kind":"declares_service","to":"Spectators.Api"}
+	]`
+	g.SaveFileExtraction(revID, "testapp", "src/Scoreboard.Api/Scoreboard.Api.csproj", "extracted", "", facts, "")
+	if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		"service:service:testapp:ScoreboardApi",
+		"service:service:testapp:Spectators.Api",
+		"service:service:testapp:scoreboard-api",
+	} {
+		referenced, err := validate.NormalizeNodeKey(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.GetNodeByKey(referenced); err != nil {
+			nodes, _ := s.ListNodes(store.NodeFilter{Layer: "service"})
+			var got []string
+			for _, n := range nodes {
+				got = append(got, n.NodeKey)
+			}
+			t.Errorf("normalized reference %q (from %q) matches no service node; resolver emitted %v", referenced, raw, got)
 		}
 	}
 }

@@ -13,6 +13,15 @@ import (
 // ARENA_CONTROLLER → arena-controller
 // my-service → my-service (idempotent)
 // IScoreService → i-score-service
+// S3Client → s3-client (digit→upper is a word boundary)
+//
+// Word boundaries: a separator (. _ - space /), lower→upper, digit→upper, and
+// the last uppercase of an acronym run before a lowercase. The digit→upper
+// boundary is not cosmetic — graph.normalizePascalCase splits there when it
+// derives the resolver's key segment from a class name, and the file stem the
+// same class lives in carries it too ("s3.client.ts"). Without it "S3Client"
+// gets two canonical spellings, "s3-client" from the resolver and "s3client"
+// from a key reference, which is exactly the defect SQ-Contract 3 forbids.
 func NormalizeName(name string) string {
 	if name == "" {
 		return ""
@@ -35,8 +44,9 @@ func NormalizeName(name string) string {
 			if i > 0 && current.Len() > 0 {
 				prev := rune(name[i-1])
 				// New word if previous was lowercase: "arenaController" → "arena" + "Controller"
+				// Or a digit: "S3Client" → "s3" + "Client", "V2Service" → "v2" + "Service"
 				// Or if previous was uppercase and next is lowercase: "IScore" → "I" + "Score"
-				if prev >= 'a' && prev <= 'z' {
+				if (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') {
 					words = append(words, current.String())
 					current.Reset()
 				} else if prev >= 'A' && prev <= 'Z' && i+1 < len(name) && name[i+1] >= 'a' && name[i+1] <= 'z' {
@@ -83,6 +93,26 @@ func routeQualifiedName(qn string) (prefix, path string, ok bool) {
 	return qn[:i+1], qn[i+1:], true
 }
 
+// NormalizeQualifiedName applies rule 2 of the canonical key rule (see
+// NormalizeNodeKey) to a bare qualified name: split on "/", each segment
+// through NormalizeName, rejoined. "/" is a real separator (file paths, scoped
+// packages) and survives; "@" passes through, so "@okeep/ui" is a fixed point.
+//
+// Exported because emitters need to canonicalize a NAME before it becomes a key
+// segment (graph.normalizePackageName). A second, private rule there is what
+// produced "scoreboardapi" for a service the key rule spells "scoreboard-api".
+func NormalizeQualifiedName(qualifiedName string) string {
+	qualifiedName = strings.Trim(strings.TrimSpace(qualifiedName), "/")
+	if !strings.Contains(qualifiedName, "/") {
+		return NormalizeName(qualifiedName)
+	}
+	segments := strings.Split(qualifiedName, "/")
+	for i, seg := range segments {
+		segments[i] = NormalizeName(seg)
+	}
+	return strings.Join(segments, "/")
+}
+
 // NormalizeNodeKey enforces format: layer:type:domain:qualified_name.
 //
 // # The canonical key rule (SQ-Contract 3)
@@ -110,6 +140,10 @@ func routeQualifiedName(qn string) (prefix, path string, ok bool) {
 //     is exactly how a class-name reference finds the node minted from
 //     orders.service.ts. "@" passes through, so scoped package keys
 //     ("@okeep/ui") are fixed points; a leading/trailing "/" is stripped.
+//     A digit followed by an uppercase is a word boundary like any other, so
+//     "S3Client" keys as "s3-client" — the same split graph.normalizePascalCase
+//     makes and the same one the file stem "s3.client.ts" carries. Two sides
+//     splitting differently is precisely the two-forms defect.
 //
 // Consequence worth naming: inside a bare identifier a dot is a word
 // separator, not part of the name — the npm package "socket.io" keys as
@@ -151,15 +185,7 @@ func NormalizeNodeKey(key string) (string, error) {
 	// Rule 2: convert PascalCase/camelCase/dots/underscores to kebab-case so
 	// ArenaController, arena.controller, arenaController all map to the same key.
 	// Preserve path separators (/) for file-path-based and scoped-package keys.
-	if strings.Contains(qualifiedName, "/") {
-		segments := strings.Split(qualifiedName, "/")
-		for i, seg := range segments {
-			segments[i] = NormalizeName(seg)
-		}
-		qualifiedName = strings.Join(segments, "/")
-	} else {
-		qualifiedName = NormalizeName(qualifiedName)
-	}
+	qualifiedName = NormalizeQualifiedName(qualifiedName)
 
 	return layer + ":" + nodeType + ":" + domain + ":" + qualifiedName, nil
 }

@@ -179,7 +179,10 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 	// ("Tom and Jerry") as domain_key when the manifest key was absent.
 	if m != nil && revisionID > 0 {
 		for _, infra := range m.Infrastructure {
-			nodeKey := infra.InfraNodeKey()
+			// SQ-Contract 3: one spelling per key. These raw store.UpsertNode
+			// calls bypass ensureNodeID, so they must canonicalize here or the
+			// manifest becomes a second writer with its own spelling.
+			nodeKey := canonicalNodeKey(infra.InfraNodeKey())
 			g.store.UpsertNode(store.NodeRow{
 				NodeKey:   nodeKey,
 				Layer:     "infra",
@@ -206,7 +209,12 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 			if len(m.Domains) > 0 && m.Domains[0].Key != "" {
 				svcDomain = m.Domains[0].Key
 			}
-			nodeKey := "service:service:" + svcDomain + ":" + svc.Key
+			// SQ-Contract 3: the resolver's calls_service/declares_service
+			// lookups canonicalize their key (resolve_extractions.go), so a
+			// manifest key spelled "tom.api" or "TomApi" must be stored under
+			// the same canonical "tom-api" — otherwise the lookup misses and
+			// resolve mints a twin for a service the manifest already declared.
+			nodeKey := canonicalNodeKey("service:service:" + svcDomain + ":" + svc.Key)
 			g.store.UpsertNode(store.NodeRow{
 				NodeKey:            nodeKey,
 				Layer:              "service",

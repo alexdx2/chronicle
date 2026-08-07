@@ -30,6 +30,18 @@ func TestNormalizeName(t *testing.T) {
 		{"ABC", "abc"},
 		{"ABCDef", "abc-def"},
 		{"getHTTPResponse", "get-http-response"},
+		// Digit→upper is a word boundary. The resolver's class-name splitter
+		// (graph.normalizePascalCase) treats it as one, so this side must too
+		// or "S3Client" gets two canonical spellings: the resolver mints
+		// code:provider:d:s3-client while a key reference normalizes to
+		// s3client and misses. It is also the boundary the file stem carries
+		// ("s3.client.ts" → "s3-client").
+		{"S3Client", "s3-client"},
+		{"V2Service", "v2-service"},
+		{"Oauth2Service", "oauth2-service"},
+		{"User2FA", "user2-fa"},
+		{"s3.client", "s3-client"},
+		{"order.created.v2", "order-created-v2"},
 	}
 
 	for _, tt := range tests {
@@ -118,6 +130,10 @@ func TestNormalizeNodeKey_CanonicalFormsAreFixedPoints(t *testing.T) {
 		"data:field:app:battle/winner-id",
 		"data:model:app:battle-event",
 		"code:provider:app:session-cookie-store",
+		"code:provider:app:s3-client",
+		"service:service:app:scoreboard-api",
+		"service:service:app:spectators-api",
+		"service:external_system:app:hooks-example-com",
 	}
 	for _, key := range canonical {
 		got, err := NormalizeNodeKey(key)
@@ -144,6 +160,9 @@ func TestNormalizeNodeKey_Idempotent(t *testing.T) {
 		"contract:endpoint:app:get:/orders//",
 		"data:field:app:Battle/winnerId",
 		"contract:topic:app:order.created",
+		"code:provider:app:S3Client",
+		"service:service:app:ScoreboardApi",
+		"service:external_system:app:hooks.example.com",
 		"a:b:c:d:e:f",
 	}
 	for _, key := range raw {
@@ -181,6 +200,39 @@ func TestNormalizeNodeKey_SpellingsConverge(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("NormalizeNodeKey(%q) = %q, want %q", spelling, got, want)
+		}
+	}
+}
+
+// The digit boundary must converge the same three spellings rule 2 converges
+// for letter-only names: the class name as written, the dot-case stem the
+// resolver derives from it, and the file stem it lives in.
+func TestNormalizeNodeKey_DigitBoundarySpellingsConverge(t *testing.T) {
+	groups := map[string][]string{
+		"code:provider:app:s3-client": {
+			"code:provider:app:S3Client",
+			"code:provider:app:s3.client",
+			"code:provider:app:s3-client",
+			"code:provider:app:S3_CLIENT",
+		},
+		"code:provider:app:v2-service": {
+			"code:provider:app:V2Service",
+			"code:provider:app:v2.service",
+		},
+		"code:provider:app:oauth2-service": {
+			"code:provider:app:Oauth2Service",
+			"code:provider:app:oauth2.service",
+		},
+	}
+	for want, spellings := range groups {
+		for _, spelling := range spellings {
+			got, err := NormalizeNodeKey(spelling)
+			if err != nil {
+				t.Fatalf("NormalizeNodeKey(%q): %v", spelling, err)
+			}
+			if got != want {
+				t.Errorf("NormalizeNodeKey(%q) = %q, want %q", spelling, got, want)
+			}
 		}
 	}
 }

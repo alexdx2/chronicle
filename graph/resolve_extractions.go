@@ -2977,6 +2977,11 @@ func canonicalNodeKey(key string) string {
 	return key
 }
 
+// CanonicalNodeKey exposes canonicalNodeKey to writers outside this package
+// (the MCP save_manifest handler mints infra nodes of its own). One rule, one
+// implementation: a caller that re-derives it becomes a second spelling.
+func CanonicalNodeKey(key string) string { return canonicalNodeKey(key) }
+
 // flattenName strips dots, dashes, underscores, slashes and lowercases for fuzzy comparison.
 func flattenName(name string) string {
 	r := strings.NewReplacer(".", "", "-", "", "_", "", "/", "", "\\", "", " ", "")
@@ -3599,13 +3604,26 @@ func buildDependencyAssertion(filePath string, fact Fact) (assertionKind string,
 	}
 }
 
+// normalizePackageName reduces an import specifier or a declared service name
+// to the one spelling the key rule uses for it.
+//
+//	"@scope/name"      → "@scope/name"   (package identity, SQ-Contract 1:
+//	"@scope/name/sub"  → "@scope/name"    scope kept verbatim, no "/"→"-")
+//	"some-package"     → "some-package"
+//	"socket.io"        → "socket-io"
+//	"ScoreboardApi"    → "scoreboard-api"
+//	"Spectators.Api"   → "spectators-api"
+//
+// It normalizes through validate.NormalizeQualifiedName rather than
+// strings.ToLower. Lowercasing is correct for npm (package names are lowercase
+// by spec, so it is identity there) but wrong for the OTHER producer of this
+// function's input: declares_service from a .csproj emits "ScoreboardApi", and
+// lowercasing destroys the word boundary before the key rule can see it —
+// minting "scoreboardapi" for a service every key reference spells
+// "scoreboard-api". graph_hygiene's name comparison gets the same benefit: a
+// declared "ScoreboardApi" and a manifest "scoreboard-api" now compare equal.
 func normalizePackageName(pkg string) string {
-	// Package identity is the package (SQ-Contract 1) — scope is kept
-	// verbatim, no "/"→"-" mangling; keys tolerate "/" already.
-	// "@scope/name" → "@scope/name"
-	// "some-package" → "some-package"
-	name := inferNameFromImport(pkg)
-	return strings.ToLower(name)
+	return validate.NormalizeQualifiedName(inferNameFromImport(pkg))
 }
 
 // normalizeControllerBase converts a controller identifier to a URL route prefix.

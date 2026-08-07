@@ -2196,8 +2196,10 @@ func saveManifestHandler(g *graph.Graph) server.ToolHandlerFunc {
 				domainKey = m.Domains[0].Name
 			}
 			for _, infra := range m.Infrastructure {
+				// Same canonical spelling discover.go writes — this handler is
+				// the other writer of manifest infra nodes (SQ-Contract 3).
 				g.Store().UpsertNode(store.NodeRow{
-					NodeKey:   infra.InfraNodeKey(),
+					NodeKey:   graph.CanonicalNodeKey(infra.InfraNodeKey()),
 					Layer:     "infra",
 					NodeType:  infra.Type,
 					DomainKey: domainKey,
