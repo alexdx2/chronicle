@@ -1554,7 +1554,7 @@ func finalizeIncrementalScanHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func queryPathTool() mcp.Tool {
 	return mcp.NewTool("chronicle_query_path",
-		mcp.WithDescription("Find paths between two nodes. Traverses through Kafka/message topics automatically (producer → topic → consumer). Default mode 'directed' follows data flow. Use 'connected' for undirected exploration. Structural edges (CONTAINS) excluded by default. Returns top-k paths ranked by path score. Result includes view_url — a dashboard deep link to the equivalent path diagram (forward-looking #v route)."),
+		mcp.WithDescription("Find paths between two nodes. Traverses through Kafka/message topics automatically (producer → topic → consumer). Default mode 'directed' follows data flow. Use 'connected' for undirected exploration. Structural edges (CONTAINS) are admitted by default only when adjacent to a path endpoint (see structural param to widen or exclude them). Returns top-k paths ranked by path score. Result includes view_url — a dashboard deep link to the equivalent path diagram (forward-looking #v route)."),
 		mcp.WithString("from_node_key", mcp.Required(), mcp.Description("Source node key OR name (e.g. 'ArenaService')")),
 		mcp.WithString("to_node_key", mcp.Required(), mcp.Description("Target node key OR name (e.g. 'SpectatorService')")),
 		mcp.WithNumber("max_depth", mcp.Description("Max depth (default 6)")),
