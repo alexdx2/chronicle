@@ -13,9 +13,27 @@ import (
 type PathOptions struct {
 	MaxDepth          int
 	TopK              int
-	Mode              string   // "directed" or "connected"
+	Mode              string // "directed" or "connected"
 	DerivationFilter  []string
 	IncludeStructural bool
+	// Structural is the tri-state successor to IncludeStructural:
+	// "none" excludes structural edges everywhere (today's default behavior),
+	// "all" admits them everywhere, "terminals" admits a structural edge only
+	// on the descent prefix from the start node or when it lands directly on
+	// the target. "" falls back to IncludeStructural (true→"all", false→"none").
+	Structural string
+}
+
+// effectiveStructural resolves the tri-state, falling back to the legacy
+// IncludeStructural bool when Structural is unset.
+func (o PathOptions) effectiveStructural() string {
+	if o.Structural != "" {
+		return o.Structural
+	}
+	if o.IncludeStructural {
+		return "all"
+	}
+	return "none"
 }
 
 // PathEdge represents a single edge in a path.
@@ -58,17 +76,23 @@ type PathResult struct {
 
 // bfsState holds a BFS queue entry.
 type bfsState struct {
-	nodeID      int64
-	nodeKey     string
-	pathNodes   []string // node keys in order
-	pathEdges   []PathEdge
-	pathConfs   []float64 // per-edge trust scores
-	visited     map[int64]bool
+	nodeID    int64
+	nodeKey   string
+	pathNodes []string // node keys in order
+	pathEdges []PathEdge
+	pathConfs []float64 // per-edge trust scores
+	visited   map[int64]bool
+	// onlyStructural is true while every edge on the path so far (from the
+	// seed) has been structural — the descent prefix Structural:"terminals"
+	// admits. Seeded true; flips to false at the first non-structural hop and
+	// stays false thereafter.
+	onlyStructural bool
 }
 
 // QueryPath finds paths between two nodes using BFS.
 func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult, error) {
 	policy := g.reg.TraversalPolicy()
+	structural := opts.effectiveStructural()
 
 	// Resolve start/end node IDs.
 	fromID, err := g.store.GetNodeIDByKey(fromKey)
@@ -99,12 +123,13 @@ func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult,
 	// BFS queue.
 	queue := []bfsState{
 		{
-			nodeID:    fromID,
-			nodeKey:   fromKey,
-			pathNodes: []string{fromKey},
-			pathEdges: nil,
-			pathConfs: nil,
-			visited:   map[int64]bool{fromID: true},
+			nodeID:         fromID,
+			nodeKey:        fromKey,
+			pathNodes:      []string{fromKey},
+			pathEdges:      nil,
+			pathConfs:      nil,
+			visited:        map[int64]bool{fromID: true},
+			onlyStructural: true,
 		},
 	}
 
@@ -170,9 +195,22 @@ func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult,
 				edgeTo = cur.nodeKey
 			}
 
-			// Skip structural edges unless opted in.
-			if policy.IsStructural(e.EdgeType) && !opts.IncludeStructural {
-				continue
+			// Structural edges: excluded ("none"), always admitted ("all"), or
+			// admitted only on the descent prefix from the seed / at the final
+			// hop into the target ("terminals"). Middle-of-path structural hops
+			// stay excluded under "terminals".
+			if policy.IsStructural(e.EdgeType) {
+				switch structural {
+				case "all":
+					// admitted
+				case "terminals":
+					landsOnTarget := neighborID == toID
+					if !cur.onlyStructural && !landsOnTarget {
+						continue
+					}
+				default: // "none"
+					continue
+				}
 			}
 
 			// Apply derivation filter.
@@ -235,12 +273,13 @@ func (g *Graph) QueryPath(fromKey, toKey string, opts PathOptions) (*PathResult,
 
 			// Enqueue next state.
 			queue = append(queue, bfsState{
-				nodeID:    neighborID,
-				nodeKey:   neighborKey,
-				pathNodes: newNodes,
-				pathEdges: newEdges,
-				pathConfs: newConfs,
-				visited:   newVisited,
+				nodeID:         neighborID,
+				nodeKey:        neighborKey,
+				pathNodes:      newNodes,
+				pathEdges:      newEdges,
+				pathConfs:      newConfs,
+				visited:        newVisited,
+				onlyStructural: cur.onlyStructural && policy.IsStructural(e.EdgeType),
 			})
 		}
 	}

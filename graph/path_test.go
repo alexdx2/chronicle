@@ -1,6 +1,9 @@
 package graph
 
 import (
+	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/validate"
@@ -263,5 +266,105 @@ func TestQueryPathDerivationFilter(t *testing.T) {
 	r2, _ := g.QueryPath("code:controller:orders:a", "service:service:orders:d", PathOptions{MaxDepth: 6, TopK: 3, Mode: "directed", DerivationFilter: []string{"hard", "linked"}})
 	if len(r2.Paths) != 1 {
 		t.Errorf("hard+linked paths = %d, want 1", len(r2.Paths))
+	}
+}
+
+// testRevSeq guarantees a unique git_after_sha per CreateRevision call in
+// mustNode/mustEdge — graph_revisions has a UNIQUE(domain_key, git_after_sha)
+// index, and both helpers may be called many times against the same domain
+// within a single test.
+var testRevSeq int64
+
+func testAfterSHA() string {
+	return fmt.Sprintf("sha-test-%d", atomic.AddInt64(&testRevSeq, 1))
+}
+
+// mustNode upserts a node with the given key/layer/type (domain and name are
+// derived from the key's "layer:type:domain:name" segments) under a fresh
+// revision, and returns the key so it can be passed straight into mustEdge.
+func mustNode(t *testing.T, g *Graph, key, layer, nodeType string) string {
+	t.Helper()
+	parts := strings.Split(key, ":")
+	domain, name := "test", key
+	if len(parts) >= 4 {
+		domain, name = parts[2], parts[3]
+	}
+	revID, err := g.Store().CreateRevision(domain, "", testAfterSHA(), "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey:   key,
+		Layer:     layer,
+		NodeType:  nodeType,
+		DomainKey: domain,
+		Name:      name,
+	}, revID); err != nil {
+		t.Fatalf("UpsertNode %s: %v", key, err)
+	}
+	return key
+}
+
+// mustEdge upserts an edge between two node keys (as returned by mustNode).
+// From/to layers are derived from each key's leading ':'-separated segment.
+func mustEdge(t *testing.T, g *Graph, fromKey, toKey, edgeType, derivationKind string) {
+	t.Helper()
+	revID, err := g.Store().CreateRevision("test", "", testAfterSHA(), "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey:    fromKey,
+		ToNodeKey:      toKey,
+		EdgeType:       edgeType,
+		DerivationKind: derivationKind,
+		FromLayer:      keyLayer(fromKey),
+		ToLayer:        keyLayer(toKey),
+	}, revID); err != nil {
+		t.Fatalf("UpsertEdge %s->%s (%s): %v", fromKey, toKey, edgeType, err)
+	}
+}
+
+func keyLayer(key string) string {
+	if i := strings.Index(key, ":"); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
+func TestQueryPath_StructuralTerminals(t *testing.T) {
+	g, _ := newTestGraph(t)
+	// service --CONTAINS--> member --INJECTS--> target
+	svc := mustNode(t, g, "service:service:d:svc", "service", "service")
+	mem := mustNode(t, g, "code:provider:d:member", "code", "provider")
+	tgt := mustNode(t, g, "code:provider:d:target", "code", "provider")
+	mustEdge(t, g, svc, mem, "CONTAINS", "hard")
+	mustEdge(t, g, mem, tgt, "INJECTS", "hard")
+
+	// none: unreachable (service has only structural out-edges)
+	r, err := g.QueryPath("service:service:d:svc", "code:provider:d:target", PathOptions{Structural: "none"})
+	if err != nil || len(r.Paths) != 0 {
+		t.Fatalf("none: want 0 paths, got %d (err %v)", len(r.Paths), err)
+	}
+	// terminals: descent through CONTAINS then semantic hop
+	r, err = g.QueryPath("service:service:d:svc", "code:provider:d:target", PathOptions{Structural: "terminals"})
+	if err != nil || len(r.Paths) != 1 {
+		t.Fatalf("terminals: want 1 path, got %d (err %v)", len(r.Paths), err)
+	}
+}
+
+func TestQueryPath_TerminalsBlocksMidPathStructural(t *testing.T) {
+	g, _ := newTestGraph(t)
+	// a --INJECTS--> b --CONTAINS--> c --INJECTS--> d : must NOT resolve under terminals
+	a := mustNode(t, g, "code:provider:d:a", "code", "provider")
+	b := mustNode(t, g, "code:provider:d:b", "code", "provider")
+	c := mustNode(t, g, "code:provider:d:c", "code", "provider")
+	dd := mustNode(t, g, "code:provider:d:dd", "code", "provider")
+	mustEdge(t, g, a, b, "INJECTS", "hard")
+	mustEdge(t, g, b, c, "CONTAINS", "hard")
+	mustEdge(t, g, c, dd, "INJECTS", "hard")
+	r, _ := g.QueryPath("code:provider:d:a", "code:provider:d:dd", PathOptions{Structural: "terminals"})
+	if len(r.Paths) != 0 {
+		t.Fatalf("mid-path structural must stay blocked under terminals, got %d paths", len(r.Paths))
 	}
 }
