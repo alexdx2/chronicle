@@ -411,6 +411,13 @@ func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) 
 	return out, rows.Err()
 }
 
+// ListReverifiableEvidenceByFile returns evidence that re-verification must
+// re-examine for a file: stale rows AND rows whose assertion was rejected —
+// a rejected verdict deserves a fresh look whenever the file is re-verified.
+func (s *Store) ListReverifiableEvidenceByFile(filePath string) ([]EvidenceRow, error) {
+	return s.queryEvidence("file_path = ? AND (evidence_status = 'stale' OR verification_status = 'rejected')", filePath)
+}
+
 // UpdateEvidenceVerification updates an evidence row after mechanical verification.
 func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificationStatus, verificationReason string, lineStart, lineEnd int, revisionID int64) error {
 	// Resolve identity + owner for journaling (and uid backfill for legacy rows).

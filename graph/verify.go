@@ -48,8 +48,10 @@ type VerifySummary struct {
 func (g *Graph) VerifyFileEvidence(filePath string, revisionID int64, domainKey string) (*VerifyFileResult, error) {
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 
-	// Get stale evidence for this file
-	evidence, err := g.store.ListStaleEvidenceByFile(filePath)
+	// Get evidence this file needs to re-examine: stale rows, plus rows
+	// rejected at creation time (which stay evidence_status='valid' and
+	// would otherwise never be looked at again).
+	evidence, err := g.store.ListReverifiableEvidenceByFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("VerifyFileEvidence: %w", err)
 	}
