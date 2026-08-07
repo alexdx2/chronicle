@@ -47,6 +47,12 @@ type PathEdge struct {
 // PathJump marks a repo or identity boundary crossed while walking a Path —
 // e.g. a package-stitched edge where FromRepo and ToRepo differ. Populated
 // by pro's package-stitching resolver; core only carries the shape.
+//
+// Consumers must NOT assume Edges[i].From == Nodes[i]: when an identity jump
+// precedes hop i the edge keeps the literal key of the node row it was stored
+// under, while Nodes[i] records the key the path arrived on, and the identity
+// jump at index i records the switch (its Detail names both keys). The
+// invariant that does hold everywhere is len(Nodes) == len(Edges)+1.
 type PathJump struct {
 	Index    int    `json:"index"` // position in Edges where the jump happened
 	Kind     string `json:"kind"`  // "package" | "identity"
