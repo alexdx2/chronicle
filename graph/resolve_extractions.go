@@ -177,13 +177,27 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) ([]UnmatchedHTTPCall, [
 	// Get all endpoints in this domain
 	endpointNodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "endpoint"})
 
-	// Group endpoints by service: find which service exposes which endpoints
+	// Group endpoints by service: find which service exposes which endpoints,
+	// scoped to THIS domain. EdgeFilter has no Domain axis, so
+	// ListEdges(EdgeType:"EXPOSES_ENDPOINT") spans EVERY domain in the shared
+	// store — multi-domain manifests scan domains sequentially into the same
+	// .depbot/chronicle.db (testdata/manifest/multi_domain.yaml), so an
+	// unscoped read here lets domain B's narrow candidate set pick up domain
+	// A's controllers whenever their directory names happen to collide
+	// (controllerHostToken only looks at the path segment). Filter both
+	// edge endpoints by their node's DomainKey — the same axis
+	// ownHostsForDomain already scopes its NodeFilter reads by — rather than
+	// re-parsing the domain out of the node key string.
 	exposeEdges, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "EXPOSES_ENDPOINT"})
 	// Map: service controller key → endpoint names
 	controllerEndpoints := map[string][]string{}
 	for _, e := range exposeEdges {
+		ctrlNode, _ := g.store.GetNodeByKey(e.FromNodeKey)
+		if ctrlNode == nil || ctrlNode.DomainKey != domainKey {
+			continue
+		}
 		epNode, _ := g.store.GetNodeByKey(e.ToNodeKey)
-		if epNode != nil {
+		if epNode != nil && epNode.DomainKey == domainKey {
 			controllerEndpoints[e.FromNodeKey] = append(controllerEndpoints[e.FromNodeKey], epNode.Name)
 		}
 	}
@@ -203,6 +217,15 @@ func (g *Graph) FindUnmatchedHTTPCalls(domainKey string) ([]UnmatchedHTTPCall, [
 		}
 		fromNode, _ := g.store.GetNodeByKey(e.FromNodeKey)
 		if fromNode == nil {
+			continue
+		}
+		// callsServiceEdges spans every domain in the shared store (same
+		// EdgeFilter gap as EXPOSES_ENDPOINT above) — without this check a
+		// domain-B reconcile would surface domain-A's unmatched calls
+		// wholesale, and a calls_endpoint fact against one would mint its
+		// contract:endpoint node under domain B (normalizeEndpointKey uses
+		// the CURRENT domainKey, not the call's origin domain).
+		if fromNode.DomainKey != domainKey {
 			continue
 		}
 		// Extract host from the target service key

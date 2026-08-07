@@ -120,3 +120,97 @@ func TestReconcilePayloadShape(t *testing.T) {
 		}
 	}
 }
+
+// TestReconcilePayloadShape_DomainScoped is the RED/GREEN test for the Task 9
+// review finding: narrowEndpointsForHost/controllerEndpoints had no domain
+// scope. EXPOSES_ENDPOINT edges are read via
+// ListEdges(EdgeFilter{EdgeType:"EXPOSES_ENDPOINT"}) with no domain filter,
+// which spans EVERY domain in the shared store — and multi-domain manifests
+// scan domains sequentially into the SAME .depbot/chronicle.db
+// (testdata/manifest/multi_domain.yaml). Two domains whose controllers
+// happen to live under the same directory name (a realistic coincidence —
+// "gateway/", "api/", "svc-shared/" repeat across services) collide on
+// controllerHostToken; pre-fix, domain B's narrow endpoint list picked up
+// domain A's endpoints too, and calls_endpoint facts against a leaked
+// candidate would mint a phantom contract:endpoint node under the wrong
+// domain.
+func TestReconcilePayloadShape_DomainScoped(t *testing.T) {
+	g, s, _ := setupTestGraph(t)
+
+	revA, err := s.CreateRevision("domain-a", "scan_a", "", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revB, err := s.CreateRevision("domain-b", "scan_b", "", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both domains' controllers live under the SAME directory name
+	// ("svc-shared/") — the host-token collision that used to leak across
+	// domains. Endpoint names carry a domain-prefix ("a-item"/"b-item") so a
+	// leak is unambiguous in assertions.
+	seedDomain := func(domainKey string, revID int64, prefix string) {
+		var endpointFacts []Fact
+		for i := 0; i < 3; i++ {
+			endpointFacts = append(endpointFacts, Fact{
+				Kind: "endpoint", Method: "GET",
+				Target: fmt.Sprintf("/svc-shared/%s-item%d", prefix, i), FromType: "controller",
+			})
+		}
+		factsJSON, err := json.Marshal(endpointFacts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.SaveFileExtraction(revID, domainKey, "svc-shared/src/"+prefix+".controller.ts", "extracted", "", string(factsJSON), ""); err != nil {
+			t.Fatal(err)
+		}
+
+		// One unmatched call per domain, targeting the shared host token. The
+		// digit-bearing path ("item-999") keeps it out of auto-materialization
+		// (see the note in TestReconcilePayloadShape above) so it survives to
+		// FindUnmatchedHTTPCalls.
+		callFacts, err := json.Marshal([]Fact{
+			{Kind: "http_call", From: prefix + "Client.unknown", FromType: "provider",
+				Target: "http://svc-shared:3000/svc-shared/item-999", Method: "GET"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.SaveFileExtraction(revID, domainKey, prefix+"-client/src/"+prefix+".client.ts", "extracted", "", string(callFacts), ""); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := g.ResolveExtractions(domainKey, revID); err != nil {
+			t.Fatalf("ResolveExtractions(%s): %v", domainKey, err)
+		}
+	}
+
+	seedDomain("domain-a", revA, "a")
+	seedDomain("domain-b", revB, "b")
+
+	unmatchedB, allEndpointsB := g.FindUnmatchedHTTPCalls("domain-b")
+
+	// KnownEndpoints (the full domain list) must be domain-b-only.
+	for _, ep := range allEndpointsB {
+		if strings.Contains(ep, "a-item") {
+			t.Errorf("domain-b KnownEndpoints leaked a domain-a endpoint: %q (full list=%v)", ep, allEndpointsB)
+		}
+	}
+	if len(allEndpointsB) != 3 {
+		t.Errorf("expected 3 domain-b known endpoints, got %d: %v", len(allEndpointsB), allEndpointsB)
+	}
+
+	if len(unmatchedB) != 1 {
+		t.Fatalf("expected 1 unmatched call for domain-b, got %d: %+v", len(unmatchedB), unmatchedB)
+	}
+	// The narrow per-item list must be domain-b-only too.
+	for _, ep := range unmatchedB[0].Endpoints {
+		if strings.Contains(ep, "a-item") {
+			t.Errorf("domain-b narrow Endpoints leaked a domain-a endpoint: %q (list=%v)", ep, unmatchedB[0].Endpoints)
+		}
+		if !strings.Contains(ep, "b-item") {
+			t.Errorf("domain-b narrow Endpoints contains unexpected entry: %q", ep)
+		}
+	}
+}
