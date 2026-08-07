@@ -2,6 +2,7 @@ package graph
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -53,7 +54,7 @@ func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 		{"kind":"injects","to":"S3Client"},
 		{"kind":"import","symbols":["X"],"to":"@okeep/ui/button"},
 		{"kind":"http_call","method":"POST","target":"https://hooks.example.com/battles"},
-		{"kind":"http_call","method":"POST","target":"http://battle-svc/battles"},
+		{"kind":"http_call","method":"POST","target":"http://battle-svc/status"},
 		{"kind":"declares_service","to":"Spectators.Api"},
 		{"kind":"declares_service","to":"ScoreboardApi"}
 	]`
@@ -89,7 +90,7 @@ func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 		// post-pass still materializes its endpoint (Task 5: isExternalHost
 		// only routes dotted, unmatched hosts to the external-only path).
 		"service:external_system:testapp:battle-svc",
-		"contract:endpoint:testapp:post:/battles",
+		"contract:endpoint:testapp:post:/status",
 		"service:service:testapp:spectators-api",
 		"service:service:testapp:scoreboard-api",
 	} {
@@ -100,6 +101,15 @@ func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 			}
 			sort.Strings(got)
 			t.Errorf("fact family produced no node under %q; emitted %v", want, got)
+		}
+	}
+	// Verify the external-host path never appears in endpoint keys (Task 5: external
+	// URLs like https://hooks.example.com/battles must never materialize as
+	// contract:endpoint nodes). The internal call uses /status; /battles must
+	// appear in NO endpoint key.
+	for k := range emitted {
+		if strings.HasPrefix(k, "contract:endpoint:") && strings.Contains(k, "/battles") {
+			t.Errorf("external URL path /battles leaked into endpoint key: %q", k)
 		}
 	}
 }
