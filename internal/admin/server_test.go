@@ -135,6 +135,93 @@ func TestHandleGraphEmitsTrustScore(t *testing.T) {
 	}
 }
 
+// 2026-08-07 scoped re-review finding: handleGraph looked up manifest infra
+// nodes via the RAW manifest.InfraEntry.InfraNodeKey() against stored
+// NodeKeys, which the writers (discover.go, mcpserver/server.go) canonicalize
+// via graph.CanonicalNodeKey. A manifest address that isn't already
+// lowercase-kebab (e.g. "MyRedis.Internal:6379") stored as
+// "infra:cache:myredis.internal:6379" but was looked up as
+// "infra:cache:MyRedis.Internal:6379" — the lookup missed and the
+// USES_INFRA edge silently vanished from the dashboard.
+func TestHandleGraph_UsesInfraEdgeSurvivesNonCanonicalManifestAddress(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	reg, _ := registry.LoadDefaults()
+	g := graph.New(s, reg)
+
+	manifestPath := filepath.Join(dir, "chronicle.domain.yaml")
+	manifestYAML := `domains:
+  - name: test
+    scan:
+      include:
+        - "src/**"
+infrastructure:
+  - name: MyRedis
+    type: cache
+    address: "MyRedis.Internal:6379"
+`
+	if err := os.WriteFile(manifestPath, []byte(manifestYAML), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Controller node so "test" is recognized as a backend domain.
+	if _, err := s.UpsertNode(store.NodeRow{
+		NodeKey: "code:controller:test:tom-controller", Layer: "code", NodeType: "controller",
+		DomainKey: "test", Name: "TomController", Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertNode controller: %v", err)
+	}
+
+	// Infra node stored the way discover.go now writes it: canonicalized.
+	rawKey := "infra:cache:MyRedis.Internal:6379"
+	canonicalKey := graph.CanonicalNodeKey(rawKey)
+	if canonicalKey == rawKey {
+		t.Fatalf("fixture invalid: raw key %q is already canonical, test would not catch a raw lookup", rawKey)
+	}
+	infraID, err := s.UpsertNode(store.NodeRow{
+		NodeKey: canonicalKey, Layer: "infra", NodeType: "cache",
+		DomainKey: "test", Name: "MyRedis", Status: "active",
+	})
+	if err != nil {
+		t.Fatalf("UpsertNode infra: %v", err)
+	}
+
+	srv := NewServer(g, s, 0, manifestPath, false, dir)
+	req := httptest.NewRequest("GET", "/api/graph?domain=test", nil)
+	w := httptest.NewRecorder()
+	srv.handleGraph(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp struct {
+		Edges []map[string]any `json:"edges"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Edges) == 0 {
+		t.Fatal("no edges — assertion would pass vacuously")
+	}
+	var found bool
+	for _, e := range resp.Edges {
+		if e["edge_type"] != "USES_INFRA" {
+			continue
+		}
+		toID, ok := e["to_node_id"].(float64)
+		if ok && int64(toID) == infraID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no USES_INFRA edge to infra node %d (key %q); edges = %v", infraID, canonicalKey, resp.Edges)
+	}
+}
+
 func TestHandleLowConfidence(t *testing.T) {
 	srv := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/low-confidence", nil)

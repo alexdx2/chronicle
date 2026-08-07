@@ -1095,7 +1095,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, infra := range m.Infrastructure {
-			infraID, ok := infraIDs[infra.InfraNodeKey()]
+			infraID, ok := infraIDs[graph.CanonicalNodeKey(infra.InfraNodeKey())]
 			if !ok {
 				continue
 			}
@@ -1426,7 +1426,7 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		}
 		// Also: all backend services use shared infra from manifest
 		for _, infra := range m.Infrastructure {
-			infraID, ok := infraIDs[infra.InfraNodeKey()]
+			infraID, ok := infraIDs[graph.CanonicalNodeKey(infra.InfraNodeKey())]
 			if !ok {
 				continue
 			}
