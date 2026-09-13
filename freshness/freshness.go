@@ -258,7 +258,7 @@ func (r *Report) resolveStatus(repoDir string) string {
 	if r.Structured != nil && r.Structured.SHA != "" && r.Structured.SHA == r.Head.SHA {
 		return StatusStructured
 	}
-	if r.verifiedAfterScan() && r.Verified.SHA == r.Head.SHA && r.Unscanned.Commits > 0 {
+	if r.VerifiedAfterScan() && r.Verified.SHA == r.Head.SHA && r.Unscanned.Commits > 0 {
 		return StatusVerified
 	}
 	return StatusStale
@@ -273,12 +273,16 @@ func (r *Report) SetRepo(repo string) {
 	r.Message = r.body()
 }
 
-// verifiedAfterScan reports whether the last refresh actually re-verified the
+// VerifiedAfterScan reports whether the last refresh actually re-verified the
 // scan — i.e. it happened after it. A refresh that predates the scan is older
 // knowledge about an older commit: rendering "scanned@N+5 · verified@N" would
 // read as "re-verified since the scan" when the truth is the reverse, and a
 // stale graph would wear the verified status.
-func (r *Report) verifiedAfterScan() bool {
+//
+// Exported because the federated line (chronicle-pro) has to answer the same
+// question, and it is a rule, not a formatting detail: which pointer counts as
+// a re-verification cannot have two different answers in two renderers.
+func (r *Report) VerifiedAfterScan() bool {
 	return r.Verified != nil && r.Verified.SHA != "" &&
 		r.Scanned != nil && r.Verified.RevisionID > r.Scanned.RevisionID
 }
@@ -324,12 +328,14 @@ func (r *Report) body() string {
 	// The structural point rides with the scan rather than in its own segment:
 	// the two together are the answer to "what does this graph know about
 	// today's code", and showing one without the other is the lie §3 names.
-	if r.Structured != nil && r.Structured.SHA != "" {
+	// Unless they are the same commit — then it is one fact printed twice, and
+	// the line exists to be read at a glance.
+	if r.Structured != nil && r.Structured.SHA != "" && r.Structured.SHA != r.Scanned.SHA {
 		head += " structured@" + short(r.Structured.SHA)
 	}
 	parts := []string{head}
 
-	if r.verifiedAfterScan() && r.Verified.SHA != r.Scanned.SHA {
+	if r.VerifiedAfterScan() && r.Verified.SHA != r.Scanned.SHA {
 		parts = append(parts, "verified@"+short(r.Verified.SHA))
 	}
 

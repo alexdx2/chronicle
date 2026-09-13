@@ -148,3 +148,15 @@ func TestFreshnessToolRegistered(t *testing.T) {
 		t.Fatal("chronicle_freshness missing from Tools()")
 	}
 }
+
+// The tool's JSON carries a structured point and a structured status, and an
+// agent reads the description to know what to look for. A field the
+// description does not mention is a field nobody asks about.
+func TestFreshnessToolDescriptionNamesTheStructuralPoint(t *testing.T) {
+	desc := freshnessTool().Description
+	for _, want := range []string{"structured", "rules"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("the tool description never mentions %q: %s", want, desc)
+		}
+	}
+}

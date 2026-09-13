@@ -50,7 +50,7 @@ func FreshnessReportForDomain(g *graph.Graph, repoDir, domain string) (*freshnes
 
 func freshnessTool() mcp.Tool {
 	return mcp.NewTool("chronicle_freshness",
-		mcp.WithDescription("How old is this graph? Returns the commit the knowledge was scanned at, the commit it was last verified at, how many commits and files have landed since, whether the scanned commit is still on this branch (diverged), and how much of the graph is already marked stale. Call it before trusting a query answer, or when deciding whether a rescan is needed."),
+		mcp.WithDescription("How old is this graph? Returns three commits — the one the knowledge was scanned at, the one its deterministic structure was last re-extracted at (structured: today's imports, routes and models, with yesterday's meanings), and the one its evidence was last verified at — plus how many commits and files have landed since, how many files still await re-extraction under a newer rules pack (structured.old_rules), whether the scanned commit is still on this branch (diverged), and how much of the graph is already marked stale. Status is one of empty, fresh, structured, verified, stale, diverged. Call it before trusting a query answer, or when deciding whether a rescan is needed."),
 		mcp.WithString("repo", mcp.Description("Label for this repo in the report (default: the project directory name)")),
 	)
 }

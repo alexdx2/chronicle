@@ -435,3 +435,39 @@ func TestStatusStructuredIsInTheClosedSet(t *testing.T) {
 		t.Fatalf("StatusStructured = %q", StatusStructured)
 	}
 }
+
+// A structural phase that finished at the same commit the scan was taken from
+// has nothing of its own to say: "scanned@abc structured@abc" is the same fact
+// twice, and the line's whole job is to be read at a glance.
+func TestStructuredIsNotRepeatedWhenItEqualsTheScan(t *testing.T) {
+	r := &Report{
+		Repo: "auto", Status: StatusFresh,
+		Scanned:    &Point{SHA: "22f9f92aaaa", At: "2026-08-07T10:00:00Z", RevisionID: 1},
+		Structured: &Point{SHA: "22f9f92aaaa", RevisionID: 1},
+	}
+	want := "knowledge: auto scanned@22f9f92 · current"
+	if got := r.Line(); got != want {
+		t.Errorf("line = %q, want %q", got, want)
+	}
+	// The backlog is still the structural point's to report, even then.
+	r.Structured.OldRules = 3
+	if got := r.Line(); !strings.Contains(got, "3 files on old rules") {
+		t.Errorf("line dropped the backlog with the repeated point: %q", got)
+	}
+}
+
+// VerifiedAfterScan is the one rule for "is there a re-verification worth
+// naming" — exported because the federated line has to answer it the same way
+// core's does, and a second copy of the rule is a second chance to get it wrong.
+func TestVerifiedAfterScanIsTheExportedRule(t *testing.T) {
+	scanned := &Point{SHA: "aaa", RevisionID: 5}
+	if (&Report{Scanned: scanned, Verified: &Point{SHA: "bbb", RevisionID: 6}}).VerifiedAfterScan() != true {
+		t.Error("a refresh newer than the scan is a verification worth naming")
+	}
+	if (&Report{Scanned: scanned, Verified: &Point{SHA: "bbb", RevisionID: 4}}).VerifiedAfterScan() != false {
+		t.Error("a refresh older than the scan is older knowledge, not newer")
+	}
+	if (&Report{Scanned: scanned}).VerifiedAfterScan() != false {
+		t.Error("no refresh at all is not a verification")
+	}
+}
