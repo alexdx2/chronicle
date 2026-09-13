@@ -2050,7 +2050,7 @@ func scanStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 			// One freshness answer for every consumer: the same report
 			// chronicle_freshness and /api/freshness return, not a second
 			// hand-rolled comparison that can disagree with them.
-			if rep, err := freshnessReportFor(g, serverRepoDir(), domain); err == nil {
+			if rep, err := FreshnessReportForDomain(g, serverRepoDir(), domain); err == nil {
 				result["freshness"] = rep
 			}
 

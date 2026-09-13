@@ -30,17 +30,19 @@ func repoLabel(repoDir string) string {
 	return filepath.Base(abs)
 }
 
-// FreshnessReport computes the freshness report for one project directory.
-// Exported for the admin dashboard (/api/freshness) and chronicle-pro, which
-// need the same numbers the tool returns without going through MCP.
+// FreshnessReport computes the freshness report for one project directory,
+// letting the store pick the domain. Exported for the admin dashboard
+// (/api/freshness) and chronicle-pro, which need the same numbers the tool
+// returns without going through MCP.
 func FreshnessReport(g *graph.Graph, repoDir string) (*freshness.Report, error) {
-	return freshnessReportFor(g, repoDir, "")
+	return FreshnessReportForDomain(g, repoDir, "")
 }
 
-// freshnessReportFor is FreshnessReport with a caller-known domain: scan_status
-// already resolved which domain it is reporting on and must not let the report
-// silently pick a different one.
-func freshnessReportFor(g *graph.Graph, repoDir, domain string) (*freshness.Report, error) {
+// FreshnessReportForDomain is FreshnessReport for a caller-known domain. A
+// caller that already resolved which domain it is showing — scan_status, the
+// dashboard's ?domain= selector — must report on that one, not on whichever
+// domain happens to hold the newest revision.
+func FreshnessReportForDomain(g *graph.Graph, repoDir, domain string) (*freshness.Report, error) {
 	if repoDir == "" {
 		repoDir = serverRepoDir()
 	}
@@ -60,7 +62,7 @@ func freshnessTool() mcp.Tool {
 func freshnessHandler(g *graph.Graph, repoDir string) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
-		rep, err := freshnessReportFor(g, repoDir, "")
+		rep, err := FreshnessReportForDomain(g, repoDir, "")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}

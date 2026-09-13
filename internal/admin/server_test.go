@@ -742,3 +742,47 @@ func TestHandleFreshnessEmptyStore(t *testing.T) {
 		t.Fatalf("status = %v, want empty", rep["status"])
 	}
 }
+
+// The header line must describe the domain the page is showing. With two
+// domains scanned at different commits, ?domain= decides which one is reported.
+func TestHandleFreshnessFollowsSelectedDomain(t *testing.T) {
+	srv, dir := setupTestServerInGitRepo(t)
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headSHA := strings.TrimSpace(string(head))
+
+	// "old" was scanned at a commit that no longer is HEAD; "current" is at HEAD.
+	// "current" is the newest revision, so a domain-blind report would pick it.
+	if _, err := srv.store.CreateRevision("old", "", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.CreateRevision("current", "", headSHA, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(domain string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/freshness?domain="+domain, nil)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var rep map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&rep); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return rep
+	}
+
+	cur := get("current")
+	if cur["domain"] != "current" || cur["status"] != "fresh" {
+		t.Fatalf("domain=current: got %v / %v", cur["domain"], cur["status"])
+	}
+	old := get("old")
+	if old["domain"] != "old" || old["status"] != "diverged" {
+		t.Fatalf("domain=old: got %v / %v", old["domain"], old["status"])
+	}
+}

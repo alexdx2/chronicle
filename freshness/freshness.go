@@ -129,7 +129,9 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	if scanRev != nil {
+	// A revision that recorded no commit pins nothing: reporting it as
+	// Scanned would contradict the "empty" status it still produces.
+	if scanRev != nil && scanRev.GitAfterSHA != "" {
 		p := &Point{SHA: scanRev.GitAfterSHA, At: scanRev.CreatedAt, RevisionID: scanRev.RevisionID}
 		if run, err := s.GetScanRunByRevision(scanRev.RevisionID); err == nil && run != nil {
 			p.Files = run.ExtractedFiles
@@ -213,7 +215,7 @@ func (r *Report) resolveStatus(repoDir string) string {
 
 	r.Unscanned.Commits = gitCount(repoDir, r.Scanned.SHA+"..HEAD")
 	r.Unscanned.Files = gitChangedFiles(repoDir, r.Scanned.SHA, "HEAD")
-	if r.Verified != nil && r.Verified.SHA == r.Head.SHA && r.Unscanned.Commits > 0 {
+	if r.verifiedAfterScan() && r.Verified.SHA == r.Head.SHA && r.Unscanned.Commits > 0 {
 		return StatusVerified
 	}
 	return StatusStale
@@ -226,6 +228,16 @@ func (r *Report) resolveStatus(repoDir string) string {
 func (r *Report) SetRepo(repo string) {
 	r.Repo = repo
 	r.Message = r.body()
+}
+
+// verifiedAfterScan reports whether the last refresh actually re-verified the
+// scan — i.e. it happened after it. A refresh that predates the scan is older
+// knowledge about an older commit: rendering "scanned@N+5 · verified@N" would
+// read as "re-verified since the scan" when the truth is the reverse, and a
+// stale graph would wear the verified status.
+func (r *Report) verifiedAfterScan() bool {
+	return r.Verified != nil && r.Verified.SHA != "" &&
+		r.Scanned != nil && r.Verified.RevisionID > r.Scanned.RevisionID
 }
 
 // Line renders the one-line knowledge string used by the MCP knowledge block:
@@ -268,7 +280,7 @@ func (r *Report) body() string {
 	}
 	parts := []string{head}
 
-	if r.Verified != nil && r.Verified.SHA != "" && r.Verified.SHA != r.Scanned.SHA {
+	if r.verifiedAfterScan() && r.Verified.SHA != r.Scanned.SHA {
 		parts = append(parts, "verified@"+short(r.Verified.SHA))
 	}
 

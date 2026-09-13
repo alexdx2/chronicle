@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -50,6 +51,20 @@ func TestEmpty(t *testing.T) {
 	}
 	if r.Head == nil || r.Head.SHA == "" {
 		t.Fatalf("empty report must still carry HEAD: %+v", r.Head)
+	}
+
+	// A revision that pinned no commit is not a scan point: "empty" must not
+	// come back with a scanned object attached.
+	if _, err := s.CreateRevision("d", "", "", "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Compute(dir, "r", "d", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != "empty" || r.Scanned != nil || r.Layers["code"] != nil {
+		t.Fatalf("revision without a sha must leave scanned nil: %s scanned=%+v layers=%+v",
+			r.Status, r.Scanned, r.Layers)
 	}
 }
 
@@ -162,13 +177,66 @@ func TestLineShapes(t *testing.T) {
 	}
 	stale := &Report{
 		Repo: "auto", Status: "stale",
-		Scanned:   &Point{SHA: "22f9f92aaaa", At: "2026-08-07T10:00:00Z"},
-		Verified:  &Point{SHA: "dd193adbbbb"},
+		Scanned:   &Point{SHA: "22f9f92aaaa", At: "2026-08-07T10:00:00Z", RevisionID: 1},
+		Verified:  &Point{SHA: "dd193adbbbb", RevisionID: 2},
 		Unscanned: Distance{Commits: 796},
 		Touched:   Touched{NodesStale: 118},
 	}
 	want := "knowledge: auto scanned@22f9f92 (07.08) · verified@dd193ad · 796 unscanned commits · 118 nodes touched"
 	if got := stale.Line(); got != want {
 		t.Errorf("stale line = %q, want %q", got, want)
+	}
+}
+
+// A refresh that predates the scan is older knowledge about an older commit.
+// It must neither earn the verified status nor appear on the knowledge line.
+func TestRefreshBeforeScanIsNotVerification(t *testing.T) {
+	dir, s := newRepo(t)
+	commit(t, dir, "a.ts")
+	sha2 := commit(t, dir, "b.ts")
+
+	// Hook refreshed at HEAD first...
+	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental", `{"kind":"refresh"}`); err != nil {
+		t.Fatal(err)
+	}
+	// ...then an older checkout was scanned.
+	sha1 := git(t, dir, "rev-parse", "HEAD~1")
+	sha1 = sha1[:len(sha1)-1]
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Compute(dir, "r", "d", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != "stale" {
+		t.Fatalf("a refresh older than the scan must not read as verified: %s", r.Status)
+	}
+	if strings.Contains(r.Line(), "verified@") {
+		t.Fatalf("line claims a verification that predates the scan: %q", r.Line())
+	}
+	if r.Verified == nil || r.Verified.SHA != sha2 {
+		t.Fatalf("the refresh itself must still be reported: %+v", r.Verified)
+	}
+}
+
+// The ordering guard must not suppress a real verification.
+func TestRefreshAfterScanStillVerifies(t *testing.T) {
+	dir, s := newRepo(t)
+	sha1 := commit(t, dir, "a.ts")
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	sha2 := commit(t, dir, "b.ts")
+	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental", `{"kind":"refresh"}`); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Status != "verified" {
+		t.Fatalf("want verified, got %s", r.Status)
+	}
+	if !strings.Contains(r.Line(), "verified@"+sha2[:7]) {
+		t.Fatalf("line must name the refresh: %q", r.Line())
 	}
 }

@@ -168,3 +168,25 @@ func TestQueryToolsCoversTheReadOnlyTools(t *testing.T) {
 		}
 	}
 }
+
+// A host that wraps one handler with both wrappers (logging + knowledge) must
+// still get exactly one knowledge block.
+func TestKnowledgeBlockNotAppendedTwice(t *testing.T) {
+	SetKnowledgeLiner(fixedLiner("knowledge: r scanned@abc · current"))
+	t.Cleanup(func() { SetKnowledgeLiner(nil) })
+	s := newTestStore(t)
+	inner := func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		return mcplib.NewToolResultText(`[{"a":1}]`), nil
+	}
+	doubled := WrapWithKnowledge("chronicle_node_search", WrapWithLogging(s, "chronicle_node_search", inner))
+	res, err := doubled(context.Background(), callReq("chronicle_node_search", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Content) != 2 {
+		t.Fatalf("want 2 blocks (answer + one knowledge line), got %d: %+v", len(res.Content), res.Content)
+	}
+	if res.Content[1].(mcplib.TextContent).Text != "knowledge: r scanned@abc · current" {
+		t.Fatalf("second block: %+v", res.Content[1])
+	}
+}

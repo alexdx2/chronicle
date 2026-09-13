@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,6 +66,9 @@ func appendKnowledge(toolName string, result *mcplib.CallToolResult, callErr err
 	if l == nil {
 		return
 	}
+	if hasKnowledgeBlock(result) {
+		return
+	}
 	line := l.KnowledgeLine(toolName, firstBlockText)
 	if line == "" {
 		return
@@ -72,10 +76,27 @@ func appendKnowledge(toolName string, result *mcplib.CallToolResult, callErr err
 	result.Content = append(result.Content, mcplib.TextContent{Type: "text", Text: line})
 }
 
+// knowledgePrefix opens every knowledge line, and is how a result says it
+// already carries one.
+const knowledgePrefix = "knowledge: "
+
+// hasKnowledgeBlock reports whether the result already ends with a knowledge
+// block. A host that wraps a handler with both WrapWithLogging and
+// WrapWithKnowledge would otherwise append the same line twice.
+func hasKnowledgeBlock(result *mcplib.CallToolResult) bool {
+	if len(result.Content) == 0 {
+		return false
+	}
+	tc, ok := result.Content[len(result.Content)-1].(mcplib.TextContent)
+	return ok && strings.HasPrefix(tc.Text, knowledgePrefix)
+}
+
 // WrapWithKnowledge appends the knowledge block to h's result without
 // touching the request log. chronicle-pro's federation server has no
 // request-log store of its own — it wraps its tools with this so federated
-// answers carry the same age marker core's do.
+// answers carry the same age marker core's do. Stacking it on top of
+// WrapWithLogging is safe: the second wrapper sees the block the first one
+// added and leaves the result alone.
 func WrapWithKnowledge(name string, h server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		result, err := h(ctx, req)

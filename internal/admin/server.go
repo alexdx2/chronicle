@@ -717,12 +717,14 @@ func (s *Server) handleScans(w http.ResponseWriter, r *http.Request) {
 
 // handleFreshness answers "how old is what this dashboard is showing" with
 // the same report chronicle_freshness returns — one computation, so the header
-// line and the MCP tool can never disagree.
+// line and the MCP tool can never disagree. It follows the page's selected
+// domain: a header line describing a different domain than the tables below it
+// is worse than no line at all.
 func (s *Server) handleFreshness(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	dir := s.projectPath
 	s.mu.RUnlock()
-	rep, err := mcp.FreshnessReport(s.getGraph(), dir)
+	rep, err := mcp.FreshnessReportForDomain(s.getGraph(), dir, s.getDomain(r))
 	if err != nil {
 		httpError(w, err, 500)
 		return
