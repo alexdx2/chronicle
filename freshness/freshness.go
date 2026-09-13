@@ -92,10 +92,9 @@ var QueryToolNames = []string{
 	"chronicle_wiki_page",
 }
 
-// surfaceLayers are the non-code layers a report breaks out. "code" is the
-// scan itself; everything here is imported separately and can be older or
-// newer than the scan.
-var surfaceLayers = []string{"ui"}
+// uiLayer is the non-code layer a report breaks out. "code" is the scan
+// itself; the ui layer is imported separately and can be older or newer.
+const uiLayer = "ui"
 
 // Compute reads the store and git in repoDir. repo/domain are labels the
 // caller knows; an empty domain resolves to the domain of the newest revision
@@ -151,19 +150,21 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 		r.Verified = &Point{SHA: refreshRev.GitAfterSHA, At: refreshRev.CreatedAt, RevisionID: refreshRev.RevisionID}
 	}
 
-	for _, layer := range surfaceLayers {
-		rev, err := latest(s.LatestLayerRevision(domain, layer))
-		if err != nil {
-			return nil, err
-		}
-		if rev == nil {
-			continue
-		}
-		r.Layers[layer] = &Point{
-			SHA:        rev.GitAfterSHA,
-			At:         rev.CreatedAt,
-			RevisionID: rev.RevisionID,
-			Source:     metadataString(rev.Metadata, "source"),
+	// The ui layer is found by LatestSurfaceRevision, not by metadata.layer
+	// alone: an import onto a commit a scan already named rides along on that
+	// row and marks itself with metadata.surface instead (see
+	// store.LatestSurfaceRevision). Reading only the layer stamp made the ui
+	// layer vanish from the report in exactly the commonest flow.
+	surfRev, err := latest(s.LatestSurfaceRevision(domain))
+	if err != nil {
+		return nil, err
+	}
+	if surfRev != nil {
+		r.Layers[uiLayer] = &Point{
+			SHA:        surfRev.GitAfterSHA,
+			At:         surfRev.CreatedAt,
+			RevisionID: surfRev.RevisionID,
+			Source:     surfaceSource(surfRev.Metadata),
 		}
 	}
 
@@ -410,6 +411,24 @@ func latest(rev *store.Revision, err error) (*store.Revision, error) {
 		return nil, err
 	}
 	return rev, nil
+}
+
+// surfaceSource reads the extract's path from either metadata shape: top-level
+// "source" on an import's own revision, nested under "surface" when it rode
+// along on a scan's.
+func surfaceSource(raw string) string {
+	if v := metadataString(raw, "source"); v != "" {
+		return v
+	}
+	var m struct {
+		Surface struct {
+			Source string `json:"source"`
+		} `json:"surface"`
+	}
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return ""
+	}
+	return m.Surface.Source
 }
 
 func metadataString(raw, key string) string {

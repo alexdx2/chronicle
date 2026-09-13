@@ -24,6 +24,7 @@ func newSurfaceImportCmd() *cobra.Command {
 	var domain string
 	var allowUnresolved bool
 	var allowDiverged bool
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "import <surface.json>",
@@ -58,6 +59,7 @@ resolve. Each has a flag that says "yes, I meant that".`,
 				RepoDir:         paths.GitDir(),
 				AllowUnresolved: allowUnresolved,
 				AllowDiverged:   allowDiverged,
+				Force:           force,
 			})
 			if err != nil {
 				outputRefusal(err)
@@ -68,6 +70,7 @@ resolve. Each has a flag that says "yes, I meant that".`,
 	cmd.Flags().StringVar(&domain, "domain", "", "Domain key (default: the store's only domain)")
 	cmd.Flags().BoolVar(&allowUnresolved, "allow-unresolved", false, "Import what resolves; report the names that do not")
 	cmd.Flags().BoolVar(&allowDiverged, "allow-diverged", false, "Import even though the commit is not an ancestor of HEAD")
+	cmd.Flags().BoolVar(&force, "force", false, "Re-import an extract already recorded as imported at this commit")
 	return cmd
 }
 

@@ -37,8 +37,8 @@ func (r *Resolver) FieldKey(ref string) (string, error) {
 	}
 	key := fmt.Sprintf("data:field:%s:%s/%s", r.Domain,
 		validate.NormalizeName(model), validate.NormalizeName(field))
-	if _, err := r.Store.GetNodeByKey(key); err != nil {
-		return "", fmt.Errorf("field %q: no node %s in the graph — scan the data layer first", ref, key)
+	if !r.active(key) {
+		return "", fmt.Errorf("field %q: no active node %s in the graph — scan the data layer first", ref, key)
 	}
 	return key, nil
 }
@@ -61,7 +61,7 @@ func (r *Resolver) resolveMutation(name string) (key string, candidates []string
 		return "", nil, fmt.Errorf("mutation name is empty")
 	}
 	canonical := fmt.Sprintf("contract:endpoint:%s:mutation:/%s", r.Domain, strings.ToLower(name))
-	if _, e := r.Store.GetNodeByKey(canonical); e == nil {
+	if r.active(canonical) {
 		return canonical, nil, nil
 	}
 
@@ -137,18 +137,28 @@ func (r *Resolver) RouteKey(route string) (string, error) {
 	normalized := NormalizeRoute(route)
 
 	key := r.routeKeyFor(normalized)
-	if _, err := r.Store.GetNodeByKey(key); err == nil {
+	if r.active(key) {
 		return key, nil
 	}
 	if normalized != route {
 		if raw := r.routeKeyFor(route); raw != key {
-			if _, err := r.Store.GetNodeByKey(raw); err == nil {
+			if r.active(raw) {
 				return raw, nil
 			}
 		}
 		return "", fmt.Errorf("route %q (%s): no node %s in the graph", route, normalized, key)
 	}
 	return "", fmt.Errorf("route %q: no node %s in the graph", route, key)
+}
+
+// active reports whether the graph holds this key as a node the surface may
+// point at. The canonical-key lookups are a FAST PATH for the name index, not
+// a laxer rule: the index only ever offers active nodes, so a fast path that
+// accepted a tombstone would resolve to a node the slow path just refused —
+// and hang new ui edges off something the graph says is gone.
+func (r *Resolver) active(key string) bool {
+	n, err := r.Store.GetNodeByKey(key)
+	return err == nil && n != nil && n.Status == "active"
 }
 
 func (r *Resolver) routeKeyFor(route string) string {

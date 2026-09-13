@@ -18,7 +18,15 @@ type ImportOptions struct {
 	RepoDir         string // where git runs for the ancestor check ("" = skip git checks, tests only)
 	AllowUnresolved bool
 	AllowDiverged   bool
+	Force           bool // re-import an extract already marked as imported
 }
+
+// ImporterVersion is the version of the resolution rules this importer
+// applies. It is part of the "already imported" key, so an upgraded importer
+// re-imports automatically instead of reporting a previous version's verdict
+// as its own. Bump it whenever resolution changes what an unchanged extract
+// would produce.
+const ImporterVersion = 2
 
 // ImportResult is what one import did (or refused to do).
 type ImportResult struct {
@@ -112,7 +120,7 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 	// keyed by domain+product+commit, and is written only after a fully
 	// successful import.
 	hashKey := importedHashKey(domain, f.Product, f.Commit)
-	if prev, err := s.GetSetting(hashKey); err == nil && prev != "" {
+	if prev, err := s.GetSetting(hashKey); err == nil && prev != "" && !o.Force {
 		if prev == f.ContentHash {
 			res.AlreadyImported = true
 			if rev, rerr := s.GetRevisionBySHA(domain, f.Commit); rerr == nil {
@@ -155,6 +163,24 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 	case perr == nil:
 		revID = prior.RevisionID
 		res.ReusedRevision = true
+		// The row belongs to whoever created it — a scan, usually — so this
+		// MERGES what the import knows rather than replacing the metadata.
+		// Deliberately NOT layer="ui": that stamp is how LatestScanRevision
+		// recognises a layer-only revision and skips it, and stamping it on a
+		// scan's row would hide the commit the code knowledge came from.
+		// layer_extra + surface say "this commit also carries a ui import",
+		// and LatestSurfaceRevision finds it by the surface key.
+		if err := s.UpdateRevisionMetadata(revID, map[string]any{
+			"layer_extra": "ui",
+			"surface": map[string]any{
+				"source":         f.Path,
+				"schema_version": f.SchemaVersion,
+				"content_hash":   f.ContentHash,
+				"product":        f.Product,
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("surface: marking revision %d as carrying a ui import: %w", revID, err)
+		}
 	case errors.Is(perr, store.ErrNotFound):
 		meta, _ := json.Marshal(revisionMeta{
 			Layer:         "ui",
@@ -193,7 +219,7 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 
 	// (7) Closed world, per product: the file is the whole truth about this
 	// product's surface, so a ui node it stopped mentioning is gone.
-	deleted, err := closeWorld(s, domain, f.Product, fileKeys)
+	deleted, err := closeWorld(s, domain, f.Product, fileKeys, revID)
 	if err != nil {
 		return nil, err
 	}
@@ -207,10 +233,13 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 }
 
 // importedHashKey names the content hash of the extract last imported for one
-// product at one commit. Keyed independently of the revision, because a
-// revision row is not always available to stamp (see step 2).
+// product at one commit BY THIS VERSION of the importer. Keyed independently
+// of the revision, because a revision row is not always available to stamp
+// (see step 2); keyed by importer version because the same bytes at the same
+// commit resolve differently once the rules change, and an old mark would
+// report the old result as still current.
 func importedHashKey(domain, product, commit string) string {
-	return "surface:" + domain + ":" + product + ":" + commit
+	return fmt.Sprintf("surface:%s:%s:%s:v%d", domain, product, commit, ImporterVersion)
 }
 
 func short(hash string) string {
@@ -230,29 +259,47 @@ type revisionMeta struct {
 	Product       string `json:"product"`
 }
 
-// closeWorld tombstones every active ui node of this product that the extract
-// no longer names. Other products' ui nodes in the same domain are untouched —
+// closeWorld tombstones every ui node of this product that the extract no
+// longer names. Other products' ui nodes in the same domain are untouched —
 // the metadata each node carries is what keeps the blast radius at one product.
-func closeWorld(s *store.Store, domain, product string, fileKeys []string) ([]string, error) {
+//
+// Stale nodes are considered alongside active ones. "Stale" means a sweep
+// suspected the node; the extract is the authority on whether it still exists,
+// and leaving a stale-but-gone control out of the closed world would keep it
+// in the graph forever, never listed as deleted and never re-confirmed.
+//
+// Each tombstone records removed_in_revision, so the removal can be dated
+// instead of being a status with no story behind it.
+func closeWorld(s *store.Store, domain, product string, fileKeys []string, revID int64) ([]string, error) {
 	present := make(map[string]bool, len(fileKeys))
 	for _, k := range fileKeys {
 		present[k] = true
 	}
-	rows, err := s.ListNodes(store.NodeFilter{Layer: "ui", Domain: domain, Status: "active"})
-	if err != nil {
-		return nil, fmt.Errorf("surface: listing ui nodes: %w", err)
+	var rows []store.NodeRow
+	for _, status := range []string{"active", "stale"} {
+		batch, err := s.ListNodes(store.NodeFilter{Layer: "ui", Domain: domain, Status: status})
+		if err != nil {
+			return nil, fmt.Errorf("surface: listing ui nodes: %w", err)
+		}
+		rows = append(rows, batch...)
 	}
 	var deleted []string
 	for _, row := range rows {
-		var md struct {
-			Product string `json:"product"`
+		var md map[string]any
+		if err := json.Unmarshal([]byte(row.Metadata), &md); err != nil || md == nil {
+			md = map[string]any{}
 		}
-		_ = json.Unmarshal([]byte(row.Metadata), &md)
-		if md.Product != product || present[row.NodeKey] {
+		if product_, _ := md["product"].(string); product_ != product || present[row.NodeKey] {
 			continue
 		}
 		if err := s.DeleteNode(row.NodeKey); err != nil {
 			return nil, fmt.Errorf("surface: tombstoning %s: %w", row.NodeKey, err)
+		}
+		md["removed_in_revision"] = revID
+		if out, err := json.Marshal(md); err == nil {
+			if err := s.UpdateNodeMetadata(row.NodeID, string(out)); err != nil {
+				return nil, fmt.Errorf("surface: dating the tombstone on %s: %w", row.NodeKey, err)
+			}
 		}
 		deleted = append(deleted, row.NodeKey)
 	}

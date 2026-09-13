@@ -196,3 +196,52 @@ func TestImportSurfaceToolRegistered(t *testing.T) {
 		t.Fatal("the help listing does not mention the surface command")
 	}
 }
+
+// A refusal an agent can act on differently from a crash: the CLI has said so
+// with exit code 2 since the importer shipped, and the MCP door said it only
+// in prose. The kind is a field now, so a caller can branch on it.
+func TestImportSurfaceRefusalCarriesItsKind(t *testing.T) {
+	g := seedSurfaceGraph(t)
+	path := surfaceRepo(t)
+
+	// Re-point the extract at a commit this repo has never had.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["commit"] = "0000000000000000000000000000000000000009"
+	out, _ := json.Marshal(doc)
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, isErr := callSurfaceTool(t, g, map[string]any{"path": path, "domain": "mini"})
+	if !isErr {
+		t.Fatalf("an unknown commit must be refused: %v", res)
+	}
+	text, _ := res["error"].(string)
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatalf("a refusal must be JSON a caller can branch on, got %q", text)
+	}
+	if payload["refusal"] == "" {
+		t.Errorf("refusal kind missing from %v", payload)
+	}
+}
+
+// The happy path must stay exactly what it was: one JSON object, no wrapper.
+func TestImportSurfaceRefusalKindDoesNotChangeSuccess(t *testing.T) {
+	g := seedSurfaceGraph(t)
+	path := surfaceRepo(t)
+	out, isErr := callSurfaceTool(t, g, map[string]any{"path": path, "domain": "mini"})
+	if isErr {
+		t.Fatalf("errored: %v", out)
+	}
+	if _, ok := out["refusal"]; ok {
+		t.Errorf("a successful import must not carry a refusal field: %v", out)
+	}
+}

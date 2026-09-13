@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -23,6 +25,7 @@ func importSurfaceTool() mcp.Tool {
 		mcp.WithString("domain", mcp.Description("Domain key (default: the store's only domain)")),
 		mcp.WithBoolean("allow_unresolved", mcp.Description("Import what resolves and report the names that do not, instead of refusing")),
 		mcp.WithBoolean("allow_diverged", mcp.Description("Import even though the extract's commit is not an ancestor of HEAD")),
+		mcp.WithBoolean("force", mcp.Description("Re-import an extract already recorded as imported at this commit (after an importer upgrade, or to repair a partial import)")),
 	)
 }
 
@@ -43,9 +46,10 @@ func importSurfaceHandler(g *graph.Graph) server.ToolHandlerFunc {
 			RepoDir:         surfaceRepoDir(),
 			AllowUnresolved: boolParam(args, "allow_unresolved"),
 			AllowDiverged:   boolParam(args, "allow_diverged"),
+			Force:           boolParam(args, "force"),
 		})
 		if err != nil {
-			return errorResult(err), nil
+			return refusalResult(err), nil
 		}
 		return jsonResult(res), nil
 	}
@@ -56,3 +60,37 @@ func importSurfaceHandler(g *graph.Graph) server.ToolHandlerFunc {
 // directory every other git question in this process uses — the CLI importer
 // and this one must not disagree about which tree "HEAD" means.
 func surfaceRepoDir() string { return paths.GitDir() }
+
+// refusalKinds maps each refusal to the word an MCP caller branches on. The
+// CLI says the same thing with exit code 2; a tool caller had only prose, and
+// prose is not something a script can act on — so "regenerate the extract" and
+// "Chronicle is broken" looked identical from here.
+var refusalKinds = []struct {
+	err  error
+	kind string
+}{
+	{surface.ErrAlreadyImported, "already_imported"},
+	{surface.ErrCommitChanged, "commit_changed"},
+	{surface.ErrDiverged, "diverged"},
+	{surface.ErrUnresolved, "unresolved"},
+}
+
+// refusalResult is errorResult plus a machine-readable kind. The payload stays
+// an error result (IsError), so a caller that only reads text is unaffected.
+func refusalResult(err error) *mcp.CallToolResult {
+	kind := "invalid"
+	for _, r := range refusalKinds {
+		if errors.Is(err, r.err) {
+			kind = r.kind
+			break
+		}
+	}
+	body, jerr := json.Marshal(map[string]string{"error": err.Error(), "refusal": kind})
+	if jerr != nil {
+		return errorResult(err)
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{mcp.NewTextContent(string(body))},
+		IsError: true,
+	}
+}
