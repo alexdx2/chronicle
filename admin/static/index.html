@@ -2359,7 +2359,7 @@ function dashboard() {
 
     async fetchFreshness() {
       try {
-        const r = await fetch('/api/freshness?domain=' + this.domain);
+        const r = await fetch('/api/freshness?domain=' + encodeURIComponent(this.domain || ''));
         this.freshness = await r.json();
       } catch(e) { console.error('freshness:', e); }
     },

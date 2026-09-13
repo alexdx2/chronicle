@@ -67,78 +67,6 @@ func (s *Store) CreateRevisionWithContext(domainKey, beforeSHA, afterSHA, trigge
 	return id, nil
 }
 
-// GetLatestRevision returns the most recent revision for a domain.
-func (s *Store) GetLatestRevision(domainKey string) (*Revision, error) {
-	const q = `
-		SELECT revision_id, domain_key, COALESCE(git_before_sha,''), git_after_sha,
-		       trigger_kind, mode, created_at, metadata
-		FROM graph_revisions
-		WHERE domain_key = ?
-		ORDER BY revision_id DESC
-		LIMIT 1
-	`
-	r := &Revision{}
-	err := s.db.QueryRow(q, domainKey).Scan(
-		&r.RevisionID, &r.DomainKey, &r.GitBeforeSHA, &r.GitAfterSHA,
-		&r.TriggerKind, &r.Mode, &r.CreatedAt, &r.Metadata,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("GetLatestRevision %q: %w", domainKey, ErrNotFound)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("GetLatestRevision %q: %w", domainKey, err)
-	}
-	return r, nil
-}
-
-// LatestRevisionAnyDomain returns the most recent revision across all domains
-// (GetLatestRevision is domain-scoped via WHERE domain_key = ?, which does not
-// match rows with a real domain key when called with "").
-func (s *Store) LatestRevisionAnyDomain() (*Revision, error) {
-	const q = `
-		SELECT revision_id, domain_key, COALESCE(git_before_sha,''), git_after_sha,
-		       trigger_kind, mode, created_at, metadata
-		FROM graph_revisions
-		ORDER BY revision_id DESC
-		LIMIT 1
-	`
-	r := &Revision{}
-	err := s.db.QueryRow(q).Scan(
-		&r.RevisionID, &r.DomainKey, &r.GitBeforeSHA, &r.GitAfterSHA,
-		&r.TriggerKind, &r.Mode, &r.CreatedAt, &r.Metadata,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("LatestRevisionAnyDomain: %w", ErrNotFound)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("LatestRevisionAnyDomain: %w", err)
-	}
-	return r, nil
-}
-
-// GetRevision returns the revision with the given id, or ErrNotFound if absent.
-func (s *Store) GetRevision(id int64) (*Revision, error) {
-	const q = `
-		SELECT revision_id, domain_key, COALESCE(git_before_sha,''), git_after_sha,
-		       trigger_kind, mode, created_at, metadata
-		FROM graph_revisions
-		WHERE revision_id = ?
-	`
-	row := s.db.QueryRow(q, id)
-	r := &Revision{}
-	err := row.Scan(
-		&r.RevisionID, &r.DomainKey, &r.GitBeforeSHA, &r.GitAfterSHA,
-		&r.TriggerKind, &r.Mode, &r.CreatedAt, &r.Metadata,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("GetRevision %d: %w", id, ErrNotFound)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("GetRevision %d: %w", id, err)
-	}
-	return r, nil
-}
-
 // revisionCols is the column list every revision query selects, in Revision
 // field order.
 const revisionCols = `revision_id, domain_key, COALESCE(git_before_sha,''), git_after_sha,
@@ -164,6 +92,27 @@ func (s *Store) oneRevision(what, q string, args ...any) (*Revision, error) {
 		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	return r, nil
+}
+
+// GetLatestRevision returns the most recent revision for a domain.
+func (s *Store) GetLatestRevision(domainKey string) (*Revision, error) {
+	return s.oneRevision(fmt.Sprintf("GetLatestRevision %q", domainKey),
+		`SELECT `+revisionCols+` FROM graph_revisions
+		 WHERE domain_key = ? ORDER BY revision_id DESC LIMIT 1`, domainKey)
+}
+
+// LatestRevisionAnyDomain returns the most recent revision across all domains
+// (GetLatestRevision is domain-scoped via WHERE domain_key = ?, which does not
+// match rows with a real domain key when called with "").
+func (s *Store) LatestRevisionAnyDomain() (*Revision, error) {
+	return s.oneRevision("LatestRevisionAnyDomain",
+		`SELECT `+revisionCols+` FROM graph_revisions ORDER BY revision_id DESC LIMIT 1`)
+}
+
+// GetRevision returns the revision with the given id, or ErrNotFound if absent.
+func (s *Store) GetRevision(id int64) (*Revision, error) {
+	return s.oneRevision(fmt.Sprintf("GetRevision %d", id),
+		`SELECT `+revisionCols+` FROM graph_revisions WHERE revision_id = ?`, id)
 }
 
 // LatestScanRevision is the newest non-refresh, non-layer revision of
@@ -277,15 +226,12 @@ func (s *Store) UpdateRevisionMetadata(revisionID int64, merge map[string]any) e
 // store — the caller's answer to "which domain is this project" when no
 // domain was passed. ErrNotFound when the store holds no revisions.
 func (s *Store) NewestRevisionDomain() (string, error) {
-	var d string
-	err := s.db.QueryRow(`SELECT domain_key FROM graph_revisions ORDER BY revision_id DESC LIMIT 1`).Scan(&d)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("NewestRevisionDomain: %w", ErrNotFound)
-	}
+	rev, err := s.oneRevision("NewestRevisionDomain",
+		`SELECT `+revisionCols+` FROM graph_revisions ORDER BY revision_id DESC LIMIT 1`)
 	if err != nil {
-		return "", fmt.Errorf("NewestRevisionDomain: %w", err)
+		return "", err
 	}
-	return d, nil
+	return rev.DomainKey, nil
 }
 
 // GetRevisionBySHA returns the revision a domain recorded for one git SHA, or
