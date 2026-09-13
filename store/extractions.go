@@ -100,12 +100,17 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 		return insert()
 	}
 
-	// ast / llm_single / default: dedup by domain + file against non-flow rows.
+	// ast / llm_single / default: dedup by domain + file against rows that
+	// belong to the same conversation. A flow row is phase 2's, and a
+	// structural row is the refresh phase's standing answer for the file
+	// (StructuralExtractionRole) — deduping a scan's reading against either
+	// would throw the scan's facts away.
 	var existingID int64
 	var existingFacts string
 	err := s.db.QueryRow(`
 		SELECT extraction_id, facts_json FROM scan_extractions
-		WHERE domain_key = ? AND file_path = ? AND COALESCE(extraction_role,'single') != 'flow'
+		WHERE domain_key = ? AND file_path = ?
+		  AND COALESCE(extraction_role,'single') NOT IN ('flow', '`+StructuralExtractionRole+`')
 		ORDER BY extraction_id DESC LIMIT 1
 	`, domainKey, filePath).Scan(&existingID, &existingFacts)
 	if err == nil {
@@ -132,6 +137,51 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 	}
 
 	return insert()
+}
+
+// StructuralExtractionRole marks the row the deterministic structural phase
+// keeps for a file. It is its own role because the phase REPLACES its previous
+// answer on every run, while every other role's dedup exists to stop a second
+// writer overwriting the first: SaveExtraction would have handed the phase back
+// the row from the previous commit and silently discarded the new facts, so the
+// file's structure could never change again.
+const StructuralExtractionRole = "structural"
+
+// SaveStructuralExtraction stores the structural phase's answer for one file,
+// replacing its previous one and re-pointing it at the revision now being
+// resolved. One row per (domain, file) — this is a standing answer, not a
+// history; the history lives in the evidence rows it justifies.
+func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, status, fromType, factsJSON, errorMessage string) (int64, error) {
+	if factsJSON == "" {
+		factsJSON = "[]"
+	}
+	var existingID int64
+	err := s.db.QueryRow(`
+		SELECT extraction_id FROM scan_extractions
+		WHERE domain_key = ? AND file_path = ? AND extraction_role = ?
+		ORDER BY extraction_id DESC LIMIT 1
+	`, domainKey, filePath, StructuralExtractionRole).Scan(&existingID)
+	if err == nil {
+		// metadata is reset with the facts: the unresolved names recorded on
+		// the row describe the answer being replaced, not the new one.
+		if _, uerr := s.db.Exec(`
+			UPDATE scan_extractions
+			SET revision_id = ?, status = ?, from_type = ?, facts_json = ?,
+			    error_message = ?, metadata = '{}'
+			WHERE extraction_id = ?`,
+			revisionID, status, fromType, factsJSON, nullableStr(errorMessage), existingID); uerr != nil {
+			return 0, fmt.Errorf("SaveStructuralExtraction: %w", uerr)
+		}
+		return existingID, nil
+	}
+	res, err := s.db.Exec(`
+		INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, from_type, extraction_role, vote_index, facts_json, error_message)
+		VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+	`, revisionID, domainKey, filePath, status, fromType, StructuralExtractionRole, factsJSON, nullableStr(errorMessage))
+	if err != nil {
+		return 0, fmt.Errorf("SaveStructuralExtraction: %w", err)
+	}
+	return res.LastInsertId()
 }
 
 // ListExtractions returns all extractions for a revision.

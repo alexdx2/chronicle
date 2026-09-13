@@ -1419,3 +1419,42 @@ func (s *Store) CountFilesWithExtractorVersionOtherThan(extractorID, version str
 	return n, nil
 }
 
+// EvidenceOwnersSupersededIn returns the distinct nodes and edges that LOST
+// evidence in one revision — the rows SupersedeEvidenceNotIn transitioned.
+//
+// Superseding is the only half of the structural phase's write that the
+// resolver cannot recompute trust for: the resolver recalculates whatever it
+// writes evidence FOR, but an edge that just lost its last observation was
+// never mentioned in this pass at all. Without recomputing these, an endpoint
+// deleted from a file would keep its active edge and its old trust score, with
+// nothing but superseded rows behind it — the graph asserting a route the
+// source no longer has.
+func (s *Store) EvidenceOwnersSupersededIn(revisionID int64) (nodeIDs, edgeIDs []int64, err error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT COALESCE(node_id, 0), COALESCE(edge_id, 0)
+		FROM graph_evidence
+		WHERE invalidated_by_revision_id = ? AND evidence_status = 'superseded'`, revisionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("EvidenceOwnersSupersededIn: %w", err)
+	}
+	defer rows.Close()
+	seenNode, seenEdge := map[int64]bool{}, map[int64]bool{}
+	for rows.Next() {
+		var nodeID, edgeID int64
+		if err := rows.Scan(&nodeID, &edgeID); err != nil {
+			return nil, nil, fmt.Errorf("EvidenceOwnersSupersededIn scan: %w", err)
+		}
+		if nodeID > 0 && !seenNode[nodeID] {
+			seenNode[nodeID] = true
+			nodeIDs = append(nodeIDs, nodeID)
+		}
+		if edgeID > 0 && !seenEdge[edgeID] {
+			seenEdge[edgeID] = true
+			edgeIDs = append(edgeIDs, edgeID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("EvidenceOwnersSupersededIn rows: %w", err)
+	}
+	return nodeIDs, edgeIDs, nil
+}

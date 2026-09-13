@@ -447,9 +447,18 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	}
 	// Deterministic mode is state for the duration of this pass only.
 	defer g.detBegin(opts)()
-	degradedFiles, err := g.finalizeObligationsBeforeResolve(domainKey, revisionID, opts.AllowDegraded)
-	if err != nil {
-		return nil, err
+	// The obligation gate answers "did every agent finish the file it was
+	// given?" — a question a deterministic resolve does not ask anyone. It
+	// also cannot pass it: the structural phase resolves on the revision the
+	// refresh's verification phase opened, whose verify_file obligations are
+	// open by design and are not the phase's to satisfy, fail or skip.
+	var degradedFiles []string
+	if !opts.Deterministic {
+		var err error
+		degradedFiles, err = g.finalizeObligationsBeforeResolve(domainKey, revisionID, opts.AllowDegraded)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	rawExtractions, err := g.store.ListUnresolvedExtractions(revisionID, domainKey)
