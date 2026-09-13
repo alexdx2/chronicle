@@ -42,6 +42,7 @@ var Capabilities = []string{
 	"surface_import",   // chronicle_import_surface / chronicle surface import (ui layer)
 	"ui_layer",         // registry layer ui: product/screen/panel/control
 	"worktree_resolve", // linked worktrees read the main checkout's graph
+	"structural_refresh", // refresh phase 2: deterministic structure per commit, structured pointer/status, deterministic resolver
 }
 
 // MCPIdentity is the full identity payload for agents and operators.

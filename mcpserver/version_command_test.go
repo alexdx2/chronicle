@@ -25,7 +25,7 @@ func TestVersionIdentityFingerprintStable(t *testing.T) {
 	if id.ReleaseCodename != "kestrel-fresh1" {
 		t.Fatalf("release_codename = %q, want kestrel-fresh1", id.ReleaseCodename)
 	}
-	if id.Fingerprint != "702106d35ca3" {
-		t.Fatalf("fingerprint = %q, want 702106d35ca3", id.Fingerprint)
+	if id.Fingerprint != "b7fe4b4406ba" {
+		t.Fatalf("fingerprint = %q, want b7fe4b4406ba", id.Fingerprint)
 	}
 }
