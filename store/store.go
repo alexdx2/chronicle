@@ -247,6 +247,10 @@ func (s *Store) migrate() error {
 		`ALTER TABLE scan_extractions ADD COLUMN extraction_role TEXT NOT NULL DEFAULT 'single'`,
 		`ALTER TABLE scan_extractions ADD COLUMN vote_group TEXT`,
 		`ALTER TABLE scan_extractions ADD COLUMN vote_index INTEGER NOT NULL DEFAULT 0`,
+		// Per-extraction metadata JSON (additive): the deterministic resolver
+		// records the names it refused to link here (0 or >1 candidates), so a
+		// later pass can ask about exactly those and nothing else.
+		`ALTER TABLE scan_extractions ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE scan_runs ADD COLUMN votes_needed INTEGER NOT NULL DEFAULT 1`,
 		// Claim attempt tracking
 		`ALTER TABLE scan_obligations ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
@@ -776,6 +780,7 @@ CREATE TABLE IF NOT EXISTS scan_extractions (
     vote_index      INTEGER NOT NULL DEFAULT 0,
     facts_json      TEXT NOT NULL DEFAULT '[]',
     error_message   TEXT,
+    metadata        TEXT NOT NULL DEFAULT '{}',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 

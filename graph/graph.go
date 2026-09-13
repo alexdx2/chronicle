@@ -63,6 +63,12 @@ type Graph struct {
 	// minting a code:provider twin beside it.
 	domainOwnPackages map[string]string
 
+	// det is non-nil only while a deterministic resolve is running
+	// (ResolveOptions.Deterministic). It carries the evidence stamping, the
+	// per-file evidence ids and the refused name lookups for that pass —
+	// see resolve_deterministic.go. Nil means legacy behaviour everywhere.
+	det *detResolve
+
 	// evidenceErr records the first evidence-write failure on a void path
 	// (ensureNodeID → ensureNode) during ResolveExtractions. Evidence writes
 	// journal events; silently dropping a failure inside a tx that then

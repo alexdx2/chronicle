@@ -67,6 +67,44 @@ type ResolveOptions struct {
 	// — the resolver has no other use for the manifest today, so it doesn't
 	// need the whole object.
 	IncludeDevDeps bool `json:"include_dev_deps"`
+
+	// Deterministic switches the resolver from "an agent told us this" to
+	// "the structural extractor read this out of the file" (lazy-scan spec
+	// §2.6, §3). It changes three things and nothing else:
+	//
+	//  1. every evidence row the resolver writes FOR A FILE is stamped
+	//     source_kind "ast", extractor_id ExtractorID (default
+	//     "chronicle-structural"), extractor_version ExtractorVersion,
+	//     metadata {"content_hash": ContentHashes[file]}. Evidence the
+	//     post-passes derive from the graph keeps its own identity;
+	//  2. certainty follows construction: a fact whose target is fixed by
+	//     the source text (an import specifier, a declaration, a route, a
+	//     schema model) keeps derivation_kind "hard"; a link whose target
+	//     the resolver picked by looking a NAME up among candidate nodes
+	//     gets "inferred" and detNameMatchConfidence;
+	//  3. a name lookup that returns 0 or more than 1 candidate writes NO
+	//     edge and mints no node — it is recorded on the extraction row
+	//     instead (see ResolveExtractionsResult.UnresolvedCount).
+	//
+	// Off (the default), the resolver behaves exactly as it always has.
+	Deterministic bool `json:"deterministic,omitempty"`
+
+	// ExtractorVersion is the structural extractor's rules-pack version,
+	// stamped on every evidence row a deterministic resolve writes. Required
+	// in spirit (spec: "every ast row carries the rules-pack version");
+	// empty falls back to the legacy "1.0" so evidence validation still
+	// passes rather than failing the whole resolve.
+	ExtractorVersion string `json:"extractor_version,omitempty"`
+
+	// ExtractorID is the evidence identity a deterministic resolve stamps —
+	// who read the file. Empty defaults to detDefaultExtractorID
+	// ("chronicle-structural"); the structural pass passes its own.
+	ExtractorID string `json:"extractor_id,omitempty"`
+
+	// ContentHashes maps file path → content sha256, written into each
+	// evidence row's metadata as "content_hash". A file with no entry gets
+	// no content_hash — the evidence is still written.
+	ContentHashes map[string]string `json:"content_hashes,omitempty"`
 }
 
 // ResolveExtractionsResult is returned by ResolveExtractions.
@@ -81,6 +119,21 @@ type ResolveExtractionsResult struct {
 	Unresolved          []UnresolvedRef   `json:"unresolved,omitempty"`
 	Degraded            bool              `json:"degraded,omitempty"`
 	DegradedFiles       []string          `json:"degraded_files,omitempty"`
+
+	// UnresolvedCount is how many name lookups a deterministic resolve
+	// refused (0 or >1 candidates → no edge). Zero in legacy mode.
+	//
+	// Named UnresolvedCount, not Unresolved: this struct already carries
+	// Unresolved []UnresolvedRef and renaming that would break every caller
+	// that reads it. Each refusal is ALSO appended there, with the candidate
+	// count in Reason, so nothing is only a number.
+	UnresolvedCount int `json:"unresolved_count,omitempty"`
+
+	// EvidenceIDsByFile lists the node AND edge evidence rows this resolve
+	// created (or re-observed), keyed by the file path of the extraction
+	// being resolved when the row was written. The caller supersedes the
+	// evidence it is NOT handed back for those files. Nil in legacy mode.
+	EvidenceIDsByFile map[string][]int64 `json:"evidence_ids_by_file,omitempty"`
 }
 
 // UnresolvedRef is a reference that couldn't be automatically resolved.
@@ -392,6 +445,8 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	if testHookResolveInTx != nil {
 		testHookResolveInTx(g.store.InTx())
 	}
+	// Deterministic mode is state for the duration of this pass only.
+	defer g.detBegin(opts)()
 	degradedFiles, err := g.finalizeObligationsBeforeResolve(domainKey, revisionID, opts.AllowDegraded)
 	if err != nil {
 		return nil, err
@@ -428,7 +483,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 			})
 			continue
 		}
-		allFiles = append(allFiles, fileFacts{filePath: ext.FilePath, fromType: ext.FromType, facts: facts})
+		allFiles = append(allFiles, fileFacts{extractionID: ext.ExtractionID, filePath: ext.FilePath, fromType: ext.FromType, facts: facts})
 	}
 
 	// Phase 1: Discover all entities mentioned across all files
@@ -472,6 +527,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 		// This allows provides/parent resolution to consult this file's imports first,
 		// making CONTAINS edges deterministic and immune to same-class-name collisions.
 		g.currentFileImportMap = buildFileImportMap(ff.filePath, ff.facts)
+		g.detSetFile(ff.filePath, ff.extractionID)
 		// Definitions before references within a file: a model_relation processed
 		// before its enum/model definition materializes a phantom node.
 		sort.SliceStable(ff.facts, func(i, j int) bool {
@@ -503,6 +559,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 
 	// Second pass: parent facts that failed on file ordering.
 	for _, pf := range parentRetries {
+		g.detSetFile(pf.filePath, 0)
 		created, unresolved, err := g.resolveOneFact(domainKey, revisionID, pf.filePath, pf.fact, knownEntities, opts.IncludeDevDeps)
 		if err != nil {
 			return nil, fmt.Errorf("resolving %s fact in %s: %w", pf.fact.Kind, pf.filePath, err)
@@ -514,6 +571,31 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 			result.Unresolved = append(result.Unresolved, *unresolved)
 		}
 	}
+
+	// Third pass (deterministic only): the name-resolved facts held back
+	// until every structural node in the batch exists.
+	if g.detOn() {
+		g.det.secondPass = true
+		// The structural base is complete now — index every name in it once.
+		g.detResetNameIndex()
+		for _, df := range g.det.deferred {
+			g.detSetFile(df.filePath, 0)
+			created, unresolved, err := g.resolveOneFact(domainKey, revisionID, df.filePath, df.fact, knownEntities, opts.IncludeDevDeps)
+			if err != nil {
+				return nil, fmt.Errorf("resolving %s fact in %s: %w", df.fact.Kind, df.filePath, err)
+			}
+			result.NodesCreated += created.nodes
+			result.EdgesCreated += created.edges
+			result.EvidenceCreated += created.evidence
+			if unresolved != nil {
+				result.Unresolved = append(result.Unresolved, *unresolved)
+			}
+		}
+	}
+
+	// Everything past this point is derived from the graph, not read out of a
+	// file — nothing more is attributed to an extraction.
+	g.detSetFile("", 0)
 
 	// Post-resolve: detect module nodes from graph structure and fix edge types.
 	// A module = node with ≥2 outbound import edges, 0 endpoints, 0 service actions.
@@ -548,6 +630,9 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	if n, err := g.CountResolvedExtractions(revisionID, domainKey); err == nil {
 		result.ExtractionsResolved = n
 	}
+	if err := g.detFlush(result); err != nil {
+		return nil, fmt.Errorf("ResolveExtractions: %w", err)
+	}
 	result.QualityWarnings = g.BuildScanQualityReport(domainKey)
 
 	g.emitter.Emit(ScanEvent{
@@ -574,9 +659,12 @@ type createdCounts struct {
 }
 
 type fileFacts struct {
-	filePath string
-	fromType string // file-level from_type from API (not from individual facts)
-	facts    []Fact
+	// extractionID is the scan_extractions row these facts came from —
+	// deterministic mode writes what it refused to resolve back onto it.
+	extractionID int64
+	filePath     string
+	fromType     string // file-level from_type from API (not from individual facts)
+	facts        []Fact
 }
 
 func (g *Graph) collectKnownEntities(allFiles []fileFacts) map[string]bool {
@@ -610,6 +698,12 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	// Evidence extractor identity follows the fact's provenance: AST-derived or
 	// AST-corroborated facts emit "chronicle-ast", pure-LLM facts "chronicle-scan".
 	extractorID := factExtractorID(fact)
+
+	// Deterministic mode resolves names only against a complete structural
+	// base — see detDefer.
+	if g.detDefer(filePath, fact) {
+		return counts, nil, nil
+	}
 
 	switch fact.Kind {
 	case "import":
@@ -714,7 +808,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if confidence == 0 {
 			confidence = 0.95
 		}
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind:       "edge",
 			SourceKind:       "file",
 			FilePath:         filePath,
@@ -814,7 +908,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -847,6 +941,17 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		var toID int64
 		resolved := false
 		if aliases, err := g.store.ListAliasesByNormalized(strings.ToLower(targetName), "dns"); err == nil && len(aliases) > 0 {
+			// Deterministic: a host that matches several services is a name
+			// with more than one meaning — no edge, and say which ones.
+			if g.detOn() && len(aliases) > 1 {
+				keys := make([]string, 0, len(aliases))
+				for _, a := range aliases {
+					if node, err := g.store.GetNodeByID(a.NodeID); err == nil {
+						keys = append(keys, node.NodeKey)
+					}
+				}
+				return counts, g.detNoteUnresolved(filePath, "http_call", targetName, keys), nil
+			}
 			// Found a matching alias — link to existing service node
 			if node, err := g.store.GetNodeByID(aliases[0].NodeID); err == nil {
 				toNodeKey = node.NodeKey
@@ -863,7 +968,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// as a boundary node so the contract path isn't lost. Only for
 			// internal-shaped hosts — a real third party's path (Telegram's
 			// "/bot<token>/sendMessage") is not this domain's contract.
-			if p := extractPathFromURL(fact.Target); p != "" && !external {
+			// Deterministic mode never queues one: materializing it mints a
+			// contract node out of a client's guess, which is exactly what
+			// "no edge without a unique target" forbids. The path is
+			// recorded as unresolved below instead.
+			if p := extractPathFromURL(fact.Target); p != "" && !external && !g.detOn() {
 				g.pendingExtEndpoints = append(g.pendingExtEndpoints, pendingExtEndpoint{
 					FromNodeKey: fromNodeKey, FromNodeID: fromID,
 					ToNodeKey: toNodeKey, Method: callMethod, Path: p,
@@ -871,13 +980,22 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			}
 		}
 
+		// Deterministic: an http call is never construction-fixed. Whether the
+		// alias table named the target or an external_system stood in for it,
+		// which service that host IS remains a guess — and an alias added
+		// later must look like the same claim getting better evidence, not
+		// like a downgrade from "hard".
+		callDerivation, callConfidence := "linked", 0.85
+		if g.detOn() {
+			callDerivation, callConfidence = "inferred", detNameMatchConfidence
+		}
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
 			FromNodeID: fromID,
 			ToNodeID:   toID,
-			EdgeType:   "CALLS_SERVICE", DerivationKind: "linked", Active: true,
-			LastSeenRevisionID: revisionID, Confidence: 0.85, Freshness: 1.0, TrustScore: 0.85,
+			EdgeType:   "CALLS_SERVICE", DerivationKind: callDerivation, Active: true,
+			LastSeenRevisionID: revisionID, Confidence: callConfidence, Freshness: 1.0, TrustScore: callConfidence,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
 		if err == nil {
@@ -901,10 +1019,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			"context":   "fetch",
 			"method":    fact.Method,
 		})
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
-			Confidence: 0.85, RevisionID: revisionID,
+			Confidence: callConfidence, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
 		counts.evidence++
@@ -915,24 +1033,36 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// a local contract (and would also hide it from FindUnmatchedHTTPCalls
 		// via hasEndpoint, silently dropping it from HTTP reconcile).
 		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" && !external {
-			epNodeKey, _ := normalizeEndpointKey(domainKey, callMethod, endpointPath)
+			epNodeKey, epDisplayName := normalizeEndpointKey(domainKey, callMethod, endpointPath)
 			// Only create edge if the endpoint node already exists (was exposed by another file)
-			if epID, err2 := g.store.GetNodeIDByKey(epNodeKey); err2 == nil {
+			epID, err2 := g.store.GetNodeIDByKey(epNodeKey)
+			if err2 != nil && g.detOn() {
+				// Nothing in the graph exposes this path: the call names an
+				// endpoint, and which one stays an open question.
+				return counts, g.detNoteUnresolved(filePath, "http_call", epDisplayName, nil), nil
+			}
+			if err2 == nil {
 				callEpEdgeKey := fromNodeKey + "->" + epNodeKey + ":CALLS_ENDPOINT"
+				// The endpoint node was matched by method+path — a name
+				// lookup, whatever the host turned out to be.
+				epDerivation, epConfidence := "linked", 0.80
+				if g.detOn() {
+					epDerivation, epConfidence = "inferred", detNameMatchConfidence
+				}
 				_, err3 := g.store.UpsertEdge(store.EdgeRow{
 					EdgeKey: callEpEdgeKey, FromNodeID: fromID, ToNodeID: epID,
 					FromNodeKey: fromNodeKey, ToNodeKey: epNodeKey,
-					EdgeType: "CALLS_ENDPOINT", DerivationKind: "linked", Active: true,
-					LastSeenRevisionID: revisionID, Confidence: 0.80, Freshness: 1.0, TrustScore: 0.80,
+					EdgeType: "CALLS_ENDPOINT", DerivationKind: epDerivation, Active: true,
+					LastSeenRevisionID: revisionID, Confidence: epConfidence, Freshness: 1.0, TrustScore: epConfidence,
 					Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 				})
 				if err3 == nil {
 					counts.edges++
 				}
-				if _, err := g.AddEdgeEvidence(callEpEdgeKey, validate.EvidenceInput{
+				if _, err := g.resolverEdgeEvidence(callEpEdgeKey, validate.EvidenceInput{
 					TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 					ExtractorID: extractorID, ExtractorVersion: "1.0",
-					Confidence: 0.80, RevisionID: revisionID,
+					Confidence: epConfidence, RevisionID: revisionID,
 					AssertionKind: "text_contains", Assertion: string(assertion),
 				}); err != nil {
 					return counts, nil, err
@@ -956,12 +1086,54 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			"callee_method": fact.Method,
 		})
 
+		// Deterministic: the callee object is a NAME. Link it only when the
+		// domain holds exactly one node that name can mean, and say so —
+		// "inferred", never "hard". 0 or >1 candidates: no edge, no node, the
+		// name is recorded on the extraction row instead.
+		if g.detOn() {
+			if fact.Object == "" {
+				return counts, nil, nil
+			}
+			cands, target, err := g.detUniqueTarget(domainKey, fact.Object, "code", []string{"provider", "controller", "module"})
+			if err != nil {
+				return counts, nil, err
+			}
+			if target == nil {
+				return counts, g.detNoteUnresolved(filePath, "call", fact.Object, detCandidateKeys(cands)), nil
+			}
+			fromID, err := g.store.GetNodeIDByKey(fromNodeKey)
+			if err != nil || fromID == target.NodeID {
+				return counts, nil, nil
+			}
+			edgeKey := fromNodeKey + "->" + target.NodeKey + ":INJECTS"
+			if g.detUpsertInferredEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: target.NodeID,
+				FromNodeKey: fromNodeKey, ToNodeKey: target.NodeKey,
+				EdgeType: "INJECTS", DerivationKind: "inferred", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: detNameMatchConfidence,
+				Freshness: 1.0, TrustScore: detNameMatchConfidence,
+				Metadata: "{}", ValidFromRevisionID: 0,
+			}) {
+				counts.edges++
+			}
+			// Legacy tolerates a failed evidence write here (`_, _ =`) — a
+			// call whose INJECTS edge is missing is not an error. Keep that.
+			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
+				Confidence: detNameMatchConfidence, RevisionID: revisionID,
+				AssertionKind: "call_expression", Assertion: string(assertion),
+			})
+			counts.evidence++
+			return counts, nil, nil
+		}
+
 		// Add evidence to existing edge — don't create edges from call facts alone
 		if fact.Object != "" {
 			toNodeKey := canonicalNodeKey("code:provider:" + domainKey + ":" + fact.Object)
 			edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
 			// Only add evidence to existing edge — don't create edges from call facts alone
-			_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.80, RevisionID: revisionID,
@@ -973,6 +1145,41 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "member_call":
 		// 3-level member chain: this.X.Y.method() — promote Y to USES_MODEL if it matches a known model
 		if fact.To == "" {
+			return counts, nil, nil
+		}
+		// Deterministic: the member is a NAME matched against the model nodes
+		// the domain holds. Exactly one match links; anything else is recorded.
+		if g.detOn() {
+			cands, target, err := g.detUniqueTarget(domainKey, fact.To, "data", []string{"model"})
+			if err != nil {
+				return counts, nil, err
+			}
+			if target == nil {
+				return counts, g.detNoteUnresolved(filePath, "member_call", fact.To, detCandidateKeys(cands)), nil
+			}
+			fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
+			fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
+			edgeKey := fromNodeKey + "->" + target.NodeKey + ":USES_MODEL"
+			if g.detUpsertInferredEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: target.NodeID,
+				FromNodeKey: fromNodeKey, ToNodeKey: target.NodeKey,
+				EdgeType: "USES_MODEL", DerivationKind: "inferred", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: detNameMatchConfidence,
+				Freshness: 1.0, TrustScore: detNameMatchConfidence,
+				Metadata: "{}", ValidFromRevisionID: 0,
+			}) {
+				counts.edges++
+			}
+			assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
+			if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
+				Confidence: detNameMatchConfidence, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(assertion),
+			}); err != nil {
+				return counts, nil, err
+			}
+			counts.evidence++
 			return counts, nil, nil
 		}
 		// Capitalize first letter to match model node naming
@@ -993,7 +1200,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				counts.edges++
 			}
 			assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
-			if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.90, RevisionID: revisionID,
@@ -1016,6 +1223,57 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
+
+		// Deterministic: the call names a service. Look it up across the
+		// service layer (a deployable peer) and the code layer (a local DI
+		// provider) at once — a unique hit decides both the target and which
+		// kind of edge this is; no hit, or several, and nothing is written.
+		if g.detOn() {
+			svcCands, err := g.detCandidates(domainKey, fact.To, "service", []string{"service", "external_system"})
+			if err != nil {
+				return counts, nil, err
+			}
+			codeCands, err := g.detCandidates(domainKey, fact.To, "code", []string{"provider", "controller", "module"})
+			if err != nil {
+				return counts, nil, err
+			}
+			cands := append(svcCands, codeCands...)
+			if len(cands) != 1 {
+				return counts, g.detNoteUnresolved(filePath, "calls_service", fact.To, detCandidateKeys(cands)), nil
+			}
+			target := cands[0]
+			if target.NodeID == fromID {
+				return counts, nil, nil
+			}
+			edgeType := "CALLS_SERVICE"
+			if target.Layer == "code" {
+				// A local provider is not a service boundary — the same
+				// reading R7a applies in legacy mode.
+				edgeType = "INJECTS"
+			}
+			edgeKey := fromNodeKey + "->" + target.NodeKey + ":" + edgeType
+			if g.detUpsertInferredEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: target.NodeID,
+				FromNodeKey: fromNodeKey, ToNodeKey: target.NodeKey,
+				EdgeType: edgeType, DerivationKind: "inferred", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: detNameMatchConfidence,
+				Freshness: 1.0, TrustScore: detNameMatchConfidence,
+				Metadata: "{}", ValidFromRevisionID: 0,
+			}) {
+				counts.edges++
+			}
+			assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
+			if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
+				Confidence: detNameMatchConfidence, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(assertion),
+			}); err != nil {
+				return counts, nil, err
+			}
+			counts.evidence++
+			return counts, nil, nil
+		}
 
 		toName := fact.To
 
@@ -1049,7 +1307,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 					counts.edges++
 				}
 				assertion, _ := json.Marshal(map[string]any{"substring": toName})
-				if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+				if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 					TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 					ExtractorID: extractorID, ExtractorVersion: "1.0",
 					Confidence: 0.9, RevisionID: revisionID,
@@ -1088,7 +1346,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 		assertion, _ := json.Marshal(map[string]any{"substring": toName})
-		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
@@ -1127,7 +1385,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 		assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
-		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
@@ -1147,6 +1405,37 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		epKey, epName := normalizeEndpointKey(domainKey, fact.Method, fact.Target)
+		// Deterministic: link to an endpoint the graph already exposes. A call
+		// to an endpoint nobody declares is a name with no target — recorded,
+		// never minted (minting it is how a client's guess becomes a contract).
+		if g.detOn() {
+			existingID, err := g.store.GetNodeIDByKey(epKey)
+			if err != nil {
+				return counts, g.detNoteUnresolved(filePath, "calls_endpoint", epName, nil), nil
+			}
+			edgeKey := fromNodeKey + "->" + epKey + ":CALLS_ENDPOINT"
+			if g.detUpsertInferredEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: existingID,
+				FromNodeKey: fromNodeKey, ToNodeKey: epKey,
+				EdgeType: "CALLS_ENDPOINT", DerivationKind: "inferred", Active: true,
+				LastSeenRevisionID: revisionID, Confidence: detNameMatchConfidence,
+				Freshness: 1.0, TrustScore: detNameMatchConfidence,
+				Metadata: "{}", ValidFromRevisionID: 0,
+			}) {
+				counts.edges++
+			}
+			assertion, _ := json.Marshal(map[string]any{"substring": fact.Target})
+			if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
+				Confidence: detNameMatchConfidence, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(assertion),
+			}); err != nil {
+				return counts, nil, err
+			}
+			counts.evidence++
+			return counts, nil, nil
+		}
 		epID := g.ensureNodeID(domainKey, revisionID, epKey, epName, "")
 
 		edgeKey := fromNodeKey + "->" + epKey + ":CALLS_ENDPOINT"
@@ -1161,7 +1450,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 		assertion, _ := json.Marshal(map[string]any{"substring": fact.Target})
-		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.85, RevisionID: revisionID,
@@ -1228,7 +1517,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{
 			"provided": fact.To,
 		})
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
@@ -1273,7 +1562,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{
 			"injected": fact.To,
 		})
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -1293,7 +1582,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Add evidence to the node (not edge)
 		nodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
-		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
+		_, _ = g.resolverNodeEvidence(nodeKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.90, RevisionID: revisionID,
@@ -1334,7 +1623,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{
 			"substring": fact.To,
 		})
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -1371,7 +1660,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{
 			"substring": fact.To,
 		})
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -1424,7 +1713,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{
 			"substring": path,
 		})
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.90, RevisionID: revisionID,
@@ -1453,7 +1742,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				"substring": fact.To,
 			})
 		}
-		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
+		_, _ = g.resolverNodeEvidence(nodeKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -1472,7 +1761,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		nodeKey := canonicalNodeKey("data:enum:" + domainKey + ":" + fact.To)
 		g.ensureNodeID(domainKey, revisionID, nodeKey, fact.To, "")
 		assertion, _ := json.Marshal(map[string]any{"enum": fact.To})
-		_, _ = g.AddNodeEvidence(nodeKey, validate.EvidenceInput{
+		_, _ = g.resolverNodeEvidence(nodeKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -1514,7 +1803,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 		assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
-		if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -1558,13 +1847,13 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 		fieldAssertion, _ := json.Marshal(map[string]any{"substring": fact.To})
-		_, _ = g.AddNodeEvidence(fieldKey, validate.EvidenceInput{
+		_, _ = g.resolverNodeEvidence(fieldKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(fieldAssertion),
 		})
-		if _, err := g.AddEdgeEvidence(fieldEdgeKey, validate.EvidenceInput{
+		if _, err := g.resolverEdgeEvidence(fieldEdgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.95, RevisionID: revisionID,
@@ -1618,7 +1907,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			counts.edges++
 		}
 		usageAssertion, _ := json.Marshal(map[string]any{"substring": fieldName})
-		if _, err := g.AddEdgeEvidence(usageEdgeKey, validate.EvidenceInput{
+		if _, err := g.resolverEdgeEvidence(usageEdgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: usageConfidence, RevisionID: revisionID,
@@ -1674,7 +1963,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		assertion, _ := json.Marshal(map[string]any{
 			"substring": methodName,
 		})
-		_, _ = g.AddNodeEvidence(flowKey, validate.EvidenceInput{
+		_, _ = g.resolverNodeEvidence(flowKey, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: 0.85, RevisionID: revisionID,
@@ -1699,7 +1988,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				counts.edges++
 			}
 			triggerAssertion, _ := json.Marshal(map[string]any{"substring": triggerPath})
-			if _, err := g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.85, RevisionID: revisionID,
@@ -1731,7 +2020,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			reqAssertion, _ := json.Marshal(map[string]any{
 				"substring": req,
 			})
-			_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: 0.80, RevisionID: revisionID,
@@ -1834,7 +2123,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			"parent": fact.To,
 			"reason": reason,
 		})
-		_, _ = g.AddEdgeEvidence(edgeKey, validate.EvidenceInput{
+		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
 			Confidence: confidence, RevisionID: revisionID,
@@ -2013,6 +2302,10 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 			// Found a stem-based node — merge by re-keying it (node + edge keys)
 			// through the instrumented store method so the rewrite is journaled.
 			g.noteEvidenceErr(g.store.RekeyNode(existing.NodeID, existing.NodeKey, nodeKey, filePath, revisionID))
+			// The node kept its id but answers to a new key: anything the
+			// deterministic name index cached about it now points at a key
+			// that no longer exists.
+			g.detResetNameIndex()
 			return existing.NodeID
 		}
 	}
@@ -2044,22 +2337,26 @@ func (g *Graph) addCreationEvidence(nodeKey string, revisionID int64, name, file
 		locator = nodeKey
 	}
 	assertion, _ := json.Marshal(map[string]string{"kind": assertionKind, "name": name})
-	if _, err := g.store.AddEvidence(store.EvidenceRow{
+	extractorVersion, metadata := "1.0", "{}"
+	sourceKind, extractorID, extractorVersion, metadata = g.detStampEvidence(sourceKind, extractorID, extractorVersion, metadata)
+	evID, err := g.store.AddEvidence(store.EvidenceRow{
 		TargetKind:          "node",
 		NodeID:              id,
 		SourceKind:          sourceKind,
 		FilePath:            filePath,
 		Locator:             locator,
 		ExtractorID:         extractorID,
-		ExtractorVersion:    "1.0",
+		ExtractorVersion:    extractorVersion,
 		Confidence:          0.6,
 		AssertionKind:       assertionKind,
 		Assertion:           string(assertion),
-		Metadata:            "{}",
+		Metadata:            metadata,
 		ValidFromRevisionID: revisionID,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("creation evidence for %s: %w", nodeKey, err)
 	}
+	g.detNoteEvidenceID(evID)
 	// Coherence rule (journal P2 spec §2.1): node status is recomputed from
 	// evidence after replay. AddEvidence's dedup-hit revalidates a stale row
 	// back to valid — without a live-side recompute the node would stay stale
@@ -2089,22 +2386,26 @@ func (g *Graph) addEdgeCreationEvidence(edgeKey string, revisionID int64, filePa
 		buf, _ := json.Marshal(map[string]string{"kind": assertionKind, "edge_key": edgeKey})
 		assertion = string(buf)
 	}
-	if _, err := g.store.AddEvidence(store.EvidenceRow{
+	extractorVersion, metadata := "1.0", "{}"
+	sourceKind, extractorID, extractorVersion, metadata = g.detStampEvidence(sourceKind, extractorID, extractorVersion, metadata)
+	evID, err := g.store.AddEvidence(store.EvidenceRow{
 		TargetKind:          "edge",
 		EdgeID:              edge.EdgeID,
 		SourceKind:          sourceKind,
 		FilePath:            filePath,
 		Locator:             locator,
 		ExtractorID:         extractorID,
-		ExtractorVersion:    "1.0",
+		ExtractorVersion:    extractorVersion,
 		Confidence:          0.6,
 		AssertionKind:       assertionKind,
 		Assertion:           assertion,
-		Metadata:            "{}",
+		Metadata:            metadata,
 		ValidFromRevisionID: revisionID,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("creation evidence for %s: %w", edgeKey, err)
 	}
+	g.detNoteEvidenceID(evID)
 	// Same coherence rule as addCreationEvidence: a dedup-hit revalidation must
 	// recompute the owner's derived active/trust on the live side.
 	if err := g.RecalculateEdgeTrust(edge.EdgeID); err != nil {
@@ -2144,6 +2445,11 @@ func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, fi
 			Metadata:           "{}",
 			SupportKind:        supportKind,
 		})
+		// A new node changes what a name can mean: drop the deterministic
+		// name index so the next candidate lookup sees it. No-op outside a
+		// deterministic resolve, and rare inside one (the third pass runs
+		// against a base the first two passes already built).
+		g.detResetNameIndex()
 		return g.addCreationEvidence(nodeKey, revisionID, name, filePath,
 			"chronicle:resolve:ensure_node", "referenced_entity")
 	}
