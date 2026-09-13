@@ -205,25 +205,34 @@ func removeHookFromSettings(existing []byte, marker string) ([]byte, bool, error
 
 // hookAdvisory builds the reminder, or "" when there is no graph or the graph
 // has never been scanned (a DB with zero revisions is a ghost, not knowledge).
-// Rate-limited to once per 10 minutes via a marker file — but only once we
-// know there is something to say: a ghost DB (or any other silent case) must
-// not burn the rate-limit window, or a real advisory could be suppressed for
-// 10 minutes by an empty-graph check that had nothing to report.
+//
+// Order matters twice. The rate window is checked FIRST, and read-only: this
+// runs before every Grep/Glob/Read, and inside the window the answer is "" no
+// matter what the graph says — so opening the store and shelling out to git to
+// compute a line nobody will see is pure latency on the agent's hot path. The
+// marker is touched LAST, only once there is something to say: a ghost DB (or
+// any other silent case) must not burn the window, or a real advisory could be
+// suppressed for 10 minutes by an empty-graph check that had nothing to report.
 func hookAdvisory() string {
 	resolveWorktreeGraph()
 	resolveDefaults()
 	if _, err := os.Stat(dbPath); err != nil {
 		return "" // no graph in this project
 	}
-	advisory := hookAdvisoryFor(dbPath, repoDirForGit())
+	if withinRateWindow() {
+		return "" // already nudged recently — say nothing, and read nothing
+	}
+	advisory := hookCompute(dbPath, repoDirForGit())
 	if advisory == "" {
 		return ""
 	}
-	if rateLimited() {
-		return ""
-	}
+	touchRateMarker()
 	return advisory
 }
+
+// hookCompute is the one step that opens the store and runs git. It is a
+// variable so a test can prove it is never reached inside the rate window.
+var hookCompute = hookAdvisoryFor
 
 // hookAdvisoryFor is the testable body: it opens dbPath, and speaks only when a
 // revision exists. repoDir is where git runs for the commits-behind count.
@@ -249,23 +258,31 @@ func hookAdvisoryFor(dbPath, repoDir string) string {
 		". Prefer chronicle_node_search(q=...) to resolve a name, then chronicle_query_deps / chronicle_impact / chronicle_subgraph, over grepping files for architecture questions."
 }
 
-// rateLimited returns true if the advisory fired within the last 10 minutes.
-// It updates the marker file as a side effect when allowing a fire, so repeated
-// Grep/Read calls in one burst get exactly one reminder.
-func rateLimited() bool {
-	marker := filepath.Join(filepath.Dir(dbPath), "hook-last-fire")
-	const window = 10 * time.Minute
-	if info, err := os.Stat(marker); err == nil {
-		if time.Since(info.ModTime()) < window {
-			return true
-		}
-	}
+// hookWindow is how long one advisory stands: repeated Grep/Read calls in one
+// burst get exactly one reminder.
+const hookWindow = 10 * time.Minute
+
+func hookMarkerPath() string {
+	return filepath.Join(filepath.Dir(dbPath), "hook-last-fire")
+}
+
+// withinRateWindow reports whether an advisory already fired recently. Pure
+// read: it never creates or touches the marker, so asking the question costs
+// nothing and cannot suppress a later advisory.
+func withinRateWindow() bool {
+	info, err := os.Stat(hookMarkerPath())
+	return err == nil && time.Since(info.ModTime()) < hookWindow
+}
+
+// touchRateMarker starts a new window. Called only after an advisory that will
+// actually be delivered.
+func touchRateMarker() {
+	marker := hookMarkerPath()
 	now := time.Now()
 	os.Chtimes(marker, now, now)
 	if _, err := os.Stat(marker); err != nil {
 		os.WriteFile(marker, []byte("chronicle hook last-fire timestamp\n"), 0644)
 	}
-	return false
 }
 
 func shortSHA(sha string) string {

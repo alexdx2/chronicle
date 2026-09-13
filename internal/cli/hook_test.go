@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/paths"
@@ -271,5 +272,120 @@ func TestHookAdvisoryGhostDBDoesNotBurnRateLimit(t *testing.T) {
 
 	if got := hookAdvisory(); got == "" {
 		t.Fatalf("advisory must fire immediately once the ghost DB gains a revision — the rate limiter must not have been burned by the earlier ghost check")
+	}
+}
+
+// TestHookAdvisoryChecksRateWindowBeforeReadingAnything guards the other half
+// of the ordering: inside the 10-minute window the answer is "" whatever the
+// graph holds, so the store must never be opened and git must never run. This
+// fires before every Grep/Glob/Read — the cost of computing a line nobody will
+// see lands directly on the agent's hot path.
+func TestHookAdvisoryChecksRateWindowBeforeReadingAnything(t *testing.T) {
+	dir := t.TempDir()
+	cwd, _ := os.Getwd()
+	realCompute := hookCompute
+	defer func() {
+		os.Chdir(cwd)
+		hookCompute = realCompute
+		projectPath = ""
+		chronicleDir = ".depbot"
+		chronicleDirExplicit = false
+		paths.SetProjectRoot("")
+		paths.SetChronicleDir(".depbot")
+	}()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	projectPath = ""
+	chronicleDir = ".depbot"
+	chronicleDirExplicit = false
+	paths.SetProjectRoot("")
+	paths.SetChronicleDir(".depbot")
+
+	depbot := filepath.Join(dir, ".depbot")
+	if err := os.MkdirAll(depbot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(depbot, "chronicle.db")
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRevision("d", "", "", "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	computed := 0
+	hookCompute = func(dbPath, repoDir string) string {
+		computed++
+		return "advisory"
+	}
+
+	if got := hookAdvisory(); got != "advisory" {
+		t.Fatalf("first call must speak, got %q", got)
+	}
+	if computed != 1 {
+		t.Fatalf("first call must compute once, computed=%d", computed)
+	}
+
+	// Second call is inside the window: silent, and nothing read.
+	if got := hookAdvisory(); got != "" {
+		t.Fatalf("second call inside the window must be silent, got %q", got)
+	}
+	if computed != 1 {
+		t.Fatalf("inside the rate window the store must not be opened and git must not run; computed=%d", computed)
+	}
+
+	// Age the marker past the window: the advisory computes again.
+	old := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(hookMarkerPath(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := hookAdvisory(); got != "advisory" {
+		t.Fatalf("past the window the advisory must fire again, got %q", got)
+	}
+	if computed != 2 {
+		t.Fatalf("computed=%d, want 2", computed)
+	}
+}
+
+// A silent case must leave the marker untouched — not merely un-updated, but
+// never created, so the next real advisory fires immediately.
+func TestHookAdvisoryGhostDBNeverCreatesMarker(t *testing.T) {
+	dir := t.TempDir()
+	cwd, _ := os.Getwd()
+	defer func() {
+		os.Chdir(cwd)
+		projectPath = ""
+		chronicleDir = ".depbot"
+		chronicleDirExplicit = false
+		paths.SetProjectRoot("")
+		paths.SetChronicleDir(".depbot")
+	}()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	projectPath = ""
+	chronicleDir = ".depbot"
+	chronicleDirExplicit = false
+	paths.SetProjectRoot("")
+	paths.SetChronicleDir(".depbot")
+
+	depbot := filepath.Join(dir, ".depbot")
+	if err := os.MkdirAll(depbot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(depbot, "chronicle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if got := hookAdvisory(); got != "" {
+		t.Fatalf("ghost DB must stay silent, got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(depbot, "hook-last-fire")); err == nil {
+		t.Fatal("a silent advisory must not create the rate-limit marker")
 	}
 }
