@@ -214,45 +214,100 @@ func TestFilesWithExtractorVersionOtherThanOrdersPacksNumerically(t *testing.T) 
 	}
 }
 
-// Phase-1 verification owns neither of the two kinds in
-// ImporterOwnedSourceKinds. `ast` joined the set because the structural phase
-// re-extracts the file in the same run and supersedes exactly what it no longer
-// asserts — staling it first double-counts the change and hands it to a
-// verifier whose verdict is about to be overwritten.
-func TestStructuralEvidenceIsNotPhaseOneVerificationsToStale(t *testing.T) {
+// Phase-1 verification does not own what another writer will put right itself.
+// The exemption is narrow on purpose: it is the structural phase's own rows —
+// `ast` from extractor "chronicle-structural" — not the whole `ast` kind.
+// graph/complexity.go and graph/similarity.go write `ast` rows too, from their
+// own extractors, and a full scan is what re-asserts those; exempting them
+// would freeze a churn metric at whatever it was the day it was measured.
+func TestOnlyTheStructuralPhasesOwnAstRowsEscapeVerification(t *testing.T) {
 	s := openTestStore(t)
 	rev1, node1, _ := seedNodes(t, s)
 
-	evAST := astEvidence(t, s, node1, "changed.ts", 1, "1", rev1)
-	evAgent, err := s.AddEvidence(EvidenceRow{
-		TargetKind: "node", NodeID: node1,
-		SourceKind: "file", FilePath: "changed.ts", LineStart: 2,
-		ExtractorID: "claude", ExtractorVersion: "1",
-		Confidence: 0.8, EvidenceStatus: "valid", EvidencePolarity: "positive",
-		ValidFromRevisionID: rev1, Metadata: "{}",
-	})
-	if err != nil {
-		t.Fatalf("AddEvidence agent: %v", err)
+	add := func(sourceKind, extractorID string, line int) int64 {
+		t.Helper()
+		id, err := s.AddEvidence(EvidenceRow{
+			TargetKind: "node", NodeID: node1,
+			SourceKind: sourceKind, FilePath: "changed.ts", LineStart: line,
+			ExtractorID: extractorID, ExtractorVersion: "1",
+			Confidence: 0.8, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			ValidFromRevisionID: rev1, Metadata: "{}",
+		})
+		if err != nil {
+			t.Fatalf("AddEvidence %s/%s: %v", sourceKind, extractorID, err)
+		}
+		return id
 	}
+
+	evStructural := add("ast", structuralExtractorID, 1)
+	evComplexity := add("ast", "chronicle-complexity", 2)
+	evAgent := add("file", "claude", 3)
+	evDeclared := add("declared", "surface-import", 4)
 
 	if _, _, _, err := s.MarkEvidenceStaleByFiles([]string{"changed.ts"}); err != nil {
 		t.Fatalf("MarkEvidenceStaleByFiles: %v", err)
 	}
-	if st, _ := evidenceStatus(t, s, evAST); st != "valid" {
-		t.Errorf("ast row is %q after a code refresh — the structural phase supersedes it itself", st)
-	}
-	if st, _ := evidenceStatus(t, s, evAgent); st != "stale" {
-		t.Errorf("agent row is %q, want stale — it is exactly what verification owns", st)
+
+	for _, tc := range []struct {
+		name string
+		id   int64
+		want string
+		why  string
+	}{
+		{"structural ast", evStructural, "valid", "phase 2 supersedes it in the same run"},
+		{"complexity ast", evComplexity, "stale", "a full scan re-asserts it, so it must refresh with the file"},
+		{"agent", evAgent, "stale", "it is exactly what verification owns"},
+		{"declared", evDeclared, "valid", "the importer owns it"},
+	} {
+		if st, _ := evidenceStatus(t, s, tc.id); st != tc.want {
+			t.Errorf("%s row is %q, want %q — %s", tc.name, st, tc.want, tc.why)
+		}
 	}
 
-	// Nor may an ast row be handed to the mechanical verifier.
+	// The same split on the re-verification queue.
 	reverifiable, err := s.ListReverifiableEvidenceByFile("changed.ts")
 	if err != nil {
 		t.Fatalf("ListReverifiableEvidenceByFile: %v", err)
 	}
+	offered := map[int64]bool{}
 	for _, r := range reverifiable {
-		if r.SourceKind == "ast" {
-			t.Errorf("ast row %d offered for re-verification", r.EvidenceID)
+		offered[r.EvidenceID] = true
+	}
+	if offered[evStructural] {
+		t.Error("the structural phase's own row was offered for re-verification")
+	}
+	if !offered[evComplexity] {
+		t.Error("a complexity ast row was withheld from re-verification — nothing else will refresh it")
+	}
+
+	// And on what an agent is told to rescan.
+	files, err := s.StaleFilePaths()
+	if err != nil {
+		t.Fatalf("StaleFilePaths: %v", err)
+	}
+	if len(files) != 1 || files[0] != "changed.ts" {
+		t.Errorf("stale file paths = %v, want [changed.ts]", files)
+	}
+}
+
+// The Go form of the same rule, for callers that hold rows rather than SQL.
+func TestEvidenceOwnedByAnotherWriter(t *testing.T) {
+	cases := []struct {
+		sourceKind, extractorID string
+		want                    bool
+	}{
+		{"declared", "surface-import", true},
+		{"surface_extract", "surface-import", true},
+		{"ast", structuralExtractorID, true},
+		{"ast", "chronicle-complexity", false},
+		{"ast", "chronicle-ast", false},
+		{"file", "claude", false},
+		{"file", structuralExtractorID, true},
+	}
+	for _, c := range cases {
+		if got := EvidenceOwnedByAnotherWriter(c.sourceKind, c.extractorID); got != c.want {
+			t.Errorf("EvidenceOwnedByAnotherWriter(%q, %q) = %v, want %v",
+				c.sourceKind, c.extractorID, got, c.want)
 		}
 	}
 }

@@ -430,11 +430,12 @@ func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) 
 // ListReverifiableEvidenceByFile returns evidence that re-verification must
 // re-examine for a file: stale rows AND rows whose assertion was rejected —
 // a rejected verdict deserves a fresh look whenever the file is re-verified.
-// Importer-owned rows are left out: the mechanical verifier has no way to
+// Rows another writer owns are left out: the mechanical verifier has no way to
 // check a declared decision or a surface extract's claim, so looking at them
-// can only produce a refutation of something that was never wrong.
+// can only produce a refutation of something that was never wrong, and the
+// structural phase re-asserts or supersedes its own rows itself.
 func (s *Store) ListReverifiableEvidenceByFile(filePath string) ([]EvidenceRow, error) {
-	skipOwned, ownedArgs := importerOwnedPredicate("source_kind")
+	skipOwned, ownedArgs := notOwnedByAnotherWriter("")
 	return s.queryEvidenceArgs(
 		"file_path = ? AND (evidence_status = 'stale' OR verification_status = 'rejected')"+skipOwned,
 		append([]any{filePath}, ownedArgs...)...)
@@ -522,36 +523,67 @@ func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificatio
 	})
 }
 
-// ImporterOwnedSourceKinds are the evidence source kinds phase-1 verification
-// must neither stale-mark nor re-verify, because a different writer owns them
-// and will put them right itself.
+// Phase-1 verification must neither stale-mark nor re-verify evidence another
+// writer owns and will put right itself. Two writers qualify, and they are
+// recognised differently — one by source kind, one by extractor id.
 //
-// Two owners, one rule:
-//
-//   - an importer — a product's own surface extract and the human decisions
-//     recorded alongside it. They are anchored at product source files, so a
-//     code refresh sees "that file changed" and would stale-mark them; the
-//     mechanical verifier, which has no way to check a declared decision, then
-//     refutes them, and nothing ever puts them back. Measured live: 146 of 146
-//     declared rows read stale/missing after one refresh. Re-importing the
-//     surface is the only thing that may change them.
-//   - the structural phase — `ast` rows. Phase 2 re-extracts the file in the
-//     same run and supersedes exactly what it no longer asserts
-//     (SupersedeEvidenceNotIn). Letting phase 1 stale-mark them first would
-//     double-count the same change and, worse, hand them to a verifier whose
-//     verdict the structural pass is about to overwrite anyway.
-var ImporterOwnedSourceKinds = []string{"declared", "surface_extract", "ast"}
+// ImporterOwnedSourceKinds: a product's own surface extract and the human
+// decisions recorded alongside it. They are anchored at product source files,
+// so a code refresh sees "that file changed" and would stale-mark them; the
+// mechanical verifier, which has no way to check a declared decision, then
+// refutes them, and nothing ever puts them back. Measured live: 146 of 146
+// declared rows read stale/missing after one refresh. Re-importing the surface
+// is the only thing that may change them.
+var ImporterOwnedSourceKinds = []string{"declared", "surface_extract"}
 
-// importerOwnedPredicate is the SQL half of that rule, for the column named by
-// col ("source_kind" or "e.source_kind" depending on the query's joins).
-func importerOwnedPredicate(col string) (string, []any) {
-	marks := make([]string, len(ImporterOwnedSourceKinds))
-	args := make([]any, len(ImporterOwnedSourceKinds))
-	for i, k := range ImporterOwnedSourceKinds {
-		marks[i] = "?"
-		args[i] = k
+// StructuralOwnedExtractorIDs: the post-commit structural phase
+// (extract/structural.ExtractorID). Phase 2 re-extracts the file in the same
+// run and supersedes exactly what it no longer asserts
+// (SupersedeEvidenceNotIn), so letting phase 1 stale-mark it first
+// double-counts the change and hands it to a verifier whose verdict is about
+// to be overwritten.
+//
+// This is an extractor list, NOT the `ast` source kind, and the difference is
+// load-bearing: graph/complexity.go and graph/similarity.go write `ast` rows
+// from their own extractors, nothing but a full scan re-asserts those, and
+// exempting them would freeze a churn metric at whatever it was the day it was
+// measured.
+var StructuralOwnedExtractorIDs = []string{"chronicle-structural"}
+
+// EvidenceOwnedByAnotherWriter is that rule in Go, for callers holding rows
+// rather than building SQL.
+func EvidenceOwnedByAnotherWriter(sourceKind, extractorID string) bool {
+	for _, k := range ImporterOwnedSourceKinds {
+		if sourceKind == k {
+			return true
+		}
 	}
-	return " AND " + col + " NOT IN (" + strings.Join(marks, ",") + ")", args
+	for _, id := range StructuralOwnedExtractorIDs {
+		if extractorID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// notOwnedByAnotherWriter is the SQL half, for the table prefix the query's
+// joins need ("" for a bare graph_evidence, "e." when it is aliased). Both
+// halves of the rule are one NOT(...) so a caller cannot apply half of it.
+func notOwnedByAnotherWriter(prefix string) (string, []any) {
+	inList := func(values []string) (string, []any) {
+		marks := make([]string, len(values))
+		args := make([]any, len(values))
+		for i, v := range values {
+			marks[i] = "?"
+			args[i] = v
+		}
+		return strings.Join(marks, ","), args
+	}
+	kindMarks, kindArgs := inList(ImporterOwnedSourceKinds)
+	idMarks, idArgs := inList(StructuralOwnedExtractorIDs)
+	return " AND NOT (" + prefix + "source_kind IN (" + kindMarks + ")" +
+			" OR " + prefix + "extractor_id IN (" + idMarks + "))",
+		append(kindArgs, idArgs...)
 }
 
 // MarkEvidenceStaleByFiles marks all valid/revalidated evidence from the given file paths as stale.
@@ -586,10 +618,10 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 		extractorID string
 		polarity    string
 	}
-	// Importer-owned rows are anchored at product source files but are not
-	// the code scan's to invalidate — see ImporterOwnedSourceKinds.
-	skipOwned, ownedArgs := importerOwnedPredicate("e.source_kind")
-	skipOwnedBare, _ := importerOwnedPredicate("source_kind")
+	// Rows another writer owns are anchored at product source files but are
+	// not the code scan's to invalidate — see notOwnedByAnotherWriter.
+	skipOwned, ownedArgs := notOwnedByAnotherWriter("e.")
+	skipOwnedBare, _ := notOwnedByAnotherWriter("")
 	fileAndOwnedArgs := append(append([]any{}, args...), ownedArgs...)
 
 	selQ := `SELECT e.evidence_id, COALESCE(e.evidence_uid,''), e.target_kind,
@@ -781,11 +813,11 @@ func (s *Store) CountEvidenceByStatus(domainKey string) (map[string]int, error) 
 }
 
 // CountCodeEvidenceByStatus is CountEvidenceByStatus over the evidence a scan
-// owns — importer-owned rows excluded. It is what freshness reports as
+// owns — rows another writer owns excluded. It is what freshness reports as
 // "touched": a stale row no rescan can refresh is not work an agent can do,
 // and counting it turns a healthy graph into an alarming number.
 func (s *Store) CountCodeEvidenceByStatus(domainKey string) (map[string]int, error) {
-	skipOwned, ownedArgs := importerOwnedPredicate("e.source_kind")
+	skipOwned, ownedArgs := notOwnedByAnotherWriter("e.")
 	q := `SELECT e.evidence_status, COUNT(*)
 		FROM graph_evidence e
 		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
@@ -882,11 +914,12 @@ func (s *Store) ListRejectedEvidence(domainKey string) ([]EvidenceRow, error) {
 }
 
 // StaleFilePaths returns distinct file paths that have stale evidence a scan
-// can do something about. Importer-owned rows are excluded: listing their file
-// for rescan sends an agent to re-read a screen whose ui knowledge only a
-// surface re-import can restore.
+// can do something about. Rows another writer owns are excluded: listing their
+// file for rescan sends an agent to re-read a screen whose ui knowledge only a
+// surface re-import can restore, or to redo work the structural phase has
+// already done.
 func (s *Store) StaleFilePaths() ([]string, error) {
-	skipOwned, ownedArgs := importerOwnedPredicate("source_kind")
+	skipOwned, ownedArgs := notOwnedByAnotherWriter("")
 	q := `SELECT DISTINCT file_path FROM graph_evidence WHERE evidence_status='stale' AND file_path != ''` + skipOwned
 	rows, err := s.db.Query(q, ownedArgs...)
 	if err != nil {
@@ -921,7 +954,7 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 		args[i] = fp
 	}
 
-	skipOwned, ownedArgs := importerOwnedPredicate("e.source_kind")
+	skipOwned, ownedArgs := notOwnedByAnotherWriter("e.")
 
 	// SELECT all current valid evidence rows from those files (owner key joined for journaling).
 	selQ := `SELECT e.evidence_id, e.target_kind,
@@ -1186,8 +1219,8 @@ func placeholderList(n int) string {
 // re-verification stamps. If verification and the structural phase ever shared
 // a revision id AND a source kind, a row verification merely re-checked would
 // land in `keep` and escape superseding. It cannot today: `ast` rows are
-// excluded from verification entirely (ImporterOwnedSourceKinds), so the only
-// writer that can stamp them with a revision is the structural phase itself.
+// excluded from verification entirely (StructuralOwnedExtractorIDs), so the
+// only writer that can stamp them with a revision is the phase itself.
 // Whoever changes that has to give this helper a source-kind filter.
 func (s *Store) EvidenceIDsCreatedIn(filePath, extractorID string, revisionID int64) ([]int64, error) {
 	rows, err := s.db.Query(`

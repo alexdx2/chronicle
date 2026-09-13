@@ -48,10 +48,12 @@ func importerOwnedFixture(t *testing.T) (*Graph, string, string) {
 	}, rev); err != nil {
 		t.Fatal(err)
 	}
-	// `ast` is owned by the structural phase, not by an importer, but the rule
-	// is the same one: phase 1 must not stale-mark it, because phase 2
+	// The third row is owned by the structural phase, not by an importer, but
+	// the rule is the same one: phase 1 must not stale-mark it, because phase 2
 	// re-extracts the file in the same run and supersedes exactly what it no
-	// longer asserts.
+	// longer asserts. It is recognised by its EXTRACTOR, not by the `ast`
+	// kind — complexity and similarity write `ast` rows too and must keep
+	// refreshing with the file (store.StructuralOwnedExtractorIDs).
 	owners := map[string]string{
 		"surface_extract": "surface-import",
 		"declared":        "surface-import",
