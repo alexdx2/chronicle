@@ -76,8 +76,11 @@ func surfaceRepo(t *testing.T) string {
 		t.Fatal(err)
 	}
 
+	// Production sets both from the same --project flag: the graph root and
+	// the directory git is measured in.
 	paths.SetProjectRoot(dir)
-	t.Cleanup(func() { paths.SetProjectRoot("") })
+	paths.SetGitDir(dir)
+	t.Cleanup(func() { paths.SetProjectRoot(""); paths.SetGitDir("") })
 	return path
 }
 

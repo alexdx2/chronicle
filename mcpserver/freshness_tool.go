@@ -11,15 +11,11 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// serverRepoDir is the directory freshness compares the graph against: the
-// --project root when the CLI set one, otherwise the process working
-// directory — the same place scan_status has always run git.
-func serverRepoDir() string {
-	if root := paths.Root(); root != "" {
-		return root
-	}
-	return "."
-}
+// serverRepoDir is the directory freshness compares the graph against. It
+// reads paths.GitDir() — the one process-wide answer to "where is git
+// measured" — rather than the graph root, which a linked worktree redirects to
+// the main checkout.
+func serverRepoDir() string { return paths.GitDir() }
 
 // repoLabel names a repo the way a human would: the directory's own name.
 func repoLabel(repoDir string) string {

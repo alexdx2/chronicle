@@ -22,6 +22,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/manifest"
 	mcp "github.com/alexdx2/chronicle-core/mcpserver"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
@@ -724,6 +725,11 @@ func (s *Server) handleFreshness(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	dir := s.projectPath
 	s.mu.RUnlock()
+	if dir == "" {
+		// No dashboard-selected project: the same directory every other git
+		// question in this process is asked in.
+		dir = paths.GitDir()
+	}
 	rep, err := mcp.FreshnessReportForDomain(s.getGraph(), dir, s.getDomain(r))
 	if err != nil {
 		httpError(w, err, 500)

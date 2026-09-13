@@ -39,6 +39,10 @@ func NewRootCmd() *cobra.Command {
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			chronicleDirExplicit = cmd.Flags().Changed("chronicle-dir")
 			paths.SetProjectRoot(projectPath)
+			// Recorded BEFORE any worktree resolution can move the graph root:
+			// this is the directory git is measured in, and it stays the
+			// worktree the user is actually standing in.
+			paths.SetGitDir(projectPath)
 			paths.SetChronicleDir(chronicleDir)
 		},
 	}
@@ -133,16 +137,11 @@ func resolveWorktreeGraph() {
 }
 
 // repoDirForGit returns the directory git commands should run in for
-// commit-count math (hook staleness, refresh diffs): the explicit --project
-// value, or the process cwd. Unlike the graph location resolved by
-// resolveWorktreeGraph, this never redirects to a linked worktree's main
-// checkout — HEAD must be the worktree's own branch tip, not main's.
-func repoDirForGit() string {
-	if projectPath != "" {
-		return projectPath
-	}
-	return "."
-}
+// commit-count math (hook staleness, refresh diffs). It is paths.GitDir() —
+// the one process-wide answer, shared with the MCP tools, the importer and the
+// dashboard — and never the graph location resolveWorktreeGraph may have
+// redirected to main: HEAD must be the worktree's own branch tip, not main's.
+func repoDirForGit() string { return paths.GitDir() }
 
 func openGraph() *graph.Graph {
 	resolveWorktreeGraph()

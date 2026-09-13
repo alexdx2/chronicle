@@ -2,9 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
@@ -104,13 +104,7 @@ func gitDiffFiles(base, filter string) ([]string, error) {
 }
 
 func gitOutput(args ...string) (string, error) {
-	dir := repoDirForGit()
-	gitArgs := args
-	if dir != "." {
-		gitArgs = append([]string{"-C", dir}, args...)
-	}
-	out, err := exec.Command("git", gitArgs...).Output()
-	return string(out), err
+	return gitutil.Run(repoDirForGit(), args...)
 }
 
 func filterRefreshable(files []string) []string {

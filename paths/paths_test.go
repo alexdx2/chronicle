@@ -72,3 +72,29 @@ func TestEmptyResetsToDefault(t *testing.T) {
 		t.Errorf("Dir() after reset = %q, want .depbot", got)
 	}
 }
+
+// The directory the graph lives in and the directory git is measured in are
+// two different answers, and the split is the whole point: a linked worktree
+// resolves its graph to the main checkout while its HEAD stays its own. One
+// accessor owns the second answer so the MCP tools, the CLI and the dashboard
+// cannot each pick a different one.
+func TestGitDirIsIndependentOfTheGraphRoot(t *testing.T) {
+	defer func() {
+		SetProjectRoot("")
+		SetGitDir("")
+	}()
+
+	SetGitDir("")
+	if got := GitDir(); got != "." {
+		t.Errorf("unset GitDir must mean the process working directory, got %q", got)
+	}
+
+	SetGitDir("/work/feature")
+	SetProjectRoot("/work/main")
+	if got := GitDir(); got != "/work/feature" {
+		t.Errorf("GitDir must not follow the graph root, got %q", got)
+	}
+	if got := Root(); got != "/work/main" {
+		t.Errorf("Root changed unexpectedly: %q", got)
+	}
+}

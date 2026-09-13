@@ -2,27 +2,28 @@ package paths
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/alexdx2/chronicle-core/gitutil"
 )
 
 // MainWorktreeDir reports the main worktree of the repo containing dir when dir
 // is inside a linked worktree (git worktree add). ("", false) for the main
 // checkout, non-git dirs, or any git error.
 func MainWorktreeDir(dir string) (string, bool) {
-	common, err := gitOut(dir, "rev-parse", "--git-common-dir")
+	common, err := gitutil.Run(dir, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", false
 	}
-	gitDir, err := gitOut(dir, "rev-parse", "--git-dir")
+	gitDir, err := gitutil.Run(dir, "rev-parse", "--git-dir")
 	if err != nil {
 		return "", false
 	}
 	if absPath(dir, common) == absPath(dir, gitDir) {
 		return "", false // main checkout
 	}
-	out, err := gitOut(dir, "worktree", "list", "--porcelain")
+	out, err := gitutil.Run(dir, "worktree", "list", "--porcelain")
 	if err != nil {
 		return "", false
 	}
@@ -61,12 +62,6 @@ func ResolveProjectDir(dir, chronicleDir string) string {
 		}
 	}
 	return dir
-}
-
-func gitOut(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
 }
 
 func absPath(base, p string) string {

@@ -12,12 +12,33 @@ const defaultDir = ".depbot"
 var (
 	projectRoot  string
 	chronicleDir = defaultDir
+	gitDir       string
 )
 
 // SetProjectRoot records the project root from --project. Empty = unset
 // (paths stay relative to the process working directory, as before).
 func SetProjectRoot(dir string) {
 	projectRoot = dir
+}
+
+// SetGitDir records the directory git is measured in, from --project. Set
+// once at startup, alongside SetProjectRoot and BEFORE any worktree
+// resolution: the two answers separate there, and only there.
+func SetGitDir(dir string) {
+	gitDir = dir
+}
+
+// GitDir is the directory every git question in this process is asked in:
+// "how far behind HEAD is the graph", "is this commit an ancestor", "which
+// files changed". It is NOT the graph location — inside a linked worktree the
+// graph resolves to the main checkout (see ResolveProjectDir) while HEAD stays
+// the worktree's own branch tip, and measuring one against the other is how a
+// feature branch ends up reported as the state of main.
+func GitDir() string {
+	if gitDir == "" {
+		return "."
+	}
+	return gitDir
 }
 
 // SetChronicleDir records the artifacts directory from --chronicle-dir.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/surface"
 )
 
@@ -48,13 +49,9 @@ resolve. Each has a flag that says "yes, I meant that".`,
 			g := openGraph()
 			defer g.Store().Close()
 
-			repoDir := projectPath
-			if repoDir == "" {
-				repoDir = "."
-			}
 			res, err := surface.Import(g, f, surface.ImportOptions{
 				Domain:          domain,
-				RepoDir:         repoDir,
+				RepoDir:         paths.GitDir(),
 				AllowUnresolved: allowUnresolved,
 				AllowDiverged:   allowDiverged,
 			})

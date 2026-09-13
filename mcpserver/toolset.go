@@ -47,7 +47,7 @@ func Tools(g *graph.Graph) []server.ServerTool {
 		{Tool: saveCustomPackTool(), Handler: saveCustomPackHandler(g)},
 		{Tool: scanConfirmTool(), Handler: scanConfirmHandler(g)},
 		{Tool: scanStatusTool(), Handler: scanStatusHandler(g)},
-		{Tool: freshnessTool(), Handler: freshnessHandler(g, serverRepoDir())},
+		{Tool: freshnessTool(), Handler: freshnessHandler(g, "")}, // "" = resolve the repo dir per call
 		{Tool: scanPoolStatusTool(), Handler: scanPoolStatusHandler(g)},
 		{Tool: scanCheckoutBatchTool(), Handler: scanCheckoutBatchHandler(g)},
 		{Tool: commitScanOutboxTool(), Handler: commitScanOutboxHandler(g)},

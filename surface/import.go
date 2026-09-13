@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/store"
 )
@@ -282,9 +282,8 @@ func defaultDomain(s *store.Store) (string, error) {
 }
 
 func gitHasCommit(dir, commit string) error {
-	cmd := exec.Command("git", "-C", dir, "cat-file", "-e", commit+"^{commit}")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("surface: commit %s is not in %s: %v %s", commit, dir, err, strings.TrimSpace(string(out)))
+	if out, err := gitutil.Output(dir, "cat-file", "-e", commit+"^{commit}"); err != nil {
+		return fmt.Errorf("surface: commit %s is not in %s: %v %s", commit, dir, err, out)
 	}
 	return nil
 }
@@ -292,13 +291,11 @@ func gitHasCommit(dir, commit string) error {
 // gitIsAncestor reports whether commit is reachable from HEAD. git exits 1 for
 // "no" and something else for a real failure, which must not read as "no".
 func gitIsAncestor(dir, commit string) (bool, error) {
-	cmd := exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", commit, "HEAD")
-	err := cmd.Run()
-	if err == nil {
+	_, err := gitutil.Run(dir, "merge-base", "--is-ancestor", commit, "HEAD")
+	switch gitutil.ExitCode(err) {
+	case 0:
 		return true, nil
-	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+	case 1:
 		return false, nil
 	}
 	return false, fmt.Errorf("surface: git merge-base in %s: %w", dir, err)

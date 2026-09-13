@@ -51,12 +51,8 @@ func importSurfaceHandler(g *graph.Graph) server.ToolHandlerFunc {
 	}
 }
 
-// surfaceRepoDir is where the git ancestry check runs: the configured project
-// root, or the process working directory when none was configured. The extract
-// claims a commit of the product's repo, and that claim is worth checking.
-func surfaceRepoDir() string {
-	if root := paths.Root(); root != "" {
-		return root
-	}
-	return "."
-}
+// surfaceRepoDir is where the git ancestry check runs. The extract claims a
+// commit of the product's repo, and that claim is checked against the same
+// directory every other git question in this process uses — the CLI importer
+// and this one must not disagree about which tree "HEAD" means.
+func surfaceRepoDir() string { return paths.GitDir() }

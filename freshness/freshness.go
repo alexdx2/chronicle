@@ -14,10 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -315,15 +315,15 @@ func (r *Report) body() string {
 // ---------------------------------------------------------------------------
 
 func gitOut(repoDir string, args ...string) (string, bool) {
-	out, err := exec.Command("git", append([]string{"-C", repoDir}, args...)...).Output()
+	out, err := gitutil.Run(repoDir, args...)
 	if err != nil {
 		return "", false
 	}
-	return strings.TrimSpace(string(out)), true
+	return out, true
 }
 
 func gitOK(repoDir string, args ...string) bool {
-	return exec.Command("git", append([]string{"-C", repoDir}, args...)...).Run() == nil
+	return gitutil.OK(repoDir, args...)
 }
 
 func gitHead(repoDir string) *Point {

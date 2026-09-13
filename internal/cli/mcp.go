@@ -72,10 +72,7 @@ func newMCPCmd() *cobra.Command {
 			// Every query answer this server returns ends with a line saying
 			// how old the knowledge behind it is. Cached briefly: freshness
 			// changes per commit, not per call.
-			projectDir := projectPath
-			if projectDir == "" {
-				projectDir = "."
-			}
+			projectDir := paths.GitDir()
 			if abs, err := filepath.Abs(projectDir); err == nil {
 				projectDir = abs
 			}
