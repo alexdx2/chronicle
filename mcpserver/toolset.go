@@ -25,6 +25,7 @@ func Tools(g *graph.Graph) []server.ServerTool {
 		{Tool: importExtractionsTool(), Handler: importExtractionsHandler(g)},
 		{Tool: resolveExtractionsTool(), Handler: resolveExtractionsHandler(g)},
 		{Tool: importAllTool(), Handler: importAllHandler(g)},
+		{Tool: importSurfaceTool(), Handler: importSurfaceHandler(g)},
 		{Tool: nodeSearchTool(), Handler: nodeSearchHandler(g)},
 		{Tool: subgraphTool(), Handler: subgraphHandler(g)},
 		{Tool: insightsTool(), Handler: insightsHandler(g)},

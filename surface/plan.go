@@ -2,6 +2,7 @@ package surface
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,10 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/validate"
 )
+
+// ErrUnresolved is the refusal a caller can answer with AllowUnresolved: the
+// extract named something the graph cannot confirm, so nothing was planned.
+var ErrUnresolved = errors.New("unresolved names")
 
 // ExtractorID is the extractor every surface-extract evidence row is stamped
 // with. It names who made the claim: the product's own surface generator.
@@ -283,8 +288,8 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 
 	if len(unresolved) > 0 && !o.AllowUnresolved {
 		return payload, uiKeys, unresolved, fmt.Errorf(
-			"surface: %d unresolved name(s) — %s (pass allow_unresolved to import what does resolve)",
-			len(unresolved), joinUnresolved(unresolved))
+			"surface: %w — %d: %s (pass allow_unresolved to import what does resolve)",
+			ErrUnresolved, len(unresolved), joinUnresolved(unresolved))
 	}
 	return payload, uiKeys, unresolved, nil
 }
