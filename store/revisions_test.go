@@ -123,3 +123,24 @@ func TestGetRevisionNotFound(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestGetRevisionBySHA(t *testing.T) {
+	s := openTestStore(t)
+	id, err := s.CreateRevision("d", "", "sha-one", "manual", "incremental", `{"layer":"ui"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRevisionBySHA("d", "sha-one")
+	if err != nil {
+		t.Fatalf("GetRevisionBySHA: %v", err)
+	}
+	if got.RevisionID != id || got.Metadata != `{"layer":"ui"}` {
+		t.Fatalf("got %+v", got)
+	}
+	if _, err := s.GetRevisionBySHA("d", "sha-two"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent sha: %v", err)
+	}
+	if _, err := s.GetRevisionBySHA("other", "sha-one"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other domain: %v", err)
+	}
+}

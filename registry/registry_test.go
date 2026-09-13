@@ -413,3 +413,36 @@ func TestFieldUsageEdgeTypes(t *testing.T) {
 		t.Error("HAS_FIELD must stay structural")
 	}
 }
+
+// TestUILayerRegistered pins the ui layer contract the surface importer writes
+// against: its four node types, the four edge shapes that leave it, and the two
+// evidence source kinds a surface extract carries.
+func TestUILayerRegistered(t *testing.T) {
+	r, err := LoadDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.IsValidLayer("ui") {
+		t.Fatal("ui layer missing")
+	}
+	for _, nt := range []string{"product", "screen", "panel", "control"} {
+		if !r.IsValidNodeType("ui", nt) {
+			t.Fatalf("ui.%s missing", nt)
+		}
+	}
+	for _, c := range [][3]string{
+		{"CONTAINS", "ui", "ui"},
+		{"SERVED_BY", "ui", "contract"},
+		{"WRITES_VIA", "ui", "contract"},
+		{"WRITES_FIELD", "ui", "data"},
+	} {
+		if err := r.ValidateEdgeLayers(c[0], c[1], c[2]); err != nil {
+			t.Fatalf("%v: %v", c, err)
+		}
+	}
+	for _, sk := range []string{"surface_extract", "declared"} {
+		if !r.IsValidSourceKind(sk) {
+			t.Fatalf("source_kind %s missing", sk)
+		}
+	}
+}

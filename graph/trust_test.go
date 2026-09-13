@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 )
 
 func TestConfidenceFromDerivation(t *testing.T) {
@@ -449,4 +450,181 @@ func TestComputeTrust(t *testing.T) {
 			t.Errorf("status = %q, want contradicted", status)
 		}
 	})
+}
+
+// TestDeclaredEvidenceIsNotExistenceEvidence pins the rule: a recorded human
+// ruling ("this control asks the user, the owner is the shop") never moves the
+// trust of the thing it is about. Declarations say what should be true; only
+// observations say what is there.
+func TestDeclaredEvidenceIsNotExistenceEvidence(t *testing.T) {
+	observed := store.EvidenceRow{
+		SourceKind: "prisma", ExtractorID: "chronicle-ast",
+		EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.9,
+	}
+	declared := store.EvidenceRow{
+		SourceKind: "declared", ExtractorID: "okeep-surface",
+		EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.95,
+	}
+
+	wantC, wantF, wantT, wantS := ComputeTrust([]store.EvidenceRow{observed})
+	gotC, gotF, gotT, gotS := ComputeTrust([]store.EvidenceRow{observed, declared})
+	if gotC != wantC || gotF != wantF || gotT != wantT || gotS != wantS {
+		t.Fatalf("declaration moved trust: %v/%v/%v/%q → %v/%v/%v/%q",
+			wantC, wantF, wantT, wantS, gotC, gotF, gotT, gotS)
+	}
+
+	if n := len(ExistenceEvidence([]store.EvidenceRow{observed, declared})); n != 1 {
+		t.Fatalf("ExistenceEvidence kept %d rows, want 1", n)
+	}
+	if n := len(ExistenceEvidence([]store.EvidenceRow{declared})); n != 0 {
+		t.Fatalf("a declaration alone is %d rows of existence evidence, want 0", n)
+	}
+}
+
+// TestRecalculateEdgeTrustHandlesEmptyAndDeclaredOnly separates the two cases
+// the declaration rule must not conflate.
+//
+// An edge with NO evidence must still be recomputed: journal replay inserts
+// 1.0/1.0/1.0 placeholders and leans on RecalculateAllTrust to correct them,
+// so a skip here would leave a rebuilt graph claiming full trust in an edge
+// nothing backs. An edge whose only evidence is a DECLARATION must be left
+// alone: a ruling is not an observation, and deriving a number from it is the
+// bug the rule exists to prevent.
+func TestRecalculateEdgeTrustHandlesEmptyAndDeclaredOnly(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	mkEdge := func(suffix string) (int64, string) {
+		t.Helper()
+		from := "code:controller:test-domain:a" + suffix
+		to := "code:provider:test-domain:b" + suffix
+		for _, n := range []struct{ key, nodeType, name string }{
+			{from, "controller", "A" + suffix},
+			{to, "provider", "B" + suffix},
+		} {
+			if _, err := g.UpsertNode(validate.NodeInput{
+				NodeKey: n.key, Layer: "code", NodeType: n.nodeType,
+				DomainKey: "test-domain", Name: n.name,
+			}, revID); err != nil {
+				t.Fatalf("UpsertNode %s: %v", n.key, err)
+			}
+		}
+		key := validate.BuildEdgeKey(from, to, "INJECTS")
+		id, err := g.UpsertEdge(validate.EdgeInput{
+			FromNodeKey: from, ToNodeKey: to, EdgeType: "INJECTS",
+			DerivationKind: "hard", FromLayer: "code", ToLayer: "code",
+		}, revID)
+		if err != nil {
+			t.Fatalf("UpsertEdge: %v", err)
+		}
+		return id, key
+	}
+
+	read := func(key string) *store.EdgeRow {
+		t.Helper()
+		row, err := g.Store().GetEdgeByKey(key)
+		if err != nil {
+			t.Fatalf("GetEdgeByKey %s: %v", key, err)
+		}
+		return row
+	}
+
+	// --- no evidence at all: recomputed, exactly as before the rule ------
+	emptyID, emptyKey := mkEdge("empty")
+	// Stand in for what journal replay writes before RecalculateAllTrust runs.
+	if err := g.Store().UpdateEdgeTrust(emptyID, 1.0, 1.0, 1.0, "active"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.RecalculateEdgeTrust(emptyID); err != nil {
+		t.Fatalf("RecalculateEdgeTrust: %v", err)
+	}
+	// The pre-change formula on an empty evidence list: positive 0, negative 0,
+	// base 0 (under the 0.65 default cap), freshness 1.0, trust 0, status unknown.
+	wantC, wantF, wantT, wantS := ComputeTrust(nil)
+	if wantC != 0 || wantF != 1 || wantT != 0 || wantS != "unknown" {
+		t.Fatalf("ComputeTrust(nil) drifted: %v/%v/%v/%q", wantC, wantF, wantT, wantS)
+	}
+	got := read(emptyKey)
+	if got.Confidence != wantC || got.Freshness != wantF || got.TrustScore != wantT {
+		t.Fatalf("evidence-free edge kept placeholders: conf=%v fresh=%v trust=%v, want %v/%v/%v",
+			got.Confidence, got.Freshness, got.TrustScore, wantC, wantF, wantT)
+	}
+
+	// --- only a declaration: left exactly as stored ----------------------
+	declaredID, declaredKey := mkEdge("declared")
+	if _, err := g.AddEdgeEvidence(declaredKey, validate.EvidenceInput{
+		TargetKind: "edge", SourceKind: "declared",
+		ExtractorID: "okeep-surface", ExtractorVersion: "1",
+		Assertion: `{"verdict":"ask"}`, AssertionKind: "decision",
+		Confidence: 0.95, RevisionID: revID,
+	}); err != nil {
+		t.Fatalf("AddEdgeEvidence: %v", err)
+	}
+	if err := g.Store().UpdateEdgeTrust(declaredID, 0.5, 0.5, 0.25, "active"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.RecalculateEdgeTrust(declaredID); err != nil {
+		t.Fatalf("RecalculateEdgeTrust: %v", err)
+	}
+	got = read(declaredKey)
+	if got.Confidence != 0.5 || got.Freshness != 0.5 || got.TrustScore != 0.25 {
+		t.Fatalf("a declaration moved edge trust: conf=%v fresh=%v trust=%v, want 0.5/0.5/0.25",
+			got.Confidence, got.Freshness, got.TrustScore)
+	}
+}
+
+// TestRecalculateNodeTrustHandlesEmptyAndDeclaredOnly: a node with no evidence
+// kept its defaults before the declaration rule and must keep them still; a
+// node whose only evidence is a declaration keeps them too.
+func TestRecalculateNodeTrustHandlesEmptyAndDeclaredOnly(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+
+	mkNode := func(suffix string) (int64, string) {
+		t.Helper()
+		key := "code:controller:test-domain:n" + suffix
+		id, err := g.UpsertNode(validate.NodeInput{
+			NodeKey: key, Layer: "code", NodeType: "controller",
+			DomainKey: "test-domain", Name: "N" + suffix,
+		}, revID)
+		if err != nil {
+			t.Fatalf("UpsertNode: %v", err)
+		}
+		if err := g.Store().UpdateNodeTrust(id, 1.0, 1.0, 1.0, "active"); err != nil {
+			t.Fatal(err)
+		}
+		return id, key
+	}
+
+	emptyID, emptyKey := mkNode("empty")
+	if err := g.RecalculateNodeTrust(emptyID); err != nil {
+		t.Fatalf("RecalculateNodeTrust: %v", err)
+	}
+	row, err := g.Store().GetNodeByKey(emptyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.TrustScore != 1.0 {
+		t.Fatalf("evidence-free node trust = %v, want the stored 1.0 (unchanged behaviour)", row.TrustScore)
+	}
+
+	declaredID, declaredKey := mkNode("declared")
+	if _, err := g.AddNodeEvidence(declaredKey, validate.EvidenceInput{
+		TargetKind: "node", SourceKind: "declared",
+		ExtractorID: "okeep-surface", ExtractorVersion: "1",
+		Assertion: `{"owner":"Shop"}`, AssertionKind: "decision",
+		Confidence: 0.95, RevisionID: revID,
+	}); err != nil {
+		t.Fatalf("AddNodeEvidence: %v", err)
+	}
+	if err := g.RecalculateNodeTrust(declaredID); err != nil {
+		t.Fatalf("RecalculateNodeTrust: %v", err)
+	}
+	row, err = g.Store().GetNodeByKey(declaredKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.TrustScore != 1.0 {
+		t.Fatalf("a declaration moved node trust to %v", row.TrustScore)
+	}
 }

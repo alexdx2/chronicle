@@ -60,6 +60,7 @@ func NewRootCmd() *cobra.Command {
 		newSubgraphCmd(),
 		newHookCmd(),
 		newRefreshCmd(),
+		newSurfaceCmd(),
 		newValidateCmd(),
 		newMCPCmd(),
 		newImpactCmd(),

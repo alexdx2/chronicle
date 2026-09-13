@@ -65,6 +65,7 @@ var UserCommands = map[string]string{
 	"topology":    "Show federation topology — how domains connect via cross-repo edges",
 	"connections": "Show cross-repo connections — external node inventory with resolution status",
 	"setup":       "Configure which directories to scan — interactive manifest builder",
+	"surface":     "Import a product's surface extract (surface.json) — screens, panels and controls into the ui layer",
 }
 
 var CommandInstructions = map[string]string{
@@ -441,6 +442,7 @@ User makes DIRECTORY-level decisions, not file-level.`,
 - /chronicle-diagram — Live architecture diagram
 - /chronicle-topology — Federation domain topology map
 - /chronicle-connections — Cross-repo edge inventory
+- /chronicle-surface — Import a product's surface extract (screens/panels/controls) into the ui layer
 - /chronicle-status — Current graph state
 - /chronicle-version — MCP identity (codename + fingerprint — call before scan)
 - /chronicle-help — This help
@@ -516,4 +518,29 @@ Evidence quality tiers (the system caps confidence based on best evidence availa
 - Code evidence (file, openapi, graphql, etc.): unlocks up to 85%
 - LLM inference only: capped at 65%
 - Manual confirmation (user_feedback): unlocks up to 95%`,
+
+	"surface": `Import this product's surface extract into the ui layer.
+
+The extract (surface.json) is produced by the PRODUCT, not by a scan: only the
+product knows which screen a panel belongs to and which mutation a toggle
+writes through. Chronicle resolves those names against the graph a scan already
+built and records the result as ui nodes anchored to the extract's commit.
+
+1. Generate the extract in the product repo (its own tooling), then either:
+   - run 'chronicle surface import <file>' in the product directory, or
+   - call chronicle_import_surface(path="docs/surface/<product>.surface.json")
+2. Read the result: nodes/edges written, "deleted" (controls the file no longer
+   mentions — tombstoned), "unresolved" (names the graph could not confirm).
+   Re-running the same extract is a no-op (already_imported: true).
+3. Then ask the graph what the surface means: chronicle_impact on a data field
+   now answers "which controls edit this?", and chronicle_query_reverse_deps on
+   a mutation answers "which controls write through it?".
+
+Refusals worth understanding:
+- "same commit, different content" — regenerate the extract at a new commit;
+  one commit must not mean two different surfaces.
+- "not an ancestor of HEAD" — the extract was made on a branch nobody merged;
+  pass allow_diverged only if that is genuinely what you want.
+- unresolved names fail the import by default; pass allow_unresolved to import
+  what does resolve and get the rest listed.`,
 }

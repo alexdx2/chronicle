@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "product": "mini",
+  "repo": "mini",
+  "commit": "0000000000000000000000000000000000000001",
+  "nodes": [
+    {
+      "id": "product:mini",
+      "kind": "product",
+      "label": "mini",
+      "evidence": []
+    },
+    {
+      "id": "ui:panel.ustawienia",
+      "kind": "screen",
+      "address": "panel.ustawienia",
+      "label": "ustawienia",
+      "route": "/panel/ustawienia",
+      "evidence": [{ "file": "src/app/panel/ustawienia/page.tsx", "line": 1 }],
+      "qa": ["MINI-A01"]
+    },
+    {
+      "id": "ui:panel.ustawienia.komunikacja",
+      "kind": "panel",
+      "address": "panel.ustawienia.komunikacja",
+      "label": "komunikacja",
+      "order": 100,
+      "group": "komunikacja",
+      "groupLabel": "Komunikacja",
+      "evidence": [{ "file": "src/app/panel/ustawienia/komunikacja.tsx", "line": 12 }]
+    },
+    {
+      "id": "ui:panel.ustawienia.komunikacja.smsSenderId",
+      "kind": "control",
+      "address": "panel.ustawienia.komunikacja.smsSenderId",
+      "label": "smsSenderId",
+      "order": 101,
+      "evidence": [{ "file": "src/graphql/shop.ts", "line": 42 }],
+      "via": ["saveShopSettings"]
+    },
+    {
+      "id": "ui:panel.ustawienia.komunikacja.quietFromHour",
+      "kind": "control",
+      "address": "panel.ustawienia.komunikacja.quietFromHour",
+      "label": "quietFromHour",
+      "order": 102,
+      "evidence": [{ "file": "src/graphql/shop.ts", "line": 57 }],
+      "via": ["saveShopSettings"]
+    },
+    {
+      "id": "data:Shop.smsSenderId",
+      "kind": "field",
+      "ref": "Shop.smsSenderId",
+      "label": "smsSenderId",
+      "type": "String",
+      "evidence": [{ "file": "prisma/schema.prisma", "line": 88 }]
+    },
+    {
+      "id": "data:Shop.quietFromHour",
+      "kind": "field",
+      "ref": "Shop.quietFromHour",
+      "label": "quietFromHour",
+      "type": "Int",
+      "evidence": [{ "file": "prisma/schema.prisma", "line": 91 }]
+    }
+  ],
+  "edges": [
+    { "from": "ui:panel.ustawienia.komunikacja.smsSenderId", "to": "data:Shop.smsSenderId", "kind": "edits" },
+    { "from": "ui:panel.ustawienia.komunikacja.quietFromHour", "to": "data:Shop.quietFromHour", "kind": "edits" }
+  ],
+  "decisions": {
+    "controls": {
+      "panel.ustawienia.komunikacja.smsSenderId": {
+        "verdict": "ask",
+        "placement": "settings",
+        "owner": "Shop",
+        "evidence": { "file": "src/surface/decisions.ts", "line": 12 }
+      }
+    },
+    "containers": {
+      "panel.ustawienia.komunikacja": {
+        "placement": "settings",
+        "owner": "Shop",
+        "evidence": { "file": "src/surface/decisions.ts", "line": 20 }
+      }
+    },
+    "fields": {
+      "Shop.quietFromHour": {
+        "verdict": "infer",
+        "placement": "decision-line",
+        "owner": "Warsztat",
+        "derivedFrom": "address",
+        "note": "hard-coded today",
+        "evidence": { "file": "src/surface/decisions.ts", "line": 40 }
+      },
+      "Shop.noSuchColumn": {
+        "verdict": "ask",
+        "placement": "settings",
+        "owner": "Shop"
+      }
+    },
+    "homes": {
+      "models": { "Shop": "ustawienia" },
+      "columns": { "Shop.smsSenderId": "komunikacja" },
+      "covered": { "mutations": "all" }
+    }
+  }
+}

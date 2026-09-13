@@ -9,6 +9,7 @@ layers:
   - ownership
   - infra
   - ci
+  - ui
 
 node_types:
   code:
@@ -72,11 +73,19 @@ node_types:
     - workflow
     - pipeline
     - release
+  # The product's own surface, as a user meets it: the screens, the panels
+  # inside them and the individual controls. Imported from a product-side
+  # surface extract (chronicle surface import), never from a code scan.
+  ui:
+    - product
+    - screen
+    - panel
+    - control
 
 edge_types:
   CONTAINS:
-    from_layers: [code, service, contract, data, flow, ownership, infra, ci]
-    to_layers: [code, service, contract, data, flow, ownership, infra, ci]
+    from_layers: [code, service, contract, data, flow, ownership, infra, ci, ui]
+    to_layers: [code, service, contract, data, flow, ownership, infra, ci, ui]
   IMPORTS:
     from_layers: [code]
     to_layers: [code]
@@ -150,8 +159,16 @@ edge_types:
     from_layers: [code, service]
     to_layers: [data]
   WRITES_FIELD:
-    from_layers: [code, service]
+    from_layers: [code, service, ui]
     to_layers: [data]
+  # A screen is served by the endpoint the user's browser actually hits.
+  SERVED_BY:
+    from_layers: [ui]
+    to_layers: [contract]
+  # A control writes through a named operation (a GraphQL mutation, a route).
+  WRITES_VIA:
+    from_layers: [ui]
+    to_layers: [contract]
   REFERENCES_MODEL:
     from_layers: [data]
     to_layers: [data]
@@ -257,6 +274,12 @@ source_kinds:
   - role_classification
   - ast
   - graph
+  # A product-side surface extract (surface.json) — the screens/controls the
+  # product itself reports, with file:line evidence from its own source.
+  - surface_extract
+  # A human decision recorded next to the thing it governs (a verdict on a
+  # control, an owner for a field) — declared, not observed.
+  - declared
 
 node_statuses:
   - active

@@ -225,3 +225,12 @@ func (s *Store) NewestRevisionDomain() (string, error) {
 	}
 	return d, nil
 }
+
+// GetRevisionBySHA returns the revision a domain recorded for one git SHA, or
+// ErrNotFound. There is at most one (UNIQUE(domain_key, git_after_sha)), which
+// is what lets an importer ask "have I already been told about this commit?"
+// before it writes anything.
+func (s *Store) GetRevisionBySHA(domainKey, sha string) (*Revision, error) {
+	q := `SELECT ` + revisionCols + ` FROM graph_revisions WHERE domain_key = ? AND git_after_sha = ?`
+	return s.oneRevision(fmt.Sprintf("GetRevisionBySHA %q %q", domainKey, sha), q, domainKey, sha)
+}
