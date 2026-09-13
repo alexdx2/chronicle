@@ -27,6 +27,8 @@
   --radius:8px;--shadow:0 1px 3px rgba(59,47,32,.06);
   --font-serif:'Lora',Georgia,serif;--font-mono:'JetBrains Mono','Source Code Pro',monospace;
 }
+.knowledge-line{font-size:11px;color:var(--text-muted);font-family:var(--font-mono)}
+.knowledge-line.stale,.knowledge-line.diverged{color:var(--error)}
 body{font-family:var(--font-serif);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;background-image:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(139,115,85,0.02) 3px,rgba(139,115,85,0.02) 6px)}
 a{color:var(--primary);text-decoration:none}
 /* Native controls pick up the warm theme instead of browser-default blue */
@@ -407,6 +409,7 @@ button,input,select,textarea{font-family:inherit}
     </span>
     <span x-show="revision" style="font-size:12px">Rev: <strong x-text="revision"></strong></span>
     <span x-show="lastScan" style="font-size:12px">Last scan: <strong x-text="lastScan"></strong></span>
+    <span x-show="freshness && freshness.message" class="knowledge-line" :class="freshness && (freshness.status === 'stale' || freshness.status === 'diverged') ? freshness.status : ''" x-text="freshness ? freshness.message : ''" :title="freshness ? freshness.status : ''"></span>
     <span :style="{color: wsConnected ? 'var(--success)' : 'var(--error)'}" :title="wsConnected ? 'Connected' : 'Disconnected'">
       <template x-if="wsConnected"><span>&#9679;</span></template>
       <template x-if="!wsConnected"><span>&#9675;</span></template>
@@ -1890,6 +1893,7 @@ function dashboard() {
     version: '',
     revision: '',
     lastScan: '',
+    freshness: null,
     wsConnected: false,
     stats: {},
     requests: [],
@@ -2350,6 +2354,14 @@ function dashboard() {
           this.lastScan = this.formatTime(latest.created_at);
         }
       } catch(e) { console.error('scans:', e); }
+      await this.fetchFreshness();
+    },
+
+    async fetchFreshness() {
+      try {
+        const r = await fetch('/api/freshness');
+        this.freshness = await r.json();
+      } catch(e) { console.error('freshness:', e); }
     },
 
     async fetchValidation() {
