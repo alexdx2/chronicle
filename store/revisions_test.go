@@ -144,3 +144,50 @@ func TestGetRevisionBySHA(t *testing.T) {
 		t.Fatalf("other domain: %v", err)
 	}
 }
+
+// The structural phase writes its own git_hook revisions. Verification must not
+// mistake one of them for the last re-verification and diff from its SHA — the
+// two pointers move independently.
+func TestLatestRefreshRevisionSkipsStructural(t *testing.T) {
+	s := openTestStore(t)
+	refreshID, err := s.CreateRevision("d", "", "sha-refresh", "git_hook", "incremental", `{"refresh":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRevision("d", "sha-refresh", "sha-structural", "git_hook", "incremental",
+		`{"kind":"structural","complete":true}`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.LatestRefreshRevision("d")
+	if err != nil {
+		t.Fatalf("LatestRefreshRevision: %v", err)
+	}
+	if got.RevisionID != refreshID {
+		t.Fatalf("LatestRefreshRevision = %d (%s), want %d (%s) — structural rows are not refresh pointers",
+			got.RevisionID, got.GitAfterSHA, refreshID, "sha-refresh")
+	}
+
+	// Any-domain form skips them too, and malformed metadata still counts as a
+	// refresh rather than failing the query.
+	if _, err := s.CreateRevision("e", "", "sha-bad-json", "git_hook", "incremental", "not json"); err != nil {
+		t.Fatal(err)
+	}
+	any, err := s.LatestRefreshRevision("")
+	if err != nil {
+		t.Fatalf("LatestRefreshRevision(\"\"): %v", err)
+	}
+	if any.GitAfterSHA != "sha-bad-json" {
+		t.Fatalf("any-domain LatestRefreshRevision = %s, want sha-bad-json", any.GitAfterSHA)
+	}
+
+	// A store whose only git_hook rows are structural has no refresh pointer.
+	s2 := openTestStore(t)
+	if _, err := s2.CreateRevision("d", "", "sha-s", "git_hook", "incremental",
+		`{"kind":"structural","complete":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.LatestRefreshRevision("d"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("only-structural store: %v, want ErrNotFound", err)
+	}
+}

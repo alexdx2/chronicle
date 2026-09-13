@@ -1150,3 +1150,244 @@ func (s *Store) KnownFilePaths(paths []string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// --- structural (deterministic) evidence -------------------------------------
+//
+// The structural phase re-extracts one file with one extractor and the result
+// REPLACES that pair's previous contribution: whatever the new pass no longer
+// asserts stops being knowledge. These helpers are the three questions that
+// contract asks of the store — what did this revision assert, what did it drop,
+// and which files still carry rows from an older rules pack.
+
+// placeholderList returns "?,?,?" for n bound arguments.
+func placeholderList(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// evidenceContentHashExpr reads metadata.content_hash the same defensive way
+// revisionLayerExpr reads metadata.layer: json_extract raises on malformed
+// JSON, which would fail the whole query because of one badly written row, and
+// CASE is documented to short-circuit.
+const evidenceContentHashExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.content_hash') ELSE NULL END`
+
+// EvidenceIDsCreatedIn returns the evidence rows (filePath, extractorID)
+// asserted in revisionID — rows the revision inserted (valid_from) and rows it
+// re-asserted. Re-assertion goes through AddEvidence's dedup path, which
+// updates the existing row and stamps last_verified_revision_id rather than
+// creating a second one, so a pass that saw the same anchor again would look
+// like it had dropped it if only valid_from were consulted. This is the `keep`
+// set SupersedeEvidenceNotIn expects.
+func (s *Store) EvidenceIDsCreatedIn(filePath, extractorID string, revisionID int64) ([]int64, error) {
+	rows, err := s.db.Query(`
+		SELECT evidence_id FROM graph_evidence
+		WHERE file_path = ? AND extractor_id = ?
+		  AND (valid_from_revision_id = ? OR last_verified_revision_id = ?)
+		ORDER BY evidence_id`, filePath, extractorID, revisionID, revisionID)
+	if err != nil {
+		return nil, fmt.Errorf("EvidenceIDsCreatedIn: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("EvidenceIDsCreatedIn scan: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("EvidenceIDsCreatedIn rows: %w", err)
+	}
+	return out, nil
+}
+
+// SupersedeEvidenceNotIn closes the part of (filePath, extractorID)'s previous
+// contribution that the latest extraction did not re-assert: every currently
+// valid/revalidated row whose evidence_id is not in keep becomes 'superseded'
+// with invalidated_by_revision_id = revisionID. Returns rows changed.
+//
+// Scope is deliberately narrow. Only this extractor's rows on this file move —
+// evidence from the agent, from another extractor, or importer-owned
+// (declared/surface_extract) rows anchored at the same file are somebody else's
+// claim and are left alone. An empty keep is meaningful: a file that now yields
+// no facts loses its whole structural contribution.
+func (s *Store) SupersedeEvidenceNotIn(filePath, extractorID string, keep []int64, revisionID int64) (int64, error) {
+	// Select the transitioning rows first — journaling is transition-only, and
+	// the same predicate drives both statements.
+	where := `e.file_path = ? AND e.extractor_id = ? AND e.evidence_status IN ('valid','revalidated')`
+	args := []any{filePath, extractorID}
+	if len(keep) > 0 {
+		where += ` AND e.evidence_id NOT IN (` + placeholderList(len(keep)) + `)`
+		for _, id := range keep {
+			args = append(args, id)
+		}
+	}
+
+	type subject struct {
+		id          int64
+		uid         string
+		targetKind  string
+		ownerKey    string
+		sourceKind  string
+		repoName    string
+		lineStart   int
+		extractorID string
+		polarity    string
+	}
+	selRows, err := s.db.Query(`
+		SELECT e.evidence_id, COALESCE(e.evidence_uid,''), e.target_kind,
+		       COALESCE(n.node_key, ed.edge_key, ''),
+		       e.source_kind, COALESCE(e.repo_name,''),
+		       COALESCE(e.line_start,0), e.extractor_id, e.evidence_polarity
+		FROM graph_evidence e
+		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+		WHERE `+where, args...)
+	if err != nil {
+		return 0, fmt.Errorf("SupersedeEvidenceNotIn select: %w", err)
+	}
+	var subjects []subject
+	for selRows.Next() {
+		var sub subject
+		if err := selRows.Scan(&sub.id, &sub.uid, &sub.targetKind, &sub.ownerKey,
+			&sub.sourceKind, &sub.repoName, &sub.lineStart, &sub.extractorID, &sub.polarity); err != nil {
+			selRows.Close()
+			return 0, fmt.Errorf("SupersedeEvidenceNotIn scan: %w", err)
+		}
+		subjects = append(subjects, sub)
+	}
+	if err := selRows.Err(); err != nil {
+		selRows.Close()
+		return 0, fmt.Errorf("SupersedeEvidenceNotIn rows: %w", err)
+	}
+	selRows.Close()
+	if len(subjects) == 0 {
+		return 0, nil
+	}
+
+	ids := make([]any, 0, len(subjects))
+	for _, sub := range subjects {
+		ids = append(ids, sub.id)
+	}
+	res, err := s.db.Exec(`
+		UPDATE graph_evidence
+		SET evidence_status = 'superseded',
+		    invalidated_by_revision_id = ?,
+		    invalidated_reason = 'not re-asserted by structural extraction'
+		WHERE evidence_id IN (`+placeholderList(len(ids))+`)`,
+		append([]any{revisionID}, ids...)...)
+	if err != nil {
+		return 0, fmt.Errorf("SupersedeEvidenceNotIn update: %w", err)
+	}
+	changed, _ := res.RowsAffected()
+
+	// One evidence_status event per transitioned row (uid backfilled for rows
+	// written before evidence_uid existed), so replay reaches the same state.
+	for _, sub := range subjects {
+		if sub.uid == "" {
+			sub.uid = EvidenceKey(sub.targetKind, sub.ownerKey, sub.sourceKind, sub.repoName,
+				filePath, sub.lineStart, sub.extractorID, sub.polarity)
+			if _, err := s.db.Exec(`UPDATE graph_evidence SET evidence_uid = ? WHERE evidence_id = ?`,
+				sub.uid, sub.id); err != nil {
+				return changed, fmt.Errorf("SupersedeEvidenceNotIn uid backfill: %w", err)
+			}
+		}
+		domain := DomainFromNodeKey(sub.ownerKey)
+		if sub.targetKind == "edge" {
+			domain = domainFromEdgeKey(sub.ownerKey)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domain, RevisionID: revisionID,
+			Kind: EvEvidenceStatus, Key: sub.uid, OwnerKey: sub.ownerKey,
+			Fields: map[string]any{"status": "superseded"},
+		}); err != nil {
+			return changed, err
+		}
+	}
+	return changed, nil
+}
+
+// currentStructuralRows is the predicate for "rows of extractorID that are still
+// knowledge". Superseded and invalidated rows are history; stale rows are
+// awaiting a verdict and re-extracting them is exactly the wrong batch to spend
+// on, so the rules-pack backlog looks only at rows that currently hold.
+const currentStructuralRows = `evidence_status IN ('valid','revalidated')`
+
+// FilesWithExtractorVersionBelow lists distinct file paths whose current rows of
+// extractorID were written by a rules pack other than version, oldest pack
+// first, at most limit files (limit <= 0 means no bound). A pack bump makes
+// every file it touched re-extractable even though the source did not change;
+// the phase works through them in bounded batches.
+//
+// String compare is enough: pack versions are integers written as strings.
+func (s *Store) FilesWithExtractorVersionBelow(extractorID, version string, limit int) ([]string, error) {
+	q := `SELECT file_path FROM graph_evidence
+	      WHERE extractor_id = ? AND extractor_version != ?
+	        AND file_path IS NOT NULL AND file_path != ''
+	        AND ` + currentStructuralRows + `
+	      GROUP BY file_path
+	      ORDER BY MIN(extractor_version) ASC, file_path ASC`
+	args := []any{extractorID, version}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("FilesWithExtractorVersionBelow: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var fp string
+		if err := rows.Scan(&fp); err != nil {
+			return nil, fmt.Errorf("FilesWithExtractorVersionBelow scan: %w", err)
+		}
+		out = append(out, fp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("FilesWithExtractorVersionBelow rows: %w", err)
+	}
+	return out, nil
+}
+
+// CountFilesWithExtractorVersionBelow is FilesWithExtractorVersionBelow's
+// predicate as a count — the "340 files on old rules" the freshness line owes
+// the reader, which must not be capped by the batch size.
+func (s *Store) CountFilesWithExtractorVersionBelow(extractorID, version string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT COUNT(DISTINCT file_path) FROM graph_evidence
+		WHERE extractor_id = ? AND extractor_version != ?
+		  AND file_path IS NOT NULL AND file_path != ''
+		  AND `+currentStructuralRows, extractorID, version).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("CountFilesWithExtractorVersionBelow: %w", err)
+	}
+	return n, nil
+}
+
+// ContentHashForFileExtractor returns the content hash the newest current row of
+// (filePath, extractorID) was extracted from, or "" when the pair has none —
+// how the phase answers "same pack, same content, nothing to do". Rows that
+// carry no hash are skipped rather than treated as an answer: re-observation
+// updates a row's status without rewriting its metadata, so the newest row is
+// not always the one that recorded the hash, and a missing answer only ever
+// costs a re-extraction.
+func (s *Store) ContentHashForFileExtractor(filePath, extractorID string) (string, error) {
+	var hash sql.NullString
+	err := s.db.QueryRow(`
+		SELECT `+evidenceContentHashExpr+` AS content_hash FROM graph_evidence
+		WHERE file_path = ? AND extractor_id = ?
+		  AND `+currentStructuralRows+`
+		  AND `+evidenceContentHashExpr+` IS NOT NULL
+		  AND `+evidenceContentHashExpr+` != ''
+		ORDER BY evidence_id DESC LIMIT 1`, filePath, extractorID).Scan(&hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("ContentHashForFileExtractor: %w", err)
+	}
+	return hash.String, nil
+}

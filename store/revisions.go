@@ -132,12 +132,22 @@ func (s *Store) LatestScanRevision(domainKey string) (*Revision, error) {
 	return s.oneRevision("LatestScanRevision", q, args...)
 }
 
-// LatestRefreshRevision is the newest trigger_kind='git_hook' revision — the
-// last time knowledge was re-verified against a commit without a rescan.
-// ErrNotFound when none.
+// revisionKindExpr reads metadata.kind defensively, like revisionLayerExpr.
+const revisionKindExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.kind') ELSE NULL END`
+
+// notStructural excludes the structural phase's own revisions. The structural
+// phase is hook-driven too (trigger_kind='git_hook'), but it advances a
+// different pointer: verification and structure succeed and fail
+// independently, and diffing re-verification from a structural revision's SHA
+// would silently skip every file between the two.
+const notStructural = ` AND (` + revisionKindExpr + ` IS NULL OR ` + revisionKindExpr + ` != 'structural')`
+
+// LatestRefreshRevision is the newest trigger_kind='git_hook' revision that is
+// not a structural one — the last time knowledge was re-verified against a
+// commit without a rescan. ErrNotFound when none.
 func (s *Store) LatestRefreshRevision(domainKey string) (*Revision, error) {
 	q := `SELECT ` + revisionCols + ` FROM graph_revisions
-	      WHERE trigger_kind = 'git_hook'`
+	      WHERE trigger_kind = 'git_hook'` + notStructural
 	var args []any
 	if domainKey != "" {
 		q += ` AND domain_key = ?`
