@@ -18,8 +18,14 @@ type RefreshResult struct {
 }
 
 // RecordRefreshNoop names HEAD as re-verified when the diff since the base
-// touched nothing a refresh can check — a docs-only commit, a lockfile bump, a
-// README.
+// touched no file the graph holds evidence for — a docs-only commit, a
+// lockfile bump, a README.
+//
+// "No file the graph knows about", NOT "no file this refresh can check". The
+// second reading would stamp verified@HEAD on every commit of a repo written
+// in a language outside refreshExtensions, which is the graph claiming to have
+// checked code it has never read. Callers must gate on
+// store.KnownFilePaths — see internal/cli/refresh.go.
 //
 // Without it those commits quietly age the graph: freshness compares the
 // newest scan/refresh commit against HEAD, so a repo whose knowledge is

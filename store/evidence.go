@@ -1089,3 +1089,64 @@ func nullableInt64(n int64) any {
 	}
 	return n
 }
+
+// KnownFilePaths returns the subset of paths the graph holds evidence for, in
+// the order given, without duplicates.
+//
+// It answers one question: "does the graph know anything about this file?" A
+// caller deciding whether a commit could possibly have invalidated knowledge
+// needs exactly that, and needs it for files of ANY language — including the
+// ones no mechanical verifier can check, which are precisely the files a
+// refresh must not quietly call verified.
+func (s *Store) KnownFilePaths(paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	// SQLite caps host parameters (999 by default), and a diff across a few
+	// hundred commits easily exceeds that — chunk rather than fail on a wide
+	// range, which is the range this is most needed for.
+	const chunk = 400
+	known := make(map[string]bool, len(paths))
+	for start := 0; start < len(paths); start += chunk {
+		end := start + chunk
+		if end > len(paths) {
+			end = len(paths)
+		}
+		batch := paths[start:end]
+		marks := make([]string, len(batch))
+		args := make([]any, len(batch))
+		for i, p := range batch {
+			marks[i] = "?"
+			args[i] = p
+		}
+		q := `SELECT DISTINCT file_path FROM graph_evidence
+		      WHERE file_path IN (` + strings.Join(marks, ",") + `)`
+		rows, err := s.db.Query(q, args...)
+		if err != nil {
+			return nil, fmt.Errorf("KnownFilePaths: %w", err)
+		}
+		for rows.Next() {
+			var fp string
+			if err := rows.Scan(&fp); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("KnownFilePaths scan: %w", err)
+			}
+			known[fp] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("KnownFilePaths rows: %w", err)
+		}
+		rows.Close()
+	}
+
+	var out []string
+	seen := make(map[string]bool, len(known))
+	for _, p := range paths {
+		if known[p] && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}

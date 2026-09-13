@@ -48,22 +48,53 @@ from a git post-commit hook (see 'chronicle hook install --git').`,
 			}
 			head = strings.TrimSpace(head)
 
-			changed, err := gitDiffFiles(base, "d") // added/copied/modified/renamed/type-changed
+			touchedAll, err := gitDiffFiles(base, "d") // added/copied/modified/renamed/type-changed
 			if err != nil {
 				outputError(err)
 			}
-			deleted, err := gitDiffFiles(base, "D") // deleted only
+			deletedAll, err := gitDiffFiles(base, "D") // deleted only
 			if err != nil {
 				outputError(err)
 			}
-			changed = filterRefreshable(changed)
-			deleted = filterRefreshable(deleted)
+			changed := filterRefreshable(touchedAll)
+			deleted := filterRefreshable(deletedAll)
 
 			if len(changed) == 0 && len(deleted) == 0 {
-				// Nothing to re-verify, but the graph IS still good at HEAD,
-				// and only a revision recorded there says so. Without this a
-				// docs-only commit leaves the repo reading "stale" against a
-				// commit that could not have invalidated anything.
+				// Nothing this refresh can check mechanically — and two very
+				// different reasons why, which must not produce the same
+				// answer.
+				//
+				// If NO file the graph holds evidence for changed, the graph
+				// really is still good at HEAD, and only a revision recorded
+				// there says so: without one a docs-only commit ages the repo
+				// into "stale, N commits behind" for changes that cannot have
+				// invalidated anything.
+				//
+				// But if a KNOWN file changed in a language refreshExtensions
+				// does not cover — Ruby, PHP, Java — stamping verified@HEAD
+				// would be the graph claiming to have checked code it never
+				// read. In a repo written entirely in such a language that is
+				// every single commit. Those files are reported as pending
+				// instead, which is the honest status: an agent has to look.
+				known, err := g.Store().KnownFilePaths(append(append([]string{}, touchedAll...), deletedAll...))
+				if err != nil {
+					outputError(err)
+				}
+				if len(known) > 0 {
+					res := &graph.RefreshResult{
+						HeadSHA:         head,
+						ChangedFiles:    len(touchedAll),
+						DeletedFiles:    len(deletedAll),
+						PendingSemantic: known,
+					}
+					if quiet {
+						fmt.Printf("chronicle refresh: %d file(s) the graph knows changed and need an agent rescan: %s\n",
+							len(known), strings.Join(known, ", "))
+						return
+					}
+					outputJSON(res)
+					return
+				}
 				if head != base {
 					if _, err := g.RecordRefreshNoop(rev.DomainKey, head); err != nil {
 						outputError(err)

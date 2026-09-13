@@ -1,13 +1,17 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/paths"
+	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/validate"
 )
 
 // refreshRepo builds a git repo with two commits on main and one commit on a
@@ -137,12 +141,10 @@ func TestRefreshBaseRefusesWithOnlyASurfaceImport(t *testing.T) {
 	}
 }
 
-// A commit that touched no refreshable file still moves the graph's verified
-// point: a docs-only commit must leave the repo reading "verified", not slide
-// it into "stale" for a change that cannot have invalidated anything.
-func TestRefreshRecordsANoopRevisionForACommitWithNothingToVerify(t *testing.T) {
-	dir, wt, _ := buildLinkedWorktree(t) // reused: a plain repo with a graph
-	_ = wt
+// runRefreshIn chdirs into dir, runs the refresh command with args, and
+// returns everything it printed to stdout.
+func runRefreshIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
 	cwd, _ := os.Getwd()
 	defer resetWorktreeGlobals(t, cwd)
 	if err := os.Chdir(dir); err != nil {
@@ -151,7 +153,51 @@ func TestRefreshRecordsANoopRevisionForACommitWithNothingToVerify(t *testing.T) 
 	paths.SetGitDir("")
 	defer paths.SetGitDir("")
 
-	// A commit that changes nothing a refresh can verify.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realStdout := os.Stdout
+	os.Stdout = w
+
+	cmd := newRefreshCmd()
+	cmd.SetArgs(args)
+	runErr := cmd.Execute()
+
+	w.Close()
+	os.Stdout = realStdout
+	out, _ := io.ReadAll(r)
+	if runErr != nil {
+		t.Fatalf("refresh: %v", runErr)
+	}
+	return string(out)
+}
+
+func refreshRevisions(t *testing.T, dir string) []*store.Revision {
+	t.Helper()
+	s, err := store.Open(filepath.Join(dir, ".depbot", "chronicle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var out []*store.Revision
+	for id := int64(1); ; id++ {
+		rev, err := s.GetRevision(id)
+		if err != nil {
+			break
+		}
+		if rev.TriggerKind == "git_hook" {
+			out = append(out, rev)
+		}
+	}
+	return out
+}
+
+// A commit that touched no file the graph knows about still moves the verified
+// point: a docs-only commit must leave the repo reading "verified", not slide
+// it into "stale" for a change that cannot have invalidated anything.
+func TestRefreshRecordsANoopRevisionForACommitTheGraphKnowsNothingAbout(t *testing.T) {
+	dir, _, _ := buildLinkedWorktree(t) // reused: a plain repo with a graph
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -159,25 +205,80 @@ func TestRefreshRecordsANoopRevisionForACommitWithNothingToVerify(t *testing.T) 
 	gitRun(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "docs")
 	head := strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD"))
 
-	cmd := newRefreshCmd()
-	cmd.SetArgs([]string{"--quiet"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("refresh: %v", err)
-	}
+	runRefreshIn(t, dir, "--quiet")
 
+	revs := refreshRevisions(t, dir)
+	if len(revs) != 1 {
+		t.Fatalf("want exactly one refresh revision, got %d", len(revs))
+	}
+	if revs[0].GitAfterSHA != head {
+		t.Errorf("refresh revision at %s, want HEAD %s", revs[0].GitAfterSHA, head)
+	}
+	if !strings.Contains(revs[0].Metadata, `"noop":true`) {
+		t.Errorf("a refresh that verified nothing must say so: metadata %s", revs[0].Metadata)
+	}
+}
+
+// "Verified" may only mean "no file the graph knows about changed". A repo
+// written in a language the deterministic refresh cannot check — Ruby, PHP,
+// Java — would otherwise have EVERY commit stamped verified@HEAD simply
+// because no changed file matched refreshExtensions, which is the graph
+// claiming to have checked code it has never read.
+func TestRefreshDoesNotClaimVerifiedWhenAKnownFileChanged(t *testing.T) {
+	dir, _, _ := buildLinkedWorktree(t)
+	const known = "lib/thing.rb"
+	seedEvidenceFor(t, dir, known)
+
+	if err := os.MkdirAll(filepath.Join(dir, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, known), []byte("class Thing; end\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", known)
+	gitRun(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ruby")
+
+	out := runRefreshIn(t, dir)
+
+	if revs := refreshRevisions(t, dir); len(revs) != 0 {
+		t.Fatalf("a change to a file the graph has evidence for must not be stamped verified: %+v", revs[0])
+	}
+	if !strings.Contains(out, known) {
+		t.Fatalf("the file the graph knows changed must be reported as pending, got:\n%s", out)
+	}
+}
+
+// seedEvidenceFor gives the graph a node with evidence anchored at filePath, so
+// the file counts as one the graph knows about.
+func seedEvidenceFor(t *testing.T, dir, filePath string) {
+	t.Helper()
 	s, err := store.Open(filepath.Join(dir, ".depbot", "chronicle.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	rev, err := s.LatestRefreshRevision("")
+	reg, err := registry.LoadDefaults()
 	if err != nil {
-		t.Fatalf("no refresh revision was recorded: %v", err)
+		t.Fatal(err)
 	}
-	if rev.GitAfterSHA != head {
-		t.Errorf("refresh revision at %s, want HEAD %s", rev.GitAfterSHA, head)
+	g := graph.New(s, reg)
+	rev, err := s.LatestScanRevision("")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(rev.Metadata, `"noop":true`) {
-		t.Errorf("a refresh that verified nothing must say so: metadata %s", rev.Metadata)
+	const key = "code:symbol:d:thing"
+	if _, err := g.UpsertNode(validate.NodeInput{
+		NodeKey: key, Layer: "code", NodeType: "symbol", DomainKey: "d",
+		Name: "Thing", FilePath: filePath,
+	}, rev.RevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.AddNodeEvidence(key, validate.EvidenceInput{
+		TargetKind: "node", SourceKind: "file", FilePath: filePath, LineStart: 1,
+		ExtractorID: "test", ExtractorVersion: "1",
+		Assertion: `{}`, AssertionKind: "symbol_exists", AssertionVersion: "1",
+		Confidence: 0.9, Polarity: "positive", RevisionID: rev.RevisionID,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
