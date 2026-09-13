@@ -29,7 +29,16 @@ type GraphTarget struct {
 	RepoName string `json:"repo_name"`
 	Path     string `json:"path"`
 	Domain   string `json:"domain,omitempty"`
+	// Status is "" when the target holds knowledge and "empty" when its DB
+	// has never recorded a scan. An empty member stays visible — discovery
+	// tells you the directory exists — but no caller may query it: a ghost DB
+	// contributes nothing and would only make a federation look larger than
+	// the knowledge behind it.
+	Status string `json:"status,omitempty"`
 }
+
+// TargetStatusEmpty marks a discovered .depbot/ whose DB has no scan revision.
+const TargetStatusEmpty = "empty"
 
 // AmbiguousRef identifies a candidate node in conflict resolution (enterprise).
 type AmbiguousRef struct {
