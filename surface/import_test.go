@@ -3,6 +3,7 @@ package surface
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,6 +218,10 @@ func TestImportClosedWorld(t *testing.T) {
 // scan. Nothing a scan wrote may move.
 func TestImportLeavesCodeLayerAlone(t *testing.T) {
 	g := setupSeededGraph(t)
+	// The fixture carries a decision keyed "Shop.quietFromHour", so this run
+	// writes declared evidence onto a scanned data:field node. Trust, not just
+	// status, must be untouched: a ruling about the UI is not evidence that
+	// the column exists.
 	snapshot := func() map[string]string {
 		out := map[string]string{}
 		for _, layer := range []string{"data", "contract"} {
@@ -225,12 +230,16 @@ func TestImportLeavesCodeLayerAlone(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, r := range rows {
-				out[r.NodeKey] = r.Status + "|" + itoa(r.LastSeenRevisionID)
+				out[r.NodeKey] = fmt.Sprintf("%s|%s|conf=%v|fresh=%v|trust=%v",
+					r.Status, itoa(r.LastSeenRevisionID), r.Confidence, r.Freshness, r.TrustScore)
 			}
 		}
 		return out
 	}
 	before := snapshot()
+	if before["data:field:mini:shop/quiet-from-hour"] == "" {
+		t.Fatal("the decision-target field is missing from the snapshot")
+	}
 	beforeRev, err := g.Store().GetLatestRevision("mini")
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +258,24 @@ func TestImportLeavesCodeLayerAlone(t *testing.T) {
 		if after[k] != v {
 			t.Fatalf("%s: %q → %q", k, v, after[k])
 		}
+	}
+	// ...and the declaration really did land on that field.
+	field, err := g.Store().GetNodeByKey("data:field:mini:shop/quiet-from-hour")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := g.Store().ListEvidenceByNode(field.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declared int
+	for _, r := range rows {
+		if r.SourceKind == "declared" {
+			declared++
+		}
+	}
+	if declared != 1 {
+		t.Fatalf("declared evidence rows on the field = %d, want 1", declared)
 	}
 	// The scan's own revision row is untouched — the import made a new one.
 	stillThere, err := g.Store().GetRevision(beforeRev.RevisionID)
@@ -404,3 +431,123 @@ func TestImportDefaultDomain(t *testing.T) {
 }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+// seedScanRevisionAt makes the graph already name the extract's commit, the
+// way a full scan at HEAD does. Every test below runs through the branch that
+// has no revision row of its own to stamp.
+func seedScanRevisionAt(t *testing.T, s *store.Store, commit string) int64 {
+	t.Helper()
+	id, err := s.CreateRevision("mini", "", commit, "manual", "full", `{"kind":"scan"}`)
+	if err != nil {
+		t.Fatalf("seed scan revision: %v", err)
+	}
+	return id
+}
+
+// TestImportOntoScanRevisionIsIdempotent is the Lane D flow: scan at HEAD,
+// then import the surface generated at HEAD. There is no second revision to
+// create, so the "I have seen this extract" mark cannot live on one — and it
+// must still short-circuit the second run.
+func TestImportOntoScanRevisionIsIdempotent(t *testing.T) {
+	g := setupSeededGraph(t)
+	f := loadFixture(t)
+	scanRev := seedScanRevisionAt(t, g.Store(), f.Commit)
+
+	res, err := Import(g, f, ImportOptions{Domain: "mini"})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if !res.ReusedRevision || res.RevisionID != scanRev {
+		t.Fatalf("expected the scan revision to be reused: %+v", res)
+	}
+	if res.Nodes != 5 || res.AlreadyImported {
+		t.Fatalf("first import = %+v", res)
+	}
+	revs := countRevisions(t, g.Store())
+	nodes := len(uiNodes(t, g.Store(), "active"))
+
+	again, err := Import(g, loadFixture(t), ImportOptions{Domain: "mini"})
+	if err != nil {
+		t.Fatalf("second Import: %v", err)
+	}
+	if !again.AlreadyImported {
+		t.Fatalf("second import onto a reused revision not recognised: %+v", again)
+	}
+	if again.Nodes != 0 || again.Edges != 0 || again.Evidence != 0 {
+		t.Fatalf("already-imported run wrote %+v", again)
+	}
+	if again.RevisionID != scanRev {
+		t.Fatalf("already-imported revision = %d, want %d", again.RevisionID, scanRev)
+	}
+	if got := countRevisions(t, g.Store()); got != revs {
+		t.Fatalf("revisions %d → %d", revs, got)
+	}
+	if got := len(uiNodes(t, g.Store(), "active")); got != nodes {
+		t.Fatalf("ui nodes %d → %d", nodes, got)
+	}
+}
+
+// TestImportOntoScanRevisionRefusesChangedContent: same commit, different
+// extract, and no ui revision row anywhere to compare hashes against. The
+// refusal must still fire.
+func TestImportOntoScanRevisionRefusesChangedContent(t *testing.T) {
+	g := setupSeededGraph(t)
+	f := loadFixture(t)
+	seedScanRevisionAt(t, g.Store(), f.Commit)
+	if _, err := Import(g, f, ImportOptions{Domain: "mini"}); err != nil {
+		t.Fatal(err)
+	}
+
+	edited, err := Load(writeVariant(t, "edited.surface.json",
+		[2]string{`"label": "komunikacja"`, `"label": "Komunikacja"`}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.ContentHash == f.ContentHash {
+		t.Fatal("variant must differ in content")
+	}
+	if _, err := Import(g, edited, ImportOptions{Domain: "mini"}); !errors.Is(err, ErrCommitChanged) {
+		t.Fatalf("err = %v, want ErrCommitChanged", err)
+	}
+}
+
+// TestImportValidatesBeforeWriting: one node the registry will not accept
+// (an empty label is an empty name) must stop the import BEFORE a revision
+// exists — ImportAll commits what it accepts, so checking afterwards would
+// leave a half-written surface and a revision naming it.
+func TestImportValidatesBeforeWriting(t *testing.T) {
+	g := setupSeededGraph(t)
+	revsBefore := countRevisions(t, g.Store())
+
+	broken, err := Load(writeVariant(t, "broken.surface.json",
+		[2]string{`"label": "smsSenderId"`, `"label": ""`}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	_, err = Import(g, broken, ImportOptions{Domain: "mini"})
+	if err == nil {
+		t.Fatal("expected the import to be refused")
+	}
+	if !strings.Contains(err.Error(), "will not accept") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := countRevisions(t, g.Store()); got != revsBefore {
+		t.Fatalf("a refused import created a revision: %d → %d", revsBefore, got)
+	}
+	if n := len(uiNodes(t, g.Store(), "active")); n != 0 {
+		t.Fatalf("a refused import wrote %d ui nodes", n)
+	}
+
+	// And the refusal is retryable: nothing was marked as imported.
+	good, err := Load(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Import(g, good, ImportOptions{Domain: "mini"})
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if res.AlreadyImported || res.Nodes != 5 {
+		t.Fatalf("retry = %+v", res)
+	}
+}

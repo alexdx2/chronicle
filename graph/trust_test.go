@@ -450,3 +450,32 @@ func TestComputeTrust(t *testing.T) {
 		}
 	})
 }
+
+// TestDeclaredEvidenceIsNotExistenceEvidence pins the rule: a recorded human
+// ruling ("this control asks the user, the owner is the shop") never moves the
+// trust of the thing it is about. Declarations say what should be true; only
+// observations say what is there.
+func TestDeclaredEvidenceIsNotExistenceEvidence(t *testing.T) {
+	observed := store.EvidenceRow{
+		SourceKind: "prisma", ExtractorID: "chronicle-ast",
+		EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.9,
+	}
+	declared := store.EvidenceRow{
+		SourceKind: "declared", ExtractorID: "okeep-surface",
+		EvidencePolarity: "positive", EvidenceStatus: "valid", Confidence: 0.95,
+	}
+
+	wantC, wantF, wantT, wantS := ComputeTrust([]store.EvidenceRow{observed})
+	gotC, gotF, gotT, gotS := ComputeTrust([]store.EvidenceRow{observed, declared})
+	if gotC != wantC || gotF != wantF || gotT != wantT || gotS != wantS {
+		t.Fatalf("declaration moved trust: %v/%v/%v/%q → %v/%v/%v/%q",
+			wantC, wantF, wantT, wantS, gotC, gotF, gotT, gotS)
+	}
+
+	if n := len(ExistenceEvidence([]store.EvidenceRow{observed, declared})); n != 1 {
+		t.Fatalf("ExistenceEvidence kept %d rows, want 1", n)
+	}
+	if n := len(ExistenceEvidence([]store.EvidenceRow{declared})); n != 0 {
+		t.Fatalf("a declaration alone is %d rows of existence evidence, want 0", n)
+	}
+}

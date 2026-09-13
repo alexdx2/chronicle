@@ -13,9 +13,17 @@ import (
 // a GraphQL mutation name, a Next.js route) into node keys of the graph a scan
 // already built. Every resolution is verified against the store: a name that
 // resolves to nothing is an unresolved name, never an invented node.
+//
+// A Resolver is scoped to one import. Plan primes its endpoint index once at
+// the start; reusing a Resolver across imports would serve a stale index.
 type Resolver struct {
 	Store  *store.Store
 	Domain string
+
+	// endpointsByName maps the flattened name of every endpoint node in the
+	// domain to the keys that carry it. Built once per Plan — a miss used to
+	// re-list every endpoint in the domain, once per unresolved mutation.
+	endpointsByName map[string][]string
 }
 
 // FieldKey maps "Shop.quietFromHour" to "data:field:<domain>:shop/quiet-from-hour"
@@ -41,34 +49,62 @@ func (r *Resolver) FieldKey(ref string) (string, error) {
 // punctuation dropped. Exactly one hit resolves; several is an error that
 // lists them rather than guessing.
 func (r *Resolver) MutationKey(name string) (string, error) {
+	key, _, err := r.resolveMutation(name)
+	return key, err
+}
+
+// resolveMutation is MutationKey plus the near misses, so an unresolved name
+// can carry its candidates instead of only its failure.
+func (r *Resolver) resolveMutation(name string) (key string, candidates []string, err error) {
 	if name == "" {
-		return "", fmt.Errorf("mutation name is empty")
+		return "", nil, fmt.Errorf("mutation name is empty")
 	}
-	key := fmt.Sprintf("contract:endpoint:%s:mutation:/%s", r.Domain, strings.ToLower(name))
-	if _, err := r.Store.GetNodeByKey(key); err == nil {
-		return key, nil
+	canonical := fmt.Sprintf("contract:endpoint:%s:mutation:/%s", r.Domain, strings.ToLower(name))
+	if _, e := r.Store.GetNodeByKey(canonical); e == nil {
+		return canonical, nil, nil
 	}
 
-	want := flatten(name)
-	nodes, err := r.Store.ListNodes(store.NodeFilter{NodeType: "endpoint", Domain: r.Domain, Status: "active"})
-	if err != nil {
-		return "", fmt.Errorf("mutation %q: %w", name, err)
+	index, e := r.EndpointIndex()
+	if e != nil {
+		return "", nil, fmt.Errorf("mutation %q: %w", name, e)
 	}
-	var hits []string
-	for _, n := range nodes {
-		if flatten(n.Name) == want {
-			hits = append(hits, n.NodeKey)
-		}
-	}
+	hits := append([]string(nil), index[flatten(name)]...)
 	sort.Strings(hits)
 	switch len(hits) {
 	case 1:
-		return hits[0], nil
+		return hits[0], nil, nil
 	case 0:
-		return "", fmt.Errorf("mutation %q: no endpoint node (tried %s and a name match)", name, key)
+		return "", nil, fmt.Errorf("mutation %q: no endpoint node (tried %s and a name match)", name, canonical)
 	default:
-		return "", fmt.Errorf("mutation %q: ambiguous — %d endpoints match: %s", name, len(hits), strings.Join(hits, ", "))
+		return "", hits, fmt.Errorf("mutation %q: ambiguous — %d endpoints match: %s", name, len(hits), strings.Join(hits, ", "))
 	}
+}
+
+// EndpointIndex returns (building once) the flattened-name index of every
+// active endpoint node in the domain.
+func (r *Resolver) EndpointIndex() (map[string][]string, error) {
+	if r.endpointsByName != nil {
+		return r.endpointsByName, nil
+	}
+	nodes, err := r.Store.ListNodes(store.NodeFilter{NodeType: "endpoint", Domain: r.Domain, Status: "active"})
+	if err != nil {
+		return nil, err
+	}
+	index := make(map[string][]string, len(nodes))
+	for _, n := range nodes {
+		if flat := flatten(n.Name); flat != "" {
+			index[flat] = append(index[flat], n.NodeKey)
+		}
+	}
+	r.endpointsByName = index
+	return index, nil
+}
+
+// primeEndpointIndex rebuilds the index so one Plan sees one snapshot of the
+// graph, however many names it has to resolve.
+func (r *Resolver) primeEndpointIndex() {
+	r.endpointsByName = nil
+	_, _ = r.EndpointIndex()
 }
 
 // RouteKey maps a page route to the GET endpoint that serves it.

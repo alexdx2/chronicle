@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -74,6 +75,17 @@ func NodeKey(domain, kind, address string) string {
 	return key
 }
 
+// ka identifies a ui node the way the extract does: its kind and its address
+// together. Load has already refused two ui nodes sharing an address, so this
+// is a total key, not a best effort.
+type ka struct{ Kind, Address string }
+
+// modelFieldRef matches the decision keys that name a data field —
+// "Shop.quietFromHour", "ShopWorkingHour.dayOfWeek". Everything else in a
+// decisions file ("models", "columns", "covered", a dotted ui address) is a
+// human's own bookkeeping and must not be looked up as a field.
+var modelFieldRef = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*\.[a-zA-Z0-9_]+$`)
+
 // Plan turns a loaded extract into an ImportPayload for graph.ImportAll,
 // plus the ui node keys the file claims (the closed-world set) and everything
 // it named that the graph could not confirm.
@@ -94,11 +106,14 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 
 	note := func(u Unresolved) { unresolved = append(unresolved, u) }
 
+	// One snapshot of the graph's endpoint names for this whole plan.
+	r.primeEndpointIndex()
+
 	// --- ui nodes ------------------------------------------------------
-	// Index by address (parent lookup) and by the file's own id (edges).
-	byAddress := map[string]Node{}
-	byID := map[string]Node{}
-	keyOf := map[string]string{} // address -> ui node key
+	byKA := map[ka]Node{}        // (kind, address) -> node
+	keyOf := map[ka]string{}     // (kind, address) -> ui node key
+	atAddress := map[string]ka{} // address -> the one ui node there (parenting)
+	byID := map[string]Node{}    // the file's own ids (edge endpoints)
 	productAddress := f.Product
 	// The product node carries no address of its own — the product name is
 	// its address, and the root every top-level screen hangs off.
@@ -108,28 +123,43 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 		}
 		return n.Address
 	}
+	idOf := func(n Node) ka { return ka{n.Kind, addrOf(n)} }
 
 	for _, n := range f.Nodes {
 		byID[n.ID] = n
 		if !n.IsUI() {
 			continue
 		}
-		addr := addrOf(n)
-		byAddress[addr] = n
-		keyOf[addr] = NodeKey(domain, n.Kind, addr)
+		id := idOf(n)
+		byKA[id] = n
+		keyOf[id] = NodeKey(domain, n.Kind, id.Address)
+		atAddress[id.Address] = id
+	}
+
+	// The product node names the product rather than a place in the source and
+	// real extracts ship it with no evidence, so its own evidence is the
+	// extract file itself.
+	fileOf := func(n Node) string {
+		if file := n.FirstFile(); file != "" {
+			return file
+		}
+		if n.Kind == "product" {
+			return f.Path
+		}
+		return ""
 	}
 
 	for _, n := range f.Nodes {
 		if !n.IsUI() {
 			continue
 		}
-		addr := addrOf(n)
-		key := keyOf[addr]
+		id := idOf(n)
+		key := keyOf[id]
 		uiKeys = append(uiKeys, key)
 
 		md, _ := json.Marshal(map[string]string{
 			"product": f.Product,
-			"address": addr,
+			"address": id.Address,
 			"kind":    n.Kind,
 		})
 		payload.Nodes = append(payload.Nodes, graph.ImportNode{
@@ -138,15 +168,15 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 			NodeType:      n.Kind,
 			DomainKey:     domain,
 			Name:          n.Label,
-			QualifiedName: addr,
-			FilePath:      n.FirstFile(),
+			QualifiedName: id.Address,
+			FilePath:      fileOf(n),
 			Metadata:      graph.FlexString(md),
 		})
 		payload.Evidence = append(payload.Evidence, graph.ImportEvidence{
 			TargetKind:       "node",
 			NodeKey:          key,
 			SourceKind:       "surface_extract",
-			FilePath:         n.FirstFile(),
+			FilePath:         fileOf(n),
 			LineStart:        graph.FlexInt(n.FirstLine()),
 			ExtractorID:      ExtractorID,
 			ExtractorVersion: version,
@@ -171,7 +201,7 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 			TargetKind:       "edge",
 			EdgeKey:          edgeKey,
 			SourceKind:       "surface_extract",
-			FilePath:         from.FirstFile(),
+			FilePath:         fileOf(from),
 			LineStart:        graph.FlexInt(from.FirstLine()),
 			ExtractorID:      ExtractorID,
 			ExtractorVersion: version,
@@ -184,11 +214,11 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 		if !n.IsUI() || n.Kind == "product" {
 			continue
 		}
-		parentAddr := parentAddress(n.Address, byAddress, productAddress)
-		if parentAddr == "" {
-			continue // no product node in the file — nothing to hang it on
+		parent, ok := parentOf(n.Address, atAddress, productAddress)
+		if !ok {
+			continue
 		}
-		addEdge(byAddress[parentAddr], keyOf[parentAddr], keyOf[n.Address], "CONTAINS", "hard")
+		addEdge(byKA[parent], keyOf[parent], keyOf[idOf(n)], "CONTAINS", "hard")
 	}
 
 	// --- SERVED_BY: a screen's route is an endpoint --------------------
@@ -198,10 +228,10 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 		}
 		key, err := r.RouteKey(n.Route)
 		if err != nil {
-			note(Unresolved{Kind: "route", Name: n.Route, Owner: keyOf[n.Address], Err: err})
+			note(Unresolved{Kind: "route", Name: n.Route, Owner: keyOf[idOf(n)], Err: err})
 			continue
 		}
-		addEdge(n, keyOf[n.Address], key, "SERVED_BY", "linked")
+		addEdge(n, keyOf[idOf(n)], key, "SERVED_BY", "linked")
 	}
 
 	// --- WRITES_VIA: a control writes through named operations ---------
@@ -210,12 +240,12 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 			continue
 		}
 		for _, via := range n.Via {
-			key, err := r.MutationKey(via)
+			key, candidates, err := r.resolveMutation(via)
 			if err != nil {
-				note(Unresolved{Kind: "mutation", Name: via, Owner: keyOf[addrOf(n)], Err: err})
+				note(Unresolved{Kind: "mutation", Name: via, Owner: keyOf[idOf(n)], Candidates: candidates, Err: err})
 				continue
 			}
-			addEdge(n, keyOf[addrOf(n)], key, "WRITES_VIA", "linked")
+			addEdge(n, keyOf[idOf(n)], key, "WRITES_VIA", "linked")
 		}
 	}
 
@@ -229,16 +259,16 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 			continue
 		}
 		if e.Kind != "edits" {
-			note(Unresolved{Kind: "edge_kind", Name: e.Kind, Owner: keyOf[addrOf(from)],
+			note(Unresolved{Kind: "edge_kind", Name: e.Kind, Owner: keyOf[idOf(from)],
 				Err: fmt.Errorf("unknown edge kind %q (known: edits)", e.Kind)})
 			continue
 		}
 		fieldKey, err := r.FieldKey(to.Ref)
 		if err != nil {
-			note(Unresolved{Kind: "field", Name: to.Ref, Owner: keyOf[addrOf(from)], Err: err})
+			note(Unresolved{Kind: "field", Name: to.Ref, Owner: keyOf[idOf(from)], Err: err})
 			continue
 		}
-		addEdge(from, keyOf[addrOf(from)], fieldKey, "WRITES_FIELD", "linked")
+		addEdge(from, keyOf[idOf(from)], fieldKey, "WRITES_FIELD", "linked")
 	}
 
 	// --- decisions: declared evidence on the thing they govern ---------
@@ -250,9 +280,9 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 		for _, dkey := range sortedKeys(f.Decisions[group]) {
 			d := f.Decisions[group][dkey]
 			target := ""
-			if _, ok := byAddress[dkey]; ok {
-				target = keyOf[dkey]
-			} else if strings.Contains(dkey, ".") {
+			if id, ok := atAddress[dkey]; ok {
+				target = keyOf[id]
+			} else if modelFieldRef.MatchString(dkey) {
 				if k, err := r.FieldKey(dkey); err == nil {
 					target = k
 				}
@@ -294,11 +324,11 @@ func Plan(f *File, r *Resolver, o Options) (graph.ImportPayload, []string, []Unr
 	return payload, uiKeys, unresolved, nil
 }
 
-// parentAddress finds the containing ui node for a dotted address: the longest
+// parentOf finds the containing ui node for a dotted address: the longest
 // known prefix, falling back to the product. "panel.ustawienia" under a file
 // with no "panel" node hangs off the product; "a.b.c" hangs off "a.b" when
 // that exists, else "a", else the product.
-func parentAddress(addr string, byAddress map[string]Node, productAddress string) string {
+func parentOf(addr string, atAddress map[string]ka, productAddress string) (ka, bool) {
 	rest := addr
 	for {
 		i := strings.LastIndex(rest, ".")
@@ -306,14 +336,14 @@ func parentAddress(addr string, byAddress map[string]Node, productAddress string
 			break
 		}
 		rest = rest[:i]
-		if _, ok := byAddress[rest]; ok && rest != addr {
-			return rest
+		if id, ok := atAddress[rest]; ok && rest != addr {
+			return id, true
 		}
 	}
-	if _, ok := byAddress[productAddress]; ok && productAddress != addr {
-		return productAddress
+	if id, ok := atAddress[productAddress]; ok && productAddress != addr {
+		return id, true
 	}
-	return ""
+	return ka{}, false
 }
 
 // layerOfKey reads the layer off a node key ("data:field:mini:x" → "data").

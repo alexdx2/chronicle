@@ -167,19 +167,67 @@ func Load(path string) (*File, error) {
 		Path:          path,
 	}
 
+	if err := f.validate(); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// validate enforces what the ui layer cannot be built without: one product
+// node as the root of the tree, one node per address, and a real file:line for
+// every screen, panel and control.
+func (f *File) validate() error {
+	products := 0
+	seen := map[string]int{} // address -> node index that claimed it
+
 	for i, n := range f.Nodes {
 		switch {
 		case n.Kind == "field":
 			if n.Ref == "" {
-				return nil, fmt.Errorf("surface: node[%d] %q is a field with no ref", i, n.ID)
+				return fmt.Errorf("surface: %s node[%d] %q is a field with no ref", f.Path, i, n.ID)
 			}
-		case n.IsUI():
-			if n.Kind != "product" && n.Address == "" {
-				return nil, fmt.Errorf("surface: node[%d] %q (%s) has no address", i, n.ID, n.Kind)
-			}
+			continue
+		case !n.IsUI():
+			continue
+		}
+
+		if n.Kind == "product" {
+			products++
+		} else if n.Address == "" {
+			return fmt.Errorf("surface: %s node[%d] %q (%s) has no address", f.Path, i, n.ID, n.Kind)
+		}
+
+		addr := n.Address
+		if n.Kind == "product" {
+			addr = f.Product
+		}
+		if prev, dup := seen[addr]; dup {
+			return fmt.Errorf("surface: %s node[%d] %q and node[%d] %q share the address %q — an address is a ui node's identity",
+				f.Path, prev, f.Nodes[prev].ID, i, n.ID, addr)
+		}
+		seen[addr] = i
+
+		// The product node names the product, not a place in the source, and
+		// real extracts ship it with no evidence at all (measured on okeep's
+		// auto.surface.json). Everything below it is a thing in a file, and
+		// must say which file and which line.
+		if n.Kind == "product" {
+			continue
+		}
+		if len(n.Evidence) == 0 || n.Evidence[0].File == "" || n.Evidence[0].Line <= 0 {
+			return fmt.Errorf("surface: %s node[%d] %q (%s) has no file:line evidence — a ui node without a location cannot be checked",
+				f.Path, i, n.ID, n.Kind)
 		}
 	}
-	return f, nil
+
+	switch products {
+	case 1:
+	case 0:
+		return fmt.Errorf("surface: %s has no product node — it is the root every screen hangs off", f.Path)
+	default:
+		return fmt.Errorf("surface: %s has %d product nodes, want exactly 1", f.Path, products)
+	}
+	return nil
 }
 
 // parseDecisions keeps every group whose entries look like decisions and

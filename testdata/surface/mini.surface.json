@@ -5,10 +5,10 @@
   "commit": "0000000000000000000000000000000000000001",
   "nodes": [
     {
-      "id": "ui:mini",
+      "id": "product:mini",
       "kind": "product",
       "label": "mini",
-      "evidence": [{ "file": "src/surface/surface.ts", "line": 1 }]
+      "evidence": []
     },
     {
       "id": "ui:panel.ustawienia",
@@ -77,9 +77,32 @@
         "evidence": { "file": "src/surface/decisions.ts", "line": 12 }
       }
     },
+    "containers": {
+      "panel.ustawienia.komunikacja": {
+        "placement": "settings",
+        "owner": "Shop",
+        "evidence": { "file": "src/surface/decisions.ts", "line": 20 }
+      }
+    },
+    "fields": {
+      "Shop.quietFromHour": {
+        "verdict": "infer",
+        "placement": "decision-line",
+        "owner": "Warsztat",
+        "derivedFrom": "address",
+        "note": "hard-coded today",
+        "evidence": { "file": "src/surface/decisions.ts", "line": 40 }
+      },
+      "Shop.noSuchColumn": {
+        "verdict": "ask",
+        "placement": "settings",
+        "owner": "Shop"
+      }
+    },
     "homes": {
       "models": { "Shop": "ustawienia" },
-      "columns": { "Shop.smsSenderId": "komunikacja" }
+      "columns": { "Shop.smsSenderId": "komunikacja" },
+      "covered": { "mutations": "all" }
     }
   }
 }

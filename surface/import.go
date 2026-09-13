@@ -56,9 +56,16 @@ var ErrDiverged = errors.New("surface commit is not an ancestor of HEAD")
 //
 // Order of business: check the commit is real and reachable, check we have not
 // already been told this exact thing, plan (which resolves every name against
-// the graph and fails loudly if one does not resolve), open a revision named
-// by the extract's commit, write, then close the world — every ui node of this
-// product that the file no longer mentions is tombstoned.
+// the graph and fails loudly if one does not resolve), validate the whole
+// payload BEFORE opening a revision, write, close the world, and only then
+// record what was imported.
+//
+// Two properties that order buys, and that the obvious order does not:
+//   - a payload the registry would partly reject never reaches the graph, so
+//     there is no half-imported surface to explain afterwards;
+//   - the "I have seen this extract" mark is written LAST, so any failure —
+//     rejected item, tombstone error, crash — leaves the import retryable
+//     instead of silently "already done".
 //
 // Nothing outside the ui layer is written. The data and contract nodes the
 // plan points at are read, never touched.
@@ -97,31 +104,24 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 		}
 	}
 
-	// (2) Have we been told this already? One revision per (domain, commit) is
-	// a hard rule of the store, so the answer lives on that row's metadata.
-	reuseRevision := int64(0)
-	prior, err := s.GetRevisionBySHA(domain, f.Commit)
-	switch {
-	case err == nil:
-		var md revisionMeta
-		_ = json.Unmarshal([]byte(prior.Metadata), &md)
-		if md.Layer == "ui" && md.Product == f.Product {
-			if md.ContentHash == f.ContentHash {
-				res.RevisionID = prior.RevisionID
-				res.AlreadyImported = true
-				return res, nil
+	// (2) Have we been told this already? The answer cannot live on the
+	// revision row: the store allows ONE revision per (domain, commit), so
+	// when a scan already named this commit the import has no row of its own
+	// to stamp — which is exactly the flow this is for (scan at HEAD, then
+	// import the surface generated at HEAD). It lives in project_settings,
+	// keyed by domain+product+commit, and is written only after a fully
+	// successful import.
+	hashKey := importedHashKey(domain, f.Product, f.Commit)
+	if prev, err := s.GetSetting(hashKey); err == nil && prev != "" {
+		if prev == f.ContentHash {
+			res.AlreadyImported = true
+			if rev, rerr := s.GetRevisionBySHA(domain, f.Commit); rerr == nil {
+				res.RevisionID = rev.RevisionID
 			}
-			return nil, fmt.Errorf("surface: commit %s (revision %d): %w",
-				f.Commit, prior.RevisionID, ErrCommitChanged)
+			return res, nil
 		}
-		// A scan or refresh already named this commit. The store allows one
-		// revision per commit, so this import rides along on that one rather
-		// than inventing a second name for the same point in history.
-		reuseRevision = prior.RevisionID
-	case errors.Is(err, store.ErrNotFound):
-		// first time at this commit
-	default:
-		return nil, fmt.Errorf("surface: looking up revision for %s: %w", f.Commit, err)
+		return nil, fmt.Errorf("surface: commit %s (imported content %s, this file is %s): %w",
+			f.Commit, short(prev), short(f.ContentHash), ErrCommitChanged)
 	}
 
 	// (3) Resolve every name the extract uses. Nothing is written if one fails
@@ -133,9 +133,29 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 	}
 	res.Unresolved = unresolved
 
-	// (4) Name the knowledge by the commit it describes.
-	revID := reuseRevision
-	if revID == 0 {
+	// (4) Validate the WHOLE payload before anything is created. ImportAll
+	// commits what it accepts and merely reports what it rejects, so checking
+	// afterwards would leave a half-written surface behind and a revision
+	// naming it.
+	dry, err := g.ImportAllDryRun(payload, 0)
+	if err != nil {
+		return nil, fmt.Errorf("surface: validating the import: %w", err)
+	}
+	if !dry.Valid {
+		return nil, fmt.Errorf("surface: %d item(s) the registry will not accept: %s",
+			len(dry.Errors), strings.Join(dry.Errors, "; "))
+	}
+
+	// (5) Name the knowledge by the commit it describes — or, when a scan or
+	// refresh already named this commit, ride along on that one rather than
+	// inventing a second name for the same point in history.
+	revID := int64(0)
+	prior, perr := s.GetRevisionBySHA(domain, f.Commit)
+	switch {
+	case perr == nil:
+		revID = prior.RevisionID
+		res.ReusedRevision = true
+	case errors.Is(perr, store.ErrNotFound):
 		meta, _ := json.Marshal(revisionMeta{
 			Layer:         "ui",
 			Source:        f.Path,
@@ -147,12 +167,14 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("surface: create revision: %w", err)
 		}
-	} else {
-		res.ReusedRevision = true
+	default:
+		return nil, fmt.Errorf("surface: looking up revision for %s: %w", f.Commit, perr)
 	}
 	res.RevisionID = revID
 
-	// (5) Write.
+	// (6) Write. A rejection here is a bug (step 4 just validated the same
+	// payload), so it fails loudly — and, because the hash is not written, the
+	// next run retries instead of reporting "already imported".
 	imported, err := g.ImportAll(payload, revID)
 	if err != nil {
 		return nil, fmt.Errorf("surface: import: %w", err)
@@ -162,21 +184,40 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 		for _, rj := range imported.Rejected {
 			lines = append(lines, rj.Error)
 		}
-		return nil, fmt.Errorf("surface: %d item(s) rejected by the registry: %s",
+		return nil, fmt.Errorf("surface: %d item(s) rejected by the registry after validation passed — this is a bug: %s",
 			len(imported.Rejected), strings.Join(lines, "; "))
 	}
 	res.Nodes = imported.NodesCreated
 	res.Edges = imported.EdgesCreated
 	res.Evidence = imported.EvidenceCreated
 
-	// (6) Closed world, per product: the file is the whole truth about this
+	// (7) Closed world, per product: the file is the whole truth about this
 	// product's surface, so a ui node it stopped mentioning is gone.
 	deleted, err := closeWorld(s, domain, f.Product, fileKeys)
 	if err != nil {
 		return nil, err
 	}
 	res.Deleted = deleted
+
+	// (8) Only now: this exact extract, at this exact commit, is in.
+	if err := s.SetSetting(hashKey, f.ContentHash); err != nil {
+		return nil, fmt.Errorf("surface: recording the imported content hash: %w", err)
+	}
 	return res, nil
+}
+
+// importedHashKey names the content hash of the extract last imported for one
+// product at one commit. Keyed independently of the revision, because a
+// revision row is not always available to stamp (see step 2).
+func importedHashKey(domain, product, commit string) string {
+	return "surface:" + domain + ":" + product + ":" + commit
+}
+
+func short(hash string) string {
+	if len(hash) > 12 {
+		return hash[:12]
+	}
+	return hash
 }
 
 // revisionMeta is the metadata a surface import stamps on its revision — what

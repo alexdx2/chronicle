@@ -272,8 +272,8 @@ func TestPlan(t *testing.T) {
 	}
 
 	// --- evidence ------------------------------------------------------
-	var extract, declared int
-	var decisionEv *graph.ImportEvidence
+	var extract int
+	declared := map[string]graph.ImportEvidence{}
 	for i, ev := range payload.Evidence {
 		switch ev.SourceKind {
 		case "surface_extract":
@@ -285,8 +285,10 @@ func TestPlan(t *testing.T) {
 				t.Fatalf("evidence %d commit = %q", i, ev.CommitSHA)
 			}
 		case "declared":
-			declared++
-			decisionEv = &payload.Evidence[i]
+			if ev.AssertionKind != "decision" {
+				t.Fatalf("declared evidence %d assertion_kind = %q", i, ev.AssertionKind)
+			}
+			declared[ev.NodeKey] = payload.Evidence[i]
 		default:
 			t.Fatalf("evidence %d source_kind = %q", i, ev.SourceKind)
 		}
@@ -294,15 +296,24 @@ func TestPlan(t *testing.T) {
 	if extract != len(payload.Nodes)+len(payload.Edges) {
 		t.Fatalf("surface_extract evidence = %d, want %d", extract, len(payload.Nodes)+len(payload.Edges))
 	}
-	if declared != 1 || decisionEv == nil {
-		t.Fatalf("declared evidence = %d", declared)
+	// Three decision keys are understood: a control address, a container
+	// address, and a Model.field. "Shop.noSuchColumn" (no such node) and the
+	// whole "homes" group (keys "models"/"columns"/"covered") are ignored, not
+	// errors — a decisions file is a human document.
+	if len(declared) != 3 {
+		t.Fatalf("declared evidence targets = %v", declared)
 	}
-	if decisionEv.AssertionKind != "decision" {
-		t.Fatalf("decision assertion_kind = %q", decisionEv.AssertionKind)
+	for _, k := range []string{
+		"ui:control:mini:panel-ustawienia-komunikacja-sms-sender-id",
+		"ui:panel:mini:panel-ustawienia-komunikacja",
+		"data:field:mini:shop/quiet-from-hour",
+	} {
+		if _, ok := declared[k]; !ok {
+			t.Fatalf("no decision evidence on %s (have %v)", k, declared)
+		}
 	}
-	if decisionEv.NodeKey != "ui:control:mini:panel-ustawienia-komunikacja-sms-sender-id" {
-		t.Fatalf("decision target = %q", decisionEv.NodeKey)
-	}
+
+	decisionEv := declared["ui:control:mini:panel-ustawienia-komunikacja-sms-sender-id"]
 	var d Decision
 	if err := json.Unmarshal([]byte(decisionEv.Assertion), &d); err != nil {
 		t.Fatalf("decision assertion %q: %v", decisionEv.Assertion, err)
@@ -315,6 +326,118 @@ func TestPlan(t *testing.T) {
 	}
 	if decisionEv.FilePath != "src/surface/decisions.ts" || int(decisionEv.LineStart) != 12 {
 		t.Fatalf("decision evidence loc = %s:%d", decisionEv.FilePath, decisionEv.LineStart)
+	}
+}
+
+// TestLoadRefusals pins what an extract may not be: no product node, two ui
+// nodes at one address, a screen with no file:line.
+func TestLoadRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		mutate     func(map[string]any)
+	}{
+		{"no product", "no product node", func(d map[string]any) {
+			d["nodes"] = dropNode(d, "product:mini")
+		}},
+		{"duplicate address", "share the address", func(d map[string]any) {
+			ns := d["nodes"].([]any)
+			dup := map[string]any{"id": "ui:dup", "kind": "panel", "address": "panel.ustawienia",
+				"label": "dup", "evidence": []any{map[string]any{"file": "x.tsx", "line": float64(1)}}}
+			d["nodes"] = append(ns, dup)
+		}},
+		{"no evidence", "no file:line evidence", func(d map[string]any) {
+			for _, n := range d["nodes"].([]any) {
+				if m := n.(map[string]any); m["kind"] == "screen" {
+					m["evidence"] = []any{}
+				}
+			}
+		}},
+		{"evidence without a line", "no file:line evidence", func(d map[string]any) {
+			for _, n := range d["nodes"].([]any) {
+				if m := n.(map[string]any); m["kind"] == "control" {
+					m["evidence"] = []any{map[string]any{"file": "x.ts", "line": float64(0)}}
+				}
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(mutatedFixture(t, tc.mutate))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want one mentioning %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func dropNode(doc map[string]any, id string) []any {
+	var kept []any
+	for _, n := range doc["nodes"].([]any) {
+		if n.(map[string]any)["id"] == id {
+			continue
+		}
+		kept = append(kept, n)
+	}
+	return kept
+}
+
+// mutatedFixture writes a copy of the fixture with one structural change.
+func mutatedFixture(t *testing.T, mutate func(map[string]any)) string {
+	t.Helper()
+	raw, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	mutate(doc)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "mutated.surface.json")
+	if err := os.WriteFile(p, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestPlanMutationCandidates: an ambiguous mutation name reports the endpoints
+// it could have meant instead of silently picking one.
+func TestPlanMutationCandidates(t *testing.T) {
+	g := setupSeededGraph(t)
+	revID, _ := g.Store().CreateRevision("mini", "", "seed0002", "manual", "incremental", "{}")
+	if _, err := g.ImportAll(graph.ImportPayload{Nodes: []graph.ImportNode{
+		{NodeKey: "contract:endpoint:mini:post:/a/ghost-mutation", Layer: "contract", NodeType: "endpoint", DomainKey: "mini", Name: "ghostMutation"},
+		{NodeKey: "contract:endpoint:mini:post:/b/ghost-mutation", Layer: "contract", NodeType: "endpoint", DomainKey: "mini", Name: "ghost_mutation"},
+	}}, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	f := loadFixture(t)
+	for i := range f.Nodes {
+		if f.Nodes[i].Kind == "control" && strings.HasSuffix(f.Nodes[i].Address, "smsSenderId") {
+			f.Nodes[i].Via = []string{"ghostMutation"}
+		}
+	}
+	r := &Resolver{Store: g.Store(), Domain: "mini"}
+	_, _, unresolved, err := Plan(f, r, Options{Domain: "mini", AllowUnresolved: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unresolved) != 1 {
+		t.Fatalf("unresolved = %+v", unresolved)
+	}
+	if len(unresolved[0].Candidates) != 2 {
+		t.Fatalf("candidates = %v", unresolved[0].Candidates)
+	}
+	js, err := json.Marshal(unresolved[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), `"candidates"`) || !strings.Contains(string(js), `"error"`) {
+		t.Fatalf("Unresolved JSON = %s", js)
 	}
 }
 

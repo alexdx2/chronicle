@@ -291,9 +291,32 @@ func ComputeEdgeStatus(evidence []store.EvidenceRow) string {
 	return "unknown"
 }
 
+// ExistenceEvidence drops the rows that are not evidence that the thing
+// exists. Today that is exactly source_kind "declared": a human ruling
+// recorded beside a node (a verdict on a control, an owner for a field) says
+// what SHOULD be true of it, never that it is there — nobody observed
+// anything. Letting a declaration into the trust formula means writing an
+// opinion about a scanned Prisma field moves that field's trust score, which
+// is how a product decision quietly rewrites a code fact.
+//
+// Declarations are still stored, still queryable, still shown: they are just
+// not counted as observations.
+func ExistenceEvidence(evidence []store.EvidenceRow) []store.EvidenceRow {
+	out := evidence[:0:0]
+	for _, e := range evidence {
+		if e.SourceKind == "declared" {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 // ComputeTrust calculates all trust metrics from evidence for an edge or node.
 // Confidence is capped based on the quality tier of available evidence.
+// Declarations are filtered out first — see ExistenceEvidence.
 func ComputeTrust(evidence []store.EvidenceRow) (confidence, freshness, trustScore float64, status string) {
+	evidence = ExistenceEvidence(evidence)
 	pos := PositiveConfidence(evidence)
 	neg := NegativeConfidence(evidence)
 	base := BaseConfidence(pos, neg)
@@ -320,6 +343,13 @@ func (g *Graph) RecalculateEdgeTrust(edgeID int64) error {
 	evidence, err := g.store.ListEvidenceByEdge(edgeID)
 	if err != nil {
 		return err
+	}
+
+	// An edge backed by nothing but declarations has no observation to derive
+	// trust from — leave what is there rather than deriving a number from
+	// rows that were never observations.
+	if len(ExistenceEvidence(evidence)) == 0 {
+		return nil
 	}
 
 	confidence, freshness, trustScore, status := ComputeTrust(evidence)
@@ -357,8 +387,9 @@ func (g *Graph) RecalculateNodeTrust(nodeID int64) error {
 		return err
 	}
 
-	if len(evidence) == 0 {
-		// Nodes without evidence keep defaults.
+	// Nodes with no evidence — and nodes whose only evidence is a declaration,
+	// which asserts nothing about existence — keep their defaults.
+	if len(ExistenceEvidence(evidence)) == 0 {
 		return nil
 	}
 
