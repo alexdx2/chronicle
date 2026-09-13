@@ -10,11 +10,6 @@ import "fmt"
 // the next run must diff A..HEAD. One pointer for both would silently claim
 // structure over the commits only the verifier saw.
 
-// revisionKindExpr and revisionCompleteExpr read metadata defensively, the way
-// revisionLayerExpr does: json_extract raises on malformed JSON, and CASE is
-// documented to short-circuit, so a row somebody wrote badly reads as "not
-// structural" instead of failing the query for every other row.
-const revisionKindExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.kind') ELSE NULL END`
 
 // SQLite's JSON1 maps a JSON true to the integer 1, so `= 1` is the check for
 // `"complete": true` and also accepts a writer that stored 1 directly.
