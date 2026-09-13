@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // EvidenceRow represents a row in graph_evidence.
@@ -312,6 +313,12 @@ func (s *Store) ListEvidenceByAssertionKind(assertionKind string) ([]EvidenceRow
 }
 
 func (s *Store) queryEvidence(where string, arg any) ([]EvidenceRow, error) {
+	return s.queryEvidenceArgs(where, arg)
+}
+
+// queryEvidenceArgs is queryEvidence for a WHERE clause with more than one
+// placeholder.
+func (s *Store) queryEvidenceArgs(where string, args ...any) ([]EvidenceRow, error) {
 	q := `
 		SELECT evidence_id, target_kind,
 		       COALESCE(node_id,0), COALESCE(edge_id,0),
@@ -334,7 +341,7 @@ func (s *Store) queryEvidence(where string, arg any) ([]EvidenceRow, error) {
 		WHERE ` + where + `
 		ORDER BY evidence_id
 	`
-	rows, err := s.db.Query(q, arg)
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listEvidence: %w", err)
 	}
@@ -423,8 +430,14 @@ func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) 
 // ListReverifiableEvidenceByFile returns evidence that re-verification must
 // re-examine for a file: stale rows AND rows whose assertion was rejected —
 // a rejected verdict deserves a fresh look whenever the file is re-verified.
+// Importer-owned rows are left out: the mechanical verifier has no way to
+// check a declared decision or a surface extract's claim, so looking at them
+// can only produce a refutation of something that was never wrong.
 func (s *Store) ListReverifiableEvidenceByFile(filePath string) ([]EvidenceRow, error) {
-	return s.queryEvidence("file_path = ? AND (evidence_status = 'stale' OR verification_status = 'rejected')", filePath)
+	skipOwned, ownedArgs := importerOwnedPredicate("source_kind")
+	return s.queryEvidenceArgs(
+		"file_path = ? AND (evidence_status = 'stale' OR verification_status = 'rejected')"+skipOwned,
+		append([]any{filePath}, ownedArgs...)...)
 }
 
 // UpdateEvidenceVerification updates an evidence row after mechanical verification.
@@ -509,6 +522,29 @@ func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificatio
 	})
 }
 
+// ImporterOwnedSourceKinds are the evidence source kinds no code scan
+// produces and no code scan can re-emit: a product's own surface extract, and
+// the human decisions recorded alongside it. They are anchored at product
+// source files, so a code refresh sees "that file changed" and would
+// stale-mark them — after which the mechanical verifier, which has no way to
+// check a declared decision, refutes them, and nothing ever puts them back.
+// Measured live: 146 of 146 declared rows read stale/missing after one
+// refresh. The importer owns these rows; re-importing the surface is the only
+// thing that may change them.
+var ImporterOwnedSourceKinds = []string{"declared", "surface_extract"}
+
+// importerOwnedPredicate is the SQL half of that rule, for the column named by
+// col ("source_kind" or "e.source_kind" depending on the query's joins).
+func importerOwnedPredicate(col string) (string, []any) {
+	marks := make([]string, len(ImporterOwnedSourceKinds))
+	args := make([]any, len(ImporterOwnedSourceKinds))
+	for i, k := range ImporterOwnedSourceKinds {
+		marks[i] = "?"
+		args[i] = k
+	}
+	return " AND " + col + " NOT IN (" + strings.Join(marks, ",") + ")", args
+}
+
 // MarkEvidenceStaleByFiles marks all valid/revalidated evidence from the given file paths as stale.
 // Returns the count and the affected edge/node IDs.
 func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, affectedEdgeIDs, affectedNodeIDs []int64, err error) {
@@ -541,6 +577,12 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 		extractorID string
 		polarity    string
 	}
+	// Importer-owned rows are anchored at product source files but are not
+	// the code scan's to invalidate — see ImporterOwnedSourceKinds.
+	skipOwned, ownedArgs := importerOwnedPredicate("e.source_kind")
+	skipOwnedBare, _ := importerOwnedPredicate("source_kind")
+	fileAndOwnedArgs := append(append([]any{}, args...), ownedArgs...)
+
 	selQ := `SELECT e.evidence_id, COALESCE(e.evidence_uid,''), e.target_kind,
 			COALESCE(n.node_key, ed.edge_key, ''),
 			e.source_kind, COALESCE(e.repo_name,''), COALESCE(e.file_path,''),
@@ -549,8 +591,8 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
 		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
 		WHERE e.file_path IN (` + placeholders + `)
-		AND e.evidence_status IN ('valid','revalidated')`
-	selRows, err := s.db.Query(selQ, args...)
+		AND e.evidence_status IN ('valid','revalidated')` + skipOwned
+	selRows, err := s.db.Query(selQ, fileAndOwnedArgs...)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles select: %w", err)
 	}
@@ -574,8 +616,8 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 	// Mark stale.
 	updQ := `UPDATE graph_evidence SET evidence_status='stale'
 		WHERE file_path IN (` + placeholders + `)
-		AND evidence_status IN ('valid','revalidated')`
-	res, err := s.db.Exec(updQ, args...)
+		AND evidence_status IN ('valid','revalidated')` + skipOwnedBare
+	res, err := s.db.Exec(updQ, fileAndOwnedArgs...)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles update: %w", err)
 	}
@@ -604,8 +646,8 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 
 	// Get affected edge IDs.
 	edgeQ := `SELECT DISTINCT edge_id FROM graph_evidence
-		WHERE file_path IN (` + placeholders + `) AND edge_id IS NOT NULL AND evidence_status='stale'`
-	rows, err := s.db.Query(edgeQ, args...)
+		WHERE file_path IN (` + placeholders + `) AND edge_id IS NOT NULL AND evidence_status='stale'` + skipOwnedBare
+	rows, err := s.db.Query(edgeQ, fileAndOwnedArgs...)
 	if err != nil {
 		return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFiles edges: %w", err)
 	}
@@ -618,8 +660,8 @@ func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, 
 
 	// Get affected node IDs.
 	nodeQ := `SELECT DISTINCT node_id FROM graph_evidence
-		WHERE file_path IN (` + placeholders + `) AND node_id IS NOT NULL AND evidence_status='stale'`
-	rows2, err := s.db.Query(nodeQ, args...)
+		WHERE file_path IN (` + placeholders + `) AND node_id IS NOT NULL AND evidence_status='stale'` + skipOwnedBare
+	rows2, err := s.db.Query(nodeQ, fileAndOwnedArgs...)
 	if err != nil {
 		return staleCount, affectedEdgeIDs, nil, fmt.Errorf("MarkEvidenceStaleByFiles nodes: %w", err)
 	}
@@ -729,6 +771,34 @@ func (s *Store) CountEvidenceByStatus(domainKey string) (map[string]int, error) 
 	return result, rows.Err()
 }
 
+// CountCodeEvidenceByStatus is CountEvidenceByStatus over the evidence a scan
+// owns — importer-owned rows excluded. It is what freshness reports as
+// "touched": a stale row no rescan can refresh is not work an agent can do,
+// and counting it turns a healthy graph into an alarming number.
+func (s *Store) CountCodeEvidenceByStatus(domainKey string) (map[string]int, error) {
+	skipOwned, ownedArgs := importerOwnedPredicate("e.source_kind")
+	q := `SELECT e.evidence_status, COUNT(*)
+		FROM graph_evidence e
+		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
+		LEFT JOIN graph_nodes en ON ed.from_node_id = en.node_id
+		WHERE COALESCE(n.domain_key, en.domain_key) = ?` + skipOwned + `
+		GROUP BY e.evidence_status`
+	rows, err := s.db.Query(q, append([]any{domainKey}, ownedArgs...)...)
+	if err != nil {
+		return nil, fmt.Errorf("CountCodeEvidenceByStatus: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var count int
+		rows.Scan(&status, &count)
+		result[status] = count
+	}
+	return result, rows.Err()
+}
+
 // CountRecentlyVerifiedEvidence counts evidence that was re-confirmed in a specific revision
 // (evidence_status='valid' AND last_verified_revision_id=revisionID).
 func (s *Store) CountRecentlyVerifiedEvidence(domainKey string, revisionID int64) (int, error) {
@@ -802,10 +872,14 @@ func (s *Store) ListRejectedEvidence(domainKey string) ([]EvidenceRow, error) {
 	return out, rows.Err()
 }
 
-// StaleFilePaths returns distinct file paths that have stale evidence.
+// StaleFilePaths returns distinct file paths that have stale evidence a scan
+// can do something about. Importer-owned rows are excluded: listing their file
+// for rescan sends an agent to re-read a screen whose ui knowledge only a
+// surface re-import can restore.
 func (s *Store) StaleFilePaths() ([]string, error) {
-	q := `SELECT DISTINCT file_path FROM graph_evidence WHERE evidence_status='stale' AND file_path != ''`
-	rows, err := s.db.Query(q)
+	skipOwned, ownedArgs := importerOwnedPredicate("source_kind")
+	q := `SELECT DISTINCT file_path FROM graph_evidence WHERE evidence_status='stale' AND file_path != ''` + skipOwned
+	rows, err := s.db.Query(q, ownedArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("StaleFilePaths: %w", err)
 	}
@@ -838,6 +912,8 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 		args[i] = fp
 	}
 
+	skipOwned, ownedArgs := importerOwnedPredicate("e.source_kind")
+
 	// SELECT all current valid evidence rows from those files (owner key joined for journaling).
 	selQ := `SELECT e.evidence_id, e.target_kind,
 	         COALESCE(e.node_id,0), COALESCE(e.edge_id,0),
@@ -857,9 +933,9 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 	    LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
 	    WHERE e.file_path IN (` + placeholders + `)
 	      AND e.evidence_status IN ('valid','revalidated')
-	      AND (e.valid_to_revision_id IS NULL OR e.valid_to_revision_id = 0)`
+	      AND (e.valid_to_revision_id IS NULL OR e.valid_to_revision_id = 0)` + skipOwned
 
-	rows, err := s.db.Query(selQ, args...)
+	rows, err := s.db.Query(selQ, append(append([]any{}, args...), ownedArgs...)...)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned select: %w", err)
 	}

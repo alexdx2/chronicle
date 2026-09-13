@@ -170,7 +170,10 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 	if n, err := s.CountNodesByStatus(domain, "stale"); err == nil {
 		r.Touched.NodesStale = n
 	}
-	if counts, err := s.CountEvidenceByStatus(domain); err == nil {
+	// Code evidence only: importer-owned rows (a surface extract, a declared
+	// decision) are not work a rescan can clear, so counting them here would
+	// report a graph as damaged when nothing is wrong with it.
+	if counts, err := s.CountCodeEvidenceByStatus(domain); err == nil {
 		r.Touched.EvidenceStale = counts["stale"]
 	}
 	if ts, err := s.LastQueryAt(QueryToolNames); err == nil {
