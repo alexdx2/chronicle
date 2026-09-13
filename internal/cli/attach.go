@@ -89,7 +89,7 @@ func runAttach(root string, out io.Writer) error {
 		return err
 	}
 	hookCmd := fmt.Sprintf("%q hook fire", wiring.CanonicalBinaryPath())
-	merged, hookChanged, err := mergeHookIntoSettings(settings, hookMatcher, hookCmd)
+	merged, hookChanged, err := wiring.MergeHookIntoSettings(settings, wiring.HookMatcher, hookCmd)
 	if err != nil {
 		return fmt.Errorf("%s is not valid JSON — fix it by hand and re-run: %w", settingsFile, err)
 	}

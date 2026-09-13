@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 )
@@ -37,7 +38,7 @@ func gitCapture(t *testing.T, dir string, args ...string) string {
 }
 
 func TestMergeHookIntoSettings_Empty(t *testing.T) {
-	out, changed, err := mergeHookIntoSettings(nil, "Grep|Glob|Read", "chronicle hook fire")
+	out, changed, err := wiring.MergeHookIntoSettings(nil, "Grep|Glob|Read", "chronicle hook fire")
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -63,11 +64,11 @@ func TestMergeHookIntoSettings_Empty(t *testing.T) {
 }
 
 func TestMergeHookIntoSettings_Idempotent(t *testing.T) {
-	out1, _, err := mergeHookIntoSettings(nil, "Grep|Glob|Read", "chronicle hook fire")
+	out1, _, err := wiring.MergeHookIntoSettings(nil, "Grep|Glob|Read", "chronicle hook fire")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out2, changed, err := mergeHookIntoSettings(out1, "Grep|Glob|Read", "chronicle hook fire")
+	out2, changed, err := wiring.MergeHookIntoSettings(out1, "Grep|Glob|Read", "chronicle hook fire")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestMergeHookIntoSettings_Idempotent(t *testing.T) {
 
 func TestMergeHookIntoSettings_PreservesOtherKeys(t *testing.T) {
 	existing := []byte(`{"model":"opus","permissions":{"allow":["Bash"]},"hooks":{"PostToolUse":[{"matcher":"Edit","hooks":[]}]}}`)
-	out, changed, err := mergeHookIntoSettings(existing, "Grep|Glob|Read", "chronicle hook fire")
+	out, changed, err := wiring.MergeHookIntoSettings(existing, "Grep|Glob|Read", "chronicle hook fire")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestMergeHookIntoSettings_PreservesOtherKeys(t *testing.T) {
 }
 
 func TestRemoveHookFromSettings(t *testing.T) {
-	installed, _, _ := mergeHookIntoSettings(
+	installed, _, _ := wiring.MergeHookIntoSettings(
 		[]byte(`{"model":"opus"}`), "Grep|Glob|Read", "chronicle hook fire")
 	out, changed, err := removeHookFromSettings(installed, "chronicle hook fire")
 	if err != nil {
@@ -131,7 +132,7 @@ func TestRemoveHookFromSettings(t *testing.T) {
 
 func TestRemoveHookFromSettings_PreservesForeignPreToolUse(t *testing.T) {
 	existing := []byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"other-tool"}]}]}}`)
-	installed, _, _ := mergeHookIntoSettings(existing, "Grep|Glob|Read", "chronicle hook fire")
+	installed, _, _ := wiring.MergeHookIntoSettings(existing, "Grep|Glob|Read", "chronicle hook fire")
 	out, _, err := removeHookFromSettings(installed, "chronicle hook fire")
 	if err != nil {
 		t.Fatal(err)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
 )
@@ -19,8 +20,6 @@ import (
 // reminder that a Chronicle graph exists. It NEVER blocks — exit 0 always,
 // permissionDecision "allow". The reminder reports staleness honestly so the
 // agent is never pushed toward a stale graph.
-
-const hookMatcher = "Grep|Glob|Read"
 
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -58,7 +57,7 @@ func newHookInstallCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			path := settingsPath()
 			existing, _ := os.ReadFile(path)
-			out, changed, err := mergeHookIntoSettings(existing, hookMatcher, hookCommand())
+			out, changed, err := wiring.MergeHookIntoSettings(existing, wiring.HookMatcher, hookCommand())
 			if err != nil {
 				outputError(err)
 			}
@@ -162,42 +161,6 @@ func hookFireMarker() string { return "hook fire" }
 
 // --- pure settings transforms (unit-tested) --------------------------------
 
-func mergeHookIntoSettings(existing []byte, matcher, command string) ([]byte, bool, error) {
-	root := map[string]any{}
-	if len(existing) > 0 {
-		if err := json.Unmarshal(existing, &root); err != nil {
-			return nil, false, fmt.Errorf("settings.json is not valid JSON: %w", err)
-		}
-	}
-	hooks, _ := root["hooks"].(map[string]any)
-	if hooks == nil {
-		hooks = map[string]any{}
-	}
-	pre, _ := hooks["PreToolUse"].([]any)
-
-	// Idempotency: a chronicle hook fire entry already present → no-op.
-	for _, e := range pre {
-		if entryHasChronicleHook(e) {
-			return existing, false, nil
-		}
-	}
-
-	pre = append(pre, map[string]any{
-		"matcher": matcher,
-		"hooks": []any{
-			map[string]any{"type": "command", "command": command},
-		},
-	})
-	hooks["PreToolUse"] = pre
-	root["hooks"] = hooks
-
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return nil, false, err
-	}
-	return append(out, '\n'), true, nil
-}
-
 func removeHookFromSettings(existing []byte, marker string) ([]byte, bool, error) {
 	root := map[string]any{}
 	if err := json.Unmarshal(existing, &root); err != nil {
@@ -213,7 +176,7 @@ func removeHookFromSettings(existing []byte, marker string) ([]byte, bool, error
 	}
 	var kept []any
 	for _, e := range pre {
-		if entryHasChronicleHook(e) {
+		if wiring.EntryHasChronicleHook(e) {
 			continue
 		}
 		kept = append(kept, e)
@@ -236,26 +199,6 @@ func removeHookFromSettings(existing []byte, marker string) ([]byte, bool, error
 		return nil, false, err
 	}
 	return append(out, '\n'), true, nil
-}
-
-// entryHasChronicleHook reports whether a PreToolUse entry contains a command
-// hook pointing at "chronicle ... hook fire".
-func entryHasChronicleHook(e any) bool {
-	m, ok := e.(map[string]any)
-	if !ok {
-		return false
-	}
-	inner, _ := m["hooks"].([]any)
-	for _, h := range inner {
-		hm, ok := h.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cmd, _ := hm["command"].(string); strings.Contains(cmd, "hook fire") {
-			return true
-		}
-	}
-	return false
 }
 
 // --- advisory text ----------------------------------------------------------
