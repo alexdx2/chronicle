@@ -29,16 +29,29 @@ type GraphTarget struct {
 	RepoName string `json:"repo_name"`
 	Path     string `json:"path"`
 	Domain   string `json:"domain,omitempty"`
-	// Status is "" when the target holds knowledge and "empty" when its DB
-	// has never recorded a scan. An empty member stays visible — discovery
-	// tells you the directory exists — but no caller may query it: a ghost DB
-	// contributes nothing and would only make a federation look larger than
-	// the knowledge behind it.
+	// Status is "" when the target holds knowledge, "empty" when its DB has
+	// never recorded a scan, and "error" when discovery could not read it at
+	// all. Both non-empty statuses stay visible — discovery tells you the
+	// directory exists — but no caller may query them: a ghost DB contributes
+	// nothing and would only make a federation look larger than the knowledge
+	// behind it, and an unreadable one contributes nothing it can vouch for.
 	Status string `json:"status,omitempty"`
+	// Reason carries why a target is not queryable — the open or query error
+	// behind Status "error". A repo that drops out of a federation because its
+	// DB was locked mid-scan must say so: "silently missing" and "known to
+	// hold nothing" are opposite facts, and only one of them is a reason to
+	// stop looking.
+	Reason string `json:"reason,omitempty"`
 }
 
-// TargetStatusEmpty marks a discovered .depbot/ whose DB has no scan revision.
-const TargetStatusEmpty = "empty"
+// Target statuses. Closed set — discovery sets them, every opener skips
+// anything but "".
+const (
+	// TargetStatusEmpty marks a discovered .depbot/ whose DB has no scan revision.
+	TargetStatusEmpty = "empty"
+	// TargetStatusError marks one discovery could not read; Reason says why.
+	TargetStatusError = "error"
+)
 
 // AmbiguousRef identifies a candidate node in conflict resolution (enterprise).
 type AmbiguousRef struct {
