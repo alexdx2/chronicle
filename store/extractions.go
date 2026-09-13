@@ -22,14 +22,18 @@ type ExtractionRow struct {
 	RevisionID     int64  `json:"revision_id"`
 	DomainKey      string `json:"domain_key"`
 	FilePath       string `json:"file_path"`
-	Status         string `json:"status"` // extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed, resolved
+	Status         string `json:"status"`              // extracted, no_runtime_architecture, config_only, type_only, generated, skipped, failed, resolved
 	FromType       string `json:"from_type,omitempty"` // controller, module, provider — set by agent at file level
 	ExtractionRole string `json:"extraction_role"`     // ast, llm_single, llm_vote, llm_merged
 	VoteGroup      string `json:"vote_group,omitempty"`
 	VoteIndex      int    `json:"vote_index"`
 	FactsJSON      string `json:"facts_json"`
 	ErrorMessage   string `json:"error_message,omitempty"`
-	CreatedAt      string `json:"created_at"`
+	// Metadata is a free-form JSON object attached to the extraction row.
+	// The deterministic resolver writes {"unresolved":[{kind,name,candidates}]}
+	// here — the names it saw but refused to turn into an edge.
+	Metadata  string `json:"metadata,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 // SaveExtraction stores facts extracted from a file by an agent.
@@ -134,7 +138,7 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]ExtractionRow, error) {
 	q := `SELECT extraction_id, revision_id, domain_key, file_path, status,
 	             COALESCE(from_type,''),
-	             facts_json, COALESCE(error_message,''), created_at
+	             facts_json, COALESCE(error_message,''), COALESCE(metadata,'{}'), created_at
 	      FROM scan_extractions
 	      WHERE revision_id = ? AND domain_key = ?
 	      ORDER BY extraction_id`
@@ -148,7 +152,7 @@ func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]Extractio
 	for rows.Next() {
 		var r ExtractionRow
 		if err := rows.Scan(&r.ExtractionID, &r.RevisionID, &r.DomainKey,
-			&r.FilePath, &r.Status, &r.FromType, &r.FactsJSON, &r.ErrorMessage, &r.CreatedAt); err != nil {
+			&r.FilePath, &r.Status, &r.FromType, &r.FactsJSON, &r.ErrorMessage, &r.Metadata, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -183,6 +187,39 @@ func (s *Store) ListUnresolvedExtractions(revisionID int64, domainKey string) ([
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// UpdateExtractionMetadata merges patch into scan_extractions.metadata for one
+// extraction row. Top-level keys in patch replace keys already stored; keys the
+// patch does not mention survive. A nil/empty patch is a no-op, and an
+// extraction id that names no row is reported — the caller is asserting the row
+// exists (it just resolved its facts).
+func (s *Store) UpdateExtractionMetadata(extractionID int64, patch map[string]any) error {
+	if extractionID <= 0 || len(patch) == 0 {
+		return nil
+	}
+	var current string
+	err := s.db.QueryRow(`SELECT COALESCE(metadata,'{}') FROM scan_extractions WHERE extraction_id = ?`, extractionID).Scan(&current)
+	if err != nil {
+		return fmt.Errorf("UpdateExtractionMetadata: %w", err)
+	}
+	merged := map[string]any{}
+	if current != "" {
+		// A row written before this column existed (or hand-edited) must not
+		// fail the merge — an unreadable value is replaced, not preserved.
+		_ = json.Unmarshal([]byte(current), &merged)
+	}
+	for k, v := range patch {
+		merged[k] = v
+	}
+	buf, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("UpdateExtractionMetadata: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE scan_extractions SET metadata = ? WHERE extraction_id = ?`, string(buf), extractionID); err != nil {
+		return fmt.Errorf("UpdateExtractionMetadata: %w", err)
+	}
+	return nil
 }
 
 // MarkExtractionsResolved marks extractions as resolved after graph build.
