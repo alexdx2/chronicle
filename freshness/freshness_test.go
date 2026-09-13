@@ -7,8 +7,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/store"
 )
+
+// structuralStamp records a structural phase the way the phase itself does:
+// as metadata merged onto whatever revision already sits at that commit, and
+// as a revision of its own only when nothing had claimed the commit yet.
+func structuralStamp(t *testing.T, s *store.Store, domain, sha string, complete bool) {
+	t.Helper()
+	rev, err := s.GetRevisionBySHA(domain, sha)
+	var id int64
+	switch {
+	case err == nil:
+		id = rev.RevisionID
+	default:
+		id, err = s.CreateRevision(domain, "", sha, "git_hook", "incremental", `{"kind":"structural"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.UpdateRevisionMetadata(id, map[string]any{
+		"structural": map[string]any{"complete": complete, "pack": rules.PackVersion},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -254,10 +278,7 @@ func TestStructuredPointAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha2 := commit(t, dir, "b.ts")
-	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
-		`{"kind":"structural","complete":true}`); err != nil {
-		t.Fatal(err)
-	}
+	structuralStamp(t, s, "d", sha2, true)
 
 	r, err := Compute(dir, "r", "d", s)
 	if err != nil {
@@ -291,20 +312,11 @@ func TestIncompleteStructuralPhaseIsNotAPoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha2 := commit(t, dir, "b.ts")
-	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
-		`{"kind":"structural","complete":false}`); err != nil {
-		t.Fatal(err)
-	}
+	structuralStamp(t, s, "d", sha2, false)
 
 	r, _ := Compute(dir, "r", "d", s)
 	if r.Structured != nil {
 		t.Fatalf("an incomplete phase must leave no structured point: %+v", r.Structured)
-	}
-	// The hook's own revision still re-verified the evidence it reached, so
-	// the verified pointer stands: what failed is the structural phase, and
-	// only the structural claim disappears with it.
-	if r.Status == StatusStructured || r.Structured != nil {
-		t.Fatalf("an incomplete structural row must not be a point: status=%q structured=%+v", r.Status, r.Structured)
 	}
 	if strings.Contains(r.Line(), "structured@") {
 		t.Fatalf("line claims structure it does not have: %q", r.Line())
@@ -314,8 +326,6 @@ func TestIncompleteStructuralPhaseIsNotAPoint(t *testing.T) {
 // Structure at HEAD outranks a verification at HEAD: both are true, and the
 // stronger claim is the one the reader needs first.
 func TestStructuredWinsOverVerified(t *testing.T) {
-	t.Skip("integration lane: the structural pointer merges onto the HEAD revision (metadata.structural); this fixture predates that shape")
-
 	dir, s := newRepo(t)
 	sha1 := commit(t, dir, "a.ts")
 	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
@@ -326,18 +336,25 @@ func TestStructuredWinsOverVerified(t *testing.T) {
 		`{"kind":"refresh"}`); err != nil {
 		t.Fatal(err)
 	}
-	// The structural phase rode the same hook one commit later.
+	// Both phases of the SAME hook run land on the SAME revision: phase 1
+	// creates the row at HEAD, phase 2 stamps metadata.structural onto it
+	// (UNIQUE(domain_key, git_after_sha) allows nothing else).
 	sha3 := commit(t, dir, "c.ts")
 	if _, err := s.CreateRevision("d", "", sha3, "git_hook", "incremental",
-		`{"kind":"structural","complete":true}`); err != nil {
+		`{"kind":"refresh"}`); err != nil {
 		t.Fatal(err)
 	}
+	structuralStamp(t, s, "d", sha3, true)
+
 	r, _ := Compute(dir, "r", "d", s)
 	if r.Status != StatusStructured {
 		t.Fatalf("status = %q, want structured", r.Status)
 	}
 	if r.Verified == nil || r.Verified.SHA != sha3 {
-		t.Fatalf("the refresh pointer is still the newest hook revision: %+v", r.Verified)
+		t.Fatalf("the same revision is still the refresh pointer: %+v", r.Verified)
+	}
+	if r.Structured == nil || r.Structured.SHA != sha3 {
+		t.Fatalf("structured point: %+v", r.Structured)
 	}
 }
 
@@ -350,10 +367,7 @@ func TestStructuredBehindHeadDoesNotClaimTheStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha2 := commit(t, dir, "b.ts")
-	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
-		`{"kind":"structural","complete":true}`); err != nil {
-		t.Fatal(err)
-	}
+	structuralStamp(t, s, "d", sha2, true)
 	commit(t, dir, "c.ts") // HEAD moved past the structural phase
 
 	r, _ := Compute(dir, "r", "d", s)
@@ -368,39 +382,28 @@ func TestStructuredBehindHeadDoesNotClaimTheStatus(t *testing.T) {
 	}
 }
 
-// The rules-pack backlog rides on the structured point: files whose
-// deterministic rows came from an older pack are re-extraction work even
-// though nothing in them changed.
+// The rules-pack backlog rides on the structured point: files whose last
+// structural look used an older pack are re-extraction work even though
+// nothing in them changed. The count comes from the phase's own per-file
+// records (project_settings), not from evidence rows — a file that yields
+// zero facts has no evidence to hang a version on and would otherwise be
+// invisible backlog forever.
 func TestStructuredCarriesTheOldRulesBacklog(t *testing.T) {
 	dir, s := newRepo(t)
 	sha1 := commit(t, dir, "a.ts")
-	revID, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	nodeID, err := s.UpsertNode(store.NodeRow{
-		NodeKey: "code:provider:d:svc", Layer: "code", NodeType: "provider",
-		DomainKey: "d", Name: "Svc", Status: "active",
-		FirstSeenRevisionID: revID, LastSeenRevisionID: revID, Confidence: 1, Metadata: "{}",
-	})
-	if err != nil {
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"old-a.ts", "old-b.ts"} {
-		if _, err := s.AddEvidence(store.EvidenceRow{
-			TargetKind: "node", NodeID: nodeID, SourceKind: "ast", FilePath: f, LineStart: 1,
-			ExtractorID: "chronicle-ast", ExtractorVersion: "0.9", Confidence: 0.9,
-			EvidenceStatus: "valid", EvidencePolarity: "positive",
-			ValidFromRevisionID: revID, Metadata: "{}",
-		}); err != nil {
+		if err := s.SetStructuralHash("d", f, "deadbeef", "0"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sha2 := commit(t, dir, "b.ts")
-	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
-		`{"kind":"structural","complete":true}`); err != nil {
+	if err := s.SetStructuralHash("d", "current.ts", "cafe", rules.PackVersion); err != nil {
 		t.Fatal(err)
 	}
+	sha2 := commit(t, dir, "b.ts")
+	structuralStamp(t, s, "d", sha2, true)
 
 	r, _ := Compute(dir, "r", "d", s)
 	if r.Structured == nil || r.Structured.OldRules != 2 {

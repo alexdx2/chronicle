@@ -6,9 +6,9 @@ import (
 )
 
 // A structural pointer may only name a revision whose phase finished for the
-// whole diff. An interrupted phase that still managed to write a row (or a row
-// written by anything else) must not be readable as "structure is guaranteed
-// up to here" — that is the one claim the pointer exists to make.
+// whole diff. An interrupted phase that still managed to write a marker (or a
+// row written by anything else) must not be readable as "structure is
+// guaranteed up to here" — that is the one claim the pointer exists to make.
 func TestLatestStructuralRevisionOnlyCountsCompletedPhases(t *testing.T) {
 	s := openTestStore(t)
 
@@ -16,7 +16,7 @@ func TestLatestStructuralRevisionOnlyCountsCompletedPhases(t *testing.T) {
 		t.Fatalf("no structural revision yet: %v", err)
 	}
 
-	// A refresh that is not structural at all.
+	// A refresh that carries no structural stamp at all.
 	if _, err := s.CreateRevision("d", "", "sha-refresh", "git_hook", "incremental", `{"kind":"refresh"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -26,17 +26,23 @@ func TestLatestStructuralRevisionOnlyCountsCompletedPhases(t *testing.T) {
 
 	// A structural phase that did not finish.
 	if _, err := s.CreateRevision("d", "", "sha-partial", "git_hook", "incremental",
-		`{"kind":"structural","complete":false}`); err != nil {
+		`{"kind":"refresh","structural":{"complete":false,"pack":"1"}}`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.LatestStructuralRevision("d"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an incomplete structural phase must not pin anything: %v", err)
 	}
 
-	// A finished one.
-	id, err := s.CreateRevision("d", "", "sha-done", "git_hook", "incremental",
-		`{"kind":"structural","complete":true}`)
+	// A finished one, stamped onto the revision that already sat at that
+	// commit — the shape the phase actually writes, because
+	// UNIQUE(domain_key, git_after_sha) forbids a second row there.
+	id, err := s.CreateRevision("d", "", "sha-done", "git_hook", "incremental", `{"kind":"refresh"}`)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateRevisionMetadata(id, map[string]any{
+		"structural": map[string]any{"complete": true, "pack": "1", "processed": 3},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.LatestStructuralRevision("d")
@@ -49,7 +55,7 @@ func TestLatestStructuralRevisionOnlyCountsCompletedPhases(t *testing.T) {
 
 	// A later incomplete one does not move the pointer back off the good one.
 	if _, err := s.CreateRevision("d", "", "sha-later-partial", "git_hook", "incremental",
-		`{"kind":"structural","complete":false}`); err != nil {
+		`{"kind":"refresh","structural":{"complete":false}}`); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.LatestStructuralRevision("d")
@@ -61,6 +67,45 @@ func TestLatestStructuralRevisionOnlyCountsCompletedPhases(t *testing.T) {
 	}
 }
 
+// The stamp is the whole condition — not the trigger kind and not
+// metadata.kind. A structural phase completes on whatever revision already
+// sits at HEAD: the scan's own manual/full row when the graph was just
+// scanned, the hook's refresh row on a normal commit, or a git_hook row of its
+// own when nothing else had claimed that commit.
+func TestLatestStructuralRevisionReadsTheStampOnAnyRevision(t *testing.T) {
+	s := openTestStore(t)
+	id, err := s.CreateRevision("d", "", "sha-scan", "manual", "full", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateRevisionMetadata(id, map[string]any{
+		"structural": map[string]any{"complete": true, "pack": "1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LatestStructuralRevision("d")
+	if err != nil {
+		t.Fatalf("a scan revision carrying the stamp is the structural pointer: %v", err)
+	}
+	if got.RevisionID != id {
+		t.Fatalf("got %+v, want revision %d", got, id)
+	}
+
+	// A structure-only revision (nothing else had claimed that commit) too.
+	sid, err := s.CreateRevision("d", "", "sha-own", "git_hook", "incremental",
+		`{"kind":"structural","structural":{"complete":true,"pack":"1"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.LatestStructuralRevision("d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RevisionID != sid {
+		t.Fatalf("got %+v, want the structure-only revision %d", got, sid)
+	}
+}
+
 // Malformed metadata is one bad row, not a broken query: json_extract raises on
 // invalid JSON, which without the json_valid guard would fail every call.
 func TestLatestStructuralRevisionSurvivesMalformedMetadata(t *testing.T) {
@@ -69,7 +114,7 @@ func TestLatestStructuralRevisionSurvivesMalformedMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateRevision("d", "", "sha-ok", "git_hook", "incremental",
-		`{"kind":"structural","complete":true}`); err != nil {
+		`{"structural":{"complete":true}}`); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.LatestStructuralRevision("d")
@@ -84,7 +129,7 @@ func TestLatestStructuralRevisionSurvivesMalformedMetadata(t *testing.T) {
 func TestLatestStructuralRevisionIsDomainScoped(t *testing.T) {
 	s := openTestStore(t)
 	if _, err := s.CreateRevision("other", "", "sha-other", "git_hook", "incremental",
-		`{"kind":"structural","complete":true}`); err != nil {
+		`{"structural":{"complete":true}}`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.LatestStructuralRevision("d"); !errors.Is(err, ErrNotFound) {
@@ -93,48 +138,5 @@ func TestLatestStructuralRevisionIsDomainScoped(t *testing.T) {
 	// The empty domain means "any domain", as it does everywhere else here.
 	if _, err := s.LatestStructuralRevision(""); err != nil {
 		t.Fatalf("any-domain lookup: %v", err)
-	}
-}
-
-// The rules-pack backlog: files whose deterministic rows were written by an
-// older pack still need re-extraction even though nothing in them changed.
-func TestCountFilesOnOtherExtractorVersion(t *testing.T) {
-	s := openTestStore(t)
-	revID, nodeID1, nodeID2 := seedNodes(t, s)
-
-	add := func(nodeID int64, file, extractor, version, status string) {
-		t.Helper()
-		if _, err := s.AddEvidence(EvidenceRow{
-			TargetKind: "node", NodeID: nodeID, SourceKind: "ast",
-			FilePath: file, LineStart: 1, ExtractorID: extractor, ExtractorVersion: version,
-			Confidence: 0.9, EvidenceStatus: status, EvidencePolarity: "positive",
-			ValidFromRevisionID: revID, Metadata: "{}",
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	add(nodeID1, "svc/a.ts", "chronicle-ast", "1", "valid")         // current pack
-	add(nodeID1, "svc/b.ts", "chronicle-ast", "0.9", "valid")       // old pack
-	add(nodeID2, "svc/b.ts", "chronicle-ast", "0.9", "revalidated") // same file again
-	add(nodeID2, "svc/c.ts", "chronicle-ast", "0.8", "revalidated") // old pack, other file
-	add(nodeID1, "svc/d.ts", "chronicle-ast", "0.9", "superseded")  // no longer counts
-	add(nodeID1, "svc/e.ts", "chronicle-scan", "0.9", "valid")      // an agent's row, not the pack's
-
-	n, err := s.CountFilesOnOtherExtractorVersion("orders", "chronicle-ast", "1")
-	if err != nil {
-		t.Fatalf("CountFilesOnOtherExtractorVersion: %v", err)
-	}
-	if n != 2 {
-		t.Fatalf("files on an older pack = %d, want 2 (b.ts, c.ts)", n)
-	}
-
-	// Another domain's backlog is not this one's.
-	n, err = s.CountFilesOnOtherExtractorVersion("elsewhere", "chronicle-ast", "1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatalf("cross-domain leak: %d", n)
 	}
 }

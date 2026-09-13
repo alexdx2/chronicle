@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/store"
 )
@@ -85,18 +86,6 @@ const (
 	StatusStale      = "stale"    // behind HEAD, not refreshed
 	StatusDiverged   = "diverged" // scanned commit is not an ancestor of HEAD
 )
-
-// RulesPackVersion is the version every deterministic (`chronicle-ast`) row is
-// expected to carry; rows on any other version are the re-extraction backlog
-// reported as Point.OldRules.
-//
-// TODO(merge): switch to rules.PackVersion once extract/rules defines it — the
-// constant is the structural extractor's own, and this variable exists only so
-// the freshness report can be honest about the backlog before that lands.
-var RulesPackVersion = "1"
-
-// astExtractorID is the extractor whose rows the rules pack owns.
-const astExtractorID = "chronicle-ast"
 
 // QueryToolNames are the read-only tools an agent calls to get an answer out
 // of the graph — the ones whose results carry the knowledge block, and the
@@ -183,10 +172,12 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 	}
 	if structRev != nil && structRev.GitAfterSHA != "" {
 		p := &Point{SHA: structRev.GitAfterSHA, At: structRev.CreatedAt, RevisionID: structRev.RevisionID}
-		// The rules-pack backlog is only meaningful once something structural
-		// has actually run: before that no row was written by a pack at all,
-		// and every file would read as "on old rules".
-		if n, err := s.CountFilesOnOtherExtractorVersion(domain, astExtractorID, RulesPackVersion); err == nil {
+		// The backlog is the structural phase's OWN record of what it looked
+		// at and under which pack (project_settings), not a count over
+		// evidence rows: a file that yields zero facts has no evidence to
+		// carry a version, and a row written before the phase existed was
+		// never a pack's claim at all.
+		if n, err := s.CountStructuralHashesNotOnPack(domain, rules.PackVersion); err == nil {
 			p.OldRules = n
 		}
 		r.Structured = p
