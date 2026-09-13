@@ -112,3 +112,28 @@ func (s *Store) GetRevision(id int64) (*Revision, error) {
 	}
 	return r, nil
 }
+
+// GetRevisionBySHA returns the revision a domain recorded for one git SHA, or
+// ErrNotFound. There is at most one (UNIQUE(domain_key, git_after_sha)), which
+// is what lets an importer ask "have I already been told about this commit?"
+// before it writes anything.
+func (s *Store) GetRevisionBySHA(domainKey, sha string) (*Revision, error) {
+	const q = `
+		SELECT revision_id, domain_key, COALESCE(git_before_sha,''), git_after_sha,
+		       trigger_kind, mode, created_at, metadata
+		FROM graph_revisions
+		WHERE domain_key = ? AND git_after_sha = ?
+	`
+	r := &Revision{}
+	err := s.db.QueryRow(q, domainKey, sha).Scan(
+		&r.RevisionID, &r.DomainKey, &r.GitBeforeSHA, &r.GitAfterSHA,
+		&r.TriggerKind, &r.Mode, &r.CreatedAt, &r.Metadata,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("GetRevisionBySHA %q %q: %w", domainKey, sha, ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetRevisionBySHA %q %q: %w", domainKey, sha, err)
+	}
+	return r, nil
+}
