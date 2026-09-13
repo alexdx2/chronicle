@@ -101,7 +101,24 @@ func resolveDefaults() {
 	manifestPath = filepath.Join(base, "chronicle.domain.yaml")
 }
 
+// resolveWorktreeGraph updates the shared projectPath (once, in cwd mode — no
+// explicit --project) to the main checkout when the current directory is a
+// linked worktree whose own .depbot has no graph but the main checkout's
+// does. No-op outside cwd mode or when nothing needs resolving; never creates
+// files (paths.ResolveProjectDir only stats).
+func resolveWorktreeGraph() {
+	if projectPath != "" {
+		return
+	}
+	if r := paths.ResolveProjectDir("."); r != "." {
+		projectPath = r
+		paths.SetProjectRoot(r)
+		fmt.Fprintf(os.Stderr, "chronicle: linked worktree — using graph of %s\n", r)
+	}
+}
+
 func openGraph() *graph.Graph {
+	resolveWorktreeGraph()
 	resolveDefaults()
 	ensureDepbotDir()
 

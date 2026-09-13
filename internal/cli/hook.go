@@ -265,6 +265,7 @@ func entryHasChronicleHook(e any) bool {
 // Rate-limited to once per 10 minutes via a marker file so it doesn't repeat
 // on every tool call.
 func hookAdvisory() string {
+	resolveWorktreeGraph()
 	resolveDefaults()
 	if _, err := os.Stat(dbPath); err != nil {
 		return "" // no graph in this project
