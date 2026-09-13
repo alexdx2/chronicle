@@ -174,3 +174,21 @@ func TestProjectAgentsSectionUsesRealParamNames(t *testing.T) {
 		t.Fatalf("section must show chronicle_node_search(q=\"orders\")")
 	}
 }
+
+// The path tool's two arguments are required and named from_node_key /
+// to_node_key. A section that teaches from=/to= costs every agent one rejected
+// call before it reads the error — and the section exists to prevent exactly
+// that.
+func TestProjectAgentsSectionNamesPathParameters(t *testing.T) {
+	sec := ProjectAgentsSection()
+	for _, want := range []string{"from_node_key=", "to_node_key="} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("section must teach %s:\n%s", want, sec)
+		}
+	}
+	for _, bad := range []string{"(from=", " from=", "(to=", " to="} {
+		if strings.Contains(sec, bad) {
+			t.Errorf("section must not teach %q", bad)
+		}
+	}
+}

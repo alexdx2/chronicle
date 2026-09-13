@@ -38,7 +38,7 @@ instructions exactly.
 | What does X depend on? | chronicle_query_deps(node_key=...) |
 | What depends on X? | chronicle_query_reverse_deps(node_key=...) |
 | What breaks if I change X? | chronicle_impact(node_key=..., max_depth=4) |
-| How does A connect to B? | chronicle_query_path(from=..., to=...) |
+| How does A connect to B? | chronicle_query_path(from_node_key=..., to_node_key=...) |
 | Neighborhood around a node | chronicle_subgraph(node_key=...) |
 | Hotspots / complexity / coupling | chronicle_insights() |
 | Graph size / last scan | chronicle_query_stats(), chronicle_scan_status() |
