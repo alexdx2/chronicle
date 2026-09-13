@@ -72,9 +72,11 @@ type ResolveOptions struct {
 	// "the structural extractor read this out of the file" (lazy-scan spec
 	// §2.6, §3). It changes three things and nothing else:
 	//
-	//  1. every evidence row the resolver writes is stamped source_kind
-	//     "ast", extractor_id "chronicle-ast", extractor_version
-	//     ExtractorVersion, metadata {"content_hash": ContentHashes[file]};
+	//  1. every evidence row the resolver writes FOR A FILE is stamped
+	//     source_kind "ast", extractor_id ExtractorID (default
+	//     "chronicle-structural"), extractor_version ExtractorVersion,
+	//     metadata {"content_hash": ContentHashes[file]}. Evidence the
+	//     post-passes derive from the graph keeps its own identity;
 	//  2. certainty follows construction: a fact whose target is fixed by
 	//     the source text (an import specifier, a declaration, a route, a
 	//     schema model) keeps derivation_kind "hard"; a link whose target
@@ -1092,7 +1094,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			if fact.Object == "" {
 				return counts, nil, nil
 			}
-			cands, target := g.detUniqueTarget(domainKey, fact.Object, "code", []string{"provider", "controller", "module"})
+			cands, target, err := g.detUniqueTarget(domainKey, fact.Object, "code", []string{"provider", "controller", "module"})
+			if err != nil {
+				return counts, nil, err
+			}
 			if target == nil {
 				return counts, g.detNoteUnresolved(filePath, "call", fact.Object, detCandidateKeys(cands)), nil
 			}
@@ -1145,7 +1150,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Deterministic: the member is a NAME matched against the model nodes
 		// the domain holds. Exactly one match links; anything else is recorded.
 		if g.detOn() {
-			cands, target := g.detUniqueTarget(domainKey, fact.To, "data", []string{"model"})
+			cands, target, err := g.detUniqueTarget(domainKey, fact.To, "data", []string{"model"})
+			if err != nil {
+				return counts, nil, err
+			}
 			if target == nil {
 				return counts, g.detNoteUnresolved(filePath, "member_call", fact.To, detCandidateKeys(cands)), nil
 			}
@@ -1221,9 +1229,15 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// provider) at once — a unique hit decides both the target and which
 		// kind of edge this is; no hit, or several, and nothing is written.
 		if g.detOn() {
-			cands := append(
-				g.detCandidates(domainKey, fact.To, "service", []string{"service", "external_system"}),
-				g.detCandidates(domainKey, fact.To, "code", []string{"provider", "controller", "module"})...)
+			svcCands, err := g.detCandidates(domainKey, fact.To, "service", []string{"service", "external_system"})
+			if err != nil {
+				return counts, nil, err
+			}
+			codeCands, err := g.detCandidates(domainKey, fact.To, "code", []string{"provider", "controller", "module"})
+			if err != nil {
+				return counts, nil, err
+			}
+			cands := append(svcCands, codeCands...)
 			if len(cands) != 1 {
 				return counts, g.detNoteUnresolved(filePath, "calls_service", fact.To, detCandidateKeys(cands)), nil
 			}
@@ -2288,6 +2302,10 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 			// Found a stem-based node — merge by re-keying it (node + edge keys)
 			// through the instrumented store method so the rewrite is journaled.
 			g.noteEvidenceErr(g.store.RekeyNode(existing.NodeID, existing.NodeKey, nodeKey, filePath, revisionID))
+			// The node kept its id but answers to a new key: anything the
+			// deterministic name index cached about it now points at a key
+			// that no longer exists.
+			g.detResetNameIndex()
 			return existing.NodeID
 		}
 	}

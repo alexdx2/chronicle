@@ -218,13 +218,13 @@ func (g *Graph) detFlush(result *ResolveExtractionsResult) error {
 // mean. It creates nothing: deterministic resolution links to what the graph
 // already has, or records that it could not. The result is sorted by node key
 // so "which one" is never decided by map order.
-func (g *Graph) detCandidates(domainKey, name, layer string, nodeTypes []string) []store.NodeRow {
+func (g *Graph) detCandidates(domainKey, name, layer string, nodeTypes []string) ([]store.NodeRow, error) {
 	if name == "" {
-		return nil
+		return nil, nil
 	}
 	flat := flattenName(name)
 	if flat == "" {
-		return nil
+		return nil, nil
 	}
 	seen := map[int64]bool{}
 	var out []store.NodeRow
@@ -240,7 +240,14 @@ func (g *Graph) detCandidates(domainKey, name, layer string, nodeTypes []string)
 		out = append(out, n)
 	}
 
-	for _, n := range g.detNameIndexFor(domainKey)[flat] {
+	index, err := g.detNameIndexFor(domainKey)
+	if err != nil {
+		// A lookup that could not read the graph is a resolver failure, not
+		// an unresolvable name: recording it as "0 candidates" would tell the
+		// next pass to go re-read a file over a database error.
+		return nil, err
+	}
+	for _, n := range index[flat] {
 		add(n)
 	}
 	// Aliases only exist for code-layer nodes (FindCodeNodesByAlias filters
@@ -254,7 +261,7 @@ func (g *Graph) detCandidates(domainKey, name, layer string, nodeTypes []string)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeKey < out[j].NodeKey })
-	return out
+	return out, nil
 }
 
 // detNameIndexFor returns (building once) the flattened-name index for the
@@ -262,15 +269,20 @@ func (g *Graph) detCandidates(domainKey, name, layer string, nodeTypes []string)
 // basename of that tail — mapped to the node. Built at the start of the third
 // pass, when the structural base is complete and nothing further creates nodes
 // a name lookup could mean.
-func (g *Graph) detNameIndexFor(domainKey string) map[string][]store.NodeRow {
+func (g *Graph) detNameIndexFor(domainKey string) (map[string][]store.NodeRow, error) {
 	if g.det == nil {
-		return nil
+		return nil, nil
 	}
 	if g.det.nameIndex != nil {
-		return g.det.nameIndex
+		return g.det.nameIndex, nil
 	}
 	idx := map[string][]store.NodeRow{}
-	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	nodes, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	if err != nil {
+		// Nothing is cached on a failed read: an empty index would answer
+		// every later lookup with "no such name".
+		return nil, fmt.Errorf("deterministic name index for %s: %w", domainKey, err)
+	}
 	for _, n := range nodes {
 		spellings := map[string]bool{}
 		if f := flattenName(n.Name); f != "" {
@@ -289,7 +301,7 @@ func (g *Graph) detNameIndexFor(domainKey string) map[string][]store.NodeRow {
 		}
 	}
 	g.det.nameIndex = idx
-	return idx
+	return idx, nil
 }
 
 // detResetNameIndex drops the cached index so the next lookup rebuilds it.
@@ -329,12 +341,15 @@ func detCandidateKeys(candidates []store.NodeRow) []string {
 
 // detUniqueTarget returns the single node a name resolves to, or nil when the
 // lookup is ambiguous or empty. The caller records the refusal.
-func (g *Graph) detUniqueTarget(domainKey, name, layer string, nodeTypes []string) ([]store.NodeRow, *store.NodeRow) {
-	cands := g.detCandidates(domainKey, name, layer, nodeTypes)
-	if len(cands) == 1 {
-		return cands, &cands[0]
+func (g *Graph) detUniqueTarget(domainKey, name, layer string, nodeTypes []string) ([]store.NodeRow, *store.NodeRow, error) {
+	cands, err := g.detCandidates(domainKey, name, layer, nodeTypes)
+	if err != nil {
+		return nil, nil, err
 	}
-	return cands, nil
+	if len(cands) == 1 {
+		return cands, &cands[0], nil
+	}
+	return cands, nil, nil
 }
 
 // --- Evidence chokepoint -----------------------------------------------------

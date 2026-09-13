@@ -655,3 +655,70 @@ func TestResolveDeterministic_ExtractorIDIsAnOption(t *testing.T) {
 		}
 	}
 }
+
+// --- Fix round 2 ---
+
+const rekeyDomain = "rekeyapp"
+
+// A bare import mints a stem-keyed node with no file of its own; when the file
+// that defines it is finally resolved, ensureNodeID rekeys that node in place
+// rather than minting a twin. If the rekey happens during the third pass, the
+// name index is holding the node under its OLD key — and the next
+// name-resolved edge would point at a key that no longer exists.
+func TestResolveDeterministic_RekeyDuringThirdPassInvalidatesIndex(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	revID, err := g.Store().CreateRevision(rekeyDomain, "", "rekey1", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+	save := func(path, fromType string, facts []map[string]any) {
+		buf, _ := json.Marshal(facts)
+		if _, err := g.Store().SaveExtraction(revID, rekeyDomain, path, "extracted", fromType, string(buf), ""); err != nil {
+			t.Fatalf("SaveExtraction(%s): %v", path, err)
+		}
+	}
+
+	// Resolved first (schema files sort ahead): gives member_call a target.
+	save("prisma/schema.prisma", "model", []map[string]any{
+		{"kind": "model", "to": "Cat"},
+	})
+	// A bare import — mints code:provider:rekeyapp:ghost-service, file path empty.
+	save("src/tom.module.ts", "module", []map[string]any{
+		{"kind": "import", "to": "ghost.service", "symbols": []string{"GhostService"}},
+	})
+	// Deferred, and resolved BEFORE the controller's call: its ensureNodeID
+	// rekeys the stem node onto this file's path key.
+	save("src/ghost.service.ts", "provider", []map[string]any{
+		{"kind": "member_call", "to": "cat"},
+	})
+	// Deferred after it: the name must resolve to the node's new key. The
+	// injects fact is here so the controller's own node already exists — a
+	// node created during the third pass resets the index by itself, which
+	// would hide the bug this test is about.
+	save("src/tom.controller.ts", "controller", []map[string]any{
+		{"kind": "injects", "to": "TomService"},
+		{"kind": "call", "object": "GhostService", "method": "vanish"},
+	})
+
+	if _, err := g.ResolveExtractionsWithOptions(rekeyDomain, revID, ResolveOptions{
+		Deterministic: true, ExtractorVersion: "1",
+	}); err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+
+	const (
+		stemKey       = "code:provider:" + rekeyDomain + ":ghost-service"
+		rekeyedKey    = "code:provider:" + rekeyDomain + ":src/ghost-service"
+		controllerKey = "code:controller:" + rekeyDomain + ":src/tom-controller"
+	)
+	if _, err := g.Store().GetNodeIDByKey(rekeyedKey); err != nil {
+		t.Fatalf("the stem node was not rekeyed onto its file — fixture no longer exercises the path: %v", err)
+	}
+	if _, err := g.Store().GetEdgeByKey(controllerKey + "->" + stemKey + ":INJECTS"); err == nil {
+		t.Error("name-resolved edge points at the pre-rekey key — the name index went stale")
+	}
+	edge := edgeOrFail(t, g, controllerKey+"->"+rekeyedKey+":INJECTS")
+	if edge.ToNodeKey != rekeyedKey {
+		t.Errorf("edge to_node_key = %q, want %q", edge.ToNodeKey, rekeyedKey)
+	}
+}
