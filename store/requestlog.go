@@ -1,6 +1,10 @@
 package store
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+)
 
 type RequestLogEntry struct {
 	RequestID    int64  `json:"request_id"`
@@ -92,4 +96,25 @@ func (s *Store) RequestStats() (*RequestLogStats, error) {
 		return nil, fmt.Errorf("RequestStats: %w", err)
 	}
 	return &stats, nil
+}
+
+// LastQueryAt returns the timestamp of the most recent request log entry for
+// any of toolNames, or "" when none was ever logged.
+func (s *Store) LastQueryAt(toolNames []string) (string, error) {
+	if len(toolNames) == 0 {
+		return "", nil
+	}
+	args := make([]any, len(toolNames))
+	for i, n := range toolNames {
+		args[i] = n
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(toolNames)), ",")
+	var ts sql.NullString
+	err := s.db.QueryRow(
+		`SELECT MAX(timestamp) FROM mcp_request_log WHERE tool_name IN (`+placeholders+`)`, args...,
+	).Scan(&ts)
+	if err != nil {
+		return "", fmt.Errorf("LastQueryAt: %w", err)
+	}
+	return ts.String, nil
 }
