@@ -11,12 +11,12 @@ import (
 	"github.com/alexdx2/chronicle-core/validate"
 )
 
-// detExtractorID is the evidence identity of the structural (AST) extractor.
-// The other lane defines the same string as structural.ExtractorID; it is
-// repeated here as a literal on purpose — graph/ must not depend on the
-// extractor package (the extractor imports graph types, not the other way
-// round). If one moves, the other moves with it.
-const detExtractorID = "chronicle-ast"
+// detDefaultExtractorID is the evidence identity a deterministic resolve
+// stamps when the caller did not name one: the structural phase. The
+// structural pass passes its own id explicitly (ResolveOptions.ExtractorID);
+// this is only the fallback, kept as a literal because graph/ must not depend
+// on the extractor package.
+const detDefaultExtractorID = "chronicle-structural"
 
 // detNameMatchConfidence is the ceiling for a link the resolver picked by
 // looking a name up among candidate nodes. Even a unique match is a guess
@@ -51,13 +51,20 @@ type detResolve struct {
 	// deterministic resolve refuses to, so it waits instead.
 	deferred   []detDeferredFact
 	secondPass bool
+
+	// nameIndex is flattened name → every node it could mean, built once for
+	// the whole third pass. detCandidates used to run one ListNodes sweep per
+	// node type per deferred fact; on a real repo that is thousands of full
+	// table scans.
+	nameIndex map[string][]store.NodeRow
 }
 
 // detDeferredFact is one name-resolved fact waiting for the structural base.
+// It carries no import map: every deterministic branch resolves by candidate
+// lookup and returns before reaching the legacy import-map paths.
 type detDeferredFact struct {
-	filePath  string
-	fact      Fact
-	importMap map[string]string
+	filePath string
+	fact     Fact
 }
 
 // detIsNameResolved reports whether a fact kind's target is chosen by looking
@@ -78,9 +85,7 @@ func (g *Graph) detDefer(filePath string, fact Fact) bool {
 	if g.det == nil || g.det.secondPass || !detIsNameResolved(fact.Kind) {
 		return false
 	}
-	g.det.deferred = append(g.det.deferred, detDeferredFact{
-		filePath: filePath, fact: fact, importMap: g.currentFileImportMap,
-	})
+	g.det.deferred = append(g.det.deferred, detDeferredFact{filePath: filePath, fact: fact})
 	return true
 }
 
@@ -120,11 +125,25 @@ func (d *detResolve) extractorVersion() string {
 	return d.opts.ExtractorVersion
 }
 
+// extractorID is who this resolve says wrote the evidence.
+func (d *detResolve) extractorID() string {
+	if d.opts.ExtractorID == "" {
+		return detDefaultExtractorID
+	}
+	return d.opts.ExtractorID
+}
+
 // stamp rewrites one evidence input for deterministic mode. In legacy mode it
 // is the identity function, which is what keeps the default path byte-for-byte
 // unchanged.
 func (g *Graph) detStampEvidence(sourceKind, extractorID, extractorVersion, metadata string) (string, string, string, string) {
-	if g.det == nil {
+	// No open extraction means this row is not an observation of a file: it
+	// is a post-pass writing derived evidence (external endpoints, service
+	// containment, derived flows). Those keep their own identity. Stamping
+	// them would be worse than cosmetic — the refresh caller supersedes
+	// "rows of this extractor id the resolve did not hand back for the
+	// file", and a derived row is never handed back.
+	if g.det == nil || g.det.currentFile == "" {
 		return sourceKind, extractorID, extractorVersion, metadata
 	}
 	// A row with no file behind it (a synthetic/derived node) is not an AST
@@ -132,7 +151,7 @@ func (g *Graph) detStampEvidence(sourceKind, extractorID, extractorVersion, meta
 	if sourceKind != "synthetic" {
 		sourceKind = "ast"
 	}
-	extractorID = detExtractorID
+	extractorID = g.det.extractorID()
 	extractorVersion = g.det.extractorVersion()
 	if h := g.det.opts.ContentHashes[g.det.currentFile]; h != "" {
 		buf, _ := json.Marshal(map[string]string{"content_hash": h})
@@ -214,28 +233,15 @@ func (g *Graph) detCandidates(domainKey, name, layer string, nodeTypes []string)
 		wanted[nt] = true
 	}
 	add := func(n store.NodeRow) {
-		if seen[n.NodeID] || n.Status == "deleted" || !wanted[n.NodeType] {
+		if seen[n.NodeID] || n.Status == "deleted" || n.Layer != layer || !wanted[n.NodeType] {
 			return
 		}
 		seen[n.NodeID] = true
 		out = append(out, n)
 	}
 
-	for _, nt := range nodeTypes {
-		nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: layer, NodeType: nt})
-		for _, n := range nodes {
-			if flattenName(n.Name) == flat {
-				add(n)
-				continue
-			}
-			// Path-keyed nodes: "code:provider:dom:src/tom-service" is the
-			// node a source file called "TomService" produces.
-			parts := strings.Split(n.NodeKey, ":")
-			last := parts[len(parts)-1]
-			if flattenName(filepath.Base(last)) == flat || flattenName(last) == flat {
-				add(n)
-			}
-		}
+	for _, n := range g.detNameIndexFor(domainKey)[flat] {
+		add(n)
 	}
 	// Aliases only exist for code-layer nodes (FindCodeNodesByAlias filters
 	// on layer itself), so this is a no-op for data/service lookups.
@@ -251,11 +257,59 @@ func (g *Graph) detCandidates(domainKey, name, layer string, nodeTypes []string)
 	return out
 }
 
+// detNameIndexFor returns (building once) the flattened-name index for the
+// domain: every spelling a node answers to — its name, its key tail, and the
+// basename of that tail — mapped to the node. Built at the start of the third
+// pass, when the structural base is complete and nothing further creates nodes
+// a name lookup could mean.
+func (g *Graph) detNameIndexFor(domainKey string) map[string][]store.NodeRow {
+	if g.det == nil {
+		return nil
+	}
+	if g.det.nameIndex != nil {
+		return g.det.nameIndex
+	}
+	idx := map[string][]store.NodeRow{}
+	nodes, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey})
+	for _, n := range nodes {
+		spellings := map[string]bool{}
+		if f := flattenName(n.Name); f != "" {
+			spellings[f] = true
+		}
+		parts := strings.Split(n.NodeKey, ":")
+		last := parts[len(parts)-1]
+		if f := flattenName(last); f != "" {
+			spellings[f] = true
+		}
+		if f := flattenName(filepath.Base(last)); f != "" {
+			spellings[f] = true
+		}
+		for f := range spellings {
+			idx[f] = append(idx[f], n)
+		}
+	}
+	g.det.nameIndex = idx
+	return idx
+}
+
+// detResetNameIndex drops the cached index so the next lookup rebuilds it.
+func (g *Graph) detResetNameIndex() {
+	if g.det != nil {
+		g.det.nameIndex = nil
+	}
+}
+
 // detUpsertInferredEdge writes a name-resolved edge, but never weakens one a
 // construction-fixed fact already established: a file that BOTH declares an
 // injection and calls the injected object must not end up with the call's
 // "inferred" overwriting the declaration's "hard". Returns whether the edge
 // was written.
+//
+// The call's evidence is still recorded on the kept edge, so a hard edge can
+// carry a 0.7 evidence row beside its own. That is deliberate: the call WAS
+// observed, and trust is derived from all the evidence, not from the strongest
+// row. It does mean a hard edge's computed confidence can fall when a weaker
+// observation of the same relationship arrives.
 func (g *Graph) detUpsertInferredEdge(row store.EdgeRow) bool {
 	if existing, err := g.store.GetEdgeByKey(row.EdgeKey); err == nil && existing.DerivationKind == "hard" {
 		return false

@@ -2,6 +2,7 @@ package graph
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -243,8 +244,8 @@ func TestResolveDeterministic_EvidenceIsAST(t *testing.T) {
 		if e.SourceKind != "ast" {
 			t.Errorf("evidence source_kind = %q, want ast", e.SourceKind)
 		}
-		if e.ExtractorID != "chronicle-ast" {
-			t.Errorf("evidence extractor_id = %q, want chronicle-ast", e.ExtractorID)
+		if e.ExtractorID != detDefaultExtractorID {
+			t.Errorf("evidence extractor_id = %q, want %s", e.ExtractorID, detDefaultExtractorID)
 		}
 		if e.ExtractorVersion != "1" {
 			t.Errorf("evidence extractor_version = %q, want 1", e.ExtractorVersion)
@@ -283,8 +284,8 @@ func TestResolveDeterministic_RouteIsHard(t *testing.T) {
 			continue
 		}
 		sawDecorator = true
-		if e.SourceKind != "ast" || e.ExtractorID != "chronicle-ast" {
-			t.Errorf("decorator evidence = (%s, %s), want (ast, chronicle-ast)", e.SourceKind, e.ExtractorID)
+		if e.SourceKind != "ast" || e.ExtractorID != detDefaultExtractorID {
+			t.Errorf("decorator evidence = (%s, %s), want (ast, %s)", e.SourceKind, e.ExtractorID, detDefaultExtractorID)
 		}
 	}
 	if !sawDecorator {
@@ -420,9 +421,6 @@ func TestResolveDeterministic_EvidenceIDsByFile(t *testing.T) {
 			t.Fatalf("ListEvidenceBySourceKind(%s): %v", kind, err)
 		}
 		for _, r := range rows {
-			if r.ExtractorID != detExtractorID {
-				t.Errorf("evidence %d extractor_id = %q, want %s", r.EvidenceID, r.ExtractorID, detExtractorID)
-			}
 			if kind == "ast" {
 				sawAST = true
 			}
@@ -475,9 +473,6 @@ func TestResolveDeterministic_SameFixtureRefusesPhantoms(t *testing.T) {
 		snapController + "->" + snapService + ":INJECTS":                                                  "hard",
 		snapController + "->" + snapArmEndpoint + ":EXPOSES_ENDPOINT":                                     "hard",
 		"data:model:" + snapshotDomain + ":cat->data:model:" + snapshotDomain + ":mouse:REFERENCES_MODEL": "hard",
-		// The host matched nothing in the alias table, so the external_system
-		// node came straight out of the URL literal — construction, not a guess.
-		snapController + "->service:external_system:" + snapshotDomain + ":jerry-api:CALLS_SERVICE": "hard",
 	} {
 		if got := edgeOrFail(t, g, key).DerivationKind; got != want {
 			t.Errorf("edge %s derivation_kind = %q, want %q", key, got, want)
@@ -523,6 +518,140 @@ func TestResolveDeterministic_SameFixtureRefusesPhantoms(t *testing.T) {
 	for _, r := range astRows {
 		if r.ExtractorVersion != "2" {
 			t.Errorf("evidence %d extractor_version = %q, want 2", r.EvidenceID, r.ExtractorVersion)
+		}
+	}
+}
+
+// --- Fix round 1 ---
+
+// detAllEvidence returns every evidence row reachable from a node or an edge.
+func detAllEvidence(t *testing.T, g *Graph) []store.EvidenceRow {
+	t.Helper()
+	var out []store.EvidenceRow
+	nodes, _ := g.Store().ListNodes(store.NodeFilter{})
+	for _, n := range nodes {
+		rows, _ := g.Store().ListEvidenceByNode(n.NodeID)
+		out = append(out, rows...)
+	}
+	edges, _ := g.Store().ListEdges(store.EdgeFilter{})
+	for _, e := range edges {
+		rows, _ := g.Store().ListEvidenceByEdge(e.EdgeID)
+		out = append(out, rows...)
+	}
+	return out
+}
+
+// An http_call whose path names no endpoint the graph exposes must not
+// materialize one. Legacy mode keeps the boundary node (status "external")
+// plus a linked CALLS_ENDPOINT edge; a deterministic resolve records the name
+// and writes nothing.
+func TestResolveDeterministic_NoPhantomExternalEndpoint(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	revID := snapshotFixture(t, g)
+
+	result, err := g.ResolveExtractionsWithOptions(snapshotDomain, revID, ResolveOptions{
+		Deterministic: true, ExtractorVersion: "1",
+	})
+	if err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+
+	if _, err := g.Store().GetNodeIDByKey(snapStatusEndpoint); err == nil {
+		t.Errorf("http_call materialized the phantom endpoint node %s", snapStatusEndpoint)
+	}
+	if _, err := g.Store().GetEdgeByKey(snapController + "->" + snapStatusEndpoint + ":CALLS_ENDPOINT"); err == nil {
+		t.Errorf("http_call linked a CALLS_ENDPOINT edge to a node nothing exposes")
+	}
+	var sawPath bool
+	for _, u := range result.Unresolved {
+		if u.Kind == "http_call" && strings.Contains(u.Target, "/jerry/status") {
+			sawPath = true
+		}
+	}
+	if !sawPath {
+		t.Errorf("the unlinkable endpoint path was not recorded: %v", result.Unresolved)
+	}
+}
+
+// An http_call the alias table could not resolve is still a guess about which
+// service that host is — never "hard", or adding the alias later would look
+// like a downgrade.
+func TestResolveDeterministic_UnaliasedHostIsInferred(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	revID := snapshotFixture(t, g)
+
+	if _, err := g.ResolveExtractionsWithOptions(snapshotDomain, revID, ResolveOptions{
+		Deterministic: true, ExtractorVersion: "1",
+	}); err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+	ext := edgeOrFail(t, g, snapController+"->service:external_system:"+snapshotDomain+":jerry-api:CALLS_SERVICE")
+	if ext.DerivationKind != "inferred" {
+		t.Errorf("unaliased http_call derivation_kind = %q, want inferred", ext.DerivationKind)
+	}
+	if ext.Confidence > detNameMatchConfidence {
+		t.Errorf("unaliased http_call confidence = %.2f, want <= %.2f", ext.Confidence, detNameMatchConfidence)
+	}
+}
+
+// The deterministic stamp belongs to rows read out of a file. Post-passes
+// (external endpoints, service containment, derived flows) keep their own
+// identity — the integration lane supersedes "rows of this extractor id not
+// handed back for the file", so a derived row wearing the structural id would
+// be superseded on the next refresh.
+func TestResolveDeterministic_PostPassEvidenceKeepsOwnIdentity(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	revID := snapshotFixture(t, g)
+
+	result, err := g.ResolveExtractionsWithOptions(snapshotDomain, revID, ResolveOptions{
+		Deterministic: true, ExtractorVersion: "1", ExtractorID: "chronicle-structural",
+	})
+	if err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+
+	handedBack := map[int64]bool{}
+	for _, ids := range result.EvidenceIDsByFile {
+		for _, id := range ids {
+			handedBack[id] = true
+		}
+	}
+	if len(handedBack) == 0 {
+		t.Fatal("EvidenceIDsByFile is empty")
+	}
+	for _, e := range detAllEvidence(t, g) {
+		if e.ExtractorID != "chronicle-structural" {
+			continue
+		}
+		if !handedBack[e.EvidenceID] {
+			t.Errorf("evidence %d (%s on %s) carries the structural extractor id but is not in EvidenceIDsByFile",
+				e.EvidenceID, e.AssertionKind, e.FilePath)
+		}
+	}
+}
+
+// The extractor id is the caller's to declare; the default names the
+// structural phase rather than a package constant.
+func TestResolveDeterministic_ExtractorIDIsAnOption(t *testing.T) {
+	for _, tc := range []struct{ given, want string }{
+		{"", detDefaultExtractorID},
+		{"chronicle-ast", "chronicle-ast"},
+	} {
+		g, _, _ := setupTestGraph(t)
+		revID := detFixture(t, g)
+		opts := detOptions()
+		opts.ExtractorID = tc.given
+		if _, err := g.ResolveExtractionsWithOptions(detDomain, revID, opts); err != nil {
+			t.Fatalf("ResolveExtractionsWithOptions(%q): %v", tc.given, err)
+		}
+		rows, err := g.Store().ListEvidenceBySourceKind("ast")
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("no ast evidence for ExtractorID=%q: %v", tc.given, err)
+		}
+		for _, r := range rows {
+			if r.ExtractorID != tc.want {
+				t.Errorf("ExtractorID=%q → evidence extractor_id %q, want %q", tc.given, r.ExtractorID, tc.want)
+			}
 		}
 	}
 }

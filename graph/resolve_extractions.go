@@ -94,6 +94,11 @@ type ResolveOptions struct {
 	// passes rather than failing the whole resolve.
 	ExtractorVersion string `json:"extractor_version,omitempty"`
 
+	// ExtractorID is the evidence identity a deterministic resolve stamps —
+	// who read the file. Empty defaults to detDefaultExtractorID
+	// ("chronicle-structural"); the structural pass passes its own.
+	ExtractorID string `json:"extractor_id,omitempty"`
+
 	// ContentHashes maps file path → content sha256, written into each
 	// evidence row's metadata as "content_hash". A file with no entry gets
 	// no content_hash — the evidence is still written.
@@ -569,9 +574,10 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	// until every structural node in the batch exists.
 	if g.detOn() {
 		g.det.secondPass = true
+		// The structural base is complete now — index every name in it once.
+		g.detResetNameIndex()
 		for _, df := range g.det.deferred {
 			g.detSetFile(df.filePath, 0)
-			g.currentFileImportMap = df.importMap
 			created, unresolved, err := g.resolveOneFact(domainKey, revisionID, df.filePath, df.fact, knownEntities, opts.IncludeDevDeps)
 			if err != nil {
 				return nil, fmt.Errorf("resolving %s fact in %s: %w", df.fact.Kind, df.filePath, err)
@@ -583,7 +589,6 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 				result.Unresolved = append(result.Unresolved, *unresolved)
 			}
 		}
-		g.currentFileImportMap = nil
 	}
 
 	// Everything past this point is derived from the graph, not read out of a
@@ -961,7 +966,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// as a boundary node so the contract path isn't lost. Only for
 			// internal-shaped hosts — a real third party's path (Telegram's
 			// "/bot<token>/sendMessage") is not this domain's contract.
-			if p := extractPathFromURL(fact.Target); p != "" && !external {
+			// Deterministic mode never queues one: materializing it mints a
+			// contract node out of a client's guess, which is exactly what
+			// "no edge without a unique target" forbids. The path is
+			// recorded as unresolved below instead.
+			if p := extractPathFromURL(fact.Target); p != "" && !external && !g.detOn() {
 				g.pendingExtEndpoints = append(g.pendingExtEndpoints, pendingExtEndpoint{
 					FromNodeKey: fromNodeKey, FromNodeID: fromID,
 					ToNodeKey: toNodeKey, Method: callMethod, Path: p,
@@ -969,17 +978,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			}
 		}
 
-		// Deterministic certainty split: a host the alias table resolved to a
-		// service node is name-resolved ("inferred", capped); a host that
-		// became an external_system is constructed straight out of the URL
-		// literal in the file, which is as fixed as an import specifier.
+		// Deterministic: an http call is never construction-fixed. Whether the
+		// alias table named the target or an external_system stood in for it,
+		// which service that host IS remains a guess — and an alias added
+		// later must look like the same claim getting better evidence, not
+		// like a downgrade from "hard".
 		callDerivation, callConfidence := "linked", 0.85
 		if g.detOn() {
-			if resolved {
-				callDerivation, callConfidence = "inferred", detNameMatchConfidence
-			} else {
-				callDerivation = "hard"
-			}
+			callDerivation, callConfidence = "inferred", detNameMatchConfidence
 		}
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -1025,9 +1031,15 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// a local contract (and would also hide it from FindUnmatchedHTTPCalls
 		// via hasEndpoint, silently dropping it from HTTP reconcile).
 		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" && !external {
-			epNodeKey, _ := normalizeEndpointKey(domainKey, callMethod, endpointPath)
+			epNodeKey, epDisplayName := normalizeEndpointKey(domainKey, callMethod, endpointPath)
 			// Only create edge if the endpoint node already exists (was exposed by another file)
-			if epID, err2 := g.store.GetNodeIDByKey(epNodeKey); err2 == nil {
+			epID, err2 := g.store.GetNodeIDByKey(epNodeKey)
+			if err2 != nil && g.detOn() {
+				// Nothing in the graph exposes this path: the call names an
+				// endpoint, and which one stays an open question.
+				return counts, g.detNoteUnresolved(filePath, "http_call", epDisplayName, nil), nil
+			}
+			if err2 == nil {
 				callEpEdgeKey := fromNodeKey + "->" + epNodeKey + ":CALLS_ENDPOINT"
 				// The endpoint node was matched by method+path — a name
 				// lookup, whatever the host turned out to be.
@@ -1099,14 +1111,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			}) {
 				counts.edges++
 			}
-			if _, err := g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+			// Legacy tolerates a failed evidence write here (`_, _ =`) — a
+			// call whose INJECTS edge is missing is not an error. Keep that.
+			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: detNameMatchConfidence, RevisionID: revisionID,
 				AssertionKind: "call_expression", Assertion: string(assertion),
-			}); err != nil {
-				return counts, nil, err
-			}
+			})
 			counts.evidence++
 			return counts, nil, nil
 		}
@@ -2415,6 +2427,11 @@ func (g *Graph) ensureNode(domainKey string, revisionID int64, nodeKey, name, fi
 			Metadata:           "{}",
 			SupportKind:        supportKind,
 		})
+		// A new node changes what a name can mean: drop the deterministic
+		// name index so the next candidate lookup sees it. No-op outside a
+		// deterministic resolve, and rare inside one (the third pass runs
+		// against a base the first two passes already built).
+		g.detResetNameIndex()
 		return g.addCreationEvidence(nodeKey, revisionID, name, filePath,
 			"chronicle:resolve:ensure_node", "referenced_entity")
 	}
