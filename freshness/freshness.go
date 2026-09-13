@@ -219,6 +219,15 @@ func (r *Report) resolveStatus(repoDir string) string {
 	return StatusStale
 }
 
+// SetRepo relabels the report and rebuilds Message so the knowledge line
+// matches. Callers that know a better name than the directory (the MCP tool's
+// repo argument, pro's federated repo names) use it instead of writing Repo
+// directly and leaving a stale Message behind.
+func (r *Report) SetRepo(repo string) {
+	r.Repo = repo
+	r.Message = r.body()
+}
+
 // Line renders the one-line knowledge string used by the MCP knowledge block:
 //
 //	knowledge: auto scanned@22f9f92 (07.08) · verified@dd193ad · 796 unscanned commits · 118 nodes touched
