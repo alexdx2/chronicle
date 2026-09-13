@@ -178,6 +178,15 @@ func (s *Store) FilesWithStructuralHashNotOnPack(domain, pack string, limit int)
 // whose structure came from code that is not in this history. Keeping them
 // would leave the new base's version of those files permanently unread — the
 // one way a content hash can hide a change instead of skipping a no-op.
+//
+// The cut is by REVISION ID, not by reachability: revision ids are a local
+// insertion order, not a commit graph, so "written after revision N" is a
+// proxy for "written on work this checkout can no longer reach", not a proof
+// of it. It errs on the side of forgetting — a record dropped for a file that
+// was in fact still reachable costs one re-extraction and nothing else, while
+// a record kept for an unreachable one costs a file that is never read again.
+// Asking git per record would be exact and would also mean one subprocess per
+// file; if that trade ever changes, this is the function to change.
 func (s *Store) DeleteStructuralHashesAfter(domain string, revisionID int64) (int64, error) {
 	prefix := structuralHashKeyPrefix(domain)
 	res, err := s.db.Exec(`DELETE FROM project_settings

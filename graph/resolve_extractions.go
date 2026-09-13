@@ -647,18 +647,34 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	// Post-resolve: detect module nodes from graph structure and fix edge types.
 	// A module = node with ≥2 outbound import edges, 0 endpoints, 0 service actions.
 	// This is generic (not framework-specific) — modules wire things, they don't DO things.
-	// These two follow the files that were just read: a module is recognised
-	// from the edges this batch created, and an external endpoint is
-	// materialised from an http_call in it. They stay on every path.
+	//
+	// fixModuleEdges and materializeExternalEndpoints follow the files that
+	// were just read: a module is recognised from the edges this batch created,
+	// and a boundary endpoint from an http_call in it. They stay on every path.
 	g.fixModuleEdges(domainKey)
+	var hygiene GraphHygieneStats
+	if opts.derivedPassesOn() {
+		// MERGE BEFORE MATERIALIZE, and the order is the contract between the
+		// two. mergeExternalSystemsIntoServices repoints the external_system
+		// placeholder an http_call minted for a host that turned out to be
+		// this domain's own service, and deletes it; materializeExternalEndpoints
+		// then reads those placeholders' status to decide what is still
+		// external. Materialising first publishes an `external` endpoint node
+		// and a CALLS_ENDPOINT edge for a call inside the domain, whose
+		// endpoint already exists locally.
+		//
+		// Deterministic mode queues no pending endpoint at all (minting a
+		// contract from a client's guess is what it exists to refuse), so the
+		// structural path runs materialize without the merge and materializes
+		// nothing.
+		g.mergeExternalSystemsIntoServices(domainKey)
+	}
 	if err := g.materializeExternalEndpoints(domainKey, revisionID); err != nil {
 		return nil, err
 	}
-	var hygiene GraphHygieneStats
 	if opts.derivedPassesOn() {
 		// Everything below re-derives the whole domain from the whole graph.
 		// Correct after a scan, and the dominant cost of a per-commit refresh.
-		g.mergeExternalSystemsIntoServices(domainKey)
 		if err := g.deriveServiceContains(domainKey, revisionID); err != nil {
 			return nil, err
 		}

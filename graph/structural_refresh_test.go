@@ -732,3 +732,60 @@ func TestStructuralRefreshRecordsTheRevisionWithTheContentHash(t *testing.T) {
 		t.Fatalf("forgot %d records, want the 2 this revision wrote", n)
 	}
 }
+
+// The other half of that gate: the passes a scan DOES run must still run in
+// the order they were written in.
+//
+// mergeExternalSystemsIntoServices repoints the external_system placeholder an
+// http_call minted for a host that turned out to be this domain's own service,
+// and deletes it. materializeExternalEndpoints then mints a boundary endpoint
+// node for whatever is STILL external — it reads the placeholder's status to
+// decide. Materialising first makes the graph publish an `external` contract
+// for a call inside the domain, whose endpoint already exists locally.
+func TestScanPathMergesExternalSystemsBeforeMaterialisingEndpoints(t *testing.T) {
+	g, s, _ := setupTestGraph(t)
+	const dom = "ordapp"
+	revID, err := s.CreateRevision(dom, "", "ord1", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The domain's own service, known from an earlier scan.
+	if _, err := s.UpsertNode(store.NodeRow{
+		NodeKey: "service:service:" + dom + ":jerry-api", Layer: "service", NodeType: "service",
+		DomainKey: dom, Name: "jerry-api", Status: "active",
+		FirstSeenRevisionID: revID, LastSeenRevisionID: revID, Confidence: 1, Metadata: "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A controller calling it over HTTP by host name.
+	if _, err := s.SaveExtraction(revID, dom, "src/tom.controller.ts", "extracted", "controller",
+		`[{"kind":"http_call","method":"GET","target":"http://jerry-api:3002/jerry/status","from_type":"controller"}]`,
+		""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := g.ResolveExtractions(dom, revID); err != nil {
+		t.Fatalf("ResolveExtractions: %v", err)
+	}
+
+	// The call landed on the real service, and the placeholder is gone.
+	if _, err := s.GetEdgeByKey("code:controller:" + dom + ":src/tom-controller->service:service:" + dom + ":jerry-api:CALLS_SERVICE"); err != nil {
+		t.Fatalf("the call was not repointed at the in-domain service: %v", err)
+	}
+	if n, err := s.GetNodeByKey("service:external_system:" + dom + ":jerry-api"); err == nil && n.Status == "active" {
+		t.Error("the external_system placeholder outlived the merge")
+	}
+	// And no boundary contract was published for it.
+	if n, err := s.GetNodeByKey("contract:endpoint:" + dom + ":get:/jerry/status"); err == nil {
+		t.Errorf("an in-domain call published an %q endpoint node — materialise ran before merge", n.Status)
+	}
+	edges, err := s.ListEdges(store.EdgeFilter{EdgeType: "CALLS_ENDPOINT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		if strings.Contains(e.ToNodeKey, "/jerry/status") {
+			t.Errorf("an in-domain call gained a boundary CALLS_ENDPOINT edge: %s", e.EdgeKey)
+		}
+	}
+}
