@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/extract/ast"
 	"github.com/alexdx2/chronicle-core/extract/rules"
 )
 
@@ -107,12 +108,7 @@ func TestExtractFileNilContentFails(t *testing.T) {
 	if got.Err == nil {
 		t.Error("err = nil, want a reason")
 	}
-	if got.FactsJSON != "[]" || got.FactCount != 0 {
-		t.Errorf("failed result carries facts: %s", got.FactsJSON)
-	}
-	if got.ContentHash != "" {
-		t.Errorf("content hash = %q, want empty — nothing was read", got.ContentHash)
-	}
+	assertFailedShape(t, got)
 }
 
 // Documents the real behaviour the replacement contract depends on:
@@ -216,8 +212,54 @@ func TestPackVersion(t *testing.T) {
 	}
 }
 
+// The structural phase must not answer to the scan's extractor id. Superseding
+// is scoped to (file, extractor_id), and graph.factExtractorID stamps
+// "chronicle-ast" on facts the scan's AST merge merely CORROBORATED (origin
+// "ast+llm") — rows carrying an LLM's reading that a syntax-only pass will
+// never re-assert. Sharing the id would supersede them on every commit.
 func TestExtractorID(t *testing.T) {
-	if ExtractorID != "chronicle-ast" {
-		t.Errorf("ExtractorID = %q, want chronicle-ast", ExtractorID)
+	if ExtractorID != "chronicle-structural" {
+		t.Errorf("ExtractorID = %q, want chronicle-structural", ExtractorID)
+	}
+	if ExtractorID == "chronicle-ast" {
+		t.Error("the structural phase shares the scan's extractor id — it would supersede ast+llm rows")
+	}
+}
+
+// A parser fault must not look like an answer. tree-sitter is cgo; the guard is
+// the only thing between a malformed file and a dead git hook, and an untested
+// recover is a recover that silently stops working.
+func TestExtractFileSurvivesAParserPanic(t *testing.T) {
+	orig := parseTypeScript
+	parseTypeScript = func([]byte) *ast.RawResult { panic("grammar exploded") }
+	defer func() { parseTypeScript = orig }()
+
+	got := ExtractFile("src/a.ts", []byte("export const x = 1;\n"), nestTech)
+	if got.Outcome != Failed {
+		t.Fatalf("outcome = %q, want failed", got.Outcome)
+	}
+	if got.Err == nil {
+		t.Error("err = nil, want the panic reason")
+	}
+	assertFailedShape(t, got)
+}
+
+// Every failure has the same shape, whatever caused it — the content hash
+// included: a failure means the file was not looked at, and recording a hash
+// for it would let the next run conclude "same content, already done" and skip
+// the file forever.
+func assertFailedShape(t *testing.T, got Result) {
+	t.Helper()
+	if got.ContentHash != "" {
+		t.Errorf("content hash = %q, want empty — the file was not looked at", got.ContentHash)
+	}
+	if got.FactsJSON != "[]" || got.FactCount != 0 {
+		t.Errorf("failed result carries facts: %s (%d)", got.FactsJSON, got.FactCount)
+	}
+	if got.FromType != "" {
+		t.Errorf("from type = %q, want empty", got.FromType)
+	}
+	if got.Candidates != 0 {
+		t.Errorf("candidates = %d, want 0", got.Candidates)
 	}
 }

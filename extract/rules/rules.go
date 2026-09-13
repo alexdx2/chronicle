@@ -15,8 +15,13 @@ import (
 // a new decorator, a changed mapping, a different transport tag — because it is
 // the only signal that makes files whose source did not change re-extractable:
 // the structural phase works through rows carrying an older version in bounded
-// batches until none are left. Integers written as strings, so a plain string
-// compare orders them.
+// batches until none are left.
+//
+// It is an integer written as a string. Compare it for EQUALITY, never with
+// "<": string order puts "10" before "9", so a version test that reads as
+// "older than" would silently stop draining the backlog at the first two-digit
+// pack. Callers that need oldest-first ordering cast to integer
+// (store.FilesWithStructuralHashNotOnPack does).
 const PackVersion = "1"
 
 // SemanticFact is a framework-interpreted fact ready for the graph resolver.

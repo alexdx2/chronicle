@@ -2,20 +2,22 @@ package store
 
 import "testing"
 
-// astEvidence seeds one graph_evidence row the way the structural extractor
-// writes them (source_kind "ast", extractor_id "chronicle-ast").
-func astEvidence(t *testing.T, s *Store, nodeID int64, file string, line int, version, hash string, revID int64) int64 {
+// structuralExtractorID is the id extract/structural stamps on its rows. These
+// helpers are generic over extractor_id — the store deliberately does not
+// import the extractor — so this is a test value, not a contract the store
+// enforces; extract/structural.ExtractorID is where the real one lives.
+const structuralExtractorID = "chronicle-structural"
+
+// astEvidence seeds one graph_evidence row the way the structural phase writes
+// them: source_kind "ast", the structural extractor's id.
+func astEvidence(t *testing.T, s *Store, nodeID int64, file string, line int, version string, revID int64) int64 {
 	t.Helper()
-	md := "{}"
-	if hash != "" {
-		md = `{"content_hash":"` + hash + `"}`
-	}
 	id, err := s.AddEvidence(EvidenceRow{
 		TargetKind: "node", NodeID: nodeID,
 		SourceKind: "ast", FilePath: file, LineStart: line,
-		ExtractorID: "chronicle-ast", ExtractorVersion: version,
+		ExtractorID: structuralExtractorID, ExtractorVersion: version,
 		Confidence: 1, EvidenceStatus: "valid", EvidencePolarity: "positive",
-		ValidFromRevisionID: revID, Metadata: md,
+		ValidFromRevisionID: revID, Metadata: "{}",
 	})
 	if err != nil {
 		t.Fatalf("astEvidence %s:%d: %v", file, line, err)
@@ -45,8 +47,8 @@ func TestSupersedeEvidenceNotIn(t *testing.T) {
 		t.Fatalf("CreateRevision rev2: %v", err)
 	}
 
-	evA := astEvidence(t, s, node1, "f.ts", 10, "1", "aaa", rev1)
-	evB := astEvidence(t, s, node1, "f.ts", 20, "1", "aaa", rev1)
+	evA := astEvidence(t, s, node1, "f.ts", 10, "1", rev1)
+	evB := astEvidence(t, s, node1, "f.ts", 20, "1", rev1)
 
 	// An importer-owned row on the same file: not the structural pass's to touch.
 	evDeclared, err := s.AddEvidence(EvidenceRow{
@@ -62,13 +64,13 @@ func TestSupersedeEvidenceNotIn(t *testing.T) {
 
 	// rev2: the same anchor is re-asserted (dedup updates evA in place) and one
 	// new anchor appears.
-	again := astEvidence(t, s, node1, "f.ts", 10, "2", "bbb", rev2)
+	again := astEvidence(t, s, node1, "f.ts", 10, "2", rev2)
 	if again != evA {
 		t.Fatalf("re-assertion created row %d, want the existing %d", again, evA)
 	}
-	evC := astEvidence(t, s, node2, "f.ts", 30, "2", "bbb", rev2)
+	evC := astEvidence(t, s, node2, "f.ts", 30, "2", rev2)
 
-	keep, err := s.EvidenceIDsCreatedIn("f.ts", "chronicle-ast", rev2)
+	keep, err := s.EvidenceIDsCreatedIn("f.ts", structuralExtractorID, rev2)
 	if err != nil {
 		t.Fatalf("EvidenceIDsCreatedIn: %v", err)
 	}
@@ -80,7 +82,7 @@ func TestSupersedeEvidenceNotIn(t *testing.T) {
 		t.Fatalf("EvidenceIDsCreatedIn(rev2) = %v, want [%d %d]", keep, evA, evC)
 	}
 
-	changed, err := s.SupersedeEvidenceNotIn("f.ts", "chronicle-ast", keep, rev2)
+	changed, err := s.SupersedeEvidenceNotIn("f.ts", structuralExtractorID, keep, rev2)
 	if err != nil {
 		t.Fatalf("SupersedeEvidenceNotIn: %v", err)
 	}
@@ -106,9 +108,9 @@ func TestSupersedeEvidenceNotInEmptyKeep(t *testing.T) {
 	s := openTestStore(t)
 	rev1, node1, _ := seedNodes(t, s)
 	rev2, _ := s.CreateRevision("orders", "sha1", "sha2", "git_hook", "incremental", `{"kind":"structural"}`)
-	evA := astEvidence(t, s, node1, "gone.ts", 10, "1", "aaa", rev1)
+	evA := astEvidence(t, s, node1, "gone.ts", 10, "1", rev1)
 
-	changed, err := s.SupersedeEvidenceNotIn("gone.ts", "chronicle-ast", nil, rev2)
+	changed, err := s.SupersedeEvidenceNotIn("gone.ts", structuralExtractorID, nil, rev2)
 	if err != nil {
 		t.Fatalf("SupersedeEvidenceNotIn: %v", err)
 	}
@@ -120,7 +122,7 @@ func TestSupersedeEvidenceNotInEmptyKeep(t *testing.T) {
 	}
 
 	// Superseding twice is a no-op: only valid/revalidated rows transition.
-	again, err := s.SupersedeEvidenceNotIn("gone.ts", "chronicle-ast", nil, rev2)
+	again, err := s.SupersedeEvidenceNotIn("gone.ts", structuralExtractorID, nil, rev2)
 	if err != nil {
 		t.Fatalf("second SupersedeEvidenceNotIn: %v", err)
 	}
@@ -130,13 +132,13 @@ func TestSupersedeEvidenceNotInEmptyKeep(t *testing.T) {
 }
 
 // The rules-pack backlog: which files still carry rows from an older pack.
-func TestFilesWithExtractorVersionBelow(t *testing.T) {
+func TestFilesWithExtractorVersionOtherThan(t *testing.T) {
 	s := openTestStore(t)
 	rev1, node1, _ := seedNodes(t, s)
 
-	astEvidence(t, s, node1, "old.ts", 1, "1", "aaa", rev1)
-	astEvidence(t, s, node1, "old.ts", 2, "1", "aaa", rev1) // same file, still one entry
-	astEvidence(t, s, node1, "current.ts", 1, "2", "bbb", rev1)
+	astEvidence(t, s, node1, "old.ts", 1, "1", rev1)
+	astEvidence(t, s, node1, "old.ts", 2, "1", rev1) // same file, still one entry
+	astEvidence(t, s, node1, "current.ts", 1, "2", rev1)
 
 	// Another extractor on an old version is not this backlog.
 	if _, err := s.AddEvidence(EvidenceRow{
@@ -152,80 +154,105 @@ func TestFilesWithExtractorVersionBelow(t *testing.T) {
 	if _, err := s.AddEvidence(EvidenceRow{
 		TargetKind: "node", NodeID: node1,
 		SourceKind: "ast", FilePath: "dead.ts", LineStart: 1,
-		ExtractorID: "chronicle-ast", ExtractorVersion: "1",
+		ExtractorID: structuralExtractorID, ExtractorVersion: "1",
 		Confidence: 1, EvidenceStatus: "superseded", EvidencePolarity: "positive",
 		ValidFromRevisionID: rev1, Metadata: "{}",
 	}); err != nil {
 		t.Fatalf("AddEvidence dead: %v", err)
 	}
 
-	files, err := s.FilesWithExtractorVersionBelow("chronicle-ast", "2", 10)
+	files, err := s.FilesWithExtractorVersionOtherThan(structuralExtractorID, "2", 10)
 	if err != nil {
-		t.Fatalf("FilesWithExtractorVersionBelow: %v", err)
+		t.Fatalf("FilesWithExtractorVersionOtherThan: %v", err)
 	}
 	if len(files) != 1 || files[0] != "old.ts" {
 		t.Fatalf("files = %v, want [old.ts]", files)
 	}
 
-	n, err := s.CountFilesWithExtractorVersionBelow("chronicle-ast", "2")
+	n, err := s.CountFilesWithExtractorVersionOtherThan(structuralExtractorID, "2")
 	if err != nil {
-		t.Fatalf("CountFilesWithExtractorVersionBelow: %v", err)
+		t.Fatalf("CountFilesWithExtractorVersionOtherThan: %v", err)
 	}
 	if n != 1 {
 		t.Errorf("count = %d, want 1", n)
 	}
 
 	// The batch is bounded.
-	astEvidence(t, s, node1, "older.ts", 1, "1", "aaa", rev1)
-	one, err := s.FilesWithExtractorVersionBelow("chronicle-ast", "2", 1)
+	astEvidence(t, s, node1, "older.ts", 1, "1", rev1)
+	one, err := s.FilesWithExtractorVersionOtherThan(structuralExtractorID, "2", 1)
 	if err != nil {
-		t.Fatalf("FilesWithExtractorVersionBelow limit 1: %v", err)
+		t.Fatalf("FilesWithExtractorVersionOtherThan limit 1: %v", err)
 	}
 	if len(one) != 1 {
 		t.Errorf("limit 1 returned %d files, want 1", len(one))
 	}
-	if n, _ := s.CountFilesWithExtractorVersionBelow("chronicle-ast", "2"); n != 2 {
+	if n, _ := s.CountFilesWithExtractorVersionOtherThan(structuralExtractorID, "2"); n != 2 {
 		t.Errorf("count after second old file = %d, want 2", n)
 	}
 
 	// Nothing behind the current pack once every row is at it.
-	if files, _ := s.FilesWithExtractorVersionBelow("chronicle-ast", "1", 10); len(files) != 1 || files[0] != "current.ts" {
+	if files, _ := s.FilesWithExtractorVersionOtherThan(structuralExtractorID, "1", 10); len(files) != 1 || files[0] != "current.ts" {
 		t.Errorf("below \"1\" = %v, want [current.ts]", files)
 	}
 }
 
-// The content hash of the last structural look at a file — same pack + same
-// content is a no-op, so the phase has to be able to ask.
-func TestContentHashForFileExtractor(t *testing.T) {
+// A pack bump past 9 must not send the backlog backwards: "10" is newer than
+// "9", which a plain string compare gets exactly wrong.
+func TestFilesWithExtractorVersionOtherThanOrdersPacksNumerically(t *testing.T) {
 	s := openTestStore(t)
 	rev1, node1, _ := seedNodes(t, s)
 
-	if h, err := s.ContentHashForFileExtractor("never.ts", "chronicle-ast"); err != nil || h != "" {
-		t.Fatalf("unknown file: hash=%q err=%v, want \"\"/nil", h, err)
+	astEvidence(t, s, node1, "on-ten.ts", 1, "10", rev1)
+	astEvidence(t, s, node1, "on-nine.ts", 1, "9", rev1)
+
+	files, err := s.FilesWithExtractorVersionOtherThan(structuralExtractorID, "11", 10)
+	if err != nil {
+		t.Fatalf("FilesWithExtractorVersionOtherThan: %v", err)
+	}
+	if len(files) != 2 || files[0] != "on-nine.ts" {
+		t.Fatalf("files = %v, want on-nine.ts (pack 9) before on-ten.ts (pack 10)", files)
+	}
+}
+
+// Phase-1 verification owns neither of the two kinds in
+// ImporterOwnedSourceKinds. `ast` joined the set because the structural phase
+// re-extracts the file in the same run and supersedes exactly what it no longer
+// asserts — staling it first double-counts the change and hands it to a
+// verifier whose verdict is about to be overwritten.
+func TestStructuralEvidenceIsNotPhaseOneVerificationsToStale(t *testing.T) {
+	s := openTestStore(t)
+	rev1, node1, _ := seedNodes(t, s)
+
+	evAST := astEvidence(t, s, node1, "changed.ts", 1, "1", rev1)
+	evAgent, err := s.AddEvidence(EvidenceRow{
+		TargetKind: "node", NodeID: node1,
+		SourceKind: "file", FilePath: "changed.ts", LineStart: 2,
+		ExtractorID: "claude", ExtractorVersion: "1",
+		Confidence: 0.8, EvidenceStatus: "valid", EvidencePolarity: "positive",
+		ValidFromRevisionID: rev1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("AddEvidence agent: %v", err)
 	}
 
-	astEvidence(t, s, node1, "f.ts", 1, "1", "aaa", rev1)
-	if h, err := s.ContentHashForFileExtractor("f.ts", "chronicle-ast"); err != nil || h != "aaa" {
-		t.Fatalf("hash = %q err=%v, want aaa", h, err)
+	if _, _, _, err := s.MarkEvidenceStaleByFiles([]string{"changed.ts"}); err != nil {
+		t.Fatalf("MarkEvidenceStaleByFiles: %v", err)
+	}
+	if st, _ := evidenceStatus(t, s, evAST); st != "valid" {
+		t.Errorf("ast row is %q after a code refresh — the structural phase supersedes it itself", st)
+	}
+	if st, _ := evidenceStatus(t, s, evAgent); st != "stale" {
+		t.Errorf("agent row is %q, want stale — it is exactly what verification owns", st)
 	}
 
-	// A newer row wins.
-	astEvidence(t, s, node1, "f.ts", 2, "1", "bbb", rev1)
-	if h, _ := s.ContentHashForFileExtractor("f.ts", "chronicle-ast"); h != "bbb" {
-		t.Errorf("hash = %q, want bbb (newest row)", h)
+	// Nor may an ast row be handed to the mechanical verifier.
+	reverifiable, err := s.ListReverifiableEvidenceByFile("changed.ts")
+	if err != nil {
+		t.Fatalf("ListReverifiableEvidenceByFile: %v", err)
 	}
-
-	// Malformed metadata must not fail the query for the whole file.
-	if _, err := s.db.Exec(
-		`UPDATE graph_evidence SET metadata = 'not json' WHERE file_path = 'f.ts' AND line_start = 2`); err != nil {
-		t.Fatalf("corrupt metadata: %v", err)
-	}
-	if h, err := s.ContentHashForFileExtractor("f.ts", "chronicle-ast"); err != nil || h != "aaa" {
-		t.Fatalf("with malformed metadata: hash=%q err=%v, want aaa", h, err)
-	}
-
-	// Another extractor's hash is not this extractor's answer.
-	if h, _ := s.ContentHashForFileExtractor("f.ts", "claude"); h != "" {
-		t.Errorf("other extractor hash = %q, want \"\"", h)
+	for _, r := range reverifiable {
+		if r.SourceKind == "ast" {
+			t.Errorf("ast row %d offered for re-verification", r.EvidenceID)
+		}
 	}
 }

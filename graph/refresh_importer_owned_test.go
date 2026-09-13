@@ -10,10 +10,11 @@ import (
 	"github.com/alexdx2/chronicle-core/validate"
 )
 
-// importerOwnedFixture: one screen node whose evidence comes from a surface
-// import (surface_extract for the node itself, declared for the human verdict
-// on it), both anchored at a product source file — the file a code refresh
-// will see change.
+// importerOwnedFixture: one screen node whose evidence phase-1 verification
+// does not own — a surface import (surface_extract for the node itself,
+// declared for the human verdict on it) and an `ast` row from the structural
+// phase — all anchored at a product source file, the file a code refresh will
+// see change.
 func importerOwnedFixture(t *testing.T) (*Graph, string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -47,11 +48,20 @@ func importerOwnedFixture(t *testing.T) (*Graph, string, string) {
 	}, rev); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"surface_extract", "declared"} {
+	// `ast` is owned by the structural phase, not by an importer, but the rule
+	// is the same one: phase 1 must not stale-mark it, because phase 2
+	// re-extracts the file in the same run and supersedes exactly what it no
+	// longer asserts.
+	owners := map[string]string{
+		"surface_extract": "surface-import",
+		"declared":        "surface-import",
+		"ast":             "chronicle-structural",
+	}
+	for _, kind := range []string{"surface_extract", "declared", "ast"} {
 		if _, err := g.AddNodeEvidence(key, validate.EvidenceInput{
 			TargetKind: "node", SourceKind: kind,
 			FilePath: screenFile, LineStart: 1,
-			ExtractorID: "surface-import", ExtractorVersion: "1",
+			ExtractorID: owners[kind], ExtractorVersion: "1",
 			Assertion: `{"x":1}`, AssertionKind: "decision", AssertionVersion: "1",
 			Confidence: 0.9, Polarity: "positive", RevisionID: rev,
 		}); err != nil {
@@ -96,9 +106,10 @@ func TestARefreshLeavesImporterOwnedEvidenceAlone(t *testing.T) {
 		t.Fatalf("RefreshFromDiff: %v", err)
 	}
 
-	for kind, status := range evidenceStatuses(t, g.Store(), "ui:screen:auto:admin") {
-		if status != "valid" {
-			t.Errorf("%s evidence is %q after a code refresh — the importer owns it, and no scan will ever re-emit it", kind, status)
+	statuses := evidenceStatuses(t, g.Store(), "ui:screen:auto:admin")
+	for _, kind := range []string{"surface_extract", "declared", "ast"} {
+		if statuses[kind] != "valid" {
+			t.Errorf("%s evidence is %q after a code refresh — phase 1 does not own it", kind, statuses[kind])
 		}
 	}
 }

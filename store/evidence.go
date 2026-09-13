@@ -522,16 +522,25 @@ func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificatio
 	})
 }
 
-// ImporterOwnedSourceKinds are the evidence source kinds no code scan
-// produces and no code scan can re-emit: a product's own surface extract, and
-// the human decisions recorded alongside it. They are anchored at product
-// source files, so a code refresh sees "that file changed" and would
-// stale-mark them — after which the mechanical verifier, which has no way to
-// check a declared decision, refutes them, and nothing ever puts them back.
-// Measured live: 146 of 146 declared rows read stale/missing after one
-// refresh. The importer owns these rows; re-importing the surface is the only
-// thing that may change them.
-var ImporterOwnedSourceKinds = []string{"declared", "surface_extract"}
+// ImporterOwnedSourceKinds are the evidence source kinds phase-1 verification
+// must neither stale-mark nor re-verify, because a different writer owns them
+// and will put them right itself.
+//
+// Two owners, one rule:
+//
+//   - an importer — a product's own surface extract and the human decisions
+//     recorded alongside it. They are anchored at product source files, so a
+//     code refresh sees "that file changed" and would stale-mark them; the
+//     mechanical verifier, which has no way to check a declared decision, then
+//     refutes them, and nothing ever puts them back. Measured live: 146 of 146
+//     declared rows read stale/missing after one refresh. Re-importing the
+//     surface is the only thing that may change them.
+//   - the structural phase — `ast` rows. Phase 2 re-extracts the file in the
+//     same run and supersedes exactly what it no longer asserts
+//     (SupersedeEvidenceNotIn). Letting phase 1 stale-mark them first would
+//     double-count the same change and, worse, hand them to a verifier whose
+//     verdict the structural pass is about to overwrite anyway.
+var ImporterOwnedSourceKinds = []string{"declared", "surface_extract", "ast"}
 
 // importerOwnedPredicate is the SQL half of that rule, for the column named by
 // col ("source_kind" or "e.source_kind" depending on the query's joins).
@@ -1164,11 +1173,6 @@ func placeholderList(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
-// evidenceContentHashExpr reads metadata.content_hash the same defensive way
-// revisionLayerExpr reads metadata.layer: json_extract raises on malformed
-// JSON, which would fail the whole query because of one badly written row, and
-// CASE is documented to short-circuit.
-const evidenceContentHashExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.content_hash') ELSE NULL END`
 
 // EvidenceIDsCreatedIn returns the evidence rows (filePath, extractorID)
 // asserted in revisionID — rows the revision inserted (valid_from) and rows it
@@ -1177,6 +1181,14 @@ const evidenceContentHashExpr = `CASE WHEN json_valid(metadata) THEN json_extrac
 // creating a second one, so a pass that saw the same anchor again would look
 // like it had dropped it if only valid_from were consulted. This is the `keep`
 // set SupersedeEvidenceNotIn expects.
+//
+// Caller contract: last_verified_revision_id is also what phase-1
+// re-verification stamps. If verification and the structural phase ever shared
+// a revision id AND a source kind, a row verification merely re-checked would
+// land in `keep` and escape superseding. It cannot today: `ast` rows are
+// excluded from verification entirely (ImporterOwnedSourceKinds), so the only
+// writer that can stamp them with a revision is the structural phase itself.
+// Whoever changes that has to give this helper a source-kind filter.
 func (s *Store) EvidenceIDsCreatedIn(filePath, extractorID string, revisionID int64) ([]int64, error) {
 	rows, err := s.db.Query(`
 		SELECT evidence_id FROM graph_evidence
@@ -1313,20 +1325,26 @@ func (s *Store) SupersedeEvidenceNotIn(filePath, extractorID string, keep []int6
 // on, so the rules-pack backlog looks only at rows that currently hold.
 const currentStructuralRows = `evidence_status IN ('valid','revalidated')`
 
-// FilesWithExtractorVersionBelow lists distinct file paths whose current rows of
-// extractorID were written by a rules pack other than version, oldest pack
-// first, at most limit files (limit <= 0 means no bound). A pack bump makes
-// every file it touched re-extractable even though the source did not change;
-// the phase works through them in bounded batches.
+// FilesWithExtractorVersionOtherThan lists distinct file paths whose current
+// rows of extractorID were written by a rules pack other than version, oldest
+// pack first, at most limit files (limit <= 0 means no bound).
 //
-// String compare is enough: pack versions are integers written as strings.
-func (s *Store) FilesWithExtractorVersionBelow(extractorID, version string, limit int) ([]string, error) {
+// SECONDARY. The structural phase's own backlog is
+// FilesWithStructuralHashNotOnPack, which answers for every file the phase
+// looked at — including the ones that produced no evidence at all, and which
+// this query therefore cannot see. This one reads the same fact off the rows
+// that exist, for auditing a graph and for callers that have no domain in hand.
+//
+// Packs are integers written as strings, so the numeric CAST orders them ("10"
+// sorts after "9", which a plain string compare gets backwards); the textual
+// tiebreak keeps the order total when a version is not a number.
+func (s *Store) FilesWithExtractorVersionOtherThan(extractorID, version string, limit int) ([]string, error) {
 	q := `SELECT file_path FROM graph_evidence
 	      WHERE extractor_id = ? AND extractor_version != ?
 	        AND file_path IS NOT NULL AND file_path != ''
 	        AND ` + currentStructuralRows + `
 	      GROUP BY file_path
-	      ORDER BY MIN(extractor_version) ASC, file_path ASC`
+	      ORDER BY CAST(MIN(extractor_version) AS INTEGER) ASC, MIN(extractor_version) ASC, file_path ASC`
 	args := []any{extractorID, version}
 	if limit > 0 {
 		q += ` LIMIT ?`
@@ -1334,27 +1352,28 @@ func (s *Store) FilesWithExtractorVersionBelow(extractorID, version string, limi
 	}
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("FilesWithExtractorVersionBelow: %w", err)
+		return nil, fmt.Errorf("FilesWithExtractorVersionOtherThan: %w", err)
 	}
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
 		var fp string
 		if err := rows.Scan(&fp); err != nil {
-			return nil, fmt.Errorf("FilesWithExtractorVersionBelow scan: %w", err)
+			return nil, fmt.Errorf("FilesWithExtractorVersionOtherThan scan: %w", err)
 		}
 		out = append(out, fp)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("FilesWithExtractorVersionBelow rows: %w", err)
+		return nil, fmt.Errorf("FilesWithExtractorVersionOtherThan rows: %w", err)
 	}
 	return out, nil
 }
 
-// CountFilesWithExtractorVersionBelow is FilesWithExtractorVersionBelow's
-// predicate as a count — the "340 files on old rules" the freshness line owes
-// the reader, which must not be capped by the batch size.
-func (s *Store) CountFilesWithExtractorVersionBelow(extractorID, version string) (int, error) {
+// CountFilesWithExtractorVersionOtherThan is
+// FilesWithExtractorVersionOtherThan's predicate as a count, and SECONDARY for
+// the same reason. The number the freshness line reports comes from
+// CountStructuralHashesNotOnPack.
+func (s *Store) CountFilesWithExtractorVersionOtherThan(extractorID, version string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`
 		SELECT COUNT(DISTINCT file_path) FROM graph_evidence
@@ -1362,32 +1381,8 @@ func (s *Store) CountFilesWithExtractorVersionBelow(extractorID, version string)
 		  AND file_path IS NOT NULL AND file_path != ''
 		  AND `+currentStructuralRows, extractorID, version).Scan(&n)
 	if err != nil {
-		return 0, fmt.Errorf("CountFilesWithExtractorVersionBelow: %w", err)
+		return 0, fmt.Errorf("CountFilesWithExtractorVersionOtherThan: %w", err)
 	}
 	return n, nil
 }
 
-// ContentHashForFileExtractor returns the content hash the newest current row of
-// (filePath, extractorID) was extracted from, or "" when the pair has none —
-// how the phase answers "same pack, same content, nothing to do". Rows that
-// carry no hash are skipped rather than treated as an answer: re-observation
-// updates a row's status without rewriting its metadata, so the newest row is
-// not always the one that recorded the hash, and a missing answer only ever
-// costs a re-extraction.
-func (s *Store) ContentHashForFileExtractor(filePath, extractorID string) (string, error) {
-	var hash sql.NullString
-	err := s.db.QueryRow(`
-		SELECT `+evidenceContentHashExpr+` AS content_hash FROM graph_evidence
-		WHERE file_path = ? AND extractor_id = ?
-		  AND `+currentStructuralRows+`
-		  AND `+evidenceContentHashExpr+` IS NOT NULL
-		  AND `+evidenceContentHashExpr+` != ''
-		ORDER BY evidence_id DESC LIMIT 1`, filePath, extractorID).Scan(&hash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("ContentHashForFileExtractor: %w", err)
-	}
-	return hash.String, nil
-}

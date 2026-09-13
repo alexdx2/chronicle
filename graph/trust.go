@@ -37,9 +37,10 @@ var (
 	runtimeSourceKinds = map[string]bool{
 		"runtime": true, "prisma": true,
 	}
-	// Deterministic extractors: AST pass, manifest loader
+	// Deterministic extractors: the scan's AST pass, the post-commit structural
+	// phase (extract/structural.ExtractorID), the manifest loader.
 	structuralExtractors = map[string]bool{
-		"chronicle-ast": true, "chronicle:manifest": true,
+		"chronicle-ast": true, "chronicle-structural": true, "chronicle:manifest": true,
 	}
 	// Source kinds that are structural by nature regardless of extractor:
 	// declarative schemas and infra definitions.

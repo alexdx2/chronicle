@@ -36,7 +36,15 @@ import (
 // Superseding is scoped to (file_path, extractor_id), so this string is the
 // boundary between what a structural pass may replace and what belongs to the
 // agent or to an importer.
-const ExtractorID = "chronicle-ast"
+//
+// It is deliberately NOT "chronicle-ast", which the scan already uses.
+// graph.factExtractorID stamps "chronicle-ast" on facts the scan's AST merge
+// produced OR merely corroborated — origin "ast+llm" — so those rows carry an
+// LLM's reading of the file enriched with AST fields. A structural pass sees
+// only syntax and would not re-assert them, and sharing the id would make it
+// supersede knowledge it cannot produce. Different id, different contribution,
+// each replaceable only by its own writer.
+const ExtractorID = "chronicle-structural"
 
 // Outcome is what a structural pass concluded about one file.
 type Outcome string
@@ -80,6 +88,19 @@ func isTypeScript(path string) bool {
 		strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".jsx")
 }
 
+// parseTypeScript is the tree-sitter call as a variable so the panic guard
+// below can be exercised: cgo cannot be made to fault on demand, and an
+// untested recover is a recover that silently stops working.
+var parseTypeScript = ast.ExtractTypeScript
+
+// failedResult is the ONE shape a failure has. Every field a caller might read
+// is cleared, the content hash included: a failure means the file was not
+// looked at, and recording a hash for it would let the next run conclude
+// "same content, already done" and skip the file forever.
+func failedResult(path string, err error) Result {
+	return Result{Path: path, Outcome: Failed, FactsJSON: "[]", Err: err}
+}
+
 // ExtractFile runs the deterministic extractor for path on content with the
 // tech's rule packs.
 //
@@ -97,26 +118,19 @@ func ExtractFile(path string, content []byte, tech []string) (res Result) {
 	// an empty file: an empty file genuinely asserts nothing, an unreadable one
 	// asserts we do not know.
 	if content == nil {
-		res.Outcome = Failed
-		res.Err = fmt.Errorf("structural: no content for %s", path)
-		return res
+		return failedResult(path, fmt.Errorf("structural: no content for %s", path))
 	}
 	sum := sha256.Sum256(content)
 	res.ContentHash = hex.EncodeToString(sum[:])
 
 	defer func() {
 		if r := recover(); r != nil {
-			res.Outcome = Failed
-			res.FromType = ""
-			res.FactsJSON = "[]"
-			res.FactCount = 0
-			res.Candidates = 0
-			res.Err = fmt.Errorf("structural: parser panic on %s: %v", path, r)
+			res = failedResult(path, fmt.Errorf("structural: parser panic on %s: %v", path, r))
 		}
 	}()
 
 	if isTypeScript(path) {
-		raw := ast.ExtractTypeScript(content)
+		raw := parseTypeScript(content)
 		semantic := rules.NewRegistry(rules.RulesetsForTech(tech)...).Apply(raw)
 		res.Outcome = Extracted
 		res.FromType = semantic.FromType
@@ -155,10 +169,7 @@ func ExtractFile(path string, content []byte, tech []string) (res Result) {
 			res.FactsJSON = string(b)
 		} else {
 			// Unserialisable facts are not facts we can hand anyone.
-			res.Outcome = Failed
-			res.FromType = ""
-			res.FactCount = 0
-			res.Err = fmt.Errorf("structural: encode prisma facts for %s: %w", path, err)
+			return failedResult(path, fmt.Errorf("structural: encode prisma facts for %s: %w", path, err))
 		}
 	}
 	return res
