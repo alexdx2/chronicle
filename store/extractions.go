@@ -212,14 +212,31 @@ func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]Extractio
 
 // ListUnresolvedExtractions returns extractions with status='extracted' (not yet resolved into graph).
 func (s *Store) ListUnresolvedExtractions(revisionID int64, domainKey string) ([]ExtractionRow, error) {
+	return s.ListUnresolvedExtractionsByRole(revisionID, domainKey, "")
+}
+
+// ListUnresolvedExtractionsByRole is ListUnresolvedExtractions narrowed to one
+// extraction_role (empty role = every role, the old behaviour).
+//
+// Two writers can now share a revision: the structural phase resolves on the
+// revision the refresh or the scan already opened. Without the narrowing, a
+// deterministic resolve would pick up an agent's rows on that revision, build
+// the graph from facts it never read, and mark them resolved — the agent's
+// work consumed by a pass that cannot produce it.
+func (s *Store) ListUnresolvedExtractionsByRole(revisionID int64, domainKey, role string) ([]ExtractionRow, error) {
 	q := `SELECT extraction_id, revision_id, domain_key, file_path, status,
 	             COALESCE(from_type,''), COALESCE(extraction_role,'single'),
 	             COALESCE(vote_group,''), COALESCE(vote_index,0),
 	             facts_json, COALESCE(error_message,''), created_at
 	      FROM scan_extractions
-	      WHERE revision_id = ? AND domain_key = ? AND status = 'extracted'
-	      ORDER BY extraction_id`
-	rows, err := s.db.Query(q, revisionID, domainKey)
+	      WHERE revision_id = ? AND domain_key = ? AND status = 'extracted'`
+	args := []any{revisionID, domainKey}
+	if role != "" {
+		q += ` AND COALESCE(extraction_role,'single') = ?`
+		args = append(args, role)
+	}
+	q += ` ORDER BY extraction_id`
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ListUnresolvedExtractions: %w", err)
 	}
@@ -274,10 +291,21 @@ func (s *Store) UpdateExtractionMetadata(extractionID int64, patch map[string]an
 
 // MarkExtractionsResolved marks extractions as resolved after graph build.
 func (s *Store) MarkExtractionsResolved(revisionID int64, domainKey string) error {
-	_, err := s.db.Exec(`
-		UPDATE scan_extractions SET status = 'resolved'
-		WHERE revision_id = ? AND domain_key = ? AND status = 'extracted'
-	`, revisionID, domainKey)
+	return s.MarkExtractionsResolvedByRole(revisionID, domainKey, "")
+}
+
+// MarkExtractionsResolvedByRole closes only the rows one writer owns (empty
+// role = all of them). A resolve may only mark resolved what it actually
+// resolved: see ListUnresolvedExtractionsByRole.
+func (s *Store) MarkExtractionsResolvedByRole(revisionID int64, domainKey, role string) error {
+	q := `UPDATE scan_extractions SET status = 'resolved'
+	      WHERE revision_id = ? AND domain_key = ? AND status = 'extracted'`
+	args := []any{revisionID, domainKey}
+	if role != "" {
+		q += ` AND COALESCE(extraction_role,'single') = ?`
+		args = append(args, role)
+	}
+	_, err := s.db.Exec(q, args...)
 	return err
 }
 

@@ -105,6 +105,38 @@ type ResolveOptions struct {
 	// evidence row's metadata as "content_hash". A file with no entry gets
 	// no content_hash — the evidence is still written.
 	ContentHashes map[string]string `json:"content_hashes,omitempty"`
+
+	// ExtractionRole narrows the resolve to the scan_extractions rows of one
+	// writer (store.StructuralExtractionRole, say). Empty = every row on the
+	// revision, which is what a scan means.
+	//
+	// It exists because two writers can now share a revision: the structural
+	// phase resolves on the revision the refresh or the scan already opened.
+	// Unscoped, a deterministic resolve would build the graph out of an
+	// agent's facts it never read and then mark that agent's rows resolved.
+	ExtractionRole string `json:"extraction_role,omitempty"`
+
+	// DerivedPasses controls the post-resolve passes that derive knowledge
+	// from the whole GRAPH rather than from the files just read — service
+	// containment, contains conflicts and cycles, graph hygiene, flow
+	// derivation, the quality report. nil means true, which is what a scan
+	// wants: it has just rebuilt everything, so everything derived from it is
+	// due a rebuild.
+	//
+	// A per-commit structural refresh sets it false. Those passes cost time
+	// proportional to the DOMAIN, not to the diff — measured live on
+	// okeep/auto: 16.0 s for a one-file commit, against ~0.2 s of parsing —
+	// and re-deriving the whole domain's flows because one file gained an
+	// import is work nobody asked for. Fact resolution, module-edge repair and
+	// external-endpoint materialisation still run: those follow the files.
+	DerivedPasses *bool `json:"derived_passes,omitempty"`
+}
+
+// derivedPassesOn reports whether the graph-wide post-passes should run.
+// Absent means yes — the field exists to let one caller opt out, not to make
+// every existing caller opt in.
+func (o ResolveOptions) derivedPassesOn() bool {
+	return o.DerivedPasses == nil || *o.DerivedPasses
 }
 
 // ResolveExtractionsResult is returned by ResolveExtractions.
@@ -461,7 +493,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 		}
 	}
 
-	rawExtractions, err := g.store.ListUnresolvedExtractions(revisionID, domainKey)
+	rawExtractions, err := g.store.ListUnresolvedExtractionsByRole(revisionID, domainKey, opts.ExtractionRole)
 	if err != nil {
 		return nil, fmt.Errorf("ResolveExtractions: %w", err)
 	}
@@ -496,8 +528,14 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	}
 
 	// Phase 1: Discover all entities mentioned across all files
-	// Build a set of known entity names for resolution
-	knownEntities := g.collectKnownEntities(allFiles)
+	// Build a set of known entity names for resolution. It is a full ListNodes
+	// sweep of the graph, so a resolve that runs on every commit skips it —
+	// resolveOneFact does not read the set (see its signature), and the passes
+	// that would are the ones DerivedPasses turns off.
+	var knownEntities map[string]bool
+	if opts.derivedPassesOn() {
+		knownEntities = g.collectKnownEntities(allFiles)
+	}
 
 	// Sort: files with endpoints first (they expose endpoints that others call)
 	sort.SliceStable(allFiles, func(i, j int) bool {
@@ -609,40 +647,55 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	// Post-resolve: detect module nodes from graph structure and fix edge types.
 	// A module = node with ≥2 outbound import edges, 0 endpoints, 0 service actions.
 	// This is generic (not framework-specific) — modules wire things, they don't DO things.
+	// These two follow the files that were just read: a module is recognised
+	// from the edges this batch created, and an external endpoint is
+	// materialised from an http_call in it. They stay on every path.
 	g.fixModuleEdges(domainKey)
-	g.mergeExternalSystemsIntoServices(domainKey)
 	if err := g.materializeExternalEndpoints(domainKey, revisionID); err != nil {
 		return nil, err
 	}
-	if err := g.deriveServiceContains(domainKey, revisionID); err != nil {
-		return nil, err
-	}
-	g.detectContainsConflicts(domainKey, revisionID)
-	g.detectContainsCycles(domainKey, revisionID)
-	hygiene := g.applyGraphHygiene(domainKey)
-	result.Hygiene = hygiene
-	// Deterministic flow derivation: always fresh after each resolve.
-	// This replaces the LLM phase-2 flow tracing (which is gated off).
-	// Flows are derived from endpoint → controller → transitive INJECTS closure.
-	if err := g.DeriveFlows(domainKey, revisionID); err != nil {
-		return nil, fmt.Errorf("ResolveExtractions derive flows: %w", err)
+	var hygiene GraphHygieneStats
+	if opts.derivedPassesOn() {
+		// Everything below re-derives the whole domain from the whole graph.
+		// Correct after a scan, and the dominant cost of a per-commit refresh.
+		g.mergeExternalSystemsIntoServices(domainKey)
+		if err := g.deriveServiceContains(domainKey, revisionID); err != nil {
+			return nil, err
+		}
+		g.detectContainsConflicts(domainKey, revisionID)
+		g.detectContainsCycles(domainKey, revisionID)
+		hygiene = g.applyGraphHygiene(domainKey)
+		result.Hygiene = hygiene
+		// Deterministic flow derivation: always fresh after each resolve.
+		// This replaces the LLM phase-2 flow tracing (which is gated off).
+		// Flows are derived from endpoint → controller → transitive INJECTS closure.
+		if err := g.DeriveFlows(domainKey, revisionID); err != nil {
+			return nil, fmt.Errorf("ResolveExtractions derive flows: %w", err)
+		}
 	}
 	// Evidence writes journal events; a failure swallowed on a void path
 	// (ensureNodeID) must abort the transaction, not commit a journal hole.
 	if g.evidenceErr != nil {
 		return nil, fmt.Errorf("ResolveExtractions evidence: %w", g.evidenceErr)
 	}
-	// Mark all extractions as resolved
-	if err := g.store.MarkExtractionsResolved(revisionID, domainKey); err != nil {
+	// Mark resolved exactly what this resolve resolved — its own role's rows
+	// when it owns only one.
+	if err := g.store.MarkExtractionsResolvedByRole(revisionID, domainKey, opts.ExtractionRole); err != nil {
 		return nil, fmt.Errorf("ResolveExtractions mark resolved: %w", err)
 	}
-	if n, err := g.CountResolvedExtractions(revisionID, domainKey); err == nil {
+	if opts.ExtractionRole != "" {
+		result.ExtractionsResolved = len(extractions)
+	} else if n, err := g.CountResolvedExtractions(revisionID, domainKey); err == nil {
 		result.ExtractionsResolved = n
 	}
 	if err := g.detFlush(result); err != nil {
 		return nil, fmt.Errorf("ResolveExtractions: %w", err)
 	}
-	result.QualityWarnings = g.BuildScanQualityReport(domainKey)
+	if opts.derivedPassesOn() {
+		// The quality report reads the whole domain to judge a whole scan;
+		// one commit's worth of files is not a scan to judge.
+		result.QualityWarnings = g.BuildScanQualityReport(domainKey)
+	}
 
 	g.emitter.Emit(ScanEvent{
 		Kind:  EventResolveComplete,
