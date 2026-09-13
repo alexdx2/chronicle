@@ -46,6 +46,41 @@ import (
 // each replaceable only by its own writer.
 const ExtractorID = "chronicle-structural"
 
+// NonCodeImportSuffixes are import targets that are assets, not code. A
+// stylesheet, an icon or a JSON blob is a real dependency of the file, but it
+// is not a module with behaviour, and minting a `code:provider` node for it
+// fills the graph with leaves nothing can be asked about — the lazy-scan spec
+// calls them out by name (§10 follow-up 2).
+//
+// Deterministic resolution skips them silently: an asset import is not an
+// unresolved NAME either, so recording it would put noise in the very list
+// that exists to say which files still need a reader.
+//
+// Kept deliberately small and literal. A pattern general enough to catch every
+// asset would also catch code, and the cost of missing one is a leaf node, not
+// a wrong edge.
+var NonCodeImportSuffixes = []string{
+	".css", ".scss", ".sass", ".less", ".module.css",
+	".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+	".md", ".txt", ".yaml", ".yml",
+}
+
+// IsNonCodeImport reports whether an import specifier names an asset rather
+// than a module. Any query or fragment a bundler appends ("./x.svg?raw") is
+// dropped first — it changes how the asset is loaded, not what it is.
+func IsNonCodeImport(specifier string) bool {
+	if i := strings.IndexAny(specifier, "?#"); i >= 0 {
+		specifier = specifier[:i]
+	}
+	specifier = strings.ToLower(specifier)
+	for _, suffix := range NonCodeImportSuffixes {
+		if strings.HasSuffix(specifier, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Outcome is what a structural pass concluded about one file.
 type Outcome string
 

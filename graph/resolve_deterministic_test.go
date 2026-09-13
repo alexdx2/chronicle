@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/extract/structural"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -466,17 +467,30 @@ func TestResolveDeterministic_SameFixtureRefusesPhantoms(t *testing.T) {
 		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
 	}
 
-	// Construction-fixed facts keep their certainty.
+	// Construction-fixed facts keep their certainty. The module's CONTAINS is
+	// here because the module IMPORTED TomService: the specifier fixes which
+	// TomService it provides.
 	for key, want := range map[string]string{
 		snapService + "->" + snapRepository + ":INJECTS":                                                  "hard",
 		snapModule + "->" + snapService + ":CONTAINS":                                                     "hard",
-		snapController + "->" + snapService + ":INJECTS":                                                  "hard",
 		snapController + "->" + snapArmEndpoint + ":EXPOSES_ENDPOINT":                                     "hard",
 		"data:model:" + snapshotDomain + ":cat->data:model:" + snapshotDomain + ":mouse:REFERENCES_MODEL": "hard",
 	} {
 		if got := edgeOrFail(t, g, key).DerivationKind; got != want {
 			t.Errorf("edge %s derivation_kind = %q, want %q", key, got, want)
 		}
+	}
+
+	// The controller injects TomService WITHOUT importing it. Its constructor
+	// names a type; which TomService that is came from a name lookup, not from
+	// the source text, so the edge is inferred. (The legacy path called this
+	// hard and, when the name matched nothing, minted a stem node to point at.)
+	inj := edgeOrFail(t, g, snapController+"->"+snapService+":INJECTS")
+	if inj.DerivationKind != "inferred" {
+		t.Errorf("unimported injection derivation_kind = %q, want inferred", inj.DerivationKind)
+	}
+	if inj.Confidence > detNameMatchConfidence {
+		t.Errorf("unimported injection confidence = %.2f, want <= %.2f", inj.Confidence, detNameMatchConfidence)
 	}
 
 	// member_call "cat" found exactly one model — linked, but only inferred.
@@ -720,5 +734,218 @@ func TestResolveDeterministic_RekeyDuringThirdPassInvalidatesIndex(t *testing.T)
 	edge := edgeOrFail(t, g, controllerKey+"->"+rekeyedKey+":INJECTS")
 	if edge.ToNodeKey != rekeyedKey {
 		t.Errorf("edge to_node_key = %q, want %q", edge.ToNodeKey, rekeyedKey)
+	}
+}
+
+// --- injects / provides: construction when the import fixes it, a guess otherwise ---
+
+const injDomain = "injapp"
+
+// injFixture: two same-named services (so any bare name lookup is ambiguous),
+// one file that injects the name WITHOUT importing it, and one that imports it
+// from a specific path and injects it.
+func injFixture(t *testing.T, g *Graph) int64 {
+	t.Helper()
+	revID, err := g.Store().CreateRevision(injDomain, "", "inj1", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	save := func(path, fromType string, facts []map[string]any) {
+		t.Helper()
+		buf, _ := json.Marshal(facts)
+		if _, err := g.Store().SaveExtraction(revID, injDomain, path, "extracted", fromType, string(buf), ""); err != nil {
+			t.Fatalf("SaveExtraction(%s): %v", path, err)
+		}
+	}
+	save("src/a/prisma.service.ts", "provider", []map[string]any{
+		{"kind": "import", "to": "./a.client", "symbols": []string{"AClient"}},
+	})
+	save("src/b/prisma.service.ts", "provider", []map[string]any{
+		{"kind": "import", "to": "./b.client", "symbols": []string{"BClient"}},
+	})
+	// Injects a name it never imported: which PrismaService is a guess, and
+	// there are two.
+	save("src/tom.service.ts", "provider", []map[string]any{
+		{"kind": "injects", "to": "PrismaService"},
+	})
+	// Imports one of them by path, then injects it: the specifier fixes it.
+	save("src/jerry.service.ts", "provider", []map[string]any{
+		{"kind": "import", "to": "./a/prisma.service", "symbols": []string{"PrismaService"}},
+		{"kind": "injects", "to": "PrismaService"},
+	})
+	return revID
+}
+
+func injOptions() ResolveOptions {
+	return ResolveOptions{Deterministic: true, ExtractorVersion: "1"}
+}
+
+// An injected class the file did not import is a NAME, and a name with two
+// meanings is not a target. No edge, no minted stem node, and the refusal is
+// recorded where the rescan list reads it.
+func TestResolveDeterministic_InjectsWithoutAnImportIsAGuess(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	revID := injFixture(t, g)
+
+	res, err := g.ResolveExtractionsWithOptions(injDomain, revID, injOptions())
+	if err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+
+	edges, err := g.Store().ListEdges(store.EdgeFilter{EdgeType: "INJECTS"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		if strings.HasPrefix(e.EdgeKey, "code:provider:"+injDomain+":src/tom-service->") {
+			t.Errorf("an unimported, ambiguous name produced an edge: %s", e.EdgeKey)
+		}
+	}
+	// And no stem node was minted from the class name.
+	if _, err := g.Store().GetNodeByKey("code:provider:" + injDomain + ":prisma.service"); err == nil {
+		t.Error("the class name became a node")
+	}
+	found := false
+	for _, u := range res.Unresolved {
+		if u.Kind == "injects" && u.Target == "PrismaService" && u.FromFile == "src/tom.service.ts" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the refusal was not recorded: %+v", res.Unresolved)
+	}
+	if res.UnresolvedCount == 0 {
+		t.Error("UnresolvedCount = 0")
+	}
+}
+
+// The same name, imported from a path: the specifier fixes the target, so the
+// edge is construction — hard, and on the file that was actually imported.
+func TestResolveDeterministic_InjectsWithAnImportIsHard(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	revID := injFixture(t, g)
+
+	if _, err := g.ResolveExtractionsWithOptions(injDomain, revID, injOptions()); err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+
+	key := "code:provider:" + injDomain + ":src/jerry-service->code:provider:" + injDomain + ":src/a/prisma-service:INJECTS"
+	e, err := g.Store().GetEdgeByKey(key)
+	if err != nil {
+		t.Fatalf("the imported injection is missing: %v", err)
+	}
+	if e.DerivationKind != "hard" {
+		t.Errorf("derivation_kind = %q, want hard — the import specifier fixes the target", e.DerivationKind)
+	}
+	if !e.Active {
+		t.Error("edge is not active")
+	}
+}
+
+// A `provides` target the module did not import is the same guess; with one
+// candidate it links, inferred, never hard.
+func TestResolveDeterministic_ProvidesWithoutAnImportIsInferred(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	revID, err := g.Store().CreateRevision(injDomain, "", "prov1", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	save := func(path, fromType string, facts []map[string]any) {
+		t.Helper()
+		buf, _ := json.Marshal(facts)
+		if _, err := g.Store().SaveExtraction(revID, injDomain, path, "extracted", fromType, string(buf), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("src/only.service.ts", "provider", []map[string]any{
+		{"kind": "import", "to": "./db", "symbols": []string{"Db"}},
+	})
+	save("src/app.module.ts", "module", []map[string]any{
+		{"kind": "provides", "to": "OnlyService", "from_type": "module"},
+	})
+
+	if _, err := g.ResolveExtractionsWithOptions(injDomain, revID, injOptions()); err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+
+	key := "code:module:" + injDomain + ":src/app-module->code:provider:" + injDomain + ":src/only-service:CONTAINS"
+	e, err := g.Store().GetEdgeByKey(key)
+	if err != nil {
+		t.Fatalf("the unique candidate was not linked: %v", err)
+	}
+	if e.DerivationKind != "inferred" {
+		t.Errorf("derivation_kind = %q, want inferred — the module named it, it did not import it", e.DerivationKind)
+	}
+	if e.Confidence > detNameMatchConfidence {
+		t.Errorf("confidence = %v, want <= %v", e.Confidence, detNameMatchConfidence)
+	}
+}
+
+// An asset import is a real dependency and not a module. Minting a
+// `code:provider` node for `./button.module.css` fills the graph with leaves
+// nothing can be asked about — and it is not an unresolved NAME either, so it
+// must not land in the list that says which files still need a reader.
+func TestResolveDeterministic_AssetImportsAreNotNodes(t *testing.T) {
+	g, _, _ := setupTestGraph(t)
+	const dom = "assetapp"
+	revID, err := g.Store().CreateRevision(dom, "", "asset1", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Store().SaveExtraction(revID, dom, "src/button.tsx", "extracted", "provider", `[
+		{"kind":"import","to":"./button.module.css"},
+		{"kind":"import","to":"./icons/check.svg"},
+		{"kind":"import","to":"./copy.json"},
+		{"kind":"import","to":"./logo.png?raw"},
+		{"kind":"import","to":"./button.helper","symbols":["helper"]}
+	]`, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := g.ResolveExtractionsWithOptions(dom, revID, ResolveOptions{Deterministic: true, ExtractorVersion: "1"})
+	if err != nil {
+		t.Fatalf("ResolveExtractionsWithOptions: %v", err)
+	}
+
+	// The whole node set, not a blocklist: four assets were imported, and the
+	// graph must hold the importing file and the one module it imported.
+	nodes, err := g.Store().ListNodes(store.NodeFilter{Domain: dom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, n := range nodes {
+		got[n.NodeKey] = true
+	}
+	want := map[string]bool{
+		"code:provider:" + dom + ":src/button":        true,
+		"code:provider:" + dom + ":src/button-helper": true,
+	}
+	for key := range want {
+		if !got[key] {
+			t.Errorf("missing %s — the real import was dropped with the assets", key)
+		}
+	}
+	for key := range got {
+		if !want[key] {
+			t.Errorf("an asset import became a node: %s", key)
+		}
+	}
+	// And an asset is not an unresolved name.
+	if res.UnresolvedCount != 0 || len(res.Unresolved) != 0 {
+		t.Errorf("assets landed in the rescan list: %d %+v", res.UnresolvedCount, res.Unresolved)
+	}
+}
+
+func TestIsNonCodeImportIsNotTooEager(t *testing.T) {
+	for _, spec := range []string{"./a.css", "./a.SCSS", "./x.module.css", "./d.json", "./i.svg?raw", "./r.md#frag", "./p.YAML"} {
+		if !structural.IsNonCodeImport(spec) {
+			t.Errorf("%q should be an asset", spec)
+		}
+	}
+	for _, spec := range []string{"./a.service", "./a.ts", "@okeep/ui", "./css-utils", "./json-parser", "./markdown"} {
+		if structural.IsNonCodeImport(spec) {
+			t.Errorf("%q is code", spec)
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/alexdx2/chronicle-core/extract/structural"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
 )
@@ -627,6 +628,9 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 		g.detResetNameIndex()
 		for _, df := range g.det.deferred {
 			g.detSetFile(df.filePath, 0)
+			// injects/provides resolve the specifier first, so the file's own
+			// import declarations have to come back with the fact.
+			g.currentFileImportMap = df.importMap
 			created, unresolved, err := g.resolveOneFact(domainKey, revisionID, df.filePath, df.fact, knownEntities, opts.IncludeDevDeps)
 			if err != nil {
 				return nil, fmt.Errorf("resolving %s fact in %s: %w", df.fact.Kind, df.filePath, err)
@@ -638,6 +642,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 				result.Unresolved = append(result.Unresolved, *unresolved)
 			}
 		}
+		g.currentFileImportMap = nil
 	}
 
 	// Everything past this point is derived from the graph, not read out of a
@@ -787,6 +792,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 	case "import":
 		// Filter: skip infrastructure and architectural deps
 		if !ShouldTrackDependency(fact.To) {
+			return counts, nil, nil
+		}
+		// An asset is a real dependency and not a module: a stylesheet or an
+		// icon has no behaviour to ask about, and a code:provider node for it
+		// is a leaf that only makes the graph bigger. Nothing is recorded —
+		// it is not an unresolved NAME either, and the unresolved list is the
+		// rescan queue's input.
+		if g.detOn() && structural.IsNonCodeImport(fact.To) {
 			return counts, nil, nil
 		}
 
@@ -1564,32 +1577,56 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// declarations before falling back to class-name heuristics.  This makes
 		// module CONTAINS edges deterministic and immune to same-class-name collisions
 		// across services (e.g. four prisma.service.ts files in the domain).
-		toNodeKey, toID := g.resolveViaImportMapThenClassName(domainKey, revisionID, fact.To, g.currentFileImportMap)
-		if toID == 0 {
-			return counts, &UnresolvedRef{
-				FromFile: filePath,
-				Kind:     "provides",
-				Target:   fact.To,
-				Reason:   fmt.Sprintf("provides target %q not resolved to a code node", fact.To),
-			}, nil
+		var toNodeKey string
+		var toID int64
+		derivation, confidence := "hard", fact.Confidence
+		if confidence == 0 {
+			confidence = 0.90
+		}
+		if g.detOn() {
+			// A module listing a provider by NAME has not fixed which one it
+			// means unless it also imported it. The legacy path would mint a
+			// stem node out of the name and call the edge hard; deterministic
+			// mode links only what already exists, and says "inferred" when
+			// the name — not the source text — chose it.
+			var cands []store.NodeRow
+			var err error
+			toNodeKey, toID, derivation, confidence, cands, err = g.detLinkTarget(domainKey, fact.To, g.currentFileImportMap)
+			if err != nil {
+				return counts, nil, err
+			}
+			if toID == 0 {
+				return counts, g.detNoteUnresolved(filePath, "provides", fact.To, detCandidateKeys(cands)), nil
+			}
+		} else {
+			toNodeKey, toID = g.resolveViaImportMapThenClassName(domainKey, revisionID, fact.To, g.currentFileImportMap)
+			if toID == 0 {
+				return counts, &UnresolvedRef{
+					FromFile: filePath,
+					Kind:     "provides",
+					Target:   fact.To,
+					Reason:   fmt.Sprintf("provides target %q not resolved to a code node", fact.To),
+				}, nil
+			}
 		}
 
 		if toID == fromID {
 			return counts, nil, nil // self-CONTAINS is never meaningful
 		}
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":CONTAINS"
-		confidence := fact.Confidence
-		if confidence == 0 {
-			confidence = 0.90
-		}
-		_, err := g.store.UpsertEdge(store.EdgeRow{
+		row := store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
 			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			EdgeType: "CONTAINS", DerivationKind: "hard", Active: true,
+			EdgeType: "CONTAINS", DerivationKind: derivation, Active: true,
 			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
 			Metadata: "{}", ValidFromRevisionID: 0,
-		})
-		if err == nil {
+		}
+		var err error
+		if derivation == "inferred" {
+			if g.detUpsertInferredEdge(row) {
+				counts.edges++
+			}
+		} else if _, err = g.store.UpsertEdge(row); err == nil {
 			counts.edges++
 		}
 		assertion, _ := json.Marshal(map[string]any{
@@ -1621,20 +1658,47 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Resolve injection target — import-map first (immune to same-class-name
 		// collisions across services: each service's PrismaService resolves to ITS
 		// file), then class-name / scan-index resolution.
-		toNodeKey, toID := g.resolveViaImportMapThenClassName(domainKey, revisionID, fact.To, g.currentFileImportMap)
-		if toID == 0 {
+		var toNodeKey string
+		var toID int64
+		derivation, confidence := "hard", 0.95
+		if g.detOn() {
+			// The constructor names a TYPE. If the file imported it, the
+			// specifier says which one and the edge is construction; if it did
+			// not, the name is a guess — and the legacy path answers a guess by
+			// minting a stem node and calling the result hard.
+			var cands []store.NodeRow
+			var err error
+			toNodeKey, toID, derivation, confidence, cands, err = g.detLinkTarget(domainKey, fact.To, g.currentFileImportMap)
+			if err != nil {
+				return counts, nil, err
+			}
+			if toID == 0 {
+				return counts, g.detNoteUnresolved(filePath, "injects", fact.To, detCandidateKeys(cands)), nil
+			}
+		} else {
+			toNodeKey, toID = g.resolveViaImportMapThenClassName(domainKey, revisionID, fact.To, g.currentFileImportMap)
+			if toID == 0 {
+				return counts, nil, nil
+			}
+		}
+		if toID == fromID {
 			return counts, nil, nil
 		}
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":INJECTS"
-		_, err := g.store.UpsertEdge(store.EdgeRow{
+		row := store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
 			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			EdgeType: "INJECTS", DerivationKind: "hard", Active: true,
-			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			EdgeType: "INJECTS", DerivationKind: derivation, Active: true,
+			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
-		})
-		if err == nil {
+		}
+		var err error
+		if derivation == "inferred" {
+			if g.detUpsertInferredEdge(row) {
+				counts.edges++
+			}
+		} else if _, err = g.store.UpsertEdge(row); err == nil {
 			counts.edges++
 		}
 		assertion, _ := json.Marshal(map[string]any{
@@ -1643,7 +1707,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
-			Confidence: 0.95, RevisionID: revisionID,
+			Confidence: confidence, RevisionID: revisionID,
 			AssertionKind: "constructor_injection", Assertion: string(assertion),
 		})
 		counts.evidence++
@@ -3755,6 +3819,13 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 
 	if key, id := g.lookupClassNameTarget(domainKey, revisionID, className); id != 0 {
 		return key, id
+	}
+
+	// Deterministic mode stops here. Everything below MINTS a node out of a
+	// name — the one thing "no edge without a unique target" exists to refuse —
+	// and the caller turns a zero into a recorded refusal instead.
+	if g.detOn() {
+		return "", 0
 	}
 
 	// Last resort: create stem-based provider (may merge when file is processed later).

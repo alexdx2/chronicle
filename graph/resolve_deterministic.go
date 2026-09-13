@@ -60,20 +60,30 @@ type detResolve struct {
 }
 
 // detDeferredFact is one name-resolved fact waiting for the structural base.
-// It carries no import map: every deterministic branch resolves by candidate
-// lookup and returns before reaching the legacy import-map paths.
+//
+// It carries its file's import map. `injects` and `provides` resolve the
+// specifier FIRST — an imported symbol's target is fixed by the source text,
+// not guessed — and the per-file map is built and torn down in the first pass,
+// so the fact has to take it along or the third pass would treat every
+// injection as a bare name.
 type detDeferredFact struct {
-	filePath string
-	fact     Fact
+	filePath  string
+	fact      Fact
+	importMap map[string]string
 }
 
 // detIsNameResolved reports whether a fact kind's target is chosen by looking
 // a NAME up among candidate nodes rather than fixed by the source text. These
 // are the facts the lazy-scan spec calls "inferred": the file says
 // "PrismaService", and which node that is remains a judgement.
+// `injects` and `provides` are here even though they resolve the import map
+// first: whether the file imported the symbol is not knowable from the kind,
+// only from the fact, and the half that misses the map IS a name lookup. Both
+// halves need the complete structural base, so both wait for the third pass.
 func detIsNameResolved(kind string) bool {
 	switch kind {
-	case "call", "member_call", "calls_service", "calls_endpoint", "http_call":
+	case "call", "member_call", "calls_service", "calls_endpoint", "http_call",
+		"injects", "provides":
 		return true
 	}
 	return false
@@ -85,7 +95,9 @@ func (g *Graph) detDefer(filePath string, fact Fact) bool {
 	if g.det == nil || g.det.secondPass || !detIsNameResolved(fact.Kind) {
 		return false
 	}
-	g.det.deferred = append(g.det.deferred, detDeferredFact{filePath: filePath, fact: fact})
+	g.det.deferred = append(g.det.deferred, detDeferredFact{
+		filePath: filePath, fact: fact, importMap: g.currentFileImportMap,
+	})
 	return true
 }
 
@@ -385,4 +397,52 @@ func (g *Graph) detSetFile(filePath string, extractionID int64) {
 	if extractionID > 0 {
 		g.det.extractionIDs[filePath] = extractionID
 	}
+}
+
+// detImportMapTarget resolves a symbol through THIS file's import declarations
+// to a node that already exists — construction, not a guess: the specifier
+// names one file, and one file is one node.
+//
+// It creates nothing. A specifier pointing at a file the graph does not hold
+// (an import of something outside the batch, or of a non-code asset) is not a
+// target; the caller falls back to the name lookup, which refuses honestly.
+// The node type is unknown here — a path-keyed node is keyed by the type the
+// file turned out to be — so the three code types are tried in a fixed order.
+func (g *Graph) detImportMapTarget(domainKey, symbol string, importMap map[string]string) (string, int64) {
+	if importMap == nil || symbol == "" {
+		return "", 0
+	}
+	resolvedPath, ok := importMap[symbol]
+	if !ok || resolvedPath == "" {
+		return "", 0
+	}
+	for _, nodeType := range []string{"provider", "controller", "module"} {
+		key := typedNodeKeyFromFile(domainKey, resolvedPath, nodeType)
+		if id, err := g.store.GetNodeIDByKey(key); err == nil && id > 0 {
+			return key, id
+		}
+	}
+	return "", 0
+}
+
+// detLinkTarget is the whole resolution rule for a symbol that a file may or
+// may not have imported, shared by `injects` and `provides`:
+//
+//	import map hit  → that node, derivation "hard" (the specifier fixes it)
+//	exactly one candidate by name → that node, "inferred" at detNameMatchConfidence
+//	0 or >1         → nothing; the caller records the refusal
+//
+// The returned bool says whether a target was found at all.
+func (g *Graph) detLinkTarget(domainKey, symbol string, importMap map[string]string) (key string, id int64, derivation string, confidence float64, cands []store.NodeRow, err error) {
+	if key, id = g.detImportMapTarget(domainKey, symbol, importMap); id != 0 {
+		return key, id, "hard", 0.95, nil, nil
+	}
+	cands, target, err := g.detUniqueTarget(domainKey, symbol, "code", []string{"provider", "controller", "module"})
+	if err != nil {
+		return "", 0, "", 0, nil, err
+	}
+	if target == nil {
+		return "", 0, "", 0, cands, nil
+	}
+	return target.NodeKey, target.NodeID, "inferred", detNameMatchConfidence, cands, nil
 }
