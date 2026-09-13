@@ -162,3 +162,15 @@ func TestGlobalAgentsSection_IsProjectAgnostic(t *testing.T) {
 		t.Error("global AGENTS section should tell agents how to recognize a Chronicle project (.depbot)")
 	}
 }
+
+// ─── node_search parameter name regression ────────────────────────────────
+
+func TestProjectAgentsSectionUsesRealParamNames(t *testing.T) {
+	s := ProjectAgentsSection()
+	if strings.Contains(s, `chronicle_node_search(query=`) {
+		t.Fatalf("section still teaches query= — the tool parameter is q")
+	}
+	if !strings.Contains(s, `chronicle_node_search(q="orders")`) {
+		t.Fatalf("section must show chronicle_node_search(q=\"orders\")")
+	}
+}

@@ -34,7 +34,7 @@ instructions exactly.
 
 | Question | Tool call |
 |----------|-----------|
-| Find a service/endpoint/model by name | chronicle_node_search(query="orders") |
+| Find a service/endpoint/model by name | chronicle_node_search(q="orders") |
 | What does X depend on? | chronicle_query_deps(node_key=...) |
 | What depends on X? | chronicle_query_reverse_deps(node_key=...) |
 | What breaks if I change X? | chronicle_impact(node_key=..., max_depth=4) |
