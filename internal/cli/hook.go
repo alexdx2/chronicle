@@ -260,9 +260,10 @@ func entryHasChronicleHook(e any) bool {
 
 // --- advisory text ----------------------------------------------------------
 
-// hookAdvisory builds the reminder string, or "" when there is no graph (in
-// which case the hook stays silent — no graph, no nudge). Rate-limited to once
-// per 10 minutes via a marker file so it doesn't repeat on every tool call.
+// hookAdvisory builds the reminder, or "" when there is no graph or the graph
+// has never been scanned (a DB with zero revisions is a ghost, not knowledge).
+// Rate-limited to once per 10 minutes via a marker file so it doesn't repeat
+// on every tool call.
 func hookAdvisory() string {
 	resolveDefaults()
 	if _, err := os.Stat(dbPath); err != nil {
@@ -271,26 +272,35 @@ func hookAdvisory() string {
 	if rateLimited() {
 		return ""
 	}
+	base := "."
+	if projectPath != "" {
+		base = projectPath
+	}
+	return hookAdvisoryFor(dbPath, base)
+}
 
+// hookAdvisoryFor is the testable body: it opens dbPath, and speaks only when a
+// revision exists. repoDir is where git runs for the commits-behind count.
+func hookAdvisoryFor(dbPath, repoDir string) string {
 	s, err := store.Open(dbPath)
 	if err != nil {
 		return ""
 	}
 	defer s.Close()
 
-	rev, err := s.GetLatestRevision("")
+	rev, err := s.LatestRevisionAnyDomain()
 	if err != nil || rev == nil {
-		return "A Chronicle graph exists for this project. Prefer chronicle_node_search → chronicle_query_deps/impact/subgraph over grepping files for architecture questions."
+		return "" // ghost DB: no scan has ever happened here
 	}
 
 	staleness := ""
 	if rev.GitAfterSHA != "" {
-		if behind := commitsBehind(rev.GitAfterSHA); behind > 0 {
+		if behind := commitsBehindIn(repoDir, rev.GitAfterSHA); behind > 0 {
 			staleness = fmt.Sprintf(" (graph last scanned at %s, %d commit(s) behind HEAD — run 'chronicle refresh' or rescan if results look incomplete)", shortSHA(rev.GitAfterSHA), behind)
 		}
 	}
 	return "A Chronicle knowledge graph exists for this project" + staleness +
-		". Prefer chronicle_node_search to resolve a name, then chronicle_query_deps / chronicle_impact / chronicle_subgraph, over grepping files for architecture questions."
+		". Prefer chronicle_node_search(q=...) to resolve a name, then chronicle_query_deps / chronicle_impact / chronicle_subgraph, over grepping files for architecture questions."
 }
 
 // rateLimited returns true if the advisory fired within the last 10 minutes.
@@ -319,12 +329,8 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-func commitsBehind(sha string) int {
-	base := "."
-	if projectPath != "" {
-		base = projectPath
-	}
-	out, err := exec.Command("git", "-C", base, "rev-list", "--count", sha+"..HEAD").Output()
+func commitsBehindIn(repoDir, sha string) int {
+	out, err := exec.Command("git", "-C", repoDir, "rev-list", "--count", sha+"..HEAD").Output()
 	if err != nil {
 		return 0
 	}

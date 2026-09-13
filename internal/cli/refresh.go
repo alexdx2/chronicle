@@ -81,21 +81,11 @@ from a git post-commit hook (see 'chronicle hook install --git').`,
 // latestRevisionAnyDomain returns the most recent revision across all domains,
 // since GetLatestRevision is domain-scoped and refresh is invoked without one.
 func latestRevisionAnyDomain(g *graph.Graph) *store.Revision {
-	domains, err := g.Store().GetDomains()
+	rev, err := g.Store().LatestRevisionAnyDomain()
 	if err != nil {
 		return nil
 	}
-	var best *store.Revision
-	for _, d := range domains {
-		rev, err := g.Store().GetLatestRevision(d)
-		if err != nil || rev == nil {
-			continue
-		}
-		if best == nil || rev.RevisionID > best.RevisionID {
-			best = rev
-		}
-	}
-	return best
+	return rev
 }
 
 // gitDiffFiles returns files matching a diff-filter between base..HEAD.

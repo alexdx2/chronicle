@@ -90,6 +90,31 @@ func (s *Store) GetLatestRevision(domainKey string) (*Revision, error) {
 	return r, nil
 }
 
+// LatestRevisionAnyDomain returns the most recent revision across all domains
+// (GetLatestRevision is domain-scoped via WHERE domain_key = ?, which does not
+// match rows with a real domain key when called with "").
+func (s *Store) LatestRevisionAnyDomain() (*Revision, error) {
+	const q = `
+		SELECT revision_id, domain_key, COALESCE(git_before_sha,''), git_after_sha,
+		       trigger_kind, mode, created_at, metadata
+		FROM graph_revisions
+		ORDER BY revision_id DESC
+		LIMIT 1
+	`
+	r := &Revision{}
+	err := s.db.QueryRow(q).Scan(
+		&r.RevisionID, &r.DomainKey, &r.GitBeforeSHA, &r.GitAfterSHA,
+		&r.TriggerKind, &r.Mode, &r.CreatedAt, &r.Metadata,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("LatestRevisionAnyDomain: %w", ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("LatestRevisionAnyDomain: %w", err)
+	}
+	return r, nil
+}
+
 // GetRevision returns the revision with the given id, or ErrNotFound if absent.
 func (s *Store) GetRevision(id int64) (*Revision, error) {
 	const q = `

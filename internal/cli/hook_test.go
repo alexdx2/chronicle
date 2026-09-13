@@ -2,8 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alexdx2/chronicle-core/store"
 )
 
 func TestMergeHookIntoSettings_Empty(t *testing.T) {
@@ -111,5 +114,36 @@ func TestRemoveHookFromSettings_PreservesForeignPreToolUse(t *testing.T) {
 	}
 	if strings.Contains(string(out), "chronicle hook fire") {
 		t.Errorf("chronicle hook should be gone: %s", out)
+	}
+}
+
+// ─── hookAdvisoryFor: ghost DB silence ─────────────────────────────────────
+
+func TestHookAdvisorySilentOnEmptyGraph(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "chronicle.db")
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if got := hookAdvisoryFor(db, dir); got != "" {
+		t.Fatalf("empty graph must stay silent, got %q", got)
+	}
+}
+
+func TestHookAdvisorySpeaksWithRevision(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "chronicle.db")
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRevision("d", "", "deadbeef", "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if got := hookAdvisoryFor(db, dir); got == "" {
+		t.Fatalf("graph with a revision must nudge")
 	}
 }
