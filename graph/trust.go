@@ -348,7 +348,13 @@ func (g *Graph) RecalculateEdgeTrust(edgeID int64) error {
 	// An edge backed by nothing but declarations has no observation to derive
 	// trust from — leave what is there rather than deriving a number from
 	// rows that were never observations.
-	if len(ExistenceEvidence(evidence)) == 0 {
+	//
+	// The len(evidence) > 0 half matters: an edge with NO evidence must still
+	// be recomputed. Journal replay inserts 1.0/1.0/1.0 placeholders and
+	// relies on RecalculateAllTrust to correct them, so skipping the
+	// evidence-free case would leave a rebuilt graph claiming full trust in
+	// edges nothing backs.
+	if len(evidence) > 0 && len(ExistenceEvidence(evidence)) == 0 {
 		return nil
 	}
 
@@ -387,8 +393,13 @@ func (g *Graph) RecalculateNodeTrust(nodeID int64) error {
 		return err
 	}
 
-	// Nodes with no evidence — and nodes whose only evidence is a declaration,
-	// which asserts nothing about existence — keep their defaults.
+	if len(evidence) == 0 {
+		// Nodes without evidence keep defaults (unchanged behaviour).
+		return nil
+	}
+	// A node whose only evidence is a declaration is in the same position: a
+	// ruling asserts nothing about existence, so there is nothing to derive
+	// trust from. Keep what is stored rather than deriving from non-observations.
 	if len(ExistenceEvidence(evidence)) == 0 {
 		return nil
 	}
