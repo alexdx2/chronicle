@@ -69,6 +69,19 @@ func newMCPCmd() *cobra.Command {
 			mcpserver.SetManifestPath(manifestPath)
 			mcpserver.SetGuideStore(g.Store())
 
+			// Every query answer this server returns ends with a line saying
+			// how old the knowledge behind it is. Cached briefly: freshness
+			// changes per commit, not per call.
+			projectDir := projectPath
+			if projectDir == "" {
+				projectDir = "."
+			}
+			if abs, err := filepath.Abs(projectDir); err == nil {
+				projectDir = abs
+			}
+			mcpserver.SetKnowledgeLiner(mcpserver.NewStoreLiner(
+				projectDir, filepath.Base(projectDir), g.Store(), 10*time.Second))
+
 			liveCheck, _ := cmd.Flags().GetBool("live-check")
 			mcpserver.SetLiveCheck(liveCheck)
 

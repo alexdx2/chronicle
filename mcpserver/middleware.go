@@ -99,6 +99,8 @@ func loggingWrap(logStore *store.Store, toolName string, next server.ToolHandler
 			go autoDiscover(logStore, entry.ResultJSON)
 		}
 
+		appendKnowledge(toolName, result, err, entry.ResultJSON)
+
 		return result, err
 	}
 }
