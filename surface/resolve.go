@@ -2,6 +2,7 @@ package surface
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -107,7 +108,25 @@ func (r *Resolver) primeEndpointIndex() {
 	_, _ = r.EndpointIndex()
 }
 
-// RouteKey maps a page route to the GET endpoint that serves it.
+// dynamicSegment matches a Next.js dynamic path segment in any of its three
+// spellings: "[slug]", the catch-all "[...slug]", and the optional catch-all
+// "[[...slug]]".
+var dynamicSegment = regexp.MustCompile(`\[{1,2}(?:\.\.\.)?([^\[\]/]+)\]{1,2}`)
+
+// NormalizeRoute rewrites a framework's dynamic path segments into the colon
+// form the endpoint extractor stores: "/admin/changelog/[slug]" becomes
+// "/admin/changelog/:slug", and both catch-all spellings collapse the same way.
+//
+// Measured on okeep: 13 of 19 unresolved routes in the first live import of
+// auto.surface.json failed for exactly this reason — the extract speaks the
+// file-system router's spelling and the graph speaks the route's.
+func NormalizeRoute(route string) string {
+	return dynamicSegment.ReplaceAllString(route, ":$1")
+}
+
+// RouteKey maps a page route to the GET endpoint that serves it. Dynamic
+// segments are normalized first; a graph that stores the bracket spelling
+// verbatim is still tried, so neither convention is privileged.
 func (r *Resolver) RouteKey(route string) (string, error) {
 	if route == "" {
 		return "", fmt.Errorf("route is empty")
@@ -115,11 +134,25 @@ func (r *Resolver) RouteKey(route string) (string, error) {
 	if !strings.HasPrefix(route, "/") {
 		route = "/" + route
 	}
-	key := strings.ToLower(fmt.Sprintf("contract:endpoint:%s:get:%s", r.Domain, route))
-	if _, err := r.Store.GetNodeByKey(key); err != nil {
-		return "", fmt.Errorf("route %q: no node %s in the graph", route, key)
+	normalized := NormalizeRoute(route)
+
+	key := r.routeKeyFor(normalized)
+	if _, err := r.Store.GetNodeByKey(key); err == nil {
+		return key, nil
 	}
-	return key, nil
+	if normalized != route {
+		if raw := r.routeKeyFor(route); raw != key {
+			if _, err := r.Store.GetNodeByKey(raw); err == nil {
+				return raw, nil
+			}
+		}
+		return "", fmt.Errorf("route %q (%s): no node %s in the graph", route, normalized, key)
+	}
+	return "", fmt.Errorf("route %q: no node %s in the graph", route, key)
+}
+
+func (r *Resolver) routeKeyFor(route string) string {
+	return strings.ToLower(fmt.Sprintf("contract:endpoint:%s:get:%s", r.Domain, route))
 }
 
 // splitRef splits "Model.field" on its LAST dot, so a namespaced model still

@@ -514,3 +514,110 @@ func keysOf(m map[string]graph.ImportNode) []string {
 	}
 	return out
 }
+
+// TestNormalizeRoute pins the three spellings a file-system router uses.
+func TestNormalizeRoute(t *testing.T) {
+	for _, tc := range [][2]string{
+		{"/admin/changelog/[slug]", "/admin/changelog/:slug"},
+		{"/panel/ustawienia/[sekcja]/[podstrona]", "/panel/ustawienia/:sekcja/:podstrona"},
+		{"/d/[token]", "/d/:token"},
+		{"/docs/[...path]", "/docs/:path"},
+		{"/shop/[[...filters]]", "/shop/:filters"},
+		{"/s/[token]/faktura/[invoiceId]", "/s/:token/faktura/:invoiceId"},
+		{"/admin", "/admin"},                   // nothing to do
+		{"/already/:colon", "/already/:colon"}, // already the graph's spelling
+	} {
+		if got := NormalizeRoute(tc[0]); got != tc[1] {
+			t.Fatalf("NormalizeRoute(%q) = %q, want %q", tc[0], got, tc[1])
+		}
+	}
+}
+
+// TestRouteKeyDynamicSegments: the extract speaks the router's spelling
+// ("[slug]"), the graph speaks the route's (":slug"). Measured on okeep —
+// 13 of 19 unresolved routes in the first live import were only this.
+func TestRouteKeyDynamicSegments(t *testing.T) {
+	g := setupSeededGraph(t)
+	revID, err := g.Store().CreateRevision("mini", "", "seed0003", "manual", "incremental", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := g.ImportAll(graph.ImportPayload{Nodes: []graph.ImportNode{
+		{NodeKey: "contract:endpoint:mini:get:/admin/changelog/:slug", Layer: "contract", NodeType: "endpoint", DomainKey: "mini", Name: "GET /admin/changelog/:slug"},
+		{NodeKey: "contract:endpoint:mini:get:/docs/:path", Layer: "contract", NodeType: "endpoint", DomainKey: "mini", Name: "GET /docs/:path"},
+		{NodeKey: "contract:endpoint:mini:get:/panel/ustawienia/:sekcja/:podstrona", Layer: "contract", NodeType: "endpoint", DomainKey: "mini", Name: "GET /panel/ustawienia/:sekcja/:podstrona"},
+		// A graph that kept the bracket spelling verbatim must still resolve.
+		{NodeKey: "contract:endpoint:mini:get:/raw/[id]", Layer: "contract", NodeType: "endpoint", DomainKey: "mini", Name: "GET /raw/[id]"},
+	}}, revID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Rejected) > 0 {
+		t.Fatalf("seed rejected: %+v", res.Rejected)
+	}
+
+	r := &Resolver{Store: g.Store(), Domain: "mini"}
+	for _, tc := range [][2]string{
+		{"/admin/changelog/[slug]", "contract:endpoint:mini:get:/admin/changelog/:slug"},
+		{"/docs/[...path]", "contract:endpoint:mini:get:/docs/:path"},
+		{"/panel/ustawienia/[sekcja]/[podstrona]", "contract:endpoint:mini:get:/panel/ustawienia/:sekcja/:podstrona"},
+		{"/raw/[id]", "contract:endpoint:mini:get:/raw/[id]"},
+		{"/panel/ustawienia", "contract:endpoint:mini:get:/panel/ustawienia"},
+	} {
+		got, err := r.RouteKey(tc[0])
+		if err != nil {
+			t.Fatalf("RouteKey(%q): %v", tc[0], err)
+		}
+		if got != tc[1] {
+			t.Fatalf("RouteKey(%q) = %q, want %q", tc[0], got, tc[1])
+		}
+	}
+
+	// A genuinely absent dynamic route names both spellings, so the reader can
+	// see what was looked for.
+	_, err = r.RouteKey("/nowhere/[id]")
+	if err == nil {
+		t.Fatal("expected an error for an absent route")
+	}
+	for _, want := range []string{"/nowhere/[id]", "/nowhere/:id"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestPlanResolvesDynamicScreenRoute: the normalization reaches SERVED_BY, not
+// just the resolver.
+func TestPlanResolvesDynamicScreenRoute(t *testing.T) {
+	g := setupSeededGraph(t)
+	revID, _ := g.Store().CreateRevision("mini", "", "seed0004", "manual", "incremental", "{}")
+	if _, err := g.ImportAll(graph.ImportPayload{Nodes: []graph.ImportNode{
+		{NodeKey: "contract:endpoint:mini:get:/panel/ustawienia/:sekcja", Layer: "contract", NodeType: "endpoint", DomainKey: "mini", Name: "GET /panel/ustawienia/:sekcja"},
+	}}, revID); err != nil {
+		t.Fatal(err)
+	}
+
+	f := loadFixture(t)
+	for i := range f.Nodes {
+		if f.Nodes[i].Kind == "screen" {
+			f.Nodes[i].Route = "/panel/ustawienia/[sekcja]"
+		}
+	}
+	r := &Resolver{Store: g.Store(), Domain: "mini"}
+	payload, _, unresolved, err := Plan(f, r, Options{Domain: "mini"})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(unresolved) != 0 {
+		t.Fatalf("unresolved = %+v", unresolved)
+	}
+	found := false
+	for _, e := range payload.Edges {
+		if e.EdgeType == "SERVED_BY" && e.ToNodeKey == "contract:endpoint:mini:get:/panel/ustawienia/:sekcja" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no SERVED_BY edge onto the dynamic route's endpoint")
+	}
+}
