@@ -125,8 +125,8 @@ func TestHookAdvisoryWrapperMeasuresWorktreeHEADAfterResolution(t *testing.T) {
 	paths.SetChronicleDir(".depbot")
 
 	got := hookAdvisory()
-	if !strings.Contains(got, "1 commit(s) behind") {
-		t.Fatalf("expected 1 commit(s) behind measured against the worktree's HEAD after graph resolution, got %q", got)
+	if !strings.Contains(got, "1 unscanned commit") {
+		t.Fatalf("expected 1 unscanned commit measured against the worktree's HEAD after graph resolution, got %q", got)
 	}
 }
 

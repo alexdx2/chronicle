@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/alexdx2/chronicle-core/freshness"
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/store"
@@ -235,8 +234,21 @@ func hookAdvisory() string {
 // variable so a test can prove it is never reached inside the rate window.
 var hookCompute = hookAdvisoryFor
 
+// hookNudge is the standing advice; the freshness line in front of it is what
+// changes.
+const hookNudge = "Prefer chronicle_node_search(q=...) to resolve a name, then " +
+	"chronicle_query_deps / chronicle_impact / chronicle_subgraph, over grepping files " +
+	"for architecture questions."
+
 // hookAdvisoryFor is the testable body: it opens dbPath, and speaks only when a
-// revision exists. repoDir is where git runs for the commits-behind count.
+// revision exists. repoDir is where git runs.
+//
+// The staleness line comes from freshness.Compute — the SAME report
+// chronicle_freshness, the dashboard header and every query answer's knowledge
+// block are built from. It used to be hand-rolled here from the newest
+// revision of any kind, which is how the live okeep nudge came to announce the
+// surface extract's commit as the point the code was scanned at, and how a
+// graph 800 commits behind could read as current.
 func hookAdvisoryFor(dbPath, repoDir string) string {
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -244,19 +256,24 @@ func hookAdvisoryFor(dbPath, repoDir string) string {
 	}
 	defer s.Close()
 
-	rev, err := s.LatestRevisionAnyDomain()
-	if err != nil || rev == nil {
+	if _, err := s.LatestRevisionAnyDomain(); err != nil {
 		return "" // ghost DB: no scan has ever happened here
 	}
 
-	staleness := ""
-	if rev.GitAfterSHA != "" {
-		if behind := commitsBehindIn(repoDir, rev.GitAfterSHA); behind > 0 {
-			staleness = fmt.Sprintf(" (graph last scanned at %s, %d commit(s) behind HEAD — run 'chronicle refresh' or rescan if results look incomplete)", shortSHA(rev.GitAfterSHA), behind)
-		}
+	rep, err := freshness.Compute(repoDir, repoLabel(repoDir), "", s)
+	if err != nil || rep.Message == "" {
+		return ""
 	}
-	return "A Chronicle knowledge graph exists for this project" + staleness +
-		". Prefer chronicle_node_search(q=...) to resolve a name, then chronicle_query_deps / chronicle_impact / chronicle_subgraph, over grepping files for architecture questions."
+	return "Chronicle knowledge graph: " + rep.Message + ". " + hookNudge
+}
+
+// repoLabel names a repo the way a human would: the directory's own name.
+func repoLabel(repoDir string) string {
+	abs, err := filepath.Abs(repoDir)
+	if err != nil {
+		abs = repoDir
+	}
+	return filepath.Base(abs)
 }
 
 // hookWindow is how long one advisory stands: repeated Grep/Read calls in one
@@ -291,15 +308,6 @@ func shortSHA(sha string) string {
 		return sha[:7]
 	}
 	return sha
-}
-
-func commitsBehindIn(repoDir, sha string) int {
-	out, err := exec.Command("git", "-C", repoDir, "rev-list", "--count", sha+"..HEAD").Output()
-	if err != nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
-	return n
 }
 
 func installGitPostCommit() error {

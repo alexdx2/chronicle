@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alexdx2/chronicle-core/freshness"
 	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
@@ -214,8 +215,51 @@ func TestHookAdvisoryMeasuresWorktreeHEADNotMainHEAD(t *testing.T) {
 	s.Close()
 
 	got := hookAdvisoryFor(db, wt)
-	if !strings.Contains(got, "1 commit(s) behind") {
-		t.Fatalf("expected 1 commit(s) behind measured against the worktree's HEAD, got %q", got)
+	if !strings.Contains(got, "1 unscanned commit") {
+		t.Fatalf("expected 1 unscanned commit measured against the worktree's HEAD, got %q", got)
+	}
+}
+
+// The nudge and chronicle_freshness must never disagree: the hook used to
+// hand-roll its own "last scanned at X, N commits behind" from the newest
+// revision of ANY kind, which in the live okeep run named the surface
+// extract's commit — a commit the code layer was never scanned at.
+func TestHookAdvisoryReportsTheSameFreshnessTheToolDoes(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	gitRun(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "one")
+	scanned := strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD"))
+	gitRun(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "two")
+	uiCommit := strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD"))
+
+	db := filepath.Join(dir, ".depbot", "chronicle.db")
+	if err := os.MkdirAll(filepath.Dir(db), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRevision("auto", "", scanned, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	// A surface import at a LATER commit: the newest revision, and not the
+	// commit the code knowledge came from.
+	if _, err := s.CreateRevision("auto", "", uiCommit, "manual", "incremental", `{"layer":"ui"}`); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := freshness.Compute(dir, filepath.Base(dir), "", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	got := hookAdvisoryFor(db, dir)
+	if !strings.Contains(got, rep.Message) {
+		t.Fatalf("the nudge must carry the freshness report's own line.\n got: %q\nwant it to contain: %q", got, rep.Message)
+	}
+	if strings.Contains(got, shortSHA(uiCommit)) {
+		t.Errorf("the nudge named the surface extract's commit as the scan point: %q", got)
 	}
 }
 
