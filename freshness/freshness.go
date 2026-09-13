@@ -31,6 +31,10 @@ type Point struct {
 	Nodes      int    `json:"nodes,omitempty"`  // scanned: graph_nodes count at compute time
 	Source     string `json:"source,omitempty"` // ui: metadata.source
 	Branch     string `json:"branch,omitempty"` // head only
+	// OldRules is the structural point's backlog: files whose deterministic
+	// evidence was written by an older rules pack and so still need
+	// re-extraction, even though nothing in them changed.
+	OldRules int `json:"old_rules,omitempty"`
 }
 
 // Distance is how far the working tree has moved past the knowledge.
@@ -54,10 +58,11 @@ type Touched struct {
 type Report struct {
 	Repo        string            `json:"repo"`
 	Domain      string            `json:"domain"`
-	Path        string            `json:"path"`     // repo dir (parent of .depbot)
-	Head        *Point            `json:"head"`     // nil when git is unavailable
-	Scanned     *Point            `json:"scanned"`  // nil when empty
-	Verified    *Point            `json:"verified"` // nil when never refreshed
+	Path        string            `json:"path"`       // repo dir (parent of .depbot)
+	Head        *Point            `json:"head"`       // nil when git is unavailable
+	Scanned     *Point            `json:"scanned"`    // nil when empty
+	Structured  *Point            `json:"structured"` // nil when no structural phase ever completed
+	Verified    *Point            `json:"verified"`   // nil when never refreshed
 	Unscanned   Distance          `json:"unscanned"`
 	Touched     Touched           `json:"touched"`
 	Layers      map[string]*Point `json:"layers"` // "code" (= scanned), "ui" when a surface import exists
@@ -68,12 +73,30 @@ type Report struct {
 
 // Status values. Closed set — dashboards and the pro lane switch on these.
 const (
-	StatusEmpty    = "empty"    // nothing scanned yet
-	StatusFresh    = "fresh"    // scanned at HEAD
-	StatusVerified = "verified" // behind HEAD, but refreshed at HEAD
-	StatusStale    = "stale"    // behind HEAD, not refreshed
-	StatusDiverged = "diverged" // scanned commit is not an ancestor of HEAD
+	StatusEmpty = "empty" // nothing scanned yet
+	StatusFresh = "fresh" // scanned at HEAD
+	// StatusStructured: the scan is behind HEAD, but the deterministic phase
+	// completed at HEAD — today's imports, routes and models are known, only
+	// their meanings are as old as the scan. Between verified and fresh: it is
+	// a wider claim than "the old evidence still holds" and a narrower one
+	// than "everything was read at this commit".
+	StatusStructured = "structured"
+	StatusVerified   = "verified" // behind HEAD, but refreshed at HEAD
+	StatusStale      = "stale"    // behind HEAD, not refreshed
+	StatusDiverged   = "diverged" // scanned commit is not an ancestor of HEAD
 )
+
+// RulesPackVersion is the version every deterministic (`chronicle-ast`) row is
+// expected to carry; rows on any other version are the re-extraction backlog
+// reported as Point.OldRules.
+//
+// TODO(merge): switch to rules.PackVersion once extract/rules defines it — the
+// constant is the structural extractor's own, and this variable exists only so
+// the freshness report can be honest about the backlog before that lands.
+var RulesPackVersion = "1"
+
+// astExtractorID is the extractor whose rows the rules pack owns.
+const astExtractorID = "chronicle-ast"
 
 // QueryToolNames are the read-only tools an agent calls to get an answer out
 // of the graph — the ones whose results carry the knowledge block, and the
@@ -150,6 +173,25 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 		r.Verified = &Point{SHA: refreshRev.GitAfterSHA, At: refreshRev.CreatedAt, RevisionID: refreshRev.RevisionID}
 	}
 
+	// The structural point moves on its own: only a phase that processed its
+	// whole diff writes one (store.LatestStructuralRevision), so an
+	// interrupted run leaves the previous SHA standing rather than claiming
+	// coverage it did not finish.
+	structRev, err := latest(s.LatestStructuralRevision(domain))
+	if err != nil {
+		return nil, err
+	}
+	if structRev != nil && structRev.GitAfterSHA != "" {
+		p := &Point{SHA: structRev.GitAfterSHA, At: structRev.CreatedAt, RevisionID: structRev.RevisionID}
+		// The rules-pack backlog is only meaningful once something structural
+		// has actually run: before that no row was written by a pack at all,
+		// and every file would read as "on old rules".
+		if n, err := s.CountFilesOnOtherExtractorVersion(domain, astExtractorID, RulesPackVersion); err == nil {
+			p.OldRules = n
+		}
+		r.Structured = p
+	}
+
 	// The ui layer is found by LatestSurfaceRevision, not by metadata.layer
 	// alone: an import onto a commit a scan already named rides along on that
 	// row and marks itself with metadata.surface instead (see
@@ -219,6 +261,12 @@ func (r *Report) resolveStatus(repoDir string) string {
 
 	r.Unscanned.Commits = gitCount(repoDir, r.Scanned.SHA+"..HEAD")
 	r.Unscanned.Files = gitChangedFiles(repoDir, r.Scanned.SHA, "HEAD")
+	// Structure at HEAD outranks a verification at HEAD, and does not need
+	// one: re-extracting the diff deterministically is a stronger statement
+	// about today's commit than re-checking what was already believed.
+	if r.Structured != nil && r.Structured.SHA != "" && r.Structured.SHA == r.Head.SHA {
+		return StatusStructured
+	}
 	if r.verifiedAfterScan() && r.Verified.SHA == r.Head.SHA && r.Unscanned.Commits > 0 {
 		return StatusVerified
 	}
@@ -282,6 +330,12 @@ func (r *Report) body() string {
 			head += " (" + d + ")"
 		}
 	}
+	// The structural point rides with the scan rather than in its own segment:
+	// the two together are the answer to "what does this graph know about
+	// today's code", and showing one without the other is the lie §3 names.
+	if r.Structured != nil && r.Structured.SHA != "" {
+		head += " structured@" + short(r.Structured.SHA)
+	}
 	parts := []string{head}
 
 	if r.verifiedAfterScan() && r.Verified.SHA != r.Scanned.SHA {
@@ -307,6 +361,9 @@ func (r *Report) body() string {
 		}
 	}
 
+	if r.Structured != nil && r.Structured.OldRules > 0 {
+		parts = append(parts, plural(r.Structured.OldRules, "file on old rules", "files on old rules"))
+	}
 	if r.Touched.NodesStale > 0 {
 		parts = append(parts, plural(r.Touched.NodesStale, "node touched", "nodes touched"))
 	}

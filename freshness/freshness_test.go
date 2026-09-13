@@ -240,3 +240,193 @@ func TestRefreshAfterScanStillVerifies(t *testing.T) {
 		t.Fatalf("line must name the refresh: %q", r.Line())
 	}
 }
+
+// --- structured -------------------------------------------------------------
+
+// `structured` is the SHA up to which deterministic structure is guaranteed.
+// It moves on its own: a scan at an old commit plus a completed structural
+// phase at HEAD is a real, nameable state — the graph knows today's imports,
+// routes and models, and yesterday's meanings.
+func TestStructuredPointAndStatus(t *testing.T) {
+	dir, s := newRepo(t)
+	sha1 := commit(t, dir, "a.ts")
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	sha2 := commit(t, dir, "b.ts")
+	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
+		`{"kind":"structural","complete":true}`); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Compute(dir, "r", "d", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Structured == nil || r.Structured.SHA != sha2 {
+		t.Fatalf("structured point: %+v", r.Structured)
+	}
+	if r.Status != StatusStructured {
+		t.Fatalf("status = %q, want structured", r.Status)
+	}
+	if r.Scanned.SHA != sha1 {
+		t.Fatalf("a structural phase must not move the scanned point: %+v", r.Scanned)
+	}
+	line := r.Line()
+	if !strings.Contains(line, "structured@"+sha2[:7]) {
+		t.Fatalf("line must name the structural commit: %q", line)
+	}
+	if !strings.Contains(line, "scanned@"+sha1[:7]) {
+		t.Fatalf("line must still name the scan: %q", line)
+	}
+}
+
+// An interrupted structural phase guarantees nothing. Whatever it managed to
+// write, no structural claim may come out of it — while the verification phase
+// that ran before it in the same hook keeps the claim it did earn.
+func TestIncompleteStructuralPhaseIsNotAPoint(t *testing.T) {
+	dir, s := newRepo(t)
+	sha1 := commit(t, dir, "a.ts")
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	sha2 := commit(t, dir, "b.ts")
+	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
+		`{"kind":"structural","complete":false}`); err != nil {
+		t.Fatal(err)
+	}
+
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Structured != nil {
+		t.Fatalf("an incomplete phase must leave no structured point: %+v", r.Structured)
+	}
+	// The hook's own revision still re-verified the evidence it reached, so
+	// the verified pointer stands: what failed is the structural phase, and
+	// only the structural claim disappears with it.
+	if r.Status != StatusVerified {
+		t.Fatalf("status = %q, want verified", r.Status)
+	}
+	if strings.Contains(r.Line(), "structured@") {
+		t.Fatalf("line claims structure it does not have: %q", r.Line())
+	}
+}
+
+// Structure at HEAD outranks a verification at HEAD: both are true, and the
+// stronger claim is the one the reader needs first.
+func TestStructuredWinsOverVerified(t *testing.T) {
+	dir, s := newRepo(t)
+	sha1 := commit(t, dir, "a.ts")
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	sha2 := commit(t, dir, "b.ts")
+	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
+		`{"kind":"refresh"}`); err != nil {
+		t.Fatal(err)
+	}
+	// The structural phase rode the same hook one commit later.
+	sha3 := commit(t, dir, "c.ts")
+	if _, err := s.CreateRevision("d", "", sha3, "git_hook", "incremental",
+		`{"kind":"structural","complete":true}`); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Status != StatusStructured {
+		t.Fatalf("status = %q, want structured", r.Status)
+	}
+	if r.Verified == nil || r.Verified.SHA != sha3 {
+		t.Fatalf("the refresh pointer is still the newest hook revision: %+v", r.Verified)
+	}
+}
+
+// A structural pointer behind HEAD is reported but does not claim the status:
+// the commits between it and HEAD have no guaranteed structure.
+func TestStructuredBehindHeadDoesNotClaimTheStatus(t *testing.T) {
+	dir, s := newRepo(t)
+	sha1 := commit(t, dir, "a.ts")
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	sha2 := commit(t, dir, "b.ts")
+	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
+		`{"kind":"structural","complete":true}`); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, dir, "c.ts") // HEAD moved past the structural phase
+
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Status != StatusStale {
+		t.Fatalf("status = %q, want stale", r.Status)
+	}
+	if r.Structured == nil || r.Structured.SHA != sha2 {
+		t.Fatalf("the structural point is still a fact worth reporting: %+v", r.Structured)
+	}
+	if !strings.Contains(r.Line(), "structured@"+sha2[:7]) {
+		t.Fatalf("line: %q", r.Line())
+	}
+}
+
+// The rules-pack backlog rides on the structured point: files whose
+// deterministic rows came from an older pack are re-extraction work even
+// though nothing in them changed.
+func TestStructuredCarriesTheOldRulesBacklog(t *testing.T) {
+	dir, s := newRepo(t)
+	sha1 := commit(t, dir, "a.ts")
+	revID, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID, err := s.UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:d:svc", Layer: "code", NodeType: "provider",
+		DomainKey: "d", Name: "Svc", Status: "active",
+		FirstSeenRevisionID: revID, LastSeenRevisionID: revID, Confidence: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"old-a.ts", "old-b.ts"} {
+		if _, err := s.AddEvidence(store.EvidenceRow{
+			TargetKind: "node", NodeID: nodeID, SourceKind: "ast", FilePath: f, LineStart: 1,
+			ExtractorID: "chronicle-ast", ExtractorVersion: "0.9", Confidence: 0.9,
+			EvidenceStatus: "valid", EvidencePolarity: "positive",
+			ValidFromRevisionID: revID, Metadata: "{}",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sha2 := commit(t, dir, "b.ts")
+	if _, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental",
+		`{"kind":"structural","complete":true}`); err != nil {
+		t.Fatal(err)
+	}
+
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Structured == nil || r.Structured.OldRules != 2 {
+		t.Fatalf("old-rules backlog: %+v", r.Structured)
+	}
+	if !strings.Contains(r.Line(), "2 files on old rules") {
+		t.Fatalf("line must carry the backlog: %q", r.Line())
+	}
+}
+
+// The whole line, in the shape the knowledge block prints it.
+func TestStructuredLineShape(t *testing.T) {
+	r := &Report{
+		Repo: "auto", Status: StatusStructured,
+		Scanned:    &Point{SHA: "22f9f92aaaa", At: "2026-08-07T10:00:00Z", RevisionID: 1},
+		Structured: &Point{SHA: "4cd10d1cccc", RevisionID: 3, OldRules: 12},
+		Verified:   &Point{SHA: "dd193adbbbb", RevisionID: 2},
+		Unscanned:  Distance{Commits: 798},
+	}
+	want := "knowledge: auto scanned@22f9f92 (07.08) structured@4cd10d1 · verified@dd193ad · 798 unscanned commits · 12 files on old rules"
+	if got := r.Line(); got != want {
+		t.Errorf("line = %q, want %q", got, want)
+	}
+}
+
+// The closed set the dashboard and the pro lane switch on.
+func TestStatusStructuredIsInTheClosedSet(t *testing.T) {
+	if StatusStructured != "structured" {
+		t.Fatalf("StatusStructured = %q", StatusStructured)
+	}
+}
