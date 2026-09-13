@@ -161,6 +161,24 @@ func TestRefreshFromALinkedWorktreeWritesNothing(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(wt, ".depbot")); err == nil {
 		t.Error("refresh created a graph directory in the worktree")
 	}
+	// Both phases are refused, not just verification: the structural phase
+	// writes more than verification does, and its pointer would name the
+	// feature branch's tip inside main's graph.
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if rev, err := s.LatestStructuralRevision(""); err == nil {
+		t.Errorf("the structural phase ran from a linked worktree: structured@%s", rev.GitAfterSHA)
+	}
+	var hashes int
+	if err := s.QueryRowScan(`SELECT COUNT(*) FROM project_settings WHERE key LIKE 'structural:hash:%'`, &hashes); err != nil {
+		t.Fatal(err)
+	}
+	if hashes != 0 {
+		t.Errorf("the structural phase recorded %d file(s) from a linked worktree", hashes)
+	}
 }
 
 // A worktree that owns a graph of its own is a deliberate setup — the guard

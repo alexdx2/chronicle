@@ -13,6 +13,11 @@ import (
 type ChangedFile struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
+	// OldPath is the path a rename came FROM (empty for every other status).
+	// A consumer that replaces per-file knowledge needs it: after a rename the
+	// new path is re-read, and the old one still carries everything the file
+	// used to assert under a name that no longer exists.
+	OldPath string `json:"old_path,omitempty"`
 }
 
 // ChangedFiles lists files changed between base and head. head == "" compares
@@ -42,10 +47,12 @@ func ChangedFiles(repoRoot, base, head string) ([]ChangedFile, error) {
 		}
 		status := parts[0][:1] // R100 → R
 		path := parts[1]
+		oldPath := ""
 		if status == "R" && len(parts) >= 3 {
+			oldPath = parts[1]
 			path = parts[2] // renamed: old new — report the new path
 		}
-		files = append(files, ChangedFile{Path: path, Status: status})
+		files = append(files, ChangedFile{Path: path, Status: status, OldPath: oldPath})
 	}
 
 	if head == "" {

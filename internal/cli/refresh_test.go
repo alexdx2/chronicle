@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -280,5 +281,254 @@ func seedEvidenceFor(t *testing.T, dir, filePath string) {
 		Confidence: 0.9, Polarity: "positive", RevisionID: rev.RevisionID,
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// --- phase 2: deterministic structural re-extraction -------------------------
+
+const srvSource = `import { Db } from './db';
+
+@Injectable()
+export class AService {
+  list() { return []; }
+}
+`
+
+const ctrlSource = `import { AService } from './a.service';
+
+@Controller('a')
+export class AController {
+  constructor(private readonly a: AService) {}
+
+  @Get('items')
+  list() { return this.a.list(); }
+}
+`
+
+const laterCtrlSource = `import { AService } from './a.service';
+
+@Controller('later')
+export class LaterController {
+  constructor(private readonly a: AService) {}
+
+  @Post('things')
+  make() { return this.a.list(); }
+}
+`
+
+const structuralManifest = `domains:
+  d:
+    name: D
+    scan:
+      include:
+        - "src/**"
+      exclude:
+        - "**/node_modules/**"
+tech:
+  - nestjs
+`
+
+// writeCommit writes a file and commits it, returning the new HEAD.
+func writeCommit(t *testing.T, dir, rel, content, msg string) string {
+	t.Helper()
+	full := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", rel)
+	gitRun(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", msg)
+	return strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD"))
+}
+
+// structuralRepo is a repo whose graph was fully scanned at its first commit:
+// one service under src/, a manifest naming domain "d" and the nestjs packs.
+func structuralRepo(t *testing.T) (dir, scanned string) {
+	t.Helper()
+	dir = t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(dir, ".depbot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".depbot", "chronicle.domain.yaml"),
+		[]byte(structuralManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("/.depbot/chronicle.db*\n/.depbot/events/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", ".gitignore", ".depbot/chronicle.domain.yaml")
+	scanned = writeCommit(t, dir, "src/a.service.ts", srvSource, "scanned state")
+
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, err := s.CreateRevision("d", "", scanned, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	return dir, scanned
+}
+
+func openRepoStore(t *testing.T, dir string) *store.Store {
+	t.Helper()
+	s, err := store.Open(filepath.Join(dir, ".depbot", "chronicle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func structuralSHA(t *testing.T, dir string) string {
+	t.Helper()
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	rev, err := s.LatestStructuralRevision("d")
+	if err != nil {
+		return ""
+	}
+	return rev.GitAfterSHA
+}
+
+func evidenceCount(t *testing.T, dir string) int {
+	t.Helper()
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	var n int
+	if err := s.QueryRowScan(`SELECT COUNT(*) FROM graph_evidence`, &n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A commit is structured by the same hook that verifies it: the files it
+// touched become nodes and edges with no model in the loop, under a pointer of
+// their own that the scan's pointer never moves with.
+func TestRefreshStructuresTheCommit(t *testing.T) {
+	dir, scanned := structuralRepo(t)
+	head := writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "add a controller")
+
+	runRefreshIn(t, dir, "--quiet")
+
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, err := s.GetNodeByKey("contract:endpoint:d:get:/a/items"); err != nil {
+		t.Fatalf("the route the commit added is not in the graph: %v", err)
+	}
+	rev, err := s.LatestStructuralRevision("d")
+	if err != nil {
+		t.Fatalf("LatestStructuralRevision: %v", err)
+	}
+	if rev.GitAfterSHA != head {
+		t.Errorf("structured@%s, want HEAD %s", rev.GitAfterSHA, head)
+	}
+	scanRev, err := s.LatestScanRevision("d")
+	if err != nil || scanRev.GitAfterSHA != scanned {
+		t.Errorf("the scan pointer moved to %+v; only a scan moves it", scanRev)
+	}
+}
+
+// Honesty test 1: a crash between verification and structure.
+//
+// The two phases have separate pointers because they succeed and fail
+// separately. A structural phase that died must leave verified@HEAD and
+// structured@<the last commit it finished>, and the NEXT run must diff from
+// there — everything in between is re-extracted, nothing is lost.
+func TestRefreshStructuralFailureLeavesVerificationStanding(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	b := writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "B: a controller")
+	runRefreshIn(t, dir, "--quiet")
+	if got := structuralSHA(t, dir); got != b {
+		t.Fatalf("structured@%s, want %s before the crash", got, b)
+	}
+
+	// C: a second controller, and a structural phase that dies.
+	c := writeCommit(t, dir, "src/later.controller.ts", laterCtrlSource, "C: another controller")
+	orig := structuralFn
+	structuralFn = func(*graph.Graph, graph.StructuralInput) (*graph.StructuralResult, error) {
+		return nil, errors.New("structural phase died")
+	}
+	runRefreshIn(t, dir, "--quiet")
+	structuralFn = orig
+
+	s := openRepoStore(t, dir)
+	verified, err := s.LatestRefreshRevision("d")
+	if err != nil {
+		t.Fatalf("LatestRefreshRevision: %v", err)
+	}
+	if verified.GitAfterSHA != c {
+		t.Errorf("verified@%s, want %s — the verification phase succeeded", verified.GitAfterSHA, c)
+	}
+	if _, err := s.GetNodeByKey("contract:endpoint:d:post:/later/things"); err == nil {
+		t.Error("a failed structural phase must not have written the route")
+	}
+	s.Close()
+	if got := structuralSHA(t, dir); got != b {
+		t.Fatalf("structured@%s, want %s — a failed phase guarantees nothing", got, b)
+	}
+
+	// D: the next run diffs from B, so C's route arrives after all.
+	d := writeCommit(t, dir, "src/d.service.ts", srvSource, "D: another service")
+	runRefreshIn(t, dir, "--quiet")
+
+	s2 := openRepoStore(t, dir)
+	defer s2.Close()
+	if _, err := s2.GetNodeByKey("contract:endpoint:d:post:/later/things"); err != nil {
+		t.Fatalf("the commit the crash skipped was never re-extracted: %v", err)
+	}
+	if got := structuralSHA(t, dir); got != d {
+		t.Errorf("structured@%s, want %s", got, d)
+	}
+}
+
+// The phase is opt-out: a caller that only wants verification gets only
+// verification, and no structural claim comes out of it.
+func TestRefreshNoStructuralSkipsPhaseTwo(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "add a controller")
+
+	runRefreshIn(t, dir, "--quiet", "--no-structural")
+
+	if got := structuralSHA(t, dir); got != "" {
+		t.Fatalf("structured@%s, want nothing — phase 2 was switched off", got)
+	}
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, err := s.GetNodeByKey("contract:endpoint:d:get:/a/items"); err == nil {
+		t.Error("phase 2 ran anyway")
+	}
+}
+
+// After an interrupted phase the pointer is behind, so the next run sees the
+// whole repo again — and redoes none of the files whose content it already
+// applied. Re-extracting them would be wasted work; re-writing their evidence
+// would be a lie about when it was observed.
+func TestRefreshRerunAfterAnInterruptedPhaseRedoesNothing(t *testing.T) {
+	dir, scanned := structuralRepo(t)
+	writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "add a controller")
+	runRefreshIn(t, dir, "--quiet")
+	before := evidenceCount(t, dir)
+
+	// The state an interrupted phase leaves: the work applied, the claim not
+	// made. The next run therefore has no pointer and sweeps every file.
+	s := openRepoStore(t, dir)
+	rev, err := s.LatestStructuralRevision("d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateRevisionMetadata(rev.RevisionID, map[string]any{
+		"structural": map[string]any{"complete": false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	runRefreshIn(t, dir, "--quiet")
+
+	if after := evidenceCount(t, dir); after != before {
+		t.Errorf("evidence rows %d → %d; content already applied must not be re-extracted", before, after)
+	}
+	if got := structuralSHA(t, dir); got == "" || got == scanned {
+		t.Errorf("structured@%q — the rerun must finish what the interrupted phase started", got)
 	}
 }

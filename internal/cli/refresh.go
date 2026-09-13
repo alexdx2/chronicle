@@ -3,10 +3,15 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/extract/structural"
+	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
 )
@@ -15,117 +20,355 @@ import (
 // can re-verify. Anything outside this set is left to a full scan.
 var refreshExtensions = []string{".ts", ".tsx", ".js", ".jsx", ".cs", ".prisma", ".graphql", ".proto", ".go", ".py"}
 
+// refreshOutput is what one `chronicle refresh` did, in both phases. The
+// verification result is embedded so its JSON shape is unchanged for anything
+// already reading it; the structural phase adds one key.
+type refreshOutput struct {
+	*graph.RefreshResult
+	Structural      *graph.StructuralResult `json:"structural,omitempty"`
+	StructuralError string                  `json:"structural_error,omitempty"`
+}
+
+// structuralFn is phase 2 as a package variable so a test can make it fail
+// where the real thing would crash. The whole two-pointer design exists for
+// that one moment — verification recorded, structure not — and an untested
+// recovery path is a recovery path that silently stops working.
+var structuralFn = func(g *graph.Graph, in graph.StructuralInput) (*graph.StructuralResult, error) {
+	return g.StructuralRefresh(in)
+}
+
 func newRefreshCmd() *cobra.Command {
 	var quiet bool
+	var noStructural bool
 	cmd := &cobra.Command{
 		Use:   "refresh",
-		Short: "Zero-token structural freshness — re-verify evidence on git-changed files since the last scan",
-		Long: `Diffs the working tree against the last scanned revision, re-verifies
-structural evidence on changed files mechanically (no LLM), stale-marks evidence
-on deleted files, and reports which files still need an agent rescan. Safe to run
-from a git post-commit hook (see 'chronicle hook install --git').`,
+		Short: "Zero-token structural freshness — re-verify evidence and re-extract structure for git-changed files",
+		Long: `Runs two phases against the working tree, neither of which calls a model.
+
+Phase 1 (verification) diffs against the last scan or refresh, re-verifies
+structural evidence on changed files mechanically, stale-marks evidence on
+deleted files, and reports which files still need an agent rescan.
+
+Phase 2 (structure) diffs against its OWN pointer — the last commit whose
+structural extraction completed — re-extracts imports, routes, models and calls
+for the files that changed since, and replaces what those files no longer say.
+The two pointers move independently, so a phase that fails costs only its own
+claim. Use --no-structural to run phase 1 alone.
+
+Safe to run from a git post-commit hook (see 'chronicle hook install --git').`,
 		Run: func(cmd *cobra.Command, args []string) {
-			if notice, linked := linkedWorktreeRefusal(); linked {
-				// A commit in any worktree runs the MAIN checkout's
-				// post-commit hook, so without this a feature branch writes
-				// refresh revisions — at its own tip — into main's graph.
-				refuseWrite(notice, quiet)
-				return
-			}
-
-			g := openGraph()
-			defer g.Store().Close()
-
-			rev, err := refreshBase(g.Store(), repoDirForGit())
-			if err != nil {
-				outputError(err)
-			}
-			base := rev.GitAfterSHA
-
-			head, err := gitOutput("rev-parse", "HEAD")
-			if err != nil {
-				outputError(fmt.Errorf("not a git repository or no HEAD: %w", err))
-			}
-			head = strings.TrimSpace(head)
-
-			touchedAll, err := gitDiffFiles(base, "d") // added/copied/modified/renamed/type-changed
-			if err != nil {
-				outputError(err)
-			}
-			deletedAll, err := gitDiffFiles(base, "D") // deleted only
-			if err != nil {
-				outputError(err)
-			}
-			changed := filterRefreshable(touchedAll)
-			deleted := filterRefreshable(deletedAll)
-
-			if len(changed) == 0 && len(deleted) == 0 {
-				// Nothing this refresh can check mechanically — and two very
-				// different reasons why, which must not produce the same
-				// answer.
-				//
-				// If NO file the graph holds evidence for changed, the graph
-				// really is still good at HEAD, and only a revision recorded
-				// there says so: without one a docs-only commit ages the repo
-				// into "stale, N commits behind" for changes that cannot have
-				// invalidated anything.
-				//
-				// But if a KNOWN file changed in a language refreshExtensions
-				// does not cover — Ruby, PHP, Java — stamping verified@HEAD
-				// would be the graph claiming to have checked code it never
-				// read. In a repo written entirely in such a language that is
-				// every single commit. Those files are reported as pending
-				// instead, which is the honest status: an agent has to look.
-				known, err := g.Store().KnownFilePaths(append(append([]string{}, touchedAll...), deletedAll...))
-				if err != nil {
-					outputError(err)
-				}
-				if len(known) > 0 {
-					res := &graph.RefreshResult{
-						HeadSHA:         head,
-						ChangedFiles:    len(touchedAll),
-						DeletedFiles:    len(deletedAll),
-						PendingSemantic: known,
-					}
-					if quiet {
-						fmt.Printf("chronicle refresh: %d file(s) the graph knows changed and need an agent rescan: %s\n",
-							len(known), strings.Join(known, ", "))
-						return
-					}
-					outputJSON(res)
-					return
-				}
-				if head != base {
-					if _, err := g.RecordRefreshNoop(rev.DomainKey, head); err != nil {
-						outputError(err)
-					}
-				}
-				if !quiet {
-					fmt.Println("Graph is current — no refreshable changes since last scan.")
-				}
-				return
-			}
-
-			res, err := g.RefreshFromDiff(rev.DomainKey, head, changed, deleted)
-			if err != nil {
-				outputError(err)
-			}
-			if quiet {
-				if len(res.PendingSemantic) > 0 {
-					fmt.Printf("chronicle refresh: %d files re-verified, %d need rescan\n",
-						res.ChangedFiles, len(res.PendingSemantic))
-				}
-				return
-			}
-			outputJSON(res)
+			runRefresh(quiet, noStructural)
 		},
 	}
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "Minimal output (for git hooks)")
+	cmd.Flags().BoolVar(&noStructural, "no-structural", false, "Skip phase 2 (deterministic structural re-extraction)")
 	return cmd
 }
 
-// refreshBase picks the commit a refresh diffs from: the newer of the last
-// scan and the last refresh, and never a layer import.
+// runRefresh is the command body, extracted so tests can drive both phases
+// without a process.
+func runRefresh(quiet, noStructural bool) {
+	if notice, linked := linkedWorktreeRefusal(); linked {
+		// A commit in any worktree runs the MAIN checkout's post-commit hook,
+		// so without this a feature branch writes refresh revisions — at its
+		// own tip — into main's graph. Both phases are refused: phase 2 writes
+		// more than phase 1 does, not less.
+		refuseWrite(notice, quiet)
+		return
+	}
+
+	g := openGraph()
+	defer g.Store().Close()
+
+	rev, err := refreshBase(g.Store(), repoDirForGit())
+	if err != nil {
+		outputError(err)
+	}
+	head, err := gitOutput("rev-parse", "HEAD")
+	if err != nil {
+		outputError(fmt.Errorf("not a git repository or no HEAD: %w", err))
+	}
+	head = strings.TrimSpace(head)
+
+	out := &refreshOutput{}
+	var quietLine, humanLine string
+	out.RefreshResult, quietLine, humanLine, err = verifyPhase(g, rev.DomainKey, rev.GitAfterSHA, head)
+	if err != nil {
+		outputError(err)
+	}
+	if out.RefreshResult == nil {
+		// Embedding a nil pointer is a marshalling panic, and a hook that
+		// panics looks exactly like a broken install.
+		out.RefreshResult = &graph.RefreshResult{HeadSHA: head}
+	}
+
+	// Phase 2 never undoes phase 1: whatever it does or fails to do, the
+	// verification above is already recorded.
+	var structuralErr error
+	if !noStructural {
+		out.Structural, structuralErr = structuralPhase(g, rev.DomainKey, head)
+		if structuralErr != nil {
+			out.StructuralError = structuralErr.Error()
+		}
+	}
+
+	switch {
+	case quiet:
+		// A hook must not talk unless it has something to say, and must not
+		// fail the commit it is attached to.
+		if quietLine != "" {
+			fmt.Println(quietLine)
+		}
+		if line := structuralQuietLine(out.Structural); line != "" {
+			fmt.Println(line)
+		}
+	case humanLine != "":
+		fmt.Println(humanLine)
+		if line := structuralQuietLine(out.Structural); line != "" {
+			fmt.Println(line)
+		}
+	default:
+		outputJSON(out)
+	}
+	if structuralErr != nil && !quiet {
+		os.Exit(1)
+	}
+}
+
+// verifyPhase is the original refresh, unchanged in behaviour: it returns what
+// to print rather than printing, so phase 2 can add to the same output.
+//
+// quietLine is what a hook says (empty = stay silent), humanLine is the one
+// sentence the no-op case prints instead of JSON, and a non-empty one means the
+// verification phase has nothing JSON-worthy to report.
+func verifyPhase(g *graph.Graph, domainKey, base, head string) (*graph.RefreshResult, string, string, error) {
+	touchedAll, err := gitDiffFiles(base, "d") // added/copied/modified/renamed/type-changed
+	if err != nil {
+		return nil, "", "", err
+	}
+	deletedAll, err := gitDiffFiles(base, "D") // deleted only
+	if err != nil {
+		return nil, "", "", err
+	}
+	changed := filterRefreshable(touchedAll)
+	deleted := filterRefreshable(deletedAll)
+
+	if len(changed) == 0 && len(deleted) == 0 {
+		// Nothing this phase can check mechanically — and two very different
+		// reasons why, which must not produce the same answer.
+		//
+		// If NO file the graph holds evidence for changed, the graph really is
+		// still good at HEAD, and only a revision recorded there says so:
+		// without one a docs-only commit ages the repo into "stale, N commits
+		// behind" for changes that cannot have invalidated anything.
+		//
+		// But if a KNOWN file changed in a language refreshExtensions does not
+		// cover — Ruby, PHP, Java — stamping verified@HEAD would be the graph
+		// claiming to have checked code it never read. In a repo written
+		// entirely in such a language that is every single commit. Those files
+		// are reported as pending instead, which is the honest status: an agent
+		// has to look.
+		known, err := g.Store().KnownFilePaths(append(append([]string{}, touchedAll...), deletedAll...))
+		if err != nil {
+			return nil, "", "", err
+		}
+		res := &graph.RefreshResult{
+			HeadSHA:      head,
+			ChangedFiles: len(touchedAll),
+			DeletedFiles: len(deletedAll),
+		}
+		if len(known) > 0 {
+			res.PendingSemantic = known
+			return res, fmt.Sprintf("chronicle refresh: %d file(s) the graph knows changed and need an agent rescan: %s",
+				len(known), strings.Join(known, ", ")), "", nil
+		}
+		if head != base {
+			if _, err := g.RecordRefreshNoop(domainKey, head); err != nil {
+				return nil, "", "", err
+			}
+		}
+		return res, "", "Graph is current — no refreshable changes since last scan.", nil
+	}
+
+	res, err := g.RefreshFromDiff(domainKey, head, changed, deleted)
+	if err != nil {
+		return nil, "", "", err
+	}
+	line := ""
+	if len(res.PendingSemantic) > 0 {
+		line = fmt.Sprintf("chronicle refresh: %d files re-verified, %d need rescan",
+			res.ChangedFiles, len(res.PendingSemantic))
+	}
+	return res, line, "", nil
+}
+
+// structuralPhase re-extracts the structure of everything that changed since
+// the structural pointer (not since the verification one — they move apart on
+// purpose) and hands graph.StructuralRefresh the files and the reader.
+func structuralPhase(g *graph.Graph, domainKey, head string) (*graph.StructuralResult, error) {
+	gitDir := repoDirForGit()
+	in := graph.StructuralInput{
+		DomainKey: domainKey,
+		HeadSHA:   head,
+		Tech:      manifestTech(),
+		ReadFile: func(rel string) ([]byte, error) {
+			return os.ReadFile(filepath.Join(gitDir, rel))
+		},
+	}
+
+	base, sweep := structuralBase(g.Store(), gitDir, domainKey)
+	if sweep {
+		// No structural phase has ever completed here, so there is no baseline
+		// to diff against: every supported file is owed structure. Bounded per
+		// run by graph.DefaultBacklogBatch — the remainder is reported and the
+		// pointer stays put until it is drained.
+		files, err := supportedFilesInRepo(gitDir, domainKey)
+		if err != nil {
+			return nil, err
+		}
+		if len(files) == 0 {
+			return nil, nil
+		}
+		in.Changed = files
+		return structuralFn(g, in)
+	}
+
+	if base == head {
+		// The pointer is at HEAD, and it only gets there when the phase left
+		// nothing over — no diff, no backlog, nothing to do.
+		return nil, nil
+	}
+	files, err := gitdiff.ChangedFiles(gitDir, base, head)
+	if err != nil {
+		return nil, fmt.Errorf("structural diff (base %s): %w", shortSHA(base), err)
+	}
+	for _, f := range files {
+		switch f.Status {
+		case "D":
+			in.Deleted = append(in.Deleted, f.Path)
+		case "R":
+			// A rename is both: the new path has to be read, and the old one
+			// stops asserting anything at all.
+			in.Changed = append(in.Changed, f.Path)
+			if f.OldPath != "" {
+				in.Deleted = append(in.Deleted, f.OldPath)
+			}
+		default:
+			in.Changed = append(in.Changed, f.Path)
+		}
+	}
+	if len(in.Changed) == 0 && len(in.Deleted) == 0 {
+		// Nothing structural in the diff — but the pointer still has to reach
+		// HEAD, or a run of docs-only commits leaves the graph looking as if
+		// nobody had structured them.
+		in.Changed = nil
+	}
+	return structuralFn(g, in)
+}
+
+// structuralBase picks the commit phase 2 diffs from, and whether it has to
+// sweep the whole repo instead.
+//
+// Its own pointer first: the newest COMPLETED structural phase, which is the
+// only commit up to which structure is guaranteed. A pointer this checkout
+// cannot reach (built on a branch that was never merged) is unusable, and the
+// scan is the fallback — a scan read those files, so diffing from it re-reads
+// only what changed since. With neither, nothing structural has ever been
+// established here and the answer is the whole repo.
+func structuralBase(s *store.Store, repoDir, domainKey string) (base string, sweep bool) {
+	rev, err := revOrNil(s.LatestStructuralRevision(domainKey))
+	if err == nil && rev != nil && rev.GitAfterSHA != "" {
+		if isAncestorOfHEAD(repoDir, rev.GitAfterSHA) {
+			return rev.GitAfterSHA, false
+		}
+		if scan, err := revOrNil(s.LatestScanRevision(domainKey)); err == nil && scan != nil &&
+			scan.GitAfterSHA != "" && isAncestorOfHEAD(repoDir, scan.GitAfterSHA) {
+			return scan.GitAfterSHA, false
+		}
+	}
+	return "", true
+}
+
+// supportedFilesInRepo is every tracked file with a deterministic extractor,
+// narrowed to the domain's own scan.include/exclude when the manifest defines
+// them — the sweep must not claim files another domain owns.
+func supportedFilesInRepo(gitDir, domainKey string) ([]string, error) {
+	out, err := gitutil.Run(gitDir, "ls-files")
+	if err != nil {
+		return nil, fmt.Errorf("structural: git ls-files: %w", err)
+	}
+	inScope := domainScopeFilter(domainKey)
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !structural.Supported(line) || !inScope(line) {
+			continue
+		}
+		files = append(files, line)
+	}
+	return files, nil
+}
+
+// domainScopeFilter reads the domain's scan globs out of the manifest. A
+// manifest that does not mention this domain says nothing about which files are
+// its own, so everything supported is in scope — narrowing by another domain's
+// patterns would silently leave files unstructured forever.
+func domainScopeFilter(domainKey string) func(string) bool {
+	all := func(string) bool { return true }
+	m, err := manifest.LoadFile(manifestPath)
+	if err != nil {
+		return all
+	}
+	for _, d := range m.Domains {
+		if d.Key != domainKey && d.Name != domainKey {
+			continue
+		}
+		if len(d.Scan.Include) == 0 {
+			return all
+		}
+		include, exclude := d.Scan.Include, d.Scan.Exclude
+		return func(path string) bool {
+			for _, p := range exclude {
+				if manifest.MatchGlob(path, p) {
+					return false
+				}
+			}
+			for _, p := range include {
+				if manifest.MatchGlob(path, p) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return all
+}
+
+// manifestTech is the rule packs the structural extractor applies. A missing or
+// broken manifest is not an error here: the packs are an enrichment, and a
+// refresh that refused to run without one would break every repo that has not
+// filled it in.
+func manifestTech() []string {
+	m, err := manifest.LoadFile(manifestPath)
+	if err != nil {
+		return nil
+	}
+	return m.Tech
+}
+
+// structuralQuietLine is the one line a hook prints — only when the phase
+// actually did something, so an ordinary commit stays silent.
+func structuralQuietLine(res *graph.StructuralResult) string {
+	if res == nil || res.Processed == 0 {
+		return ""
+	}
+	return fmt.Sprintf("chronicle refresh: structure %d files (%d failed, %d unresolved, %d remaining)",
+		res.Processed, len(res.Failed), res.Unresolved, res.Backlog)
+}
+
+// refreshBase picks the commit the VERIFICATION phase diffs from: the newer of
+// the last scan and the last refresh, and never a layer import or the
+// structural phase's own revision (LatestRefreshRevision excludes those).
 //
 // The two rules it enforces are the two ways the naive "newest revision of any
 // kind" answer goes wrong.
