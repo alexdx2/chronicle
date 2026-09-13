@@ -11,10 +11,10 @@ import (
 
 // ReleaseCodename is a human-memorable release marker. Bump when scan/MCP contract changes.
 // Agents compare this string — not semver alone — to detect stale MCP servers.
-const ReleaseCodename = "osprey-fed1"
+const ReleaseCodename = "kestrel-fresh1"
 
 // SchemaGeneration bumps when MCP tool response shapes change incompatibly.
-const SchemaGeneration = 4
+const SchemaGeneration = 5
 
 // BuildTime is set at compile time via -ldflags (optional).
 var BuildTime = ""
@@ -37,6 +37,11 @@ var Capabilities = []string{
 	"field_impact",     // data:field nodes, READS/WRITES_FIELD, field-mode impact
 	"review_report",    // chronicle_review_report MR review tool
 	"client_aware_ids", // extractor/source defaults follow the connected client
+	"freshness_v1",     // chronicle_freshness, scanned vs verified SHA, scan_status.freshness is a Report
+	"knowledge_block",  // every query result ends with a knowledge: content block
+	"surface_import",   // chronicle_import_surface / chronicle surface import (ui layer)
+	"ui_layer",         // registry layer ui: product/screen/panel/control
+	"worktree_resolve", // linked worktrees read the main checkout's graph
 }
 
 // MCPIdentity is the full identity payload for agents and operators.
