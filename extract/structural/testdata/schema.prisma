@@ -1,0 +1,11 @@
+model Order {
+  id     String      @id @default(cuid())
+  status OrderStatus @default(OPEN)
+  total  Int
+}
+
+enum OrderStatus {
+  OPEN
+  PAID
+  VOID
+}

@@ -10,6 +10,15 @@ import (
 	"github.com/alexdx2/chronicle-core/extract/ast"
 )
 
+// PackVersion is the version of the rule packs in this package, stamped on
+// every `ast` evidence row as extractor_version. Bump it on ANY rule change —
+// a new decorator, a changed mapping, a different transport tag — because it is
+// the only signal that makes files whose source did not change re-extractable:
+// the structural phase works through rows carrying an older version in bounded
+// batches until none are left. Integers written as strings, so a plain string
+// compare orders them.
+const PackVersion = "1"
+
 // SemanticFact is a framework-interpreted fact ready for the graph resolver.
 type SemanticFact struct {
 	Kind       string   `json:"kind"`
