@@ -23,49 +23,70 @@ type ChangedFile struct {
 // ChangedFiles lists files changed between base and head. head == "" compares
 // base against the working tree and includes untracked files (status A) —
 // that is what a reviewer means by "my current changes".
+//
+// NUL-separated, with quoting off. Both defaults silently lose files rather
+// than failing: core.quotePath renders "src/café.ts" as "src/caf\303\251.ts"
+// WITH the quotation marks, and any whitespace split loses everything after
+// the first space in a path. A consumer that replaces per-file knowledge reads
+// a missing file as "nothing changed here", which is the worst possible
+// failure — it is indistinguishable from the truth.
 func ChangedFiles(repoRoot, base, head string) ([]ChangedFile, error) {
-	args := []string{"diff", "--name-status", "-M"}
+	args := []string{"diff", "--name-status", "-M", "-z"}
 	if head == "" {
 		args = append(args, base)
 	} else {
 		args = append(args, base+".."+head)
 	}
-	out, err := git(repoRoot, args...)
+	out, err := gitVerbatim(repoRoot, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git diff (base %s): %w", base, err)
 	}
 
+	// With -z the stream is NUL-terminated fields, not lines: a status field,
+	// then its path — and for a rename or copy, TWO paths (old, then new).
+	fields := splitNUL(out)
 	var files []ChangedFile
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	for i := 0; i < len(fields); {
+		status := fields[i][:1] // R100 → R
+		i++
+		if i >= len(fields) {
+			break
 		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		status := parts[0][:1] // R100 → R
-		path := parts[1]
+		path := fields[i]
+		i++
 		oldPath := ""
-		if status == "R" && len(parts) >= 3 {
-			oldPath = parts[1]
-			path = parts[2] // renamed: old new — report the new path
+		if status == "R" || status == "C" {
+			if i >= len(fields) {
+				break
+			}
+			oldPath = path
+			path = fields[i] // renamed: old then new — report the new path
+			i++
 		}
 		files = append(files, ChangedFile{Path: path, Status: status, OldPath: oldPath})
 	}
 
 	if head == "" {
-		untracked, err := git(repoRoot, "ls-files", "--others", "--exclude-standard")
+		untracked, err := gitVerbatim(repoRoot, "ls-files", "--others", "--exclude-standard", "-z")
 		if err == nil {
-			for _, line := range strings.Split(strings.TrimSpace(untracked), "\n") {
-				if line = strings.TrimSpace(line); line != "" {
-					files = append(files, ChangedFile{Path: line, Status: "A"})
-				}
+			for _, path := range splitNUL(untracked) {
+				files = append(files, ChangedFile{Path: path, Status: "A"})
 			}
 		}
 	}
 	return files, nil
+}
+
+// splitNUL splits a git -z stream into its fields, dropping the empty tail the
+// final terminator leaves behind.
+func splitNUL(out string) []string {
+	var fields []string
+	for _, f := range strings.Split(out, "\x00") {
+		if f != "" {
+			fields = append(fields, f)
+		}
+	}
+	return fields
 }
 
 // Show returns the content of path at ref (git show ref:path).
@@ -88,6 +109,15 @@ func MergeBase(repoRoot, ref string) (string, error) {
 
 func git(repoRoot string, args ...string) (string, error) {
 	out, err := gitBytes(repoRoot, args...)
+	return string(out), err
+}
+
+// gitVerbatim runs git with path quoting off, so a path with a non-ASCII byte
+// arrives as its own bytes instead of as a quoted C string. Set per invocation
+// (-c) rather than relied on from the repo's config: the repo belongs to the
+// user, and this is our parsing requirement, not their preference.
+func gitVerbatim(repoRoot string, args ...string) (string, error) {
+	out, err := gitBytes(repoRoot, append([]string{"-c", "core.quotePath=false"}, args...)...)
 	return string(out), err
 }
 

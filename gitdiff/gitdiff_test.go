@@ -82,3 +82,101 @@ func TestMergeBase(t *testing.T) {
 		t.Errorf("merge-base sha too short: %q", sha)
 	}
 }
+
+// Paths git has to quote — a space, a non-ASCII byte — must come back whole.
+//
+// Two defaults conspire here: core.quotePath renders "src/café.ts" as
+// "src/caf\303\251.ts" WITH the quotes, and splitting --name-status on
+// whitespace loses everything after the first space in a path. Both failures
+// are silent: the file simply is not in the diff, and every consumer concludes
+// nothing changed in it.
+func TestChangedFilesHandlesQuotedAndSpacedPaths(t *testing.T) {
+	dir := initRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	const spaced = "src/my component.ts"
+	const accented = "src/café.ts"
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{spaced, accented} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("export const x = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("add", ".")
+	run("commit", "-m", "c2")
+
+	files, err := ChangedFiles(dir, "HEAD~1", "HEAD")
+	if err != nil {
+		t.Fatalf("ChangedFiles: %v", err)
+	}
+	got := map[string]string{}
+	for _, f := range files {
+		got[f.Path] = f.Status
+	}
+	for _, name := range []string{spaced, accented} {
+		if got[name] != "A" {
+			t.Errorf("%q: status %q, want A (files: %+v)", name, got[name], files)
+		}
+	}
+}
+
+// A rename of such a path has to carry both halves: the new name to read and
+// the old one to close.
+func TestChangedFilesRenameCarriesBothPaths(t *testing.T) {
+	dir := initRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	const before = "src/old name.ts"
+	const after = "src/nouveau café.ts"
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "export const x = 1\n// keep the similarity index high\n"
+	if err := os.WriteFile(filepath.Join(dir, before), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-m", "c2")
+	run("mv", before, after)
+	run("commit", "-m", "c3")
+
+	files, err := ChangedFiles(dir, "HEAD~1", "HEAD")
+	if err != nil {
+		t.Fatalf("ChangedFiles: %v", err)
+	}
+	var ren *ChangedFile
+	for i := range files {
+		if files[i].Status == "R" {
+			ren = &files[i]
+		}
+	}
+	if ren == nil {
+		t.Fatalf("no rename in %+v", files)
+	}
+	if ren.Path != after {
+		t.Errorf("new path = %q, want %q", ren.Path, after)
+	}
+	if ren.OldPath != before {
+		t.Errorf("old path = %q, want %q", ren.OldPath, before)
+	}
+}

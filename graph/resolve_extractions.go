@@ -543,8 +543,26 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 		return fileTypeOrderFromFacts(allFiles[i].facts) < fileTypeOrderFromFacts(allFiles[j].facts)
 	})
 
-	// Index all scanned files (including type_only / empty facts) for class-name resolution.
-	allScanned, _ := g.store.ListExtractions(revisionID, domainKey)
+	// Index all scanned files (including type_only / empty facts) for class-name
+	// resolution. Whoever is resolving indexes their OWN rows: a scan must not
+	// see the structural phase's standing rows (they are another writer's
+	// account of the same files), and the phase already asked for its own by
+	// role. The index decides which file a class name means, so mixing two
+	// writers' file sets there is how one writer's ordering changes the other's
+	// edges.
+	var allScanned []store.ExtractionRow
+	if opts.ExtractionRole != "" {
+		allScanned, _ = g.store.ListExtractions(revisionID, domainKey)
+		filtered := allScanned[:0:0]
+		for _, e := range allScanned {
+			if e.ExtractionRole == opts.ExtractionRole {
+				filtered = append(filtered, e)
+			}
+		}
+		allScanned = filtered
+	} else {
+		allScanned, _ = g.store.ListScanExtractions(revisionID, domainKey)
+	}
 	g.scanFileIndex = buildScanFileIndex(allScanned)
 	defer func() { g.scanFileIndex = scanFileIndex{} }()
 

@@ -789,3 +789,62 @@ func TestScanPathMergesExternalSystemsBeforeMaterialisingEndpoints(t *testing.T)
 		}
 	}
 }
+
+// Role scoping has to run both ways. The structural phase keeps ONE standing
+// row per file, on whatever revision it last resolved; a scan that opens a
+// revision those rows already point at must not resolve them, close them, or
+// count them as its own work — it never read those files in this run.
+func TestAScanDoesNotResolveOrCountTheStructuralPhasesRows(t *testing.T) {
+	g, s, f := srSetup(t)
+	// A completed structural phase at a commit.
+	res := srRun(t, g, srInput(f, "head-1", srController, srService))
+
+	// The scan opens its own revision and reads one file.
+	scanRev, err := s.CreateRevision(srDomain, "", "scan-head", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveExtraction(scanRev, srDomain, "src/agent-only.ts", "extracted", "provider",
+		`[{"kind":"import","to":"./thing","symbols":["Thing"]}]`, ""); err != nil {
+		t.Fatal(err)
+	}
+	// The phase's rows are re-pointed at the scan's revision by a run there —
+	// the state a scan at the same commit as the last refresh actually finds.
+	if _, err := s.SaveStructuralExtraction(scanRev, srDomain, srController, "extracted", "controller",
+		`[{"kind":"endpoint","from":"billing","method":"DELETE","target":"invoices"}]`, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := g.ResolveExtractions(srDomain, scanRev)
+	if err != nil {
+		t.Fatalf("ResolveExtractions: %v", err)
+	}
+
+	if out.FilesProcessed != 1 {
+		t.Errorf("the scan resolved %d files, want 1 — its own", out.FilesProcessed)
+	}
+	if out.ExtractionsResolved != 1 {
+		t.Errorf("the scan closed %d rows, want 1", out.ExtractionsResolved)
+	}
+	// The phase's row is untouched, and the route it holds was not built.
+	left, err := s.ListUnresolvedExtractionsByRole(scanRev, srDomain, store.StructuralExtractionRole)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].Status != "extracted" {
+		t.Fatalf("the structural row was consumed by the scan: %+v", left)
+	}
+	if _, err := s.GetNodeByKey("contract:endpoint:" + srDomain + ":delete:/billing/invoices"); err == nil {
+		t.Error("the scan built the graph from the structural phase's facts")
+	}
+
+	// And the scan's own coverage does not count them.
+	n, err := g.CountResolvedExtractions(scanRev, srDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("CountResolvedExtractions = %d, want 1 — the phase's row is not the scan's work", n)
+	}
+	_ = res
+}

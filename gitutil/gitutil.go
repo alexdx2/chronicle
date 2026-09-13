@@ -20,6 +20,18 @@ func Run(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// RunRaw is Run without the trim: git's stdout byte for byte.
+//
+// Every NUL-separated form (`-z`) needs it, and so does anything whose output
+// can legally begin or end with whitespace — a path may contain, start with or
+// end in a space, and Run's TrimSpace would quietly shorten it. Trimming is
+// the right default for the questions git answers with one token; it is the
+// wrong one for a stream of paths.
+func RunRaw(dir string, args ...string) (string, error) {
+	out, err := exec.Command("git", withDir(dir, args)...).Output()
+	return string(out), err
+}
+
 // OK reports whether git exited zero. It is the form for the questions whose
 // answer IS the exit code ("is this commit an ancestor", "does this object
 // exist"), where stdout carries nothing worth reading.

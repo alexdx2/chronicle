@@ -329,18 +329,22 @@ func structuralBase(s *store.Store, repoDir, domainKey string) (base string, swe
 // HEAD's tree, not the index: the phase reads committed blobs, and a file that
 // is staged but never committed has nothing at HEAD to read.
 func supportedFilesAtHead(gitDir, domainKey string) ([]string, error) {
-	out, err := gitutil.Run(gitDir, "ls-tree", "-r", "--name-only", "HEAD")
+	// -z with quoting off, for the same reason gitdiff.ChangedFiles uses them:
+	// core.quotePath renders a non-ASCII path as a quoted C string, and
+	// splitting on newlines is fine but trimming is not — a path can legally
+	// contain a space, and losing one here is a file that is never structured
+	// while `complete: true` is stamped over its absence.
+	out, err := gitutil.RunRaw(gitDir, "-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", "-z", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("structural: git ls-tree HEAD: %w", err)
 	}
 	inScope := domainScopeFilter(domainKey)
 	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || !structural.Supported(line) || !inScope(line) {
+	for _, path := range strings.Split(out, "\x00") {
+		if path == "" || !structural.Supported(path) || !inScope(path) {
 			continue
 		}
-		files = append(files, line)
+		files = append(files, path)
 	}
 	return files, nil
 }

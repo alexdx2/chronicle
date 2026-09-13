@@ -187,7 +187,10 @@ func (g *Graph) BuildScanRunStatus(run *store.ScanRunRow, obligationType string)
 		return nil, err
 	}
 
-	exts, err := g.store.ListExtractions(run.RevisionID, run.DomainKey)
+	// A scan's own rows only: the structural phase keeps one standing row per
+	// file, and counting those as extractions of this scan would report files
+	// nobody in this run was ever given.
+	exts, err := g.store.ListScanExtractions(run.RevisionID, run.DomainKey)
 	if err != nil {
 		return nil, err
 	}
@@ -214,9 +217,10 @@ func (g *Graph) BuildScanRunStatus(run *store.ScanRunRow, obligationType string)
 	return status, nil
 }
 
-// CountResolvedExtractions returns rows marked resolved after graph build.
+// CountResolvedExtractions returns rows marked resolved after graph build —
+// the scan's own, not the structural phase's standing rows.
 func (g *Graph) CountResolvedExtractions(revisionID int64, domainKey string) (int, error) {
-	exts, err := g.store.ListExtractions(revisionID, domainKey)
+	exts, err := g.store.ListScanExtractions(revisionID, domainKey)
 	if err != nil {
 		return 0, err
 	}

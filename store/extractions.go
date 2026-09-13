@@ -184,6 +184,26 @@ func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, 
 	return res.LastInsertId()
 }
 
+// ListScanExtractions is ListExtractions without the structural phase's
+// standing rows — what a SCAN's coverage, counts and file index are about. The
+// phase writes one row per file that outlives the revision it was last
+// resolved on, so counting it as part of a scan's work would report files the
+// scan never touched.
+func (s *Store) ListScanExtractions(revisionID int64, domainKey string) ([]ExtractionRow, error) {
+	all, err := s.ListExtractions(revisionID, domainKey)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0:0]
+	for _, e := range all {
+		if e.ExtractionRole == StructuralExtractionRole {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
 // ListExtractions returns all extractions for a revision.
 func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]ExtractionRow, error) {
 	q := `SELECT extraction_id, revision_id, domain_key, file_path, status,
@@ -216,7 +236,8 @@ func (s *Store) ListUnresolvedExtractions(revisionID int64, domainKey string) ([
 }
 
 // ListUnresolvedExtractionsByRole is ListUnresolvedExtractions narrowed to one
-// extraction_role (empty role = every role, the old behaviour).
+// extraction_role. An empty role means "every role a scan owns", which
+// excludes StructuralExtractionRole — see below.
 //
 // Two writers can now share a revision: the structural phase resolves on the
 // revision the refresh or the scan already opened. Without the narrowing, a
@@ -234,6 +255,12 @@ func (s *Store) ListUnresolvedExtractionsByRole(revisionID int64, domainKey, rol
 	if role != "" {
 		q += ` AND COALESCE(extraction_role,'single') = ?`
 		args = append(args, role)
+	} else {
+		// "Every role" means every role a SCAN owns. The structural phase's
+		// standing row is another writer's, exactly as this caller's own rows
+		// are not the structural phase's — the exclusion has to run both ways
+		// or a scan resolves and closes work it did not do.
+		q += ` AND COALESCE(extraction_role,'single') != '` + StructuralExtractionRole + `'`
 	}
 	q += ` ORDER BY extraction_id`
 	rows, err := s.db.Query(q, args...)
@@ -294,9 +321,10 @@ func (s *Store) MarkExtractionsResolved(revisionID int64, domainKey string) erro
 	return s.MarkExtractionsResolvedByRole(revisionID, domainKey, "")
 }
 
-// MarkExtractionsResolvedByRole closes only the rows one writer owns (empty
-// role = all of them). A resolve may only mark resolved what it actually
-// resolved: see ListUnresolvedExtractionsByRole.
+// MarkExtractionsResolvedByRole closes only the rows one writer owns. An empty
+// role means "every role a scan owns" and excludes the structural phase's, the
+// same way the phase's own role excludes the scan's. A resolve may only mark
+// resolved what it actually resolved.
 func (s *Store) MarkExtractionsResolvedByRole(revisionID int64, domainKey, role string) error {
 	q := `UPDATE scan_extractions SET status = 'resolved'
 	      WHERE revision_id = ? AND domain_key = ? AND status = 'extracted'`
@@ -304,6 +332,8 @@ func (s *Store) MarkExtractionsResolvedByRole(revisionID int64, domainKey, role 
 	if role != "" {
 		q += ` AND COALESCE(extraction_role,'single') = ?`
 		args = append(args, role)
+	} else {
+		q += ` AND COALESCE(extraction_role,'single') != '` + StructuralExtractionRole + `'`
 	}
 	_, err := s.db.Exec(q, args...)
 	return err

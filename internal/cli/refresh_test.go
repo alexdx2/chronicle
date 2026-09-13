@@ -706,3 +706,33 @@ func TestStructuralQuietLine(t *testing.T) {
 		t.Errorf("line = %q, want %q", got, want)
 	}
 }
+
+// The sweep lists HEAD's tree, and a path git would quote — a space, a
+// non-ASCII byte — must survive that listing. Losing one is silent: the file
+// is never structured, and `complete: true` is stamped over its absence.
+func TestRefreshSweepSeesQuotedAndSpacedPaths(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	const spaced = "src/my service.ts"
+	const accented = "src/café.controller.ts"
+	writeCommit(t, dir, spaced, srvSource, "a spaced path")
+	writeCommit(t, dir, accented, ctrlSource, "an accented path")
+
+	runRefreshIn(t, dir, "--quiet")
+
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	for _, f := range []string{spaced, accented} {
+		if _, _, ok, err := s.GetStructuralHash("d", f); err != nil || !ok {
+			t.Errorf("%q was never looked at (ok=%v, err=%v)", f, ok, err)
+		}
+	}
+	// The accented controller's route made it into the graph.
+	if _, err := s.GetNodeByKey("contract:endpoint:d:get:/a/items"); err != nil {
+		t.Errorf("the route in the accented file is missing: %v", err)
+	}
+	if rev, err := s.LatestStructuralRevision("d"); err != nil {
+		t.Fatalf("the phase must still complete: %v", err)
+	} else if rev.GitAfterSHA == "" {
+		t.Fatal("no structural pointer")
+	}
+}
