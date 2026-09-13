@@ -41,6 +41,10 @@ HEAD, its bytes changed without its commit changing, or a name it uses does not
 resolve. Each has a flag that says "yes, I meant that".`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			if notice, linked := linkedWorktreeRefusal(); linked {
+				refuseWrite(notice, false)
+			}
+
 			f, err := surface.Load(args[0])
 			if err != nil {
 				outputError(err)

@@ -129,3 +129,116 @@ func TestHookAdvisoryWrapperMeasuresWorktreeHEADAfterResolution(t *testing.T) {
 		t.Fatalf("expected 1 commit(s) behind measured against the worktree's HEAD after graph resolution, got %q", got)
 	}
 }
+
+// A commit in ANY worktree runs the main checkout's post-commit hook, so
+// `chronicle refresh --quiet` fires inside linked worktrees all day. It must
+// write nothing: the revision it would create names the feature branch's tip
+// and lands in main's graph, which then reports main as sitting on a commit
+// nobody merged.
+func TestRefreshFromALinkedWorktreeWritesNothing(t *testing.T) {
+	main, wt, _ := buildLinkedWorktree(t)
+	cwd, _ := os.Getwd()
+	defer resetWorktreeGlobals(t, cwd)
+	defer paths.SetGitDir("")
+
+	db := filepath.Join(main, ".depbot", "chronicle.db")
+	before := revisionCount(t, db)
+
+	if err := os.Chdir(wt); err != nil {
+		t.Fatal(err)
+	}
+	paths.SetGitDir("")
+
+	cmd := newRefreshCmd()
+	cmd.SetArgs([]string{"--quiet"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("refresh must not fail the commit it is hooked to: %v", err)
+	}
+
+	if after := revisionCount(t, db); after != before {
+		t.Fatalf("main's graph gained %d revision(s) from a linked worktree", after-before)
+	}
+	if _, err := os.Stat(filepath.Join(wt, ".depbot")); err == nil {
+		t.Error("refresh created a graph directory in the worktree")
+	}
+}
+
+// A worktree that owns a graph of its own is a deliberate setup — the guard
+// must not stop it writing its own knowledge.
+func TestWorktreeWithItsOwnGraphIsNotRefused(t *testing.T) {
+	_, wt, _ := buildLinkedWorktree(t)
+	cwd, _ := os.Getwd()
+	defer resetWorktreeGlobals(t, cwd)
+	defer paths.SetGitDir("")
+
+	if err := os.MkdirAll(filepath.Join(wt, ".depbot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(wt, ".depbot", "chronicle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if err := os.Chdir(wt); err != nil {
+		t.Fatal(err)
+	}
+	paths.SetGitDir("")
+	if notice, linked := linkedWorktreeRefusal(); linked {
+		t.Fatalf("a worktree with its own graph must be writable, got %q", notice)
+	}
+}
+
+func TestMainCheckoutIsNeverRefused(t *testing.T) {
+	main, _, _ := buildLinkedWorktree(t)
+	cwd, _ := os.Getwd()
+	defer resetWorktreeGlobals(t, cwd)
+	defer paths.SetGitDir("")
+
+	if err := os.Chdir(main); err != nil {
+		t.Fatal(err)
+	}
+	paths.SetGitDir("")
+	if notice, linked := linkedWorktreeRefusal(); linked {
+		t.Fatalf("the main checkout must be writable, got %q", notice)
+	}
+}
+
+// `hook install --git` run from a linked worktree used to write into that
+// worktree's private git directory, where git never looks for hooks — the hook
+// was installed and then never fired again.
+func TestGitHookInstallFromAWorktreeWritesToTheHooksGitActuallyRuns(t *testing.T) {
+	main, wt, _ := buildLinkedWorktree(t)
+	cwd, _ := os.Getwd()
+	defer resetWorktreeGlobals(t, cwd)
+	defer paths.SetGitDir("")
+
+	if err := os.Chdir(wt); err != nil {
+		t.Fatal(err)
+	}
+	paths.SetGitDir("")
+	if err := installGitPostCommit(); err != nil {
+		t.Fatalf("installGitPostCommit: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(main, ".git", "hooks", "post-commit")); err != nil {
+		t.Fatalf("post-commit hook is not where git looks for it: %v", err)
+	}
+}
+
+func revisionCount(t *testing.T, dbPath string) int {
+	t.Helper()
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	revs := 0
+	for id := int64(1); ; id++ {
+		if _, err := s.GetRevision(id); err != nil {
+			break
+		}
+		revs++
+	}
+	return revs
+}

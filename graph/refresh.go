@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -14,6 +15,39 @@ type RefreshResult struct {
 	DeletedFiles    int               `json:"deleted_files"`
 	Invalidated     *InvalidateResult `json:"invalidated"`
 	PendingSemantic []string          `json:"pending_semantic"`
+}
+
+// RecordRefreshNoop names HEAD as re-verified when the diff since the base
+// touched nothing a refresh can check — a docs-only commit, a lockfile bump, a
+// README.
+//
+// Without it those commits quietly age the graph: freshness compares the
+// newest scan/refresh commit against HEAD, so a repo whose knowledge is
+// demonstrably still correct drifts from "verified" to "stale, 12 commits
+// behind" purely because nothing wrote down that the 12 commits could not have
+// invalidated anything. Nothing is invalidated and nothing is verified here —
+// the revision records the check, and says noop so a reader is not misled into
+// thinking evidence was re-examined.
+//
+// A commit that already carries a revision keeps it: graph_revisions is
+// UNIQUE(domain_key, git_after_sha), and there is nothing to add to a commit
+// that was just scanned.
+func (g *Graph) RecordRefreshNoop(domainKey, headSHA string) (int64, error) {
+	if headSHA == "" {
+		return 0, nil
+	}
+	rev, err := g.store.GetRevisionBySHA(domainKey, headSHA)
+	switch {
+	case err == nil:
+		return rev.RevisionID, nil
+	case !errors.Is(err, store.ErrNotFound):
+		return 0, fmt.Errorf("RecordRefreshNoop: %w", err)
+	}
+	id, err := g.store.CreateRevision(domainKey, "", headSHA, "git_hook", "incremental", `{"kind":"refresh","noop":true}`)
+	if err != nil {
+		return 0, fmt.Errorf("RecordRefreshNoop: create revision: %w", err)
+	}
+	return id, nil
 }
 
 // RefreshFromDiff re-anchors structural evidence for a set of changed/deleted

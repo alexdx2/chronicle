@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -142,6 +143,49 @@ func resolveWorktreeGraph() {
 // dashboard — and never the graph location resolveWorktreeGraph may have
 // redirected to main: HEAD must be the worktree's own branch tip, not main's.
 func repoDirForGit() string { return paths.GitDir() }
+
+// linkedWorktreeRefusal reports whether a WRITE command is standing in a
+// linked worktree whose graph resolves to the main checkout — the one place a
+// write is never what the user meant.
+//
+// The hazard is not hypothetical: git runs the MAIN checkout's post-commit
+// hook for a commit made in any worktree, so `chronicle refresh` fires there
+// on every feature-branch commit and writes a revision — at the FEATURE
+// BRANCH's tip — into main's graph. The same goes for a surface import.
+//
+// Read-only commands are unaffected: answering a query from main's graph is
+// exactly what a worktree with no graph of its own should do.
+//
+// Three cases are deliberately NOT refusals: an explicit --project or
+// --chronicle-dir (the caller said where the graph is), and a worktree that
+// owns a graph of its own (a deliberate setup, writing its own knowledge).
+// They are the same three conditions resolveWorktreeGraph declines to
+// redirect under, so the guard and the redirect can never disagree.
+func linkedWorktreeRefusal() (string, bool) {
+	if projectPath != "" || chronicleDirExplicit {
+		return "", false
+	}
+	dir := paths.GitDir()
+	main, ok := paths.MainWorktreeDir(dir)
+	if !ok {
+		return "", false
+	}
+	if paths.ResolveProjectDir(dir, chronicleDir) == dir {
+		return "", false
+	}
+	return "linked worktree — run this in " + main, true
+}
+
+// refuseWrite ends a write command that must not run here. quiet callers are
+// git hooks: they exit 0 and stay off stdout, because a nudge that fails a
+// commit is a worse bug than the one this guard prevents.
+func refuseWrite(notice string, quiet bool) {
+	if quiet {
+		fmt.Fprintln(os.Stderr, "chronicle: "+notice)
+		return
+	}
+	outputError(errors.New(notice))
+}
 
 func openGraph() *graph.Graph {
 	resolveWorktreeGraph()

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
@@ -302,20 +303,21 @@ func commitsBehindIn(repoDir, sha string) int {
 }
 
 func installGitPostCommit() error {
-	base := "."
-	if projectPath != "" {
-		base = projectPath
-	}
-	out, err := exec.Command("git", "-C", base, "rev-parse", "--git-dir").Output()
+	base := repoDirForGit()
+	// --git-path hooks, not --git-dir: inside a linked worktree --git-dir is
+	// that worktree's private directory, where git never looks for hooks — an
+	// install from a worktree used to write a post-commit hook nothing would
+	// ever run. --git-path resolves to the hooks directory git actually uses
+	// (the main checkout's, and core.hooksPath when it is set).
+	hooks, err := gitutil.Run(base, "rev-parse", "--git-path", "hooks")
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
-	gitDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(base, gitDir)
+	if !filepath.IsAbs(hooks) {
+		hooks = filepath.Join(base, hooks)
 	}
 	exe, _ := os.Executable()
-	hookPath := filepath.Join(gitDir, "hooks", "post-commit")
+	hookPath := filepath.Join(hooks, "post-commit")
 	script := fmt.Sprintf("#!/bin/sh\n# Chronicle: zero-token structural refresh after each commit\n%q refresh --quiet >/dev/null 2>&1 &\n", exe)
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0755); err != nil {
 		return err
