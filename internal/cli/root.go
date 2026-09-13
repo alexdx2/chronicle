@@ -25,6 +25,11 @@ var (
 	dbPath       string
 	registryPath string
 	manifestPath string
+
+	// chronicleDirExplicit records whether --chronicle-dir was passed on the
+	// command line (vs. left at its default) — resolveWorktreeGraph must not
+	// second-guess an explicitly configured artifacts directory.
+	chronicleDirExplicit bool
 )
 
 func NewRootCmd() *cobra.Command {
@@ -32,6 +37,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "chronicle",
 		Short: "Chronicle MCP — knowledge graph for your codebase",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			chronicleDirExplicit = cmd.Flags().Changed("chronicle-dir")
 			paths.SetProjectRoot(projectPath)
 			paths.SetChronicleDir(chronicleDir)
 		},
@@ -101,20 +107,40 @@ func resolveDefaults() {
 	manifestPath = filepath.Join(base, "chronicle.domain.yaml")
 }
 
-// resolveWorktreeGraph updates the shared projectPath (once, in cwd mode — no
-// explicit --project) to the main checkout when the current directory is a
-// linked worktree whose own .depbot has no graph but the main checkout's
-// does. No-op outside cwd mode or when nothing needs resolving; never creates
-// files (paths.ResolveProjectDir only stats).
+// resolveWorktreeGraph points the graph location (paths' project root) at the
+// main checkout when the current directory is a linked worktree whose own
+// artifacts dir has no graph but the main checkout's does. It only applies in
+// cwd mode with the default artifacts dir — an explicit --project already
+// says exactly where the graph lives, and an explicit --chronicle-dir means
+// the user is deliberately scoping artifacts, which this must not second-guess
+// (redirecting to main under an assumed name could make ensureDepbotDir create
+// a stray "<main>/<custom>/" that was never asked for). Never creates files
+// (paths.ResolveProjectDir only stats).
+//
+// Deliberately does NOT change projectPath: that stays the repo dir for git
+// commands (repoDirForGit) — a linked worktree's HEAD differs from main's, so
+// commit-count math (hook staleness, refresh diffs) must keep running against
+// the actual worktree, not the main checkout the graph was resolved to.
 func resolveWorktreeGraph() {
-	if projectPath != "" {
+	if projectPath != "" || chronicleDirExplicit {
 		return
 	}
-	if r := paths.ResolveProjectDir("."); r != "." {
-		projectPath = r
+	if r := paths.ResolveProjectDir(".", chronicleDir); r != "." {
 		paths.SetProjectRoot(r)
 		fmt.Fprintf(os.Stderr, "chronicle: linked worktree — using graph of %s\n", r)
 	}
+}
+
+// repoDirForGit returns the directory git commands should run in for
+// commit-count math (hook staleness, refresh diffs): the explicit --project
+// value, or the process cwd. Unlike the graph location resolved by
+// resolveWorktreeGraph, this never redirects to a linked worktree's main
+// checkout — HEAD must be the worktree's own branch tip, not main's.
+func repoDirForGit() string {
+	if projectPath != "" {
+		return projectPath
+	}
+	return "."
 }
 
 func openGraph() *graph.Graph {

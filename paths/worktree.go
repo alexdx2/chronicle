@@ -34,14 +34,29 @@ func MainWorktreeDir(dir string) (string, bool) {
 	return "", false
 }
 
-// ResolveProjectDir is dir when it owns a graph; otherwise the main worktree
-// when dir is a linked worktree; otherwise dir unchanged. It never creates files.
-func ResolveProjectDir(dir string) string {
-	if _, err := os.Stat(filepath.Join(dir, ".depbot", "chronicle.db")); err == nil {
+// ResolveProjectDir is dir when it owns a graph at <dir>/<chronicleDir>/chronicle.db;
+// otherwise the main worktree's dir when dir is a linked worktree and the main
+// checkout owns a graph there (same chronicleDir name); otherwise dir
+// unchanged. It never creates files.
+//
+// chronicleDir is the configured artifacts directory name (relative to the
+// project root; "" defaults to ".depbot", matching ConfiguredDir's default).
+// An absolute chronicleDir names the same location regardless of which
+// worktree you're in, so it is left out of this resolution entirely — dir is
+// returned unchanged.
+func ResolveProjectDir(dir, chronicleDir string) string {
+	rel := chronicleDir
+	if rel == "" {
+		rel = defaultDir
+	}
+	if filepath.IsAbs(rel) {
+		return dir
+	}
+	if _, err := os.Stat(filepath.Join(dir, rel, "chronicle.db")); err == nil {
 		return dir
 	}
 	if main, ok := MainWorktreeDir(dir); ok {
-		if _, err := os.Stat(filepath.Join(main, ".depbot", "chronicle.db")); err == nil {
+		if _, err := os.Stat(filepath.Join(main, rel, "chronicle.db")); err == nil {
 			return main
 		}
 	}

@@ -262,22 +262,24 @@ func entryHasChronicleHook(e any) bool {
 
 // hookAdvisory builds the reminder, or "" when there is no graph or the graph
 // has never been scanned (a DB with zero revisions is a ghost, not knowledge).
-// Rate-limited to once per 10 minutes via a marker file so it doesn't repeat
-// on every tool call.
+// Rate-limited to once per 10 minutes via a marker file — but only once we
+// know there is something to say: a ghost DB (or any other silent case) must
+// not burn the rate-limit window, or a real advisory could be suppressed for
+// 10 minutes by an empty-graph check that had nothing to report.
 func hookAdvisory() string {
 	resolveWorktreeGraph()
 	resolveDefaults()
 	if _, err := os.Stat(dbPath); err != nil {
 		return "" // no graph in this project
 	}
+	advisory := hookAdvisoryFor(dbPath, repoDirForGit())
+	if advisory == "" {
+		return ""
+	}
 	if rateLimited() {
 		return ""
 	}
-	base := "."
-	if projectPath != "" {
-		base = projectPath
-	}
-	return hookAdvisoryFor(dbPath, base)
+	return advisory
 }
 
 // hookAdvisoryFor is the testable body: it opens dbPath, and speaks only when a

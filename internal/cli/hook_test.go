@@ -2,12 +2,39 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 )
+
+// gitRun runs a git command in dir, failing the test on error. Shared by any
+// test in this package that needs a real git repo.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// gitCapture runs a git command in dir and returns its stdout, failing the
+// test on error.
+func gitCapture(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
+}
 
 func TestMergeHookIntoSettings_Empty(t *testing.T) {
 	out, changed, err := mergeHookIntoSettings(nil, "Grep|Glob|Read", "chronicle hook fire")
@@ -145,5 +172,103 @@ func TestHookAdvisorySpeaksWithRevision(t *testing.T) {
 	s.Close()
 	if got := hookAdvisoryFor(db, dir); got == "" {
 		t.Fatalf("graph with a revision must nudge")
+	}
+}
+
+// TestHookAdvisoryMeasuresWorktreeHEADNotMainHEAD guards against staleness
+// math running "git -C <main>" after graph resolution: the graph lives in
+// main's .depbot, but a linked worktree can be on a branch main's checked-out
+// ref knows nothing about. commitsBehindIn must be told the worktree's own
+// dir so "N commits behind HEAD" reflects the worktree's actual HEAD, not
+// main's (which never moves when you commit inside the worktree).
+func TestHookAdvisoryMeasuresWorktreeHEADNotMainHEAD(t *testing.T) {
+	root := t.TempDir()
+	main := filepath.Join(root, "main")
+	if err := os.MkdirAll(main, 0755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, main, "init", "-q", "-b", "main")
+	gitRun(t, main, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "base")
+	baseSHA := strings.TrimSpace(gitCapture(t, main, "rev-parse", "HEAD"))
+
+	wt := filepath.Join(root, "wt")
+	gitRun(t, main, "worktree", "add", "-q", wt, "-b", "feat")
+	// The worktree moves one commit ahead of main's checked-out ref. Main's
+	// own HEAD never changes — this is exactly the case that "git -C main"
+	// would get wrong (0 commits behind instead of 1).
+	gitRun(t, wt, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "ahead")
+
+	db := filepath.Join(main, ".depbot", "chronicle.db")
+	if err := os.MkdirAll(filepath.Dir(db), 0755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRevision("d", "", baseSHA, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	got := hookAdvisoryFor(db, wt)
+	if !strings.Contains(got, "1 commit(s) behind") {
+		t.Fatalf("expected 1 commit(s) behind measured against the worktree's HEAD, got %q", got)
+	}
+}
+
+// TestHookAdvisoryGhostDBDoesNotBurnRateLimit guards the ordering fix: a ghost
+// DB (no revision yet) must not touch the 10-minute rate-limit marker, or a
+// scan that lands moments later could still be suppressed for the rest of
+// that window.
+func TestHookAdvisoryGhostDBDoesNotBurnRateLimit(t *testing.T) {
+	dir := t.TempDir()
+	cwd, _ := os.Getwd()
+	defer func() {
+		os.Chdir(cwd)
+		projectPath = ""
+		chronicleDir = ".depbot"
+		chronicleDirExplicit = false
+		paths.SetProjectRoot("")
+		paths.SetChronicleDir(".depbot")
+	}()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	projectPath = ""
+	chronicleDir = ".depbot"
+	chronicleDirExplicit = false
+	paths.SetProjectRoot("")
+	paths.SetChronicleDir(".depbot")
+
+	depbot := filepath.Join(dir, ".depbot")
+	if err := os.MkdirAll(depbot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(depbot, "chronicle.db")
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if got := hookAdvisory(); got != "" {
+		t.Fatalf("ghost DB must stay silent, got %q", got)
+	}
+
+	// A scan just landed — the DB now has a revision. Because the ghost check
+	// above must not have touched the rate limiter, this must fire right away
+	// instead of waiting out the 10-minute window.
+	s2, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.CreateRevision("d", "", "", "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	s2.Close()
+
+	if got := hookAdvisory(); got == "" {
+		t.Fatalf("advisory must fire immediately once the ghost DB gains a revision — the rate limiter must not have been burned by the earlier ghost check")
 	}
 }

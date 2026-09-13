@@ -104,9 +104,10 @@ func gitDiffFiles(base, filter string) ([]string, error) {
 }
 
 func gitOutput(args ...string) (string, error) {
+	dir := repoDirForGit()
 	gitArgs := args
-	if projectPath != "" {
-		gitArgs = append([]string{"-C", projectPath}, args...)
+	if dir != "." {
+		gitArgs = append([]string{"-C", dir}, args...)
 	}
 	out, err := exec.Command("git", gitArgs...).Output()
 	return string(out), err
