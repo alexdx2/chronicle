@@ -291,23 +291,3 @@ func TestOnlyTheStructuralPhasesOwnAstRowsEscapeVerification(t *testing.T) {
 }
 
 // The Go form of the same rule, for callers that hold rows rather than SQL.
-func TestEvidenceOwnedByAnotherWriter(t *testing.T) {
-	cases := []struct {
-		sourceKind, extractorID string
-		want                    bool
-	}{
-		{"declared", "surface-import", true},
-		{"surface_extract", "surface-import", true},
-		{"ast", structuralExtractorID, true},
-		{"ast", "chronicle-complexity", false},
-		{"ast", "chronicle-ast", false},
-		{"file", "claude", false},
-		{"file", structuralExtractorID, true},
-	}
-	for _, c := range cases {
-		if got := EvidenceOwnedByAnotherWriter(c.sourceKind, c.extractorID); got != c.want {
-			t.Errorf("EvidenceOwnedByAnotherWriter(%q, %q) = %v, want %v",
-				c.sourceKind, c.extractorID, got, c.want)
-		}
-	}
-}

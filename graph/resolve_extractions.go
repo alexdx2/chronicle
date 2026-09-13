@@ -75,9 +75,9 @@ type ResolveOptions struct {
 	//
 	//  1. every evidence row the resolver writes FOR A FILE is stamped
 	//     source_kind "ast", extractor_id ExtractorID (default
-	//     "chronicle-structural"), extractor_version ExtractorVersion,
-	//     metadata {"content_hash": ContentHashes[file]}. Evidence the
-	//     post-passes derive from the graph keeps its own identity;
+	//     "chronicle-structural") and extractor_version ExtractorVersion.
+	//     Evidence the post-passes derive from the graph keeps its own
+	//     identity;
 	//  2. certainty follows construction: a fact whose target is fixed by
 	//     the source text (an import specifier, a declaration, a route, a
 	//     schema model) keeps derivation_kind "hard"; a link whose target
@@ -101,11 +101,6 @@ type ResolveOptions struct {
 	// who read the file. Empty defaults to detDefaultExtractorID
 	// ("chronicle-structural"); the structural pass passes its own.
 	ExtractorID string `json:"extractor_id,omitempty"`
-
-	// ContentHashes maps file path → content sha256, written into each
-	// evidence row's metadata as "content_hash". A file with no entry gets
-	// no content_hash — the evidence is still written.
-	ContentHashes map[string]string `json:"content_hashes,omitempty"`
 
 	// ExtractionRole narrows the resolve to the scan_extractions rows of one
 	// writer (store.StructuralExtractionRole, say). Empty = every row on the

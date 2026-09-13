@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -165,10 +164,12 @@ func (g *Graph) detStampEvidence(sourceKind, extractorID, extractorVersion, meta
 	}
 	extractorID = g.det.extractorID()
 	extractorVersion = g.det.extractorVersion()
-	if h := g.det.opts.ContentHashes[g.det.currentFile]; h != "" {
-		buf, _ := json.Marshal(map[string]string{"content_hash": h})
-		metadata = string(buf)
-	}
+	// No content hash here. AddEvidence's dedup path re-uses an existing row
+	// without rewriting its metadata, so a hash stamped on an evidence row is
+	// frozen at the moment the row was first inserted and reads as a lie about
+	// every later assertion. The live answer to "what content justifies this"
+	// is the phase's own per-file record (store.GetStructuralHash), which is
+	// rewritten every time the file is looked at.
 	return sourceKind, extractorID, extractorVersion, metadata
 }
 

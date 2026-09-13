@@ -7,9 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alexdx2/chronicle-core/extract/ast"
-	"github.com/alexdx2/chronicle-core/extract/prisma"
-	"github.com/alexdx2/chronicle-core/extract/rules"
+	"github.com/alexdx2/chronicle-core/extract/structural"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
@@ -225,9 +223,15 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 				}
 			}
 
-			// Run tree-sitter AST + rules on each file
-			// AST extracts raw syntax → rules apply framework meaning → semantic facts saved
-			ruleRegistry := rules.NewRegistry(rules.RulesetsForTech(tech)...)
+			// One deterministic read per file — the same call the structural
+			// refresh phase makes (extract/structural). The two used to hold
+			// separate copies of this logic, which had already drifted: the
+			// package sets FromType "schema" for every prisma file, the copy
+			// here only did so when the schema yielded facts.
+			//
+			// The scan's own extension gate stays around the call. Supported()
+			// covers .js/.jsx too, and widening WHICH files a scan reads is a
+			// different decision from deduplicating HOW it reads them.
 			filesWithAST := make([]FileWithAST, 0, len(batch))
 			for _, filePath := range batch {
 				meta := metaByFile[filePath]
@@ -240,50 +244,20 @@ func (g *Graph) scanNextAction(domainKey string, tech ...string) (*ScanAction, e
 					VoteGroup:    meta.voteGroup,
 					VoteIndex:    meta.voteIndex,
 				}
-				if isTypeScriptFile(filePath) {
-					if content := readFileContent(filePath); content != nil {
-						rawResult := ast.ExtractTypeScript(content)
-						semantic := ruleRegistry.Apply(rawResult)
-						fwa.ASTFacts = semantic.FactsJSON()
-						fwa.FromType = semantic.FromType
-						fmt.Fprintf(os.Stderr, "AST: %s → %d facts, %d candidates\n", filePath, len(rawResult.Facts), len(rawResult.Candidates))
-						// Serialize candidates for LLM classification
-						if len(rawResult.Candidates) > 0 {
-							if cb, err := json.Marshal(rawResult.Candidates); err == nil {
-								fwa.Candidates = string(cb)
-							}
+				if isTypeScriptFile(filePath) || strings.HasSuffix(filePath, ".prisma") {
+					res := structural.ExtractFile(filePath, readFileContent(filePath), tech)
+					switch res.Outcome {
+					case structural.Extracted:
+						fwa.ASTFacts = res.FactsJSON
+						fwa.FromType = res.FromType
+						if res.CandidatesJSON != "" {
+							fwa.Candidates = res.CandidatesJSON
 						}
-					}
-				}
-				if strings.HasSuffix(filePath, ".prisma") {
-					if content := readFileContent(filePath); content != nil {
-						prismaResult := prisma.Extract(content)
-						var facts []map[string]any
-						for _, m := range prismaResult.Models {
-							facts = append(facts, map[string]any{
-								"kind": "model", "name": m.Name,
-								"file_path": filePath, "line": m.Line,
-							})
-						}
-						for _, e := range prismaResult.Enums {
-							facts = append(facts, map[string]any{
-								"kind": "enum", "name": e.Name,
-								"file_path": filePath, "line": e.Line,
-							})
-						}
-						for _, r := range prismaResult.Relations {
-							facts = append(facts, map[string]any{
-								"kind": "model_relation", "from": r.From,
-								"to": r.To, "field_name": r.FieldName,
-							})
-						}
-						if len(facts) > 0 {
-							factsJSON, _ := json.Marshal(facts)
-							fwa.ASTFacts = string(factsJSON)
-							fwa.FromType = "schema"
-							fmt.Fprintf(os.Stderr, "Prisma: %s → %d models, %d enums, %d relations\n",
-								filePath, len(prismaResult.Models), len(prismaResult.Enums), len(prismaResult.Relations))
-						}
+						fmt.Fprintf(os.Stderr, "AST: %s → %d facts\n", filePath, res.FactCount)
+					default:
+						// Unreadable or unparseable: no facts, as before. The
+						// agent still gets the file — the obligation stands.
+						fmt.Fprintf(os.Stderr, "AST: %s → no facts (%s: %v)\n", filePath, res.Outcome, res.Err)
 					}
 				}
 				filesWithAST = append(filesWithAST, fwa)

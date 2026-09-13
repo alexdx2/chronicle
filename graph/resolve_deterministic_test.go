@@ -217,10 +217,6 @@ func detOptions() ResolveOptions {
 	return ResolveOptions{
 		Deterministic:    true,
 		ExtractorVersion: "1",
-		ContentHashes: map[string]string{
-			"src/tom.module.ts":     "hash-module",
-			"src/tom.controller.ts": "hash-controller",
-		},
 	}
 }
 
@@ -251,12 +247,16 @@ func TestResolveDeterministic_EvidenceIsAST(t *testing.T) {
 		if e.ExtractorVersion != "1" {
 			t.Errorf("evidence extractor_version = %q, want 1", e.ExtractorVersion)
 		}
+		// No content hash on the row. AddEvidence's dedup path re-uses an
+		// existing row without rewriting its metadata, so a hash here is
+		// frozen at first insertion and reads as a lie about every later
+		// assertion; the live answer lives in the phase's own per-file record.
 		var meta map[string]string
 		if err := json.Unmarshal([]byte(e.Metadata), &meta); err != nil {
 			t.Fatalf("evidence metadata %q: %v", e.Metadata, err)
 		}
-		if meta["content_hash"] != "hash-module" {
-			t.Errorf("evidence metadata content_hash = %q, want hash-module", meta["content_hash"])
+		if _, ok := meta["content_hash"]; ok {
+			t.Errorf("evidence metadata carries a content hash that can never be updated: %q", e.Metadata)
 		}
 	}
 }

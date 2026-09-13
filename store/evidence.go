@@ -550,25 +550,13 @@ var ImporterOwnedSourceKinds = []string{"declared", "surface_extract"}
 // measured.
 var StructuralOwnedExtractorIDs = []string{"chronicle-structural"}
 
-// EvidenceOwnedByAnotherWriter is that rule in Go, for callers holding rows
-// rather than building SQL.
-func EvidenceOwnedByAnotherWriter(sourceKind, extractorID string) bool {
-	for _, k := range ImporterOwnedSourceKinds {
-		if sourceKind == k {
-			return true
-		}
-	}
-	for _, id := range StructuralOwnedExtractorIDs {
-		if extractorID == id {
-			return true
-		}
-	}
-	return false
-}
-
-// notOwnedByAnotherWriter is the SQL half, for the table prefix the query's
+// notOwnedByAnotherWriter is the rule as SQL, for the table prefix the query's
 // joins need ("" for a bare graph_evidence, "e." when it is aliased). Both
 // halves of the rule are one NOT(...) so a caller cannot apply half of it.
+//
+// There is no Go twin. One existed and had no caller outside its own test:
+// every question of this shape is asked of the database, and a second copy of
+// a two-part rule is a second chance to apply one part of it.
 func notOwnedByAnotherWriter(prefix string) (string, []any) {
 	inList := func(values []string) (string, []any) {
 		marks := make([]string, len(values))
