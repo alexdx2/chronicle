@@ -137,3 +137,91 @@ func (s *Store) GetRevision(id int64) (*Revision, error) {
 	}
 	return r, nil
 }
+
+// revisionCols is the column list every revision query selects, in Revision
+// field order.
+const revisionCols = `revision_id, domain_key, COALESCE(git_before_sha,''), git_after_sha,
+		       trigger_kind, mode, created_at, metadata`
+
+// revisionLayerExpr reads metadata.layer defensively. json_extract raises on
+// malformed JSON, which would fail the whole query because of one bad row;
+// CASE is documented to short-circuit, so json_extract never sees invalid
+// input and a non-JSON metadata simply reads as "no layer".
+const revisionLayerExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.layer') ELSE NULL END`
+
+// oneRevision runs a single-row revision query and maps no rows to ErrNotFound.
+func (s *Store) oneRevision(what, q string, args ...any) (*Revision, error) {
+	r := &Revision{}
+	err := s.db.QueryRow(q, args...).Scan(
+		&r.RevisionID, &r.DomainKey, &r.GitBeforeSHA, &r.GitAfterSHA,
+		&r.TriggerKind, &r.Mode, &r.CreatedAt, &r.Metadata,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%s: %w", what, ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	return r, nil
+}
+
+// LatestScanRevision is the newest non-refresh, non-layer revision of
+// domainKey (empty domainKey = any domain) — the revision that says how old
+// the code knowledge is. Refresh revisions (trigger_kind='git_hook') only
+// re-verify existing knowledge and layer imports (metadata.layer) only carry
+// one layer, so neither may move the scanned SHA. ErrNotFound when none.
+func (s *Store) LatestScanRevision(domainKey string) (*Revision, error) {
+	q := `SELECT ` + revisionCols + ` FROM graph_revisions
+	      WHERE trigger_kind != 'git_hook' AND ` + revisionLayerExpr + ` IS NULL`
+	var args []any
+	if domainKey != "" {
+		q += ` AND domain_key = ?`
+		args = append(args, domainKey)
+	}
+	q += ` ORDER BY revision_id DESC LIMIT 1`
+	return s.oneRevision("LatestScanRevision", q, args...)
+}
+
+// LatestRefreshRevision is the newest trigger_kind='git_hook' revision — the
+// last time knowledge was re-verified against a commit without a rescan.
+// ErrNotFound when none.
+func (s *Store) LatestRefreshRevision(domainKey string) (*Revision, error) {
+	q := `SELECT ` + revisionCols + ` FROM graph_revisions
+	      WHERE trigger_kind = 'git_hook'`
+	var args []any
+	if domainKey != "" {
+		q += ` AND domain_key = ?`
+		args = append(args, domainKey)
+	}
+	q += ` ORDER BY revision_id DESC LIMIT 1`
+	return s.oneRevision("LatestRefreshRevision", q, args...)
+}
+
+// LatestLayerRevision is the newest revision whose metadata.layer == layer
+// (e.g. a "ui" surface import). ErrNotFound when none.
+func (s *Store) LatestLayerRevision(domainKey, layer string) (*Revision, error) {
+	q := `SELECT ` + revisionCols + ` FROM graph_revisions
+	      WHERE ` + revisionLayerExpr + ` = ?`
+	args := []any{layer}
+	if domainKey != "" {
+		q += ` AND domain_key = ?`
+		args = append(args, domainKey)
+	}
+	q += ` ORDER BY revision_id DESC LIMIT 1`
+	return s.oneRevision("LatestLayerRevision", q, args...)
+}
+
+// NewestRevisionDomain returns the domain of the newest revision in the
+// store — the caller's answer to "which domain is this project" when no
+// domain was passed. ErrNotFound when the store holds no revisions.
+func (s *Store) NewestRevisionDomain() (string, error) {
+	var d string
+	err := s.db.QueryRow(`SELECT domain_key FROM graph_revisions ORDER BY revision_id DESC LIMIT 1`).Scan(&d)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("NewestRevisionDomain: %w", ErrNotFound)
+	}
+	if err != nil {
+		return "", fmt.Errorf("NewestRevisionDomain: %w", err)
+	}
+	return d, nil
+}

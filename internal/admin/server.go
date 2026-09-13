@@ -381,6 +381,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/requests", s.handleRequests)
 	mux.HandleFunc("/api/low-confidence", s.handleLowConfidence)
 	mux.HandleFunc("/api/scans", s.handleScans)
+	mux.HandleFunc("/api/freshness", s.handleFreshness)
 	mux.HandleFunc("/api/validate", s.handleValidate)
 	mux.HandleFunc("/api/graph/domains", s.handleGraphDomains)
 	mux.HandleFunc("/api/graph", s.handleGraph)
@@ -712,6 +713,23 @@ func (s *Server) handleScans(w http.ResponseWriter, r *http.Request) {
 	domain := s.getDomain(r)
 	snaps, _ := s.getStore().ListSnapshots(domain)
 	httpJSON(w, snaps)
+}
+
+// handleFreshness answers "how old is what this dashboard is showing" with
+// the same report chronicle_freshness returns — one computation, so the header
+// line and the MCP tool can never disagree. It follows the page's selected
+// domain: a header line describing a different domain than the tables below it
+// is worse than no line at all.
+func (s *Server) handleFreshness(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	dir := s.projectPath
+	s.mu.RUnlock()
+	rep, err := mcp.FreshnessReportForDomain(s.getGraph(), dir, s.getDomain(r))
+	if err != nil {
+		httpError(w, err, 500)
+		return
+	}
+	httpJSON(w, rep)
 }
 
 func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {

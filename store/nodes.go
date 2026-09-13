@@ -626,3 +626,19 @@ func defaultStr(s, def string) string {
 	}
 	return s
 }
+
+// CountNodesByStatus counts nodes in one status ('active', 'stale', ...).
+// Empty domainKey counts across every domain.
+func (s *Store) CountNodesByStatus(domainKey, status string) (int, error) {
+	q := `SELECT COUNT(*) FROM graph_nodes WHERE status = ?`
+	args := []any{status}
+	if domainKey != "" {
+		q += ` AND domain_key = ?`
+		args = append(args, domainKey)
+	}
+	var n int
+	if err := s.db.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("CountNodesByStatus: %w", err)
+	}
+	return n, nil
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -665,5 +666,123 @@ func TestAnalyticsEdgeCategory(t *testing.T) {
 	}
 	if a.Types["CHANGES_WITH"] == "" || a.Types["SIMILAR_TO"] == "" {
 		t.Fatalf("analytics category must map CHANGES_WITH and SIMILAR_TO, got %+v", a.Types)
+	}
+}
+
+// setupTestServerInGitRepo builds a server whose project dir is a real git
+// repo with one commit — freshness has nothing to compare against otherwise.
+func setupTestServerInGitRepo(t *testing.T) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir,
+			"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(dir, "a.ts"), []byte("export const a = 1\n"), 0644)
+	run("add", "a.ts")
+	run("commit", "-q", "-m", "a")
+
+	s, err := store.Open(filepath.Join(dir, ".depbot", "chronicle.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	reg, _ := registry.LoadDefaults()
+	g := graph.New(s, reg)
+	manifestPath := filepath.Join(dir, "chronicle.domain.yaml")
+	os.WriteFile(manifestPath, []byte("domain: test\nrepositories:\n  - name: test\n    path: .\n"), 0644)
+	return NewServer(g, s, 0, manifestPath, false, dir), dir
+}
+
+func TestHandleFreshness(t *testing.T) {
+	srv, dir := setupTestServerInGitRepo(t)
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.TrimSpace(string(head))
+	if _, err := srv.store.CreateRevision("test", "", sha, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/freshness", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var rep map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&rep); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rep["status"] != "fresh" {
+		t.Fatalf("status = %v, want fresh\n%+v", rep["status"], rep)
+	}
+	if msg, _ := rep["message"].(string); msg == "" {
+		t.Fatal("message must carry the human line the header renders")
+	}
+}
+
+func TestHandleFreshnessEmptyStore(t *testing.T) {
+	srv, _ := setupTestServerInGitRepo(t)
+	req := httptest.NewRequest("GET", "/api/freshness", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var rep map[string]any
+	json.NewDecoder(w.Body).Decode(&rep)
+	if rep["status"] != "empty" {
+		t.Fatalf("status = %v, want empty", rep["status"])
+	}
+}
+
+// The header line must describe the domain the page is showing. With two
+// domains scanned at different commits, ?domain= decides which one is reported.
+func TestHandleFreshnessFollowsSelectedDomain(t *testing.T) {
+	srv, dir := setupTestServerInGitRepo(t)
+	head, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headSHA := strings.TrimSpace(string(head))
+
+	// "old" was scanned at a commit that no longer is HEAD; "current" is at HEAD.
+	// "current" is the newest revision, so a domain-blind report would pick it.
+	if _, err := srv.store.CreateRevision("old", "", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.store.CreateRevision("current", "", headSHA, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(domain string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/freshness?domain="+domain, nil)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var rep map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&rep); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return rep
+	}
+
+	cur := get("current")
+	if cur["domain"] != "current" || cur["status"] != "fresh" {
+		t.Fatalf("domain=current: got %v / %v", cur["domain"], cur["status"])
+	}
+	old := get("old")
+	if old["domain"] != "old" || old["status"] != "diverged" {
+		t.Fatalf("domain=old: got %v / %v", old["domain"], old["status"])
 	}
 }
