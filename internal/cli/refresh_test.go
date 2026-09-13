@@ -698,10 +698,13 @@ func TestStructuralQuietLine(t *testing.T) {
 	if got := structuralQuietLine(&graph.StructuralResult{Superseded: 3}); got == "" {
 		t.Error("a deletion-only run changed the graph and must say so")
 	}
+	// Both kinds of no-answer are named: they ask for different fixes, and a
+	// single "failed" number would send the reader after the wrong one.
 	got := structuralQuietLine(&graph.StructuralResult{
-		Processed: 5, Failed: []string{"a.ts"}, Unresolved: 2, Backlog: 7,
+		Processed: 5, Failed: []string{"a.ts"}, Unread: []string{"b.ts", "c.ts"},
+		Unresolved: 2, Backlog: 7,
 	})
-	want := "chronicle refresh: structure 5 files (1 failed, 2 unresolved, 7 remaining)"
+	want := "chronicle refresh: structure 5 files (1 failed, 2 not read, 2 unresolved, 7 remaining)"
 	if got != want {
 		t.Errorf("line = %q, want %q", got, want)
 	}

@@ -952,3 +952,103 @@ func TestStructuralAlreadyCompleteAgreesWithThePointer(t *testing.T) {
 		}
 	}
 }
+
+const srModuleSource = `import { BillingService } from './billing.service';
+
+@Module({
+  providers: [BillingService],
+})
+export class AppModule {}
+`
+
+const srBootSource = `import { AppModule } from './app.module';
+
+@Injectable()
+export class Bootstrapper {
+  boot() { return AppModule; }
+}
+`
+
+// One path is one node. The file index built from this pass's extractions is
+// what tells an import which TYPE the file it points at turned out to be; with
+// an empty index the import falls back to guessing from the class name, and a
+// module imported by anything lands as a second, provider-typed node for the
+// same path — two nodes, one file, and every query about it answering half.
+func TestStructuralRefreshDoesNotMintAMistypedTwinForAPath(t *testing.T) {
+	g, s, f := srSetup(t)
+	f.content["src/app.module.ts"] = srModuleSource
+	f.content["src/boot.ts"] = srBootSource
+
+	srRun(t, g, srInput(f, "head-1", "src/app.module.ts", "src/boot.ts", srService))
+
+	nodes, err := s.ListNodes(store.NodeFilter{Domain: srDomain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forModule []store.NodeRow
+	for _, n := range nodes {
+		if strings.HasSuffix(n.NodeKey, ":src/app-module") {
+			forModule = append(forModule, n)
+		}
+	}
+	if len(forModule) != 1 {
+		keys := make([]string, 0, len(forModule))
+		for _, n := range forModule {
+			keys = append(keys, n.NodeKey)
+		}
+		t.Fatalf("%d nodes for src/app.module.ts: %v — one path is one node", len(forModule), keys)
+	}
+	if forModule[0].NodeType != "module" {
+		t.Errorf("node type = %q, want module — the file said so", forModule[0].NodeType)
+	}
+}
+
+// The retry set is bounded by the same number that bounds everything else.
+// Uncapped, files the parser can never read would add themselves to EVERY run
+// and crowd the pack backlog out from behind them forever.
+func TestStructuralRefreshCapsTheRetrySetAtTheBatch(t *testing.T) {
+	g, s, f := srSetup(t)
+	// Three files with no standing answer.
+	for i, name := range []string{"src/x1.ts", "src/x2.ts", "src/x3.ts"} {
+		f.content[name] = srServiceSource
+		f.fail[name] = true
+		_ = i
+	}
+	in := srInput(f, "head-1", "src/x1.ts", "src/x2.ts", "src/x3.ts")
+	res := srRun(t, g, in)
+	if len(res.Unread) != 3 {
+		t.Fatalf("fixture: unread = %v", res.Unread)
+	}
+
+	// A later run that mentions none of them, with room for two.
+	for _, name := range []string{"src/x1.ts", "src/x2.ts", "src/x3.ts"} {
+		f.fail[name] = false
+	}
+	in2 := srInput(f, "head-2")
+	in2.BacklogBatch = 2
+	f.reads = map[string]int{}
+	res2 := srRun(t, g, in2)
+
+	if res2.Processed != 2 {
+		t.Fatalf("processed = %d, want 2: %+v", res2.Processed, res2)
+	}
+	// The cap is about what the run TOUCHES, not only what it parses: an
+	// uncapped retry set is read and hashed in full every run even when the
+	// parse budget stops short, which is the cost a hook pays.
+	if len(f.reads) != 2 {
+		t.Fatalf("the run read %d files (%v), want the 2 the batch has room for", len(f.reads), f.reads)
+	}
+	failed, unread, err := s.StructuralFailures(srDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failed)+len(unread) != 1 {
+		t.Fatalf("%d files still without an answer, want the 1 the batch had no room for", len(failed)+len(unread))
+	}
+	// And the next run takes it.
+	in3 := srInput(f, "head-3")
+	in3.BacklogBatch = 2
+	if res3 := srRun(t, g, in3); res3.Processed != 1 {
+		t.Fatalf("third run processed %d, want the last one: %+v", res3.Processed, res3)
+	}
+}

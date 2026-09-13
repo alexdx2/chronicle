@@ -147,16 +147,22 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 	if err != nil {
 		return nil, fmt.Errorf("structural: backlog: %w", err)
 	}
-	// A file whose standing answer is "no answer" is retried on every run.
-	// It has no content record — a failure never writes one — so nothing else
-	// would ever bring it back: not the diff (it stopped changing), not the
-	// pack backlog (it is not in it). The retry set is the only thing between
-	// a transient read error and a file the graph forgets about permanently.
+	// A file whose standing answer is "no answer" is retried. It has no
+	// content record — a failure never writes one — so nothing else would ever
+	// bring it back: not the diff (it stopped changing), not the pack backlog
+	// (it is not in it). The retry set is the only thing between a transient
+	// read error and a file the graph forgets about permanently.
+	//
+	// Capped at the batch, oldest first. Uncapped, N files the parser can
+	// never read would add N targets to EVERY hook run and crowd out the pack
+	// backlog behind them forever; capped, they take their turn and the run
+	// stays bounded by the one number that bounds it.
 	retryFailed, retryUnread, err := g.store.StructuralFailures(in.DomainKey)
 	if err != nil {
 		return nil, fmt.Errorf("structural: retry set: %w", err)
 	}
-	targets := structuralTargets(in.Changed, backlogFiles, retryFailed, retryUnread)
+	retry := capList(append(append([]string{}, retryFailed...), retryUnread...), batch)
+	targets := structuralTargets(in.Changed, backlogFiles, retry)
 
 	hashes := make(map[string]string, len(targets))
 	var extracted []string
@@ -439,6 +445,16 @@ func (g *Graph) recalculateSupersededTrust(revisionID int64) error {
 		}
 	}
 	return nil
+}
+
+// capList truncates to at most n entries (n <= 0 means no bound). The order is
+// the caller's: StructuralFailures returns oldest first, so a file that has
+// been without an answer longest is the first retried.
+func capList(files []string, n int) []string {
+	if n > 0 && len(files) > n {
+		return files[:n]
+	}
+	return files
 }
 
 // structuralTargets is the changed files that have a deterministic extractor,

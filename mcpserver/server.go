@@ -2134,7 +2134,9 @@ func scanPoolStatusHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 		allObligations, _ := g.Store().ListAllObligations(run.RevisionID)
 		parentFactCount := 0
-		exts, _ := g.Store().ListExtractions(run.RevisionID, domain)
+		// The scan's own rows: the structural phase keeps a standing row per
+		// file, and its parent facts are not this scan's progress.
+		exts, _ := g.Store().ListScanExtractions(run.RevisionID, domain)
 		for _, ext := range exts {
 			if strings.Contains(ext.FactsJSON, `"parent"`) {
 				parentFactCount++

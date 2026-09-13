@@ -277,9 +277,18 @@ func (s *Store) ListScanExtractions(revisionID int64, domainKey string) ([]Extra
 }
 
 // ListExtractions returns all extractions for a revision.
+//
+// extraction_role is selected, and that is load-bearing rather than tidy: it
+// was missing, so every row came back with an empty role and every caller that
+// filters on one filtered nothing — ListScanExtractions kept the structural
+// phase's rows in a scan's coverage, and the resolver's role-scoped file index
+// matched zero rows and left the index EMPTY, which made an import guess the
+// type of the file it points at and mint a second, mistyped node for the same
+// path.
 func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]ExtractionRow, error) {
 	q := `SELECT extraction_id, revision_id, domain_key, file_path, status,
-	             COALESCE(from_type,''),
+	             COALESCE(from_type,''), COALESCE(extraction_role,'single'),
+	             COALESCE(vote_group,''), COALESCE(vote_index,0),
 	             facts_json, COALESCE(error_message,''), COALESCE(metadata,'{}'), created_at
 	      FROM scan_extractions
 	      WHERE revision_id = ? AND domain_key = ?
@@ -294,7 +303,9 @@ func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]Extractio
 	for rows.Next() {
 		var r ExtractionRow
 		if err := rows.Scan(&r.ExtractionID, &r.RevisionID, &r.DomainKey,
-			&r.FilePath, &r.Status, &r.FromType, &r.FactsJSON, &r.ErrorMessage, &r.Metadata, &r.CreatedAt); err != nil {
+			&r.FilePath, &r.Status, &r.FromType, &r.ExtractionRole,
+			&r.VoteGroup, &r.VoteIndex,
+			&r.FactsJSON, &r.ErrorMessage, &r.Metadata, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

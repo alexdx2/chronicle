@@ -289,5 +289,3 @@ func TestOnlyTheStructuralPhasesOwnAstRowsEscapeVerification(t *testing.T) {
 		t.Errorf("stale file paths = %v, want [changed.ts]", files)
 	}
 }
-
-// The Go form of the same rule, for callers that hold rows rather than SQL.

@@ -405,8 +405,8 @@ func structuralQuietLine(res *graph.StructuralResult) string {
 	if res == nil || (res.Processed == 0 && res.Superseded == 0) {
 		return ""
 	}
-	return fmt.Sprintf("chronicle refresh: structure %d files (%d failed, %d unresolved, %d remaining)",
-		res.Processed, len(res.Failed), res.Unresolved, res.Backlog)
+	return fmt.Sprintf("chronicle refresh: structure %d files (%d failed, %d not read, %d unresolved, %d remaining)",
+		res.Processed, len(res.Failed), len(res.Unread), res.Unresolved, res.Backlog)
 }
 
 // refreshBase picks the commit the VERIFICATION phase diffs from: the newer of
