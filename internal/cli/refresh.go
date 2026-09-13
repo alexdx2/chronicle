@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/extract/structural"
 	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/gitutil"
@@ -130,6 +130,12 @@ func runRefresh(quiet, noStructural bool, structuralBatch int) {
 		if line := structuralQuietLine(out.Structural); line != "" {
 			fmt.Println(line)
 		}
+		if structuralErr != nil {
+			// This path prints a sentence, not the JSON that would have
+			// carried structural_error — so the failure has to be said out
+			// loud, or phase 2 fails invisibly behind "Graph is current".
+			fmt.Fprintln(os.Stderr, "chronicle refresh: structural phase failed: "+structuralErr.Error())
+		}
 	default:
 		outputJSON(out)
 	}
@@ -215,18 +221,29 @@ func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.
 		HeadSHA:      head,
 		Tech:         manifestTech(),
 		BacklogBatch: batch,
+		// The phase diffs COMMITS, so it reads commits. Reading the working
+		// tree would put structure in the graph that no commit contains —
+		// a half-staged file, an editor buffer — attributed to the commit
+		// that does not contain it, and record its bytes as already seen.
 		ReadFile: func(rel string) ([]byte, error) {
-			return os.ReadFile(filepath.Join(gitDir, rel))
+			return gitdiff.Show(gitDir, head, rel)
 		},
 	}
 
-	base, sweep := structuralBase(g.Store(), gitDir, domainKey)
+	base, sweep, forgetAfter := structuralBase(g.Store(), gitDir, domainKey)
+	if forgetAfter > 0 {
+		// The pointer was earned on a branch this checkout cannot reach; the
+		// content records those runs wrote go with it.
+		if _, err := g.Store().DeleteStructuralHashesAfter(domainKey, forgetAfter); err != nil {
+			return nil, err
+		}
+	}
 	if sweep {
 		// No structural phase has ever completed here, so there is no baseline
 		// to diff against: every supported file is owed structure. Bounded per
 		// run by graph.DefaultBacklogBatch — the remainder is reported and the
 		// pointer stays put until it is drained.
-		files, err := supportedFilesInRepo(gitDir, domainKey)
+		files, err := supportedFilesAtHead(gitDir, domainKey)
 		if err != nil {
 			return nil, err
 		}
@@ -238,9 +255,18 @@ func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.
 	}
 
 	if base == head {
-		// The pointer is at HEAD, and it only gets there when the phase left
-		// nothing over — no diff, no backlog, nothing to do.
-		return nil, nil
+		// The pointer is at HEAD, so the diff is empty — but a rules-pack bump
+		// makes files re-extractable without anyone committing anything, and
+		// gating on "has the diff moved" would leave that backlog sitting
+		// there until somebody happened to commit.
+		backlog, err := g.Store().CountStructuralHashesNotOnPack(domainKey, rules.PackVersion)
+		if err != nil {
+			return nil, err
+		}
+		if backlog == 0 {
+			return nil, nil
+		}
+		return structuralFn(g, in)
 	}
 	files, err := gitdiff.ChangedFiles(gitDir, base, head)
 	if err != nil {
@@ -279,27 +305,33 @@ func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.
 // scan is the fallback — a scan read those files, so diffing from it re-reads
 // only what changed since. With neither, nothing structural has ever been
 // established here and the answer is the whole repo.
-func structuralBase(s *store.Store, repoDir, domainKey string) (base string, sweep bool) {
+// forgetAfter, when non-zero, is the revision past which this domain's content
+// records have to be forgotten before anything else happens: they were written
+// by structural runs on a branch this history does not contain.
+func structuralBase(s *store.Store, repoDir, domainKey string) (base string, sweep bool, forgetAfter int64) {
 	rev, err := revOrNil(s.LatestStructuralRevision(domainKey))
 	if err == nil && rev != nil && rev.GitAfterSHA != "" {
 		if isAncestorOfHEAD(repoDir, rev.GitAfterSHA) {
-			return rev.GitAfterSHA, false
+			return rev.GitAfterSHA, false, 0
 		}
 		if scan, err := revOrNil(s.LatestScanRevision(domainKey)); err == nil && scan != nil &&
 			scan.GitAfterSHA != "" && isAncestorOfHEAD(repoDir, scan.GitAfterSHA) {
-			return scan.GitAfterSHA, false
+			return scan.GitAfterSHA, false, scan.RevisionID
 		}
 	}
-	return "", true
+	return "", true, 0
 }
 
-// supportedFilesInRepo is every tracked file with a deterministic extractor,
-// narrowed to the domain's own scan.include/exclude when the manifest defines
-// them — the sweep must not claim files another domain owns.
-func supportedFilesInRepo(gitDir, domainKey string) ([]string, error) {
-	out, err := gitutil.Run(gitDir, "ls-files")
+// supportedFilesAtHead is every file in HEAD's tree with a deterministic
+// extractor, narrowed to the domain's own scan.include/exclude when the
+// manifest defines them — the sweep must not claim files another domain owns.
+//
+// HEAD's tree, not the index: the phase reads committed blobs, and a file that
+// is staged but never committed has nothing at HEAD to read.
+func supportedFilesAtHead(gitDir, domainKey string) ([]string, error) {
+	out, err := gitutil.Run(gitDir, "ls-tree", "-r", "--name-only", "HEAD")
 	if err != nil {
-		return nil, fmt.Errorf("structural: git ls-files: %w", err)
+		return nil, fmt.Errorf("structural: git ls-tree HEAD: %w", err)
 	}
 	inScope := domainScopeFilter(domainKey)
 	var files []string
@@ -363,7 +395,10 @@ func manifestTech() []string {
 // structuralQuietLine is the one line a hook prints — only when the phase
 // actually did something, so an ordinary commit stays silent.
 func structuralQuietLine(res *graph.StructuralResult) string {
-	if res == nil || res.Processed == 0 {
+	// Superseded counts too: a commit that only DELETED files parses nothing
+	// and still changed what the graph asserts, which is exactly the change a
+	// reader would want to hear about.
+	if res == nil || (res.Processed == 0 && res.Superseded == 0) {
 		return ""
 	}
 	return fmt.Sprintf("chronicle refresh: structure %d files (%d failed, %d unresolved, %d remaining)",

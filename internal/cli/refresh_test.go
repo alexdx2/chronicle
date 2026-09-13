@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/registry"
@@ -554,5 +557,152 @@ func TestRefreshStructuralBatchIsWiredThrough(t *testing.T) {
 	defer s.Close()
 	if _, err := s.GetNodeByKey("contract:endpoint:d:get:/a/items"); err != nil {
 		t.Fatalf("both files must be structured after two batches: %v", err)
+	}
+}
+
+const ctrlSourceTwoRoutes = `import { AService } from './a.service';
+
+@Controller('a')
+export class AController {
+  constructor(private readonly a: AService) {}
+
+  @Get('items')
+  list() { return this.a.list(); }
+
+  @Post('items')
+  make() { return this.a.list(); }
+}
+`
+
+// The phase diffs commits, so it must read commits. A half-written working
+// tree — a partially staged file, an editor buffer saved mid-thought — would
+// otherwise put structure in the graph that no commit contains, attributed to
+// the commit that does not contain it.
+func TestRefreshStructuresTheCommitNotTheWorkingTree(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "one route")
+
+	// Uncommitted: a second route nobody has committed.
+	if err := os.WriteFile(filepath.Join(dir, "src/a.controller.ts"), []byte(ctrlSourceTwoRoutes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runRefreshIn(t, dir, "--quiet")
+
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, err := s.GetNodeByKey("contract:endpoint:d:get:/a/items"); err != nil {
+		t.Fatalf("the committed route is missing: %v", err)
+	}
+	if _, err := s.GetNodeByKey("contract:endpoint:d:post:/a/items"); err == nil {
+		t.Fatal("the graph gained a route no commit contains")
+	}
+	// And the content record names the committed bytes, so the commit that
+	// eventually lands the second route is not mistaken for a no-op.
+	sum := sha256.Sum256([]byte(ctrlSource))
+	hash, _, ok, err := s.GetStructuralHash("d", "src/a.controller.ts")
+	if err != nil || !ok {
+		t.Fatalf("no content record (ok=%v, err=%v)", ok, err)
+	}
+	if hash != hex.EncodeToString(sum[:]) {
+		t.Error("the content record names the working tree, so the real commit will look unchanged")
+	}
+}
+
+// A rules-pack bump makes files re-extractable without a commit. The phase has
+// to run for that alone: gating it on "has the diff moved" would leave the
+// backlog undrained until somebody happened to commit something.
+func TestRefreshDrainsThePackBacklogWithNoNewCommit(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "one route")
+	runRefreshIn(t, dir, "--quiet")
+
+	// The state a pack bump leaves: the files are recorded, under an older
+	// pack. HEAD has not moved.
+	s := openRepoStore(t, dir)
+	rev, err := s.LatestStructuralRevision("d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"src/a.service.ts", "src/a.controller.ts"} {
+		hash, _, ok, err := s.GetStructuralHash("d", f)
+		if err != nil || !ok {
+			t.Fatalf("%s: ok=%v err=%v", f, ok, err)
+		}
+		if err := s.SetStructuralHash("d", f, hash, "0", rev.RevisionID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, _ := s.CountStructuralHashesNotOnPack("d", rules.PackVersion); n != 2 {
+		t.Fatalf("fixture: backlog = %d, want 2", n)
+	}
+	s.Close()
+
+	runRefreshIn(t, dir, "--quiet")
+
+	s2 := openRepoStore(t, dir)
+	defer s2.Close()
+	if n, err := s2.CountStructuralHashesNotOnPack("d", rules.PackVersion); err != nil || n != 0 {
+		t.Fatalf("backlog = %d (%v); a pack bump must drain without waiting for a commit", n, err)
+	}
+}
+
+// A structural pointer this checkout cannot reach was earned on a branch
+// nobody merged. Its content records say "already done" about files whose
+// structure came from code this history does not contain, so they are
+// forgotten along with the pointer — otherwise the new base's version of those
+// files is never read.
+func TestRefreshForgetsBranchOnlyContentRecordsAfterARebase(t *testing.T) {
+	dir, scanned := structuralRepo(t)
+
+	gitRun(t, dir, "checkout", "-q", "-b", "side")
+	writeCommit(t, dir, "src/side.controller.ts", ctrlSource, "side: a controller")
+	runRefreshIn(t, dir, "--quiet")
+	if _, _, ok, _ := func() (string, string, bool, error) {
+		s := openRepoStore(t, dir)
+		defer s.Close()
+		return s.GetStructuralHash("d", "src/side.controller.ts")
+	}(); !ok {
+		t.Fatal("fixture: the side branch's file was not recorded")
+	}
+
+	// Back on a history the side branch is not part of.
+	gitRun(t, dir, "checkout", "-q", "main")
+	if strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD")) != scanned {
+		t.Fatal("fixture: main should still be at the scanned commit")
+	}
+	writeCommit(t, dir, "src/main.controller.ts", laterCtrlSource, "main: a controller")
+
+	runRefreshIn(t, dir, "--quiet")
+
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, _, ok, _ := s.GetStructuralHash("d", "src/side.controller.ts"); ok {
+		t.Error("a branch-only content record survived the switch")
+	}
+	if _, err := s.GetNodeByKey("contract:endpoint:d:post:/later/things"); err != nil {
+		t.Fatalf("the commit on this branch was not structured: %v", err)
+	}
+}
+
+// What the hook says, and when it stays quiet. A commit that only deleted
+// files parses nothing and still changed what the graph asserts — silence
+// there would hide the one kind of change people most want confirmed.
+func TestStructuralQuietLine(t *testing.T) {
+	if got := structuralQuietLine(nil); got != "" {
+		t.Errorf("no phase, no line: %q", got)
+	}
+	if got := structuralQuietLine(&graph.StructuralResult{Skipped: 12}); got != "" {
+		t.Errorf("a run that did nothing must stay silent: %q", got)
+	}
+	if got := structuralQuietLine(&graph.StructuralResult{Superseded: 3}); got == "" {
+		t.Error("a deletion-only run changed the graph and must say so")
+	}
+	got := structuralQuietLine(&graph.StructuralResult{
+		Processed: 5, Failed: []string{"a.ts"}, Unresolved: 2, Backlog: 7,
+	})
+	want := "chronicle refresh: structure 5 files (1 failed, 2 unresolved, 7 remaining)"
+	if got != want {
+		t.Errorf("line = %q, want %q", got, want)
 	}
 }
