@@ -532,3 +532,27 @@ func TestRefreshRerunAfterAnInterruptedPhaseRedoesNothing(t *testing.T) {
 		t.Errorf("structured@%q — the rerun must finish what the interrupted phase started", got)
 	}
 }
+
+// The batch bounds a hook; a person draining a first pass or a rules-pack
+// backlog needs to be able to lift it. --structural-batch=1 proves the knob is
+// wired to the phase and not just parsed: two supported files, one parsed, the
+// other left as backlog, and no pointer until it is drained.
+func TestRefreshStructuralBatchIsWiredThrough(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "add a controller")
+
+	runRefreshIn(t, dir, "--quiet", "--structural-batch=1")
+
+	if got := structuralSHA(t, dir); got != "" {
+		t.Fatalf("structured@%s — one file of two is not a complete phase", got)
+	}
+	runRefreshIn(t, dir, "--quiet", "--structural-batch=1")
+	if got := structuralSHA(t, dir); got == "" {
+		t.Fatal("the second batch must finish the sweep")
+	}
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, err := s.GetNodeByKey("contract:endpoint:d:get:/a/items"); err != nil {
+		t.Fatalf("both files must be structured after two batches: %v", err)
+	}
+}

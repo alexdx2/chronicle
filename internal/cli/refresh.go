@@ -40,6 +40,7 @@ var structuralFn = func(g *graph.Graph, in graph.StructuralInput) (*graph.Struct
 func newRefreshCmd() *cobra.Command {
 	var quiet bool
 	var noStructural bool
+	var structuralBatch int
 	cmd := &cobra.Command{
 		Use:   "refresh",
 		Short: "Zero-token structural freshness — re-verify evidence and re-extract structure for git-changed files",
@@ -57,17 +58,19 @@ claim. Use --no-structural to run phase 1 alone.
 
 Safe to run from a git post-commit hook (see 'chronicle hook install --git').`,
 		Run: func(cmd *cobra.Command, args []string) {
-			runRefresh(quiet, noStructural)
+			runRefresh(quiet, noStructural, structuralBatch)
 		},
 	}
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "Minimal output (for git hooks)")
 	cmd.Flags().BoolVar(&noStructural, "no-structural", false, "Skip phase 2 (deterministic structural re-extraction)")
+	cmd.Flags().IntVar(&structuralBatch, "structural-batch", 0,
+		fmt.Sprintf("Files phase 2 parses per run (default %d; -1 = no bound). Raise it to drain a first pass or a rules-pack backlog in one go, away from a hook.", graph.DefaultBacklogBatch))
 	return cmd
 }
 
 // runRefresh is the command body, extracted so tests can drive both phases
 // without a process.
-func runRefresh(quiet, noStructural bool) {
+func runRefresh(quiet, noStructural bool, structuralBatch int) {
 	if notice, linked := linkedWorktreeRefusal(); linked {
 		// A commit in any worktree runs the MAIN checkout's post-commit hook,
 		// so without this a feature branch writes refresh revisions — at its
@@ -106,7 +109,7 @@ func runRefresh(quiet, noStructural bool) {
 	// verification above is already recorded.
 	var structuralErr error
 	if !noStructural {
-		out.Structural, structuralErr = structuralPhase(g, rev.DomainKey, head)
+		out.Structural, structuralErr = structuralPhase(g, rev.DomainKey, head, structuralBatch)
 		if structuralErr != nil {
 			out.StructuralError = structuralErr.Error()
 		}
@@ -205,12 +208,13 @@ func verifyPhase(g *graph.Graph, domainKey, base, head string) (*graph.RefreshRe
 // structuralPhase re-extracts the structure of everything that changed since
 // the structural pointer (not since the verification one — they move apart on
 // purpose) and hands graph.StructuralRefresh the files and the reader.
-func structuralPhase(g *graph.Graph, domainKey, head string) (*graph.StructuralResult, error) {
+func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.StructuralResult, error) {
 	gitDir := repoDirForGit()
 	in := graph.StructuralInput{
-		DomainKey: domainKey,
-		HeadSHA:   head,
-		Tech:      manifestTech(),
+		DomainKey:    domainKey,
+		HeadSHA:      head,
+		Tech:         manifestTech(),
+		BacklogBatch: batch,
 		ReadFile: func(rel string) ([]byte, error) {
 			return os.ReadFile(filepath.Join(gitDir, rel))
 		},
