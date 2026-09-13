@@ -36,11 +36,18 @@ type Point struct {
 	// evidence was written by an older rules pack and so still need
 	// re-extraction, even though nothing in them changed.
 	OldRules int `json:"old_rules,omitempty"`
-	// Failed is how many files the structural phase could not parse at this
-	// point. Their previous contribution stands, so nothing is wrong with the
-	// graph — but nothing new arrived for them either, and a pointer that says
-	// "structure is guaranteed here" owes the reader that number.
+	// Failed is how many files the structural phase currently has no answer
+	// for because the parser could not read them, and Unread how many because
+	// the bytes never arrived. Their previous contribution stands, so nothing
+	// is wrong with the graph — but nothing new arrived for them either, and a
+	// pointer that says "structure is guaranteed here" owes the reader both
+	// numbers.
+	//
+	// They count STANDING rows, not the last run's tally: a file that failed
+	// three commits ago is still without an answer, and reading the newest
+	// stamp made that disclosure vanish the moment any other commit landed.
 	Failed int `json:"failed,omitempty"`
+	Unread int `json:"unread,omitempty"`
 }
 
 // Distance is how far the working tree has moved past the knowledge.
@@ -73,7 +80,7 @@ type Report struct {
 	Touched     Touched           `json:"touched"`
 	Layers      map[string]*Point `json:"layers"` // "code" (= scanned), "ui" when a surface import exists
 	LastQueryAt string            `json:"last_query_at,omitempty"`
-	Status      string            `json:"status"`  // empty | fresh | verified | stale | diverged
+	Status      string            `json:"status"`  // empty | fresh | structured | verified | stale | diverged
 	Message     string            `json:"message"` // one human line, also the knowledge line body
 }
 
@@ -185,7 +192,9 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 		if n, err := s.CountStructuralHashesNotOnPack(domain, rules.PackVersion); err == nil {
 			p.OldRules = n
 		}
-		p.Failed = structuralFailedCount(structRev.Metadata)
+		if failed, unread, err := s.StructuralFailures(domain); err == nil {
+			p.Failed, p.Unread = len(failed), len(unread)
+		}
 		r.Structured = p
 	}
 
@@ -370,6 +379,9 @@ func (r *Report) body() string {
 	if r.Structured != nil && r.Structured.Failed > 0 {
 		parts = append(parts, plural(r.Structured.Failed, "file failed to parse", "files failed to parse"))
 	}
+	if r.Structured != nil && r.Structured.Unread > 0 {
+		parts = append(parts, plural(r.Structured.Unread, "file not read", "files not read"))
+	}
 	if r.Touched.NodesStale > 0 {
 		parts = append(parts, plural(r.Touched.NodesStale, "node touched", "nodes touched"))
 	}
@@ -474,21 +486,6 @@ func latest(rev *store.Revision, err error) (*store.Revision, error) {
 		return nil, err
 	}
 	return rev, nil
-}
-
-// structuralFailedCount reads metadata.structural.failed, which the phase
-// writes with the rest of its account of itself. Anything unreadable is zero:
-// a number nobody can parse is not a number to put on the line.
-func structuralFailedCount(raw string) int {
-	var m struct {
-		Structural struct {
-			Failed int `json:"failed"`
-		} `json:"structural"`
-	}
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return 0
-	}
-	return m.Structural.Failed
 }
 
 // surfaceSource reads the extract's path from either metadata shape: top-level

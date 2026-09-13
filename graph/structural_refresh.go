@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/extract/structural"
@@ -69,7 +70,8 @@ type StructuralResult struct {
 	RevisionID int64    `json:"revision_id"`
 	Processed  int      `json:"processed"`
 	Facts      int      `json:"facts"`
-	Failed     []string `json:"failed,omitempty"` // parser/read errors — the semantic queue's input
+	Failed     []string `json:"failed,omitempty"` // parse errors — the semantic queue's input
+	Unread     []string `json:"unread,omitempty"` // the bytes never arrived; nobody can read those
 	Unresolved int      `json:"unresolved"`       // name lookups with 0 or >1 candidates
 	Superseded int64    `json:"superseded"`       // rows no longer asserted by their file
 	Backlog    int      `json:"backlog"`          // files still owed structure after this run
@@ -117,11 +119,16 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 	// Say "in progress" before touching anything: until the phase finishes,
 	// the claim "structure is guaranteed at this commit" is not true.
 	//
-	// Unless a previous run already earned that claim at this very commit. A
-	// rerun there — a pack bump, a second hook, an amend that kept the tree —
-	// only ever adds; marking it incomplete first would drop a true claim for
-	// the duration, and a crash would drop it for good. The final stamp
-	// rewrites it either way.
+	// Unless a previous run already earned that claim at this very commit.
+	// Marking it incomplete first would drop a true claim for the duration of
+	// the run, and a crash would drop it for good.
+	//
+	// This does NOT mean a rerun can never withdraw the claim: the final stamp
+	// is written from this run's own accounting, so a rerun that finds a
+	// rules-pack backlog it cannot drain in one batch writes complete:false
+	// and the pointer falls back — correctly, because part of the graph is now
+	// known to be on rules this commit no longer stands for. What the guard
+	// prevents is losing the claim to a CRASH, not to an honest answer.
 	alreadyComplete, err := g.structuralAlreadyComplete(revID)
 	if err != nil {
 		return nil, err
@@ -140,7 +147,16 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 	if err != nil {
 		return nil, fmt.Errorf("structural: backlog: %w", err)
 	}
-	targets := structuralTargets(in.Changed, backlogFiles)
+	// A file whose standing answer is "no answer" is retried on every run.
+	// It has no content record — a failure never writes one — so nothing else
+	// would ever bring it back: not the diff (it stopped changing), not the
+	// pack backlog (it is not in it). The retry set is the only thing between
+	// a transient read error and a file the graph forgets about permanently.
+	retryFailed, retryUnread, err := g.store.StructuralFailures(in.DomainKey)
+	if err != nil {
+		return nil, fmt.Errorf("structural: retry set: %w", err)
+	}
+	targets := structuralTargets(in.Changed, backlogFiles, retryFailed, retryUnread)
 
 	hashes := make(map[string]string, len(targets))
 	var extracted []string
@@ -149,12 +165,14 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 	for _, file := range targets {
 		content, rerr := readFile(file)
 		if rerr != nil {
-			// Not an emptiness: a file nobody could look at keeps whatever it
-			// used to assert, and is named so the semantic queue can pick it up.
-			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "failed", "", "[]", rerr.Error()); err != nil {
+			// Not an emptiness and not a parse failure: a file whose bytes
+			// never arrived keeps whatever it used to assert, and handing it
+			// to a model would not help. It stays in the retry set instead.
+			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "failed", "", "[]",
+				rerr.Error(), store.StructuralOutcomeUnreadable); err != nil {
 				return nil, fmt.Errorf("structural: record failure for %s: %w", file, err)
 			}
-			res.Failed = append(res.Failed, file)
+			res.Unread = append(res.Unread, file)
 			continue
 		}
 
@@ -185,22 +203,30 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 		r := structural.ExtractFile(file, content, in.Tech)
 		switch r.Outcome {
 		case structural.Extracted:
-			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "extracted", r.FromType, r.FactsJSON, ""); err != nil {
+			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "extracted", r.FromType, r.FactsJSON, "", ""); err != nil {
 				return nil, fmt.Errorf("structural: save extraction for %s: %w", file, err)
 			}
 			res.Facts += r.FactCount
 			res.Processed++
 			hashes[file] = r.ContentHash
 			extracted = append(extracted, file)
-		case structural.Failed:
+		case structural.Failed, structural.Unreadable:
 			msg := "structural extraction failed"
 			if r.Err != nil {
 				msg = r.Err.Error()
 			}
-			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "failed", "", "[]", msg); err != nil {
+			outcome := ""
+			if r.Outcome == structural.Unreadable {
+				outcome = store.StructuralOutcomeUnreadable
+			}
+			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "failed", "", "[]", msg, outcome); err != nil {
 				return nil, fmt.Errorf("structural: record failure for %s: %w", file, err)
 			}
-			res.Failed = append(res.Failed, file)
+			if r.Outcome == structural.Unreadable {
+				res.Unread = append(res.Unread, file)
+			} else {
+				res.Failed = append(res.Failed, file)
+			}
 			res.Processed++
 		default:
 			// Unsupported: not a structural file at all. structuralTargets
@@ -217,7 +243,6 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 			Deterministic:    true,
 			ExtractorID:      structural.ExtractorID,
 			ExtractorVersion: pack,
-			ContentHashes:    hashes,
 			// Only this phase's own rows: the revision belongs to whoever
 			// opened it, and an agent's extraction on it is not our input.
 			ExtractionRole: store.StructuralExtractionRole,
@@ -254,6 +279,11 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 		if err := g.store.DeleteStructuralHash(in.DomainKey, file); err != nil {
 			return nil, fmt.Errorf("structural: forget %s: %w", file, err)
 		}
+		// And its standing answer, or a `failed` row would keep a file that
+		// cannot come back in the retry set forever.
+		if err := g.store.DeleteStructuralExtraction(in.DomainKey, file); err != nil {
+			return nil, fmt.Errorf("structural: forget %s: %w", file, err)
+		}
 	}
 
 	if res.Superseded > 0 {
@@ -284,6 +314,7 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 		"pack":       pack,
 		"processed":  res.Processed,
 		"failed":     len(res.Failed),
+		"unread":     len(res.Unread),
 		"unresolved": res.Unresolved,
 	}); err != nil {
 		return nil, err
@@ -330,7 +361,13 @@ func (g *Graph) structuralAlreadyComplete(revisionID int64) (bool, error) {
 	}
 	var md struct {
 		Structural struct {
-			Complete bool `json:"complete"`
+			// json.Number, not bool: SQLite's JSON1 maps a JSON true to the
+			// integer 1, and store.LatestStructuralRevision's query accepts
+			// `= 1` — so a writer that stored 1 directly reads as complete to
+			// the pointer. This guard has to agree with the pointer, or a
+			// revision the graph calls complete would still have its claim
+			// withdrawn here.
+			Complete json.RawMessage `json:"complete"`
 		} `json:"structural"`
 	}
 	// Unreadable metadata is not a completed phase; the marker is written and
@@ -338,7 +375,11 @@ func (g *Graph) structuralAlreadyComplete(revisionID int64) (bool, error) {
 	if err := json.Unmarshal([]byte(rev.Metadata), &md); err != nil {
 		return false, nil
 	}
-	return md.Structural.Complete, nil
+	switch strings.TrimSpace(string(md.Structural.Complete)) {
+	case "true", "1":
+		return true, nil
+	}
+	return false, nil
 }
 
 // stampStructural merges the phase's own key into the revision's metadata.
@@ -401,12 +442,16 @@ func (g *Graph) recalculateSupersededTrust(revisionID int64) error {
 }
 
 // structuralTargets is the changed files that have a deterministic extractor,
-// followed by the rules-pack backlog, deduplicated with the changed files
-// first: a file whose content moved deserves the batch slot more than one whose
-// only claim is an older pack.
-func structuralTargets(changed, backlog []string) []string {
-	seen := make(map[string]bool, len(changed)+len(backlog))
-	out := make([]string, 0, len(changed)+len(backlog))
+// followed by every other list the caller owes work to (the rules-pack backlog,
+// the standing failures), deduplicated with the changed files first: a file
+// whose content moved deserves the batch slot more than one whose only claim is
+// an older pack or a failure that has been there for weeks.
+//
+// Only `changed` is filtered by Supported — the other lists come from the
+// phase's own records, so anything in them was structural when it was written.
+func structuralTargets(changed []string, rest ...[]string) []string {
+	seen := map[string]bool{}
+	var out []string
 	for _, f := range changed {
 		if f == "" || seen[f] || !structural.Supported(f) {
 			continue
@@ -414,12 +459,14 @@ func structuralTargets(changed, backlog []string) []string {
 		seen[f] = true
 		out = append(out, f)
 	}
-	for _, f := range backlog {
-		if f == "" || seen[f] {
-			continue
+	for _, list := range rest {
+		for _, f := range list {
+			if f == "" || seen[f] {
+				continue
+			}
+			seen[f] = true
+			out = append(out, f)
 		}
-		seen[f] = true
-		out = append(out, f)
 	}
 	return out
 }

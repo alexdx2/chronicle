@@ -147,13 +147,33 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 // file's structure could never change again.
 const StructuralExtractionRole = "structural"
 
+// StructuralOutcomeUnreadable marks a standing structural row whose file could
+// not be read at all, as against one the parser choked on.
+//
+// scan_extractions.status is a CHECK enum with no room for a new value, so both
+// land as 'failed' and the difference rides in metadata. It is worth keeping:
+// a parse failure is a file to hand a model, an unread file is a file to look
+// at again, and reporting them as one number would ask for the wrong fix.
+const StructuralOutcomeUnreadable = "unreadable"
+
 // SaveStructuralExtraction stores the structural phase's answer for one file,
 // replacing its previous one and re-pointing it at the revision now being
 // resolved. One row per (domain, file) — this is a standing answer, not a
 // history; the history lives in the evidence rows it justifies.
-func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, status, fromType, factsJSON, errorMessage string) (int64, error) {
+//
+// outcome is written to metadata as structural_outcome; empty means the plain
+// reading of status.
+func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, status, fromType, factsJSON, errorMessage, outcome string) (int64, error) {
 	if factsJSON == "" {
 		factsJSON = "[]"
+	}
+	metadata := "{}"
+	if outcome != "" {
+		buf, err := json.Marshal(map[string]string{"structural_outcome": outcome})
+		if err != nil {
+			return 0, fmt.Errorf("SaveStructuralExtraction: %w", err)
+		}
+		metadata = string(buf)
 	}
 	var existingID int64
 	err := s.db.QueryRow(`
@@ -167,21 +187,73 @@ func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, 
 		if _, uerr := s.db.Exec(`
 			UPDATE scan_extractions
 			SET revision_id = ?, status = ?, from_type = ?, facts_json = ?,
-			    error_message = ?, metadata = '{}'
+			    error_message = ?, metadata = ?
 			WHERE extraction_id = ?`,
-			revisionID, status, fromType, factsJSON, nullableStr(errorMessage), existingID); uerr != nil {
+			revisionID, status, fromType, factsJSON, nullableStr(errorMessage), metadata, existingID); uerr != nil {
 			return 0, fmt.Errorf("SaveStructuralExtraction: %w", uerr)
 		}
 		return existingID, nil
 	}
 	res, err := s.db.Exec(`
-		INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, from_type, extraction_role, vote_index, facts_json, error_message)
-		VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-	`, revisionID, domainKey, filePath, status, fromType, StructuralExtractionRole, factsJSON, nullableStr(errorMessage))
+		INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, from_type, extraction_role, vote_index, facts_json, error_message, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+	`, revisionID, domainKey, filePath, status, fromType, StructuralExtractionRole, factsJSON, nullableStr(errorMessage), metadata)
 	if err != nil {
 		return 0, fmt.Errorf("SaveStructuralExtraction: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// DeleteStructuralExtraction forgets the phase's standing row for one file.
+// Called when the file is gone: a deleted file's `failed` row would otherwise
+// keep it in the retry set forever, spending a batch slot per run on something
+// that cannot come back.
+func (s *Store) DeleteStructuralExtraction(domainKey, filePath string) error {
+	if _, err := s.db.Exec(`DELETE FROM scan_extractions
+		WHERE domain_key = ? AND file_path = ? AND extraction_role = ?`,
+		domainKey, filePath, StructuralExtractionRole); err != nil {
+		return fmt.Errorf("DeleteStructuralExtraction %q: %w", filePath, err)
+	}
+	return nil
+}
+
+// StructuralFailures lists the files whose STANDING structural answer is "no
+// answer", split by why. They are two different disclosures and one retry set:
+// the phase re-targets both on every run, and the freshness line reports them
+// as "failed to parse" and "not read" separately.
+//
+// Standing, not historical: there is one row per (domain, file), so a file
+// that failed three runs ago is still here — which is the point. Counting the
+// last run's stamp instead let a failure disappear the moment any other commit
+// landed.
+func (s *Store) StructuralFailures(domainKey string) (failed, unreadable []string, err error) {
+	rows, qerr := s.db.Query(`
+		SELECT file_path, COALESCE(metadata,'{}') FROM scan_extractions
+		WHERE domain_key = ? AND extraction_role = ? AND status = 'failed'
+		ORDER BY file_path`, domainKey, StructuralExtractionRole)
+	if qerr != nil {
+		return nil, nil, fmt.Errorf("StructuralFailures: %w", qerr)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path, metadata string
+		if err := rows.Scan(&path, &metadata); err != nil {
+			return nil, nil, fmt.Errorf("StructuralFailures scan: %w", err)
+		}
+		var m struct {
+			Outcome string `json:"structural_outcome"`
+		}
+		_ = json.Unmarshal([]byte(metadata), &m)
+		if m.Outcome == StructuralOutcomeUnreadable {
+			unreadable = append(unreadable, path)
+		} else {
+			failed = append(failed, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("StructuralFailures rows: %w", err)
+	}
+	return failed, unreadable, nil
 }
 
 // ListScanExtractions is ListExtractions without the structural phase's

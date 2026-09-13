@@ -203,7 +203,7 @@ func TestExtractionsAreListedAndResolvedByRole(t *testing.T) {
 	if _, err := s.SaveExtraction(revID, "d", "src/agent.ts", "extracted", "provider", `[{"kind":"import","to":"./x"}]`, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SaveStructuralExtraction(revID, "d", "src/struct.ts", "extracted", "provider", `[{"kind":"import","to":"./y"}]`, ""); err != nil {
+	if _, err := s.SaveStructuralExtraction(revID, "d", "src/struct.ts", "extracted", "provider", `[{"kind":"import","to":"./y"}]`, "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,8 +214,14 @@ func TestExtractionsAreListedAndResolvedByRole(t *testing.T) {
 	if len(got) != 1 || got[0].FilePath != "src/struct.ts" {
 		t.Fatalf("role-scoped list = %+v, want only the structural row", got)
 	}
-	if all, _ := s.ListUnresolvedExtractions(revID, "d"); len(all) != 2 {
-		t.Fatalf("the unscoped list must still see both: %d", len(all))
+	// And the exclusion runs the other way: "no role" means every role a SCAN
+	// owns, which is not the structural phase's standing row.
+	all, err := s.ListUnresolvedExtractions(revID, "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].FilePath != "src/agent.ts" {
+		t.Fatalf("a scan's list must not include the structural row: %+v", all)
 	}
 
 	if err := s.MarkExtractionsResolvedByRole(revID, "d", StructuralExtractionRole); err != nil {

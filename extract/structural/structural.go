@@ -10,8 +10,13 @@
 //   - extracted   — the file was parsed; N >= 0 facts. Zero facts is an answer
 //     (a type-only file asserts nothing) and supersedes whatever the pair used
 //     to assert.
-//   - failed      — the file could not be looked at. Nothing is superseded and
-//     the previous contribution stands; the file goes to the semantic queue.
+//   - failed      — the parser could not make sense of the file. Nothing is
+//     superseded and the previous contribution stands; the file goes to the
+//     semantic queue, because a model may still be able to read it.
+//   - unreadable  — the bytes never arrived (the caller could not read the
+//     file at all). Also supersedes nothing, but it is a DIFFERENT answer: no
+//     amount of re-reading by a model helps, and the honest line is "not read"
+//     rather than "failed to parse".
 //   - unsupported — no deterministic extractor for this extension. Not a
 //     structural file at all; it is not knowledge that went missing.
 //
@@ -87,19 +92,27 @@ type Outcome string
 const (
 	Extracted   Outcome = "extracted"   // N >= 0 facts; zero facts is a valid answer
 	Failed      Outcome = "failed"      // parser error; caller keeps the previous contribution
+	Unreadable  Outcome = "unreadable"  // the bytes never arrived; keeps the previous contribution too
 	Unsupported Outcome = "unsupported" // no extractor for this file; not a structural file
 )
 
-// Result is one file's structural answer.
+// Result is one file's structural answer. The caller knows which file it
+// asked about, so the path is not repeated here.
 type Result struct {
-	Path        string
-	Outcome     Outcome
-	FromType    string // rules.ApplyResult.FromType, or "schema" for prisma
-	FactsJSON   string // "[]" when none
-	FactCount   int
-	ContentHash string // sha256 hex of content ("" when there was no content to hash)
-	Candidates  int    // raw candidates left for the LLM (not written by this track)
-	Err         error  // set when Outcome == Failed
+	Outcome   Outcome
+	FromType  string // rules.ApplyResult.FromType, or "schema" for prisma
+	FactsJSON string // "[]" when none
+	FactCount int
+	// ContentHash is the sha256 hex of the content, "" when there was
+	// nothing to hash or the file produced no answer.
+	ContentHash string
+	// CandidatesJSON is the raw AST candidates the rule packs did NOT turn
+	// into facts, serialised ("[]" when none). The structural phase ignores
+	// them — a candidate is a question for a model, not a structural fact —
+	// but the scan hands them to one, and both read the same file with the
+	// same parser, so it is this call's job to produce them.
+	CandidatesJSON string
+	Err            error // set when Outcome is failed or unreadable
 }
 
 // Supported reports whether path has a deterministic extractor: tree-sitter +
@@ -128,12 +141,12 @@ func isTypeScript(path string) bool {
 // untested recover is a recover that silently stops working.
 var parseTypeScript = ast.ExtractTypeScript
 
-// failedResult is the ONE shape a failure has. Every field a caller might read
-// is cleared, the content hash included: a failure means the file was not
-// looked at, and recording a hash for it would let the next run conclude
-// "same content, already done" and skip the file forever.
-func failedResult(path string, err error) Result {
-	return Result{Path: path, Outcome: Failed, FactsJSON: "[]", Err: err}
+// failedResult is the ONE shape a non-answer has, for either reason. Every
+// field a caller might read is cleared, the content hash included: nothing was
+// learned about this file, and recording a hash for it would let the next run
+// conclude "same content, already done" and skip it forever.
+func failedResult(outcome Outcome, err error) Result {
+	return Result{Outcome: outcome, FactsJSON: "[]", CandidatesJSON: "[]", Err: err}
 }
 
 // ExtractFile runs the deterministic extractor for path on content with the
@@ -145,22 +158,23 @@ func failedResult(path string, err error) Result {
 // becomes Outcome Failed, which is the honest answer: the file could not be
 // looked at, so nothing it used to assert may be dropped.
 func ExtractFile(path string, content []byte, tech []string) (res Result) {
-	res = Result{Path: path, Outcome: Unsupported, FactsJSON: "[]"}
+	res = Result{Outcome: Unsupported, FactsJSON: "[]", CandidatesJSON: "[]"}
 	if !Supported(path) {
 		return res
 	}
-	// A caller that could not read the file passes nil. That is a failure, not
-	// an empty file: an empty file genuinely asserts nothing, an unreadable one
-	// asserts we do not know.
+	// A caller that could not read the file passes nil. That is not an empty
+	// file: an empty file genuinely asserts nothing, an unreadable one says we
+	// do not know — and it is not a parse failure either, so it is its own
+	// outcome. A model cannot read bytes that never arrived.
 	if content == nil {
-		return failedResult(path, fmt.Errorf("structural: no content for %s", path))
+		return failedResult(Unreadable, fmt.Errorf("structural: no content for %s", path))
 	}
 	sum := sha256.Sum256(content)
 	res.ContentHash = hex.EncodeToString(sum[:])
 
 	defer func() {
 		if r := recover(); r != nil {
-			res = failedResult(path, fmt.Errorf("structural: parser panic on %s: %v", path, r))
+			res = failedResult(Failed, fmt.Errorf("structural: parser panic on %s: %v", path, r))
 		}
 	}()
 
@@ -171,7 +185,11 @@ func ExtractFile(path string, content []byte, tech []string) (res Result) {
 		res.FromType = semantic.FromType
 		res.FactsJSON = semantic.FactsJSON()
 		res.FactCount = len(semantic.Facts)
-		res.Candidates = len(raw.Candidates)
+		if len(raw.Candidates) > 0 {
+			if cb, err := json.Marshal(raw.Candidates); err == nil {
+				res.CandidatesJSON = string(cb)
+			}
+		}
 		return res
 	}
 
@@ -204,7 +222,7 @@ func ExtractFile(path string, content []byte, tech []string) (res Result) {
 			res.FactsJSON = string(b)
 		} else {
 			// Unserialisable facts are not facts we can hand anyone.
-			return failedResult(path, fmt.Errorf("structural: encode prisma facts for %s: %w", path, err))
+			return failedResult(Failed, fmt.Errorf("structural: encode prisma facts for %s: %w", path, err))
 		}
 	}
 	return res

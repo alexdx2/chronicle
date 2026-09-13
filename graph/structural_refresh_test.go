@@ -340,9 +340,10 @@ func TestStructuralRefreshSkipsUnchangedContent(t *testing.T) {
 
 // --- (d) a file that cannot be read ----------------------------------------
 
-// A file the phase could not look at is a failure, not an emptiness: nothing
-// it used to assert may be dropped, and it is named so the semantic queue can
-// pick it up.
+// A file the phase could not look at is not an emptiness: nothing it used to
+// assert may be dropped. It is reported as UNREAD rather than as a parse
+// failure — a model cannot read bytes that never arrived — and it stays in the
+// retry set until somebody can.
 func TestStructuralRefreshKeepsTheContributionOfAFileItCannotRead(t *testing.T) {
 	g, s, f := srSetup(t)
 	srRun(t, g, srInput(f, "head-1", srController, srService))
@@ -351,8 +352,11 @@ func TestStructuralRefreshKeepsTheContributionOfAFileItCannotRead(t *testing.T) 
 	f.content[srController] = srControllerOneRoute // the change it cannot see
 	res := srRun(t, g, srInput(f, "head-2", srController))
 
-	if len(res.Failed) != 1 || res.Failed[0] != srController {
-		t.Fatalf("failed = %v, want [%s]", res.Failed, srController)
+	if len(res.Unread) != 1 || res.Unread[0] != srController {
+		t.Fatalf("unread = %v, want [%s]", res.Unread, srController)
+	}
+	if len(res.Failed) != 0 {
+		t.Errorf("a file that was never read did not fail to parse: %v", res.Failed)
 	}
 	// Both routes still stand: the phase did not read the file, so it knows
 	// nothing new about it.
@@ -811,7 +815,7 @@ func TestAScanDoesNotResolveOrCountTheStructuralPhasesRows(t *testing.T) {
 	// The phase's rows are re-pointed at the scan's revision by a run there —
 	// the state a scan at the same commit as the last refresh actually finds.
 	if _, err := s.SaveStructuralExtraction(scanRev, srDomain, srController, "extracted", "controller",
-		`[{"kind":"endpoint","from":"billing","method":"DELETE","target":"invoices"}]`, ""); err != nil {
+		`[{"kind":"endpoint","from":"billing","method":"DELETE","target":"invoices"}]`, "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -847,4 +851,104 @@ func TestAScanDoesNotResolveOrCountTheStructuralPhasesRows(t *testing.T) {
 		t.Errorf("CountResolvedExtractions = %d, want 1 — the phase's row is not the scan's work", n)
 	}
 	_ = res
+}
+
+// A file with no answer is retried on every run, and nothing else would bring
+// it back: a failure writes no content record, so it is not in the pack
+// backlog, and it has stopped changing, so it is not in the diff. Without the
+// retry set a transient read error is a file the graph forgets permanently.
+func TestStructuralRefreshRetriesAFileWithNoStandingAnswer(t *testing.T) {
+	g, s, f := srSetup(t)
+	f.fail[srController] = true
+	res := srRun(t, g, srInput(f, "head-1", srController, srService))
+	if len(res.Unread) != 1 {
+		t.Fatalf("fixture: unread = %v", res.Unread)
+	}
+	if _, err := s.GetNodeByKey(srGetEndpoint); err == nil {
+		t.Fatal("fixture: the unread file must have contributed nothing")
+	}
+
+	// A later commit that does not mention the file at all.
+	f.fail[srController] = false
+	res2 := srRun(t, g, srInput(f, "head-2"))
+
+	if res2.Processed != 1 {
+		t.Fatalf("processed = %d, want the retried file: %+v", res2.Processed, res2)
+	}
+	if len(res2.Unread) != 0 || len(res2.Failed) != 0 {
+		t.Fatalf("the retry succeeded but was still reported as a failure: %+v", res2)
+	}
+	if _, err := s.GetNodeByKey(srGetEndpoint); err != nil {
+		t.Fatalf("the retried file's structure never arrived: %v", err)
+	}
+	// It leaves the retry set once it has an answer.
+	failed, unread, err := s.StructuralFailures(srDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failed) != 0 || len(unread) != 0 {
+		t.Errorf("still in the retry set: failed=%v unread=%v", failed, unread)
+	}
+}
+
+// A deleted file must leave the retry set with everything else, or its
+// standing failure spends a batch slot every run on a file that cannot return.
+func TestStructuralRefreshForgetsAFailedFileWhenItIsDeleted(t *testing.T) {
+	g, s, f := srSetup(t)
+	f.fail[srController] = true
+	srRun(t, g, srInput(f, "head-1", srController, srService))
+	if _, unread, _ := s.StructuralFailures(srDomain); len(unread) != 1 {
+		t.Fatalf("fixture: unread = %v", unread)
+	}
+
+	delete(f.content, srController)
+	in := srInput(f, "head-2")
+	in.Deleted = []string{srController}
+	srRun(t, g, in)
+
+	failed, unread, err := s.StructuralFailures(srDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failed) != 0 || len(unread) != 0 {
+		t.Errorf("a deleted file is still owed an answer: failed=%v unread=%v", failed, unread)
+	}
+}
+
+// The guard against withdrawing a finished claim has to read `complete` the
+// way the POINTER reads it. SQLite's JSON1 maps a JSON true to the integer 1
+// and LatestStructuralRevision accepts `= 1`, so a stamp written as 1 is a
+// completed phase to the graph — and must be one here too, or a revision the
+// graph calls complete still loses its claim to a crashed rerun.
+func TestStructuralAlreadyCompleteAgreesWithThePointer(t *testing.T) {
+	g, s, _ := srSetup(t)
+	for _, tc := range []struct {
+		metadata string
+		want     bool
+	}{
+		{`{"structural":{"complete":true}}`, true},
+		{`{"structural":{"complete":1}}`, true},
+		{`{"structural":{"complete":false}}`, false},
+		{`{"structural":{"complete":0}}`, false},
+		{`{"kind":"refresh"}`, false},
+		{`not json`, false},
+	} {
+		id, err := s.CreateRevision(srDomain, "", "sha-"+tc.metadata, "git_hook", "incremental", tc.metadata)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := g.structuralAlreadyComplete(id)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.metadata, err)
+		}
+		if got != tc.want {
+			t.Errorf("structuralAlreadyComplete(%s) = %v, want %v", tc.metadata, got, tc.want)
+		}
+		// And the pointer's own reading, for the two that claim completion.
+		rev, perr := s.LatestStructuralRevision(srDomain)
+		pointerSees := perr == nil && rev.RevisionID == id
+		if tc.want != pointerSees {
+			t.Errorf("%s: guard says %v, the pointer says %v", tc.metadata, tc.want, pointerSees)
+		}
+	}
 }

@@ -98,12 +98,13 @@ func TestExtractFileTypesOnly(t *testing.T) {
 	}
 }
 
-// The only unambiguous parser failure is having nothing to parse: content the
-// caller could not read. Unbalanced syntax is not one — see below.
-func TestExtractFileNilContentFails(t *testing.T) {
+// Content the caller could not read is its OWN outcome, not a parse failure.
+// Both keep the file's previous contribution alive, but only one of them is
+// worth handing to a model: nobody can read bytes that never arrived.
+func TestExtractFileNilContentIsUnreadable(t *testing.T) {
 	got := ExtractFile("src/unreadable.ts", nil, nestTech)
-	if got.Outcome != Failed {
-		t.Fatalf("outcome = %q, want failed", got.Outcome)
+	if got.Outcome != Unreadable {
+		t.Fatalf("outcome = %q, want unreadable", got.Outcome)
 	}
 	if got.Err == nil {
 		t.Error("err = nil, want a reason")
@@ -196,10 +197,22 @@ func TestContentHashIsStableAndContentAddressed(t *testing.T) {
 	}
 }
 
-func TestResultCarriesPath(t *testing.T) {
-	got := ExtractFile("src/a.ts", []byte("export const x = 1;\n"), nestTech)
-	if got.Path != "src/a.ts" {
-		t.Errorf("path = %q, want src/a.ts", got.Path)
+// The scan hands the candidates the rule packs did not claim to a model, and
+// reads them from the same call the structural phase makes. They are JSON
+// because that is the shape the scan already stores.
+func TestResultCarriesCandidatesJSON(t *testing.T) {
+	got := extractFixture(t, "nest.ts")
+	if got.CandidatesJSON == "" {
+		t.Fatal("candidates JSON is empty, want at least []")
+	}
+	var cands []map[string]any
+	if err := json.Unmarshal([]byte(got.CandidatesJSON), &cands); err != nil {
+		t.Fatalf("candidates JSON is not an array: %v (%s)", err, got.CandidatesJSON)
+	}
+	// A file with nothing left over still says so in a shape a caller can store.
+	empty := ExtractFile("src/a.ts", []byte("export const x = 1;\n"), nestTech)
+	if empty.CandidatesJSON != "[]" {
+		t.Errorf("candidates JSON = %q, want []", empty.CandidatesJSON)
 	}
 }
 
@@ -259,7 +272,7 @@ func assertFailedShape(t *testing.T, got Result) {
 	if got.FromType != "" {
 		t.Errorf("from type = %q, want empty", got.FromType)
 	}
-	if got.Candidates != 0 {
-		t.Errorf("candidates = %d, want 0", got.Candidates)
+	if got.CandidatesJSON != "[]" {
+		t.Errorf("candidates JSON = %q, want []", got.CandidatesJSON)
 	}
 }

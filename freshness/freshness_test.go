@@ -472,41 +472,63 @@ func TestVerifiedAfterScanIsTheExportedRule(t *testing.T) {
 	}
 }
 
-// A file the structural phase could not parse is knowledge that did not
+// A file the structural phase has no answer for is knowledge that did not
 // arrive, and the line is where a reader learns the graph is not as complete
-// as its pointer suggests.
-func TestStructuredCarriesTheParseFailures(t *testing.T) {
+// as its pointer suggests. Two different non-answers, two different fixes: a
+// parse failure is a file to hand a model, an unread file is a file to look at
+// again.
+//
+// They are counted from the STANDING rows, so a failure from three commits ago
+// is still disclosed — reading the last run's stamp made it vanish as soon as
+// any other commit landed.
+func TestStructuredCarriesTheFilesWithNoAnswer(t *testing.T) {
 	dir, s := newRepo(t)
 	sha1 := commit(t, dir, "a.ts")
-	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+	rev1, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}")
+	if err != nil {
 		t.Fatal(err)
 	}
+	for _, f := range []string{"old-a.ts", "old-b.ts"} {
+		if _, err := s.SaveStructuralExtraction(rev1, "d", f, "failed", "", "[]", "boom", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.SaveStructuralExtraction(rev1, "d", "gone.ts", "failed", "", "[]", "no such file",
+		store.StructuralOutcomeUnreadable); err != nil {
+		t.Fatal(err)
+	}
+	// A file that DID get an answer is not a failure.
+	if _, err := s.SaveStructuralExtraction(rev1, "d", "fine.ts", "extracted", "provider", "[]", "", ""); err != nil {
+		t.Fatal(err)
+	}
+
 	sha2 := commit(t, dir, "b.ts")
+	// The stamp's own tally says nothing happened in the LAST run — the point
+	// still has to disclose what is standing.
 	id, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental", `{"kind":"structural"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpdateRevisionMetadata(id, map[string]any{
-		"structural": map[string]any{"complete": true, "pack": rules.PackVersion, "failed": 2},
+		"structural": map[string]any{"complete": true, "pack": rules.PackVersion, "failed": 0, "unread": 0},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	r, _ := Compute(dir, "r", "d", s)
-	if r.Structured == nil || r.Structured.Failed != 2 {
+	if r.Structured == nil || r.Structured.Failed != 2 || r.Structured.Unread != 1 {
 		t.Fatalf("structured point: %+v", r.Structured)
 	}
-	if !strings.Contains(r.Line(), "2 files failed to parse") {
-		t.Fatalf("line must carry the parse failures: %q", r.Line())
+	line := r.Line()
+	if !strings.Contains(line, "2 files failed to parse") {
+		t.Fatalf("line must carry the parse failures: %q", line)
 	}
-	// One is one. (Line() serves the cached Message; clear it to re-render.)
-	r.Structured.Failed, r.Message = 1, ""
-	if !strings.Contains(r.Line(), "1 file failed to parse") {
-		t.Fatalf("line: %q", r.Line())
+	if !strings.Contains(line, "1 file not read") {
+		t.Fatalf("line must carry the unread file: %q", line)
 	}
-	// None is silence.
-	r.Structured.Failed, r.Message = 0, ""
-	if strings.Contains(r.Line(), "failed to parse") {
+	// None is silence. (Line() serves the cached Message; clear it to re-render.)
+	r.Structured.Failed, r.Structured.Unread, r.Message = 0, 0, ""
+	if strings.Contains(r.Line(), "failed to parse") || strings.Contains(r.Line(), "not read") {
 		t.Fatalf("line invents failures: %q", r.Line())
 	}
 }
