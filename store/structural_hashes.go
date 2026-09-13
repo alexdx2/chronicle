@@ -20,7 +20,14 @@ import (
 // rows to hang a hash on) still needs an answer.
 //
 // Key:   structural:hash:<domain>:<file_path>
-// Value: <sha256>:<pack_version>
+// Value: <sha256>:<pack_version>:<revision_id>
+//
+// The revision is what makes a rebase recoverable: structure extracted on a
+// branch nobody merged was recorded against a revision this checkout can no
+// longer reach, and DeleteStructuralHashesAfter forgets exactly those files so
+// the next run looks at them again under the base it CAN reach. A two-field
+// value (written before the revision was recorded) reads as revision 0, i.e.
+// "older than anything" — it is never mistaken for branch-only work.
 
 const structuralHashPrefix = "structural:hash:"
 
@@ -49,20 +56,24 @@ func (s *Store) GetStructuralHash(domain, filePath string) (hash, pack string, o
 	}
 	// A record we cannot read is no record: the caller re-extracts, which is
 	// always the safe answer.
-	h, p, found := strings.Cut(value, ":")
+	h, rest, found := strings.Cut(value, ":")
 	if !found {
 		return "", "", false, nil
 	}
+	// sha256 hex has no colon, so the first one separates the hash; the second
+	// (when present) separates the pack from the revision that recorded it.
+	p, _, _ := strings.Cut(rest, ":")
 	return h, p, true, nil
 }
 
 // SetStructuralHash records what the structural phase saw, replacing any
 // previous record for the same file. This is a record, not a history.
-func (s *Store) SetStructuralHash(domain, filePath, hash, pack string) error {
+func (s *Store) SetStructuralHash(domain, filePath, hash, pack string, revisionID int64) error {
+	value := fmt.Sprintf("%s:%s:%d", hash, pack, revisionID)
 	if _, err := s.db.Exec(`
 		INSERT INTO project_settings (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		structuralHashKey(domain, filePath), hash+":"+pack); err != nil {
+		structuralHashKey(domain, filePath), value); err != nil {
 		return fmt.Errorf("SetStructuralHash %q: %w", filePath, err)
 	}
 	return nil
@@ -79,12 +90,25 @@ func (s *Store) DeleteStructuralHash(domain, filePath string) error {
 	return nil
 }
 
-// structuralPackExpr reads the pack half of the value. sha256 hex contains no
-// ':', so the first one is the separator; instr returns 0 for a value with no
-// separator at all, and substr(value, 1) then yields the whole malformed value,
-// which compares unequal to any real pack — a record in a shape we do not
-// recognise counts as backlog, and re-extracting is the safe answer.
-const structuralPackExpr = `substr(value, instr(value, ':') + 1)`
+// structuralTailExpr is everything after the hash: "<pack>" or "<pack>:<rev>".
+// sha256 hex contains no ':', so the first one is the separator; instr returns
+// 0 for a value with no separator at all, and substr(value, 1) then yields the
+// whole malformed value, which compares unequal to any real pack — a record in
+// a shape we do not recognise counts as backlog, and re-extracting is the safe
+// answer.
+const structuralTailExpr = `substr(value, instr(value, ':') + 1)`
+
+// structuralPackExpr is the pack alone. The ELSE branch reads a record written
+// before the revision id was part of the value.
+const structuralPackExpr = `CASE WHEN instr(` + structuralTailExpr + `, ':') > 0
+	THEN substr(` + structuralTailExpr + `, 1, instr(` + structuralTailExpr + `, ':') - 1)
+	ELSE ` + structuralTailExpr + ` END`
+
+// structuralRevExpr is the revision that recorded the look, 0 when the value
+// predates the field — "older than anything", never branch-only work.
+const structuralRevExpr = `CASE WHEN instr(` + structuralTailExpr + `, ':') > 0
+	THEN CAST(substr(` + structuralTailExpr + `, instr(` + structuralTailExpr + `, ':') + 1) AS INTEGER)
+	ELSE 0 END`
 
 // structuralBacklogPredicate matches one domain's records that were not written
 // by pack. The key prefix is compared with substr rather than LIKE so a domain
@@ -143,4 +167,25 @@ func (s *Store) FilesWithStructuralHashNotOnPack(domain, pack string, limit int)
 		return nil, fmt.Errorf("FilesWithStructuralHashNotOnPack rows: %w", err)
 	}
 	return out, nil
+}
+
+// DeleteStructuralHashesAfter forgets every record this domain wrote after
+// revisionID, so those files are looked at again.
+//
+// It is the answer to a rebase. When the structural pointer names a commit this
+// checkout cannot reach, the runs that produced it happened on a branch nobody
+// merged: their content records say "already done under this pack" about files
+// whose structure came from code that is not in this history. Keeping them
+// would leave the new base's version of those files permanently unread — the
+// one way a content hash can hide a change instead of skipping a no-op.
+func (s *Store) DeleteStructuralHashesAfter(domain string, revisionID int64) (int64, error) {
+	prefix := structuralHashKeyPrefix(domain)
+	res, err := s.db.Exec(`DELETE FROM project_settings
+		WHERE substr(key, 1, ?) = ? AND `+structuralRevExpr+` > ?`,
+		len(prefix), prefix, revisionID)
+	if err != nil {
+		return 0, fmt.Errorf("DeleteStructuralHashesAfter: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }

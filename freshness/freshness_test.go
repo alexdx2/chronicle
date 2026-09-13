@@ -395,11 +395,11 @@ func TestStructuredCarriesTheOldRulesBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"old-a.ts", "old-b.ts"} {
-		if err := s.SetStructuralHash("d", f, "deadbeef", "0"); err != nil {
+		if err := s.SetStructuralHash("d", f, "deadbeef", "0", 1); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := s.SetStructuralHash("d", "current.ts", "cafe", rules.PackVersion); err != nil {
+	if err := s.SetStructuralHash("d", "current.ts", "cafe", rules.PackVersion, 1); err != nil {
 		t.Fatal(err)
 	}
 	sha2 := commit(t, dir, "b.ts")
@@ -469,5 +469,44 @@ func TestVerifiedAfterScanIsTheExportedRule(t *testing.T) {
 	}
 	if (&Report{Scanned: scanned}).VerifiedAfterScan() != false {
 		t.Error("no refresh at all is not a verification")
+	}
+}
+
+// A file the structural phase could not parse is knowledge that did not
+// arrive, and the line is where a reader learns the graph is not as complete
+// as its pointer suggests.
+func TestStructuredCarriesTheParseFailures(t *testing.T) {
+	dir, s := newRepo(t)
+	sha1 := commit(t, dir, "a.ts")
+	if _, err := s.CreateRevision("d", "", sha1, "manual", "full", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	sha2 := commit(t, dir, "b.ts")
+	id, err := s.CreateRevision("d", "", sha2, "git_hook", "incremental", `{"kind":"structural"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateRevisionMetadata(id, map[string]any{
+		"structural": map[string]any{"complete": true, "pack": rules.PackVersion, "failed": 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Structured == nil || r.Structured.Failed != 2 {
+		t.Fatalf("structured point: %+v", r.Structured)
+	}
+	if !strings.Contains(r.Line(), "2 files failed to parse") {
+		t.Fatalf("line must carry the parse failures: %q", r.Line())
+	}
+	// One is one. (Line() serves the cached Message; clear it to re-render.)
+	r.Structured.Failed, r.Message = 1, ""
+	if !strings.Contains(r.Line(), "1 file failed to parse") {
+		t.Fatalf("line: %q", r.Line())
+	}
+	// None is silence.
+	r.Structured.Failed, r.Message = 0, ""
+	if strings.Contains(r.Line(), "failed to parse") {
+		t.Fatalf("line invents failures: %q", r.Line())
 	}
 }

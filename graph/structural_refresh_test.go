@@ -390,7 +390,7 @@ func TestStructuralRefreshDrainsTheOldPackBacklogInBatches(t *testing.T) {
 
 	// Three files last looked at under pack "0".
 	for _, p := range []string{srController, srService, third} {
-		if err := s.SetStructuralHash(srDomain, p, "stale-hash", "0"); err != nil {
+		if err := s.SetStructuralHash(srDomain, p, "stale-hash", "0", 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -593,5 +593,142 @@ func TestStructuralRefreshRunsOnARevisionWithOpenObligations(t *testing.T) {
 	}
 	if len(open) != 1 {
 		t.Fatalf("the phase must neither satisfy nor fail somebody else's obligation: %d open", len(open))
+	}
+}
+
+// Two writers on one revision. The structural phase resolves on the revision
+// the refresh — or a scan — already opened, and it may only build the graph
+// from facts it read itself. An agent's extraction on that revision is not its
+// input and not its to close.
+func TestStructuralRefreshLeavesAnotherWritersExtractionAlone(t *testing.T) {
+	g, s, f := srSetup(t)
+
+	revID, err := s.CreateRevision(srDomain, "", "head-1", "git_hook", "incremental", `{"kind":"refresh"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveExtraction(revID, srDomain, "src/agent-read.ts", "extracted", "provider",
+		`[{"kind":"import","to":"./ghost","symbols":["Ghost"]}]`, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	srRun(t, g, srInput(f, "head-1", srController, srService))
+
+	left, err := s.ListUnresolvedExtractions(revID, srDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].FilePath != "src/agent-read.ts" {
+		t.Fatalf("the agent's row was consumed by the structural resolve: %+v", left)
+	}
+	if _, err := s.GetNodeByKey("code:provider:" + srDomain + ":src/ghost"); err == nil {
+		t.Error("the structural phase built the graph from facts it never read")
+	}
+}
+
+// The graph-wide post-passes cost time proportional to the domain, and a
+// per-commit phase must not pay it. Flow derivation and service containment do
+// not run; the passes that follow the files just read still do.
+func TestStructuralRefreshSkipsTheGraphWidePostPasses(t *testing.T) {
+	g, s, f := srSetup(t)
+	srRun(t, g, srInput(f, "head-1", srController, srService))
+
+	nodes, err := s.ListNodes(store.NodeFilter{Domain: srDomain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range nodes {
+		if n.Layer == "flow" {
+			t.Errorf("a per-commit phase derived a flow node: %s", n.NodeKey)
+		}
+	}
+	edges, err := s.ListEdges(store.EdgeFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		switch e.EdgeType {
+		case "TRIGGERS_FLOW", "REQUIRES", "CONTAINS":
+			t.Errorf("a per-commit phase ran a derived pass: %s (%s)", e.EdgeKey, e.EdgeType)
+		}
+	}
+	// What the files themselves said is still there.
+	if _, err := s.GetEdgeByKey(srGetEdge); err != nil {
+		t.Fatalf("the route the file declares is missing: %v", err)
+	}
+
+	// And a scan-shaped resolve on the same graph still derives everything.
+	revID, err := s.CreateRevision(srDomain, "", "scan-2", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveExtraction(revID, srDomain, srController, "extracted", "controller",
+		`[{"kind":"endpoint","from":"billing","method":"GET","target":"invoices"}]`, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.ResolveExtractions(srDomain, revID); err != nil {
+		t.Fatalf("ResolveExtractions: %v", err)
+	}
+	nodes, _ = s.ListNodes(store.NodeFilter{Domain: srDomain})
+	flows := 0
+	for _, n := range nodes {
+		if n.Layer == "flow" {
+			flows++
+		}
+	}
+	if flows == 0 {
+		t.Error("a scan's resolve must still derive flows — the gate is per-call, not global")
+	}
+}
+
+// A rerun at a commit whose phase already finished must not withdraw the claim
+// while it works. The "in progress" marker exists to stop an unfinished run
+// claiming something untrue — not to drop something true: a pack bump that
+// crashes halfway would otherwise leave the commit looking unstructured when
+// its structure is exactly as good as it was a second earlier.
+func TestStructuralRefreshDoesNotWithdrawACompletedClaimOnARerun(t *testing.T) {
+	g, s, f := srSetup(t)
+	srRun(t, g, srInput(f, "head-1", srController, srService))
+	if rev, err := s.LatestStructuralRevision(srDomain); err != nil || rev.GitAfterSHA != "head-1" {
+		t.Fatalf("structured@%+v (%v), want head-1", rev, err)
+	}
+
+	// The same commit again — and this time the resolver dies.
+	boom := errors.New("resolver exploded")
+	orig := structuralResolveFn
+	structuralResolveFn = func(*Graph, string, int64, ResolveOptions) (*ResolveExtractionsResult, error) {
+		return nil, boom
+	}
+	f.content[srController] = srControllerOneRoute
+	_, err := g.StructuralRefresh(srInput(f, "head-1", srController))
+	structuralResolveFn = orig
+	if !errors.Is(err, boom) {
+		t.Fatalf("StructuralRefresh error = %v, want the resolver's", err)
+	}
+
+	rev, err := s.LatestStructuralRevision(srDomain)
+	if err != nil {
+		t.Fatalf("a finished phase's claim was withdrawn by a failed rerun: %v", err)
+	}
+	if rev.GitAfterSHA != "head-1" {
+		t.Fatalf("structured@%s, want head-1", rev.GitAfterSHA)
+	}
+}
+
+// The content record names the revision that wrote it, so a rebase can forget
+// exactly the files whose structure came from a branch nobody merged.
+func TestStructuralRefreshRecordsTheRevisionWithTheContentHash(t *testing.T) {
+	g, s, f := srSetup(t)
+	res := srRun(t, g, srInput(f, "head-1", srController, srService))
+
+	if n, err := s.DeleteStructuralHashesAfter(srDomain, res.RevisionID); err != nil || n != 0 {
+		t.Fatalf("records written BY this revision are not after it: %d (%v)", n, err)
+	}
+	n, err := s.DeleteStructuralHashesAfter(srDomain, res.RevisionID-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("forgot %d records, want the 2 this revision wrote", n)
 	}
 }

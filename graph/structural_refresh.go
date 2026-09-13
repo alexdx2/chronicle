@@ -3,6 +3,7 @@ package graph
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -113,12 +114,22 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 	}
 	res.RevisionID = revID
 
-	// Say "in progress" before touching anything. Until the phase finishes,
-	// the claim "structure is guaranteed at this commit" is not true — and a
-	// rerun that dies must not leave an earlier run's `complete: true` standing
-	// over a graph it has already started replacing.
-	if err := g.stampStructural(revID, map[string]any{"complete": false, "pack": pack}); err != nil {
+	// Say "in progress" before touching anything: until the phase finishes,
+	// the claim "structure is guaranteed at this commit" is not true.
+	//
+	// Unless a previous run already earned that claim at this very commit. A
+	// rerun there — a pack bump, a second hook, an amend that kept the tree —
+	// only ever adds; marking it incomplete first would drop a true claim for
+	// the duration, and a crash would drop it for good. The final stamp
+	// rewrites it either way.
+	alreadyComplete, err := g.structuralAlreadyComplete(revID)
+	if err != nil {
 		return nil, err
+	}
+	if !alreadyComplete {
+		if err := g.stampStructural(revID, map[string]any{"complete": false, "pack": pack}); err != nil {
+			return nil, err
+		}
 	}
 
 	// The backlog is the phase's own record of which files it looked at under
@@ -207,6 +218,11 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 			ExtractorID:      structural.ExtractorID,
 			ExtractorVersion: pack,
 			ContentHashes:    hashes,
+			// Only this phase's own rows: the revision belongs to whoever
+			// opened it, and an agent's extraction on it is not our input.
+			ExtractionRole: store.StructuralExtractionRole,
+			// The graph-wide derivations are a scan's job, not a commit's.
+			DerivedPasses: &structuralDerivedPasses,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("structural: resolve: %w", err)
@@ -251,7 +267,7 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 	// content is already in the graph", and the file would never be looked at
 	// again.
 	for _, file := range extracted {
-		if err := g.store.SetStructuralHash(in.DomainKey, file, hashes[file], pack); err != nil {
+		if err := g.store.SetStructuralHash(in.DomainKey, file, hashes[file], pack, revID); err != nil {
 			return nil, fmt.Errorf("structural: record %s: %w", file, err)
 		}
 	}
@@ -297,6 +313,32 @@ func (g *Graph) structuralRevisionAt(domainKey, headSHA string) (int64, error) {
 		return 0, fmt.Errorf("structural: create revision at %s: %w", headSHA, err)
 	}
 	return id, nil
+}
+
+// structuralDerivedPasses is the value ResolveOptions.DerivedPasses points at
+// for every structural run: off. A package var because the option is a *bool
+// (absent means on, so that no existing caller has to opt in).
+var structuralDerivedPasses = false
+
+// structuralAlreadyComplete reports whether the revision already carries a
+// finished structural phase — the one case where the up-front "in progress"
+// marker would destroy a true claim rather than withhold an untrue one.
+func (g *Graph) structuralAlreadyComplete(revisionID int64) (bool, error) {
+	rev, err := g.store.GetRevision(revisionID)
+	if err != nil {
+		return false, fmt.Errorf("structural: read revision %d: %w", revisionID, err)
+	}
+	var md struct {
+		Structural struct {
+			Complete bool `json:"complete"`
+		} `json:"structural"`
+	}
+	// Unreadable metadata is not a completed phase; the marker is written and
+	// the final stamp replaces whatever was there.
+	if err := json.Unmarshal([]byte(rev.Metadata), &md); err != nil {
+		return false, nil
+	}
+	return md.Structural.Complete, nil
 }
 
 // stampStructural merges the phase's own key into the revision's metadata.

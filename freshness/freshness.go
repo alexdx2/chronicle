@@ -36,6 +36,11 @@ type Point struct {
 	// evidence was written by an older rules pack and so still need
 	// re-extraction, even though nothing in them changed.
 	OldRules int `json:"old_rules,omitempty"`
+	// Failed is how many files the structural phase could not parse at this
+	// point. Their previous contribution stands, so nothing is wrong with the
+	// graph — but nothing new arrived for them either, and a pointer that says
+	// "structure is guaranteed here" owes the reader that number.
+	Failed int `json:"failed,omitempty"`
 }
 
 // Distance is how far the working tree has moved past the knowledge.
@@ -180,6 +185,7 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 		if n, err := s.CountStructuralHashesNotOnPack(domain, rules.PackVersion); err == nil {
 			p.OldRules = n
 		}
+		p.Failed = structuralFailedCount(structRev.Metadata)
 		r.Structured = p
 	}
 
@@ -361,6 +367,9 @@ func (r *Report) body() string {
 	if r.Structured != nil && r.Structured.OldRules > 0 {
 		parts = append(parts, plural(r.Structured.OldRules, "file on old rules", "files on old rules"))
 	}
+	if r.Structured != nil && r.Structured.Failed > 0 {
+		parts = append(parts, plural(r.Structured.Failed, "file failed to parse", "files failed to parse"))
+	}
 	if r.Touched.NodesStale > 0 {
 		parts = append(parts, plural(r.Touched.NodesStale, "node touched", "nodes touched"))
 	}
@@ -465,6 +474,21 @@ func latest(rev *store.Revision, err error) (*store.Revision, error) {
 		return nil, err
 	}
 	return rev, nil
+}
+
+// structuralFailedCount reads metadata.structural.failed, which the phase
+// writes with the rest of its account of itself. Anything unreadable is zero:
+// a number nobody can parse is not a number to put on the line.
+func structuralFailedCount(raw string) int {
+	var m struct {
+		Structural struct {
+			Failed int `json:"failed"`
+		} `json:"structural"`
+	}
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return 0
+	}
+	return m.Structural.Failed
 }
 
 // surfaceSource reads the extract's path from either metadata shape: top-level
