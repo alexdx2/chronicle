@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -142,12 +143,26 @@ const revisionKindExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metad
 // would silently skip every file between the two.
 const notStructural = ` AND (` + revisionKindExpr + ` IS NULL OR ` + revisionKindExpr + ` != 'structural')`
 
-// LatestRefreshRevision is the newest trigger_kind='git_hook' revision that is
-// not a structural one — the last time knowledge was re-verified against a
-// commit without a rescan. ErrNotFound when none.
+// revisionRefreshExpr reads metadata.refresh the same defensive way
+// revisionLayerExpr reads metadata.layer.
+const revisionRefreshExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.refresh') ELSE NULL END`
+
+// LatestRefreshRevision is the newest revision that records a re-verification —
+// the last time knowledge was checked against a commit without a rescan.
+// ErrNotFound when none.
+//
+// A refresh takes EITHER of two shapes, for the same reason a surface import
+// does. A refresh that had to create its own row owns it outright
+// (trigger_kind='git_hook', and not the structural phase, which is hook-driven
+// too but advances a different pointer). A refresh that found the commit
+// already named — by a scan, or by a surface import that got there first —
+// cannot own the row, so it merges metadata.refresh instead. Reading only the
+// first shape silently drops the second, and the graph reports a commit it did
+// re-verify as merely stale.
 func (s *Store) LatestRefreshRevision(domainKey string) (*Revision, error) {
 	q := `SELECT ` + revisionCols + ` FROM graph_revisions
-	      WHERE trigger_kind = 'git_hook'` + notStructural
+	      WHERE ((trigger_kind = 'git_hook'` + notStructural + `)
+	             OR ` + revisionRefreshExpr + ` IS NOT NULL)`
 	var args []any
 	if domainKey != "" {
 		q += ` AND domain_key = ?`
@@ -157,12 +172,20 @@ func (s *Store) LatestRefreshRevision(domainKey string) (*Revision, error) {
 	return s.oneRevision("LatestRefreshRevision", q, args...)
 }
 
-// LatestLayerRevision is the newest revision whose metadata.layer == layer
-// (e.g. a "ui" surface import). ErrNotFound when none.
+// revisionLayerExtraExpr reads metadata.layer_extra — "this row also carries
+// that layer". A layer marks itself here rather than in metadata.layer whenever
+// it does not own the row, either because a code writer got to the commit
+// first or because one later took the row over: metadata.layer hides a row from
+// LatestScanRevision, so it may only mark a row nobody outranks.
+const revisionLayerExtraExpr = `CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.layer_extra') ELSE NULL END`
+
+// LatestLayerRevision is the newest revision carrying a layer (e.g. a "ui"
+// surface import), in EITHER of the two shapes a layer can take. ErrNotFound
+// when none.
 func (s *Store) LatestLayerRevision(domainKey, layer string) (*Revision, error) {
 	q := `SELECT ` + revisionCols + ` FROM graph_revisions
-	      WHERE ` + revisionLayerExpr + ` = ?`
-	args := []any{layer}
+	      WHERE (` + revisionLayerExpr + ` = ? OR ` + revisionLayerExtraExpr + ` = ?)`
+	args := []any{layer, layer}
 	if domainKey != "" {
 		q += ` AND domain_key = ?`
 		args = append(args, domainKey)
@@ -185,9 +208,15 @@ const revisionSurfaceExpr = `CASE WHEN json_valid(metadata) THEN json_extract(me
 // lose the code layer's own commit. It merges metadata.surface instead, and
 // this is what finds it either way. ErrNotFound when the domain has no
 // surface import.
+//
+// layer_extra is the same fact arrived at from the other direction: an import
+// that DID own its row until a scan reached the same commit and took it over.
+// Missing it would lose an import purely because the code caught up with it.
 func (s *Store) LatestSurfaceRevision(domainKey string) (*Revision, error) {
 	q := `SELECT ` + revisionCols + ` FROM graph_revisions
-	      WHERE (` + revisionLayerExpr + ` = 'ui' OR ` + revisionSurfaceExpr + ` IS NOT NULL)`
+	      WHERE (` + revisionLayerExpr + ` = 'ui'
+	             OR ` + revisionLayerExtraExpr + ` = 'ui'
+	             OR ` + revisionSurfaceExpr + ` IS NOT NULL)`
 	var args []any
 	if domainKey != "" {
 		q += ` AND domain_key = ?`
@@ -251,4 +280,174 @@ func (s *Store) NewestRevisionDomain() (string, error) {
 func (s *Store) GetRevisionBySHA(domainKey, sha string) (*Revision, error) {
 	q := `SELECT ` + revisionCols + ` FROM graph_revisions WHERE domain_key = ? AND git_after_sha = ?`
 	return s.oneRevision(fmt.Sprintf("GetRevisionBySHA %q %q", domainKey, sha), q, domainKey, sha)
+}
+
+// How strongly a writer claims to speak for a commit's CODE knowledge. One
+// commit has one row (UNIQUE(domain_key, git_after_sha)) and trigger_kind can
+// name only one writer, so the rank decides who that is and everybody else
+// describes itself in metadata.
+//
+// A scan outranks the hook: LatestScanRevision reads trigger_kind, so a scan
+// that let a refresh row stand would leave the graph calling a commit it has
+// fully read "never scanned". A layer import ranks below both — it speaks for
+// one slice of the graph, and promoting it would make a ui import read as the
+// commit's code scan.
+const (
+	revisionRankLayer = 0
+	revisionRankHook  = 1
+	revisionRankScan  = 2
+)
+
+// RevisionClaim is one writer's claim on the revision row naming a commit.
+type RevisionClaim struct {
+	DomainKey   string
+	BeforeSHA   string
+	AfterSHA    string
+	TriggerKind string
+	Mode        string
+
+	// Metadata is the row's metadata when this writer CREATES it.
+	Metadata string
+
+	// Merge is what this writer adds when the row already exists, key by key.
+	//
+	// It is deliberately separate from Metadata. `kind` names the row's
+	// primary writer, and merging it onto somebody else's row hides that row
+	// from its own reader: a kind="structural" stamp on a refresh row makes
+	// LatestRefreshRevision skip it, losing a re-verification that really
+	// happened. A writer riding along names itself under its own key instead.
+	Merge map[string]any
+
+	// Layer names the single layer this writer imported, when it imported one
+	// ("ui" for a surface import). It sets the claim's rank and nothing else.
+	Layer string
+}
+
+func (c RevisionClaim) rank() int {
+	switch {
+	case c.Layer != "":
+		return revisionRankLayer
+	case c.TriggerKind == "git_hook":
+		return revisionRankHook
+	default:
+		return revisionRankScan
+	}
+}
+
+// revisionRowRank reads an existing row's rank the same way, from what is
+// actually stored: metadata.layer is what makes a row a layer row, because it
+// is what LatestScanRevision keys on.
+func revisionRowRank(r *Revision) int {
+	var md struct {
+		Layer string `json:"layer"`
+	}
+	if err := json.Unmarshal([]byte(r.Metadata), &md); err == nil && md.Layer != "" {
+		return revisionRankLayer
+	}
+	if r.TriggerKind == "git_hook" {
+		return revisionRankHook
+	}
+	return revisionRankScan
+}
+
+// ClaimRevision returns the revision naming a commit for a domain, creating it
+// only when no writer has claimed that commit yet. The bool reports whether the
+// row was created.
+//
+// Every writer that reaches a commit shares one row: a scan, the refresh's
+// verification, the structural phase and a surface import can all legitimately
+// land on the same SHA, and UNIQUE(domain_key, git_after_sha) means whoever
+// calls CreateRevision second gets a constraint error instead of a graph.
+// Removing that failure is the point of this method — a writer that finds the
+// commit already named joins the row rather than dying on it.
+//
+// Joining has one rule: trigger_kind and mode carry the strongest claim on the
+// commit, and every weaker writer describes itself in metadata. A stronger
+// claim also demotes a layer marker to layer_extra, the shape a surface import
+// already uses when it rides along on a scan's row — metadata.layer hides a row
+// from LatestScanRevision, so it may only mark a row nobody outranks.
+func (s *Store) ClaimRevision(c RevisionClaim) (int64, bool, error) {
+	if c.AfterSHA == "" {
+		return 0, false, fmt.Errorf("ClaimRevision: after SHA is required")
+	}
+
+	existing, err := s.GetRevisionBySHA(c.DomainKey, c.AfterSHA)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		meta := c.Metadata
+		if strings.TrimSpace(meta) == "" {
+			meta = "{}"
+		}
+		id, cerr := s.CreateRevision(c.DomainKey, c.BeforeSHA, c.AfterSHA, c.TriggerKind, c.Mode, meta)
+		if cerr != nil {
+			return 0, false, cerr
+		}
+		return id, true, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("ClaimRevision: %w", err)
+	}
+
+	merge := map[string]any{}
+	for k, v := range c.Merge {
+		merge[k] = v
+	}
+
+	if c.rank() > revisionRowRank(existing) {
+		if err := s.promoteRevisionClaim(existing, c, merge); err != nil {
+			return 0, false, err
+		}
+	}
+
+	if err := s.UpdateRevisionMetadata(existing.RevisionID, merge); err != nil {
+		return 0, false, fmt.Errorf("ClaimRevision: %w", err)
+	}
+	return existing.RevisionID, false, nil
+}
+
+// MergeableRevisionMetadata reads a writer's create-metadata into the keys it
+// may also add to a row somebody else created.
+//
+// Everything survives except `kind`, which names the row's primary writer:
+// merging it would rename a row this writer did not create, and the readers
+// that select on it (LatestRefreshRevision skipping kind="structural") would
+// answer about the wrong writer.
+func MergeableRevisionMetadata(metadata string) map[string]any {
+	if strings.TrimSpace(metadata) == "" {
+		return nil
+	}
+	md := map[string]any{}
+	if err := json.Unmarshal([]byte(metadata), &md); err != nil {
+		return nil
+	}
+	delete(md, "kind")
+	if len(md) == 0 {
+		return nil
+	}
+	return md
+}
+
+// promoteRevisionClaim hands a commit's row to a stronger writer: it records
+// the new trigger_kind/mode, and moves a layer marker out of metadata.layer so
+// the promoted claim becomes visible to the reader that asks for it. The layer
+// is not forgotten — layer_extra plus the import's own key is exactly how
+// LatestSurfaceRevision finds an import that rode along on somebody's row.
+func (s *Store) promoteRevisionClaim(existing *Revision, c RevisionClaim, merge map[string]any) error {
+	var md struct {
+		Layer string `json:"layer"`
+	}
+	if err := json.Unmarshal([]byte(existing.Metadata), &md); err == nil && md.Layer != "" {
+		if _, taken := merge["layer_extra"]; !taken {
+			merge["layer_extra"] = md.Layer
+		}
+		// A JSON null reads back as SQL NULL through json_extract, which is
+		// what revisionLayerExpr tests — so this really does clear the marker.
+		merge["layer"] = nil
+	}
+
+	if _, err := s.db.Exec(
+		`UPDATE graph_revisions SET trigger_kind = ?, mode = ? WHERE revision_id = ?`,
+		c.TriggerKind, c.Mode, existing.RevisionID); err != nil {
+		return fmt.Errorf("ClaimRevision: promote revision %d: %w", existing.RevisionID, err)
+	}
+	return nil
 }

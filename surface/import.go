@@ -96,10 +96,20 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 	}
 
 	// (1) Is this commit real, and is it in HEAD's history?
+	//
+	// Resolved to its full SHA before anything else uses it. `cat-file -e`
+	// accepts an abbreviation, a branch name or HEAD, and every identity below
+	// is an exact string match on what is stored: GetRevisionBySHA against
+	// UNIQUE(domain_key, git_after_sha), and the imported-hash key. An
+	// unresolved "3818b27" would miss the scan's row for the same commit and
+	// name a second revision for one point in history, and a moving ref like
+	// "main" would date the knowledge by something that is not a commit at all.
 	if o.RepoDir != "" {
-		if err := gitHasCommit(o.RepoDir, f.Commit); err != nil {
+		full, err := gitResolveCommit(o.RepoDir, f.Commit)
+		if err != nil {
 			return nil, err
 		}
+		f.Commit = full
 		ancestor, err := gitIsAncestor(o.RepoDir, f.Commit)
 		if err != nil {
 			return nil, err
@@ -157,20 +167,32 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 	// (5) Name the knowledge by the commit it describes — or, when a scan or
 	// refresh already named this commit, ride along on that one rather than
 	// inventing a second name for the same point in history.
-	revID := int64(0)
-	prior, perr := s.GetRevisionBySHA(domain, f.Commit)
-	switch {
-	case perr == nil:
-		revID = prior.RevisionID
-		res.ReusedRevision = true
-		// The row belongs to whoever created it — a scan, usually — so this
-		// MERGES what the import knows rather than replacing the metadata.
-		// Deliberately NOT layer="ui": that stamp is how LatestScanRevision
-		// recognises a layer-only revision and skips it, and stamping it on a
-		// scan's row would hide the commit the code knowledge came from.
-		// layer_extra + surface say "this commit also carries a ui import",
-		// and LatestSurfaceRevision finds it by the surface key.
-		if err := s.UpdateRevisionMetadata(revID, map[string]any{
+	meta, _ := json.Marshal(revisionMeta{
+		Layer:         "ui",
+		Source:        f.Path,
+		SchemaVersion: f.SchemaVersion,
+		ContentHash:   f.ContentHash,
+		Product:       f.Product,
+	})
+	// When the commit is already named, the row belongs to whoever created
+	// it — a scan, usually — so the import MERGES what it knows rather than
+	// replacing the metadata. Deliberately NOT layer="ui" in that case: that
+	// stamp is how LatestScanRevision recognises a layer-only revision and
+	// skips it, and stamping it on a scan's row would hide the commit the code
+	// knowledge came from. layer_extra + surface say "this commit also carries
+	// a ui import", and LatestSurfaceRevision finds it by the surface key.
+	//
+	// Layer is what keeps the claim from outranking anyone: an import speaks
+	// for one slice of the graph and must never take a commit's row over from
+	// the code writers.
+	revID, created, err := s.ClaimRevision(store.RevisionClaim{
+		DomainKey:   domain,
+		AfterSHA:    f.Commit,
+		TriggerKind: "manual",
+		Mode:        "incremental",
+		Layer:       "ui",
+		Metadata:    string(meta),
+		Merge: map[string]any{
 			"layer_extra": "ui",
 			"surface": map[string]any{
 				"source":         f.Path,
@@ -178,24 +200,12 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 				"content_hash":   f.ContentHash,
 				"product":        f.Product,
 			},
-		}); err != nil {
-			return nil, fmt.Errorf("surface: marking revision %d as carrying a ui import: %w", revID, err)
-		}
-	case errors.Is(perr, store.ErrNotFound):
-		meta, _ := json.Marshal(revisionMeta{
-			Layer:         "ui",
-			Source:        f.Path,
-			SchemaVersion: f.SchemaVersion,
-			ContentHash:   f.ContentHash,
-			Product:       f.Product,
-		})
-		revID, err = s.CreateRevision(domain, "", f.Commit, "manual", "incremental", string(meta))
-		if err != nil {
-			return nil, fmt.Errorf("surface: create revision: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("surface: looking up revision for %s: %w", f.Commit, perr)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("surface: naming revision for %s: %w", f.Commit, err)
 	}
+	res.ReusedRevision = !created
 	res.RevisionID = revID
 
 	// (6) Write. A rejection here is a bug (step 4 just validated the same
@@ -328,11 +338,22 @@ func defaultDomain(s *store.Store) (string, error) {
 	}
 }
 
-func gitHasCommit(dir, commit string) error {
-	if out, err := gitutil.Output(dir, "cat-file", "-e", commit+"^{commit}"); err != nil {
-		return fmt.Errorf("surface: commit %s is not in %s: %v %s", commit, dir, err, out)
+// gitResolveCommit checks that a commit-ish names a real commit in dir and
+// returns its full SHA.
+//
+// --end-of-options keeps a value that starts with "-" from being read as a git
+// option: the commit arrives from a surface.json another tool wrote, and the
+// caller is entitled to have it treated as data whatever it says.
+func gitResolveCommit(dir, commit string) (string, error) {
+	out, err := gitutil.Output(dir, "rev-parse", "--verify", "--end-of-options", commit+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("surface: commit %s is not in %s: %v %s", commit, dir, err, out)
 	}
-	return nil
+	full := strings.TrimSpace(out)
+	if full == "" {
+		return "", fmt.Errorf("surface: commit %s is not in %s", commit, dir)
+	}
+	return full, nil
 }
 
 // gitIsAncestor reports whether commit is reachable from HEAD. git exits 1 for

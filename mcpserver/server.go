@@ -185,11 +185,25 @@ func revisionCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
 			metadata = string(b)
 		}
 
-		id, err := g.Store().CreateRevision(domain, beforeSHA, afterSHA, trigger, mode, metadata)
+		// Claimed, not created. This is the first call of every scan, and the
+		// commit it names may already carry a row: the post-commit hook's
+		// refresh and structural phase both write one, and so does a surface
+		// import. A second INSERT for one commit is a UNIQUE(domain_key,
+		// git_after_sha) failure, which would fail the scan at step one on a
+		// repo whose hook is doing exactly what it was installed to do.
+		id, created, err := g.Store().ClaimRevision(store.RevisionClaim{
+			DomainKey:   domain,
+			BeforeSHA:   beforeSHA,
+			AfterSHA:    afterSHA,
+			TriggerKind: trigger,
+			Mode:        mode,
+			Metadata:    metadata,
+			Merge:       store.MergeableRevisionMetadata(metadata),
+		})
 		if err != nil {
 			return errorResult(err), nil
 		}
-		return jsonResult(map[string]any{"revision_id": id}), nil
+		return jsonResult(map[string]any{"revision_id": id, "created": created}), nil
 	}
 }
 

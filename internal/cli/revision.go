@@ -5,6 +5,8 @@ import (
 	"strconv"
 
 	"github.com/spf13/cobra"
+
+	"github.com/alexdx2/chronicle-core/store"
 )
 
 func newRevisionCmd() *cobra.Command {
@@ -42,7 +44,19 @@ func newRevisionCreateCmd() *cobra.Command {
 			g := openGraph()
 			defer g.Store().Close()
 
-			id, err := g.Store().CreateRevision(domain, beforeSHA, afterSHA, trigger, mode, metadata)
+			// Claimed, not created — see the chronicle_revision_create handler:
+			// the hook's refresh and structural phases, and a surface import,
+			// all legitimately name a commit before a scan reaches it, and
+			// graph_revisions is UNIQUE(domain_key, git_after_sha).
+			id, _, err := g.Store().ClaimRevision(store.RevisionClaim{
+				DomainKey:   domain,
+				BeforeSHA:   beforeSHA,
+				AfterSHA:    afterSHA,
+				TriggerKind: trigger,
+				Mode:        mode,
+				Metadata:    metadata,
+				Merge:       store.MergeableRevisionMetadata(metadata),
+			})
 			if err != nil {
 				outputError(err)
 			}

@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -37,21 +36,23 @@ type RefreshResult struct {
 //
 // A commit that already carries a revision keeps it: graph_revisions is
 // UNIQUE(domain_key, git_after_sha), and there is nothing to add to a commit
-// that was just scanned.
+// that was just scanned. The check is still recorded on that row — a scan owns
+// the trigger, but a surface import can own it too, and a refresh that left no
+// mark on somebody else's row would report a commit it did verify as stale.
 func (g *Graph) RecordRefreshNoop(domainKey, headSHA string) (int64, error) {
 	if headSHA == "" {
 		return 0, nil
 	}
-	rev, err := g.store.GetRevisionBySHA(domainKey, headSHA)
-	switch {
-	case err == nil:
-		return rev.RevisionID, nil
-	case !errors.Is(err, store.ErrNotFound):
-		return 0, fmt.Errorf("RecordRefreshNoop: %w", err)
-	}
-	id, err := g.store.CreateRevision(domainKey, "", headSHA, "git_hook", "incremental", `{"kind":"refresh","noop":true}`)
+	id, _, err := g.store.ClaimRevision(store.RevisionClaim{
+		DomainKey:   domainKey,
+		AfterSHA:    headSHA,
+		TriggerKind: "git_hook",
+		Mode:        "incremental",
+		Metadata:    `{"kind":"refresh","noop":true}`,
+		Merge:       map[string]any{"refresh": map[string]any{"noop": true}},
+	})
 	if err != nil {
-		return 0, fmt.Errorf("RecordRefreshNoop: create revision: %w", err)
+		return 0, fmt.Errorf("RecordRefreshNoop: %w", err)
 	}
 	return id, nil
 }
@@ -79,9 +80,21 @@ func (g *Graph) RefreshFromDiff(domainKey, headSHA string, changedFiles, deleted
 
 	// trigger_kind and mode are fixed enums; refresh is the git-hook-driven
 	// incremental path, distinguished by a metadata marker.
-	revID, err := g.store.CreateRevision(domainKey, "", headSHA, "git_hook", "incremental", `{"kind":"refresh"}`)
+	//
+	// Claimed, not created: the commit may already be named by a scan or by a
+	// surface import that reached it first, and inserting a second row for one
+	// commit is a UNIQUE(domain_key, git_after_sha) failure — phase 1 dying on
+	// a constraint error rather than re-anchoring anything.
+	revID, _, err := g.store.ClaimRevision(store.RevisionClaim{
+		DomainKey:   domainKey,
+		AfterSHA:    headSHA,
+		TriggerKind: "git_hook",
+		Mode:        "incremental",
+		Metadata:    `{"kind":"refresh"}`,
+		Merge:       map[string]any{"refresh": map[string]any{"noop": false}},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("RefreshFromDiff: create revision: %w", err)
+		return nil, fmt.Errorf("RefreshFromDiff: claim revision: %w", err)
 	}
 	res.RevisionID = revID
 
