@@ -30,18 +30,22 @@ const ImporterVersion = 2
 
 // ImportResult is what one import did (or refused to do).
 type ImportResult struct {
-	RevisionID      int64        `json:"revision_id"`
-	AlreadyImported bool         `json:"already_imported"`
-	ReusedRevision  bool         `json:"reused_revision,omitempty"`
-	Product         string       `json:"product"`
-	Commit          string       `json:"commit"`
-	ContentHash     string       `json:"content_hash"`
-	Nodes           int          `json:"nodes"`
-	Edges           int          `json:"edges"`
-	Evidence        int          `json:"evidence"`
-	Deleted         []string     `json:"deleted"`              // ui node keys of this product absent from the file
-	Unresolved      []Unresolved `json:"unresolved,omitempty"` // names the graph could not confirm
-	Diverged        bool         `json:"diverged"`
+	RevisionID      int64 `json:"revision_id"`
+	AlreadyImported bool  `json:"already_imported"`
+	// Healed marks a run that had every reason to skip — same extract, same
+	// commit, already recorded as imported — and went ahead because the layer
+	// those bytes describe was no longer standing in the graph.
+	Healed         bool         `json:"healed,omitempty"`
+	ReusedRevision bool         `json:"reused_revision,omitempty"`
+	Product        string       `json:"product"`
+	Commit         string       `json:"commit"`
+	ContentHash    string       `json:"content_hash"`
+	Nodes          int          `json:"nodes"`
+	Edges          int          `json:"edges"`
+	Evidence       int          `json:"evidence"`
+	Deleted        []string     `json:"deleted"`              // ui node keys of this product absent from the file
+	Unresolved     []Unresolved `json:"unresolved,omitempty"` // names the graph could not confirm
+	Diverged       bool         `json:"diverged"`
 }
 
 // ErrAlreadyImported names the condition Import reports through
@@ -132,14 +136,30 @@ func Import(g *graph.Graph, f *File, o ImportOptions) (*ImportResult, error) {
 	hashKey := importedHashKey(domain, f.Product, f.Commit)
 	if prev, err := s.GetSetting(hashKey); err == nil && prev != "" && !o.Force {
 		if prev == f.ContentHash {
-			res.AlreadyImported = true
-			if rev, rerr := s.GetRevisionBySHA(domain, f.Commit); rerr == nil {
-				res.RevisionID = rev.RevisionID
+			// "Already imported" has to mean the graph MATCHES this extract,
+			// not merely that these bytes were seen once. The record and the
+			// graph can disagree: anything that retires ui nodes outside an
+			// import — a sweep that did not spare them, a manual delete,
+			// a partly-applied run — leaves the record saying done over a
+			// layer that is gone, and a re-import was the obvious repair that
+			// did nothing. Skipping is only safe while there is nothing to
+			// repair, so it is conditioned on the layer actually standing.
+			standing, herr := productLayerIsStanding(s, domain, f.Product)
+			if herr != nil {
+				return nil, herr
 			}
-			return res, nil
+			if standing {
+				res.AlreadyImported = true
+				if rev, rerr := s.GetRevisionBySHA(domain, f.Commit); rerr == nil {
+					res.RevisionID = rev.RevisionID
+				}
+				return res, nil
+			}
+			res.Healed = true
+		} else {
+			return nil, fmt.Errorf("surface: commit %s (imported content %s, this file is %s): %w",
+				f.Commit, short(prev), short(f.ContentHash), ErrCommitChanged)
 		}
-		return nil, fmt.Errorf("surface: commit %s (imported content %s, this file is %s): %w",
-			f.Commit, short(prev), short(f.ContentHash), ErrCommitChanged)
 	}
 
 	// (3) Resolve every name the extract uses. Nothing is written if one fails
@@ -367,4 +387,42 @@ func gitIsAncestor(dir, commit string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("surface: git merge-base in %s: %w", dir, err)
+}
+
+// productLayerIsStanding reports whether this product's ui layer is actually in
+// the graph: at least one node, and none of them retired.
+//
+// It is the question "already imported" really means. The imported-hash record
+// says what bytes were applied; only the graph says whether they are still
+// there, and the two part company whenever something outside an import retires
+// ui nodes. A product with no nodes at all counts as not standing, so the first
+// import after a record was written without one repairs itself too.
+func productLayerIsStanding(s *store.Store, domain, product string) (bool, error) {
+	var active, retired int
+	for _, status := range []string{"active", "stale", "deleted"} {
+		rows, err := s.ListNodes(store.NodeFilter{Layer: "ui", Domain: domain, Status: status})
+		if err != nil {
+			return false, fmt.Errorf("surface: reading this product's ui layer: %w", err)
+		}
+		for _, row := range rows {
+			var md map[string]any
+			if err := json.Unmarshal([]byte(row.Metadata), &md); err != nil || md == nil {
+				continue
+			}
+			if p, _ := md["product"].(string); p != product {
+				continue
+			}
+			// A node the previous import deliberately tombstoned is not damage:
+			// closeWorld dates those, and the extract no longer names them.
+			if _, tombstoned := md["removed_in_revision"]; tombstoned {
+				continue
+			}
+			if status == "active" {
+				active++
+			} else {
+				retired++
+			}
+		}
+	}
+	return active > 0 && retired == 0, nil
 }

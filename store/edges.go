@@ -617,6 +617,8 @@ func (s *Store) GetEdgesBetweenNodes(nodeIDs []int64) ([]EdgeRow, error) {
 // revision — touching the closed row would emit a bogus stale event for an
 // edge that is still alive.
 func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error) {
+	keepImported, importedArgs := stillAssertedByAnImporter("graph_edges", "edge_id")
+	args := append([]any{revisionID, domainKey}, importedArgs...)
 	rows, err := s.db.Query(`
 		SELECT edge_id, edge_key FROM graph_edges
 		WHERE active=1
@@ -624,8 +626,8 @@ func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error
 		  AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
 		  AND from_node_id IN (
 		    SELECT node_id FROM graph_nodes WHERE domain_key=?
-		  )
-		ORDER BY edge_key`, revisionID, domainKey)
+		  )`+keepImported+`
+		ORDER BY edge_key`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("MarkStaleEdges select: %w", err)
 	}

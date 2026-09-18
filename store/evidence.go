@@ -574,6 +574,41 @@ func notOwnedByAnotherWriter(prefix string) (string, []any) {
 		append(kindArgs, idArgs...)
 }
 
+// stillAssertedByAnImporter is the rule for the OTHER direction: not "may this
+// writer touch that row" but "is this entity still asserted by somebody the
+// scan is not allowed to speak for".
+//
+// A full scan finishes with chronicle_stale_mark, which retires everything not
+// seen in the scan's revision. That proxy is exactly right for what a scan
+// observes and exactly wrong for an imported layer: a surface import advances
+// its own revision and no scan ever re-asserts a ui node, so every ui node has
+// last_seen < the next scan's revision and the sweep retires the whole layer —
+// nodes, edges and the surface_extract/declared rows under them. Re-importing
+// the same extract is then a no-op against the imported-hash gate, so the layer
+// cannot come back without --force.
+//
+// The exemption is by live evidence, not by layer name: an entity that still
+// carries a valid importer-owned observation has not stopped being asserted,
+// whatever the scan's revision numbering says about it.
+// outerTable must be named, not left implicit: graph_evidence has node_id and
+// edge_id columns of its own, so an unqualified reference inside the subquery
+// binds to the INNER row and the predicate silently degenerates to
+// `ie.node_id = ie.node_id` — true for every row, exempting nothing.
+func stillAssertedByAnImporter(outerTable, ownerCol string) (string, []any) {
+	marks := make([]string, len(ImporterOwnedSourceKinds))
+	args := make([]any, len(ImporterOwnedSourceKinds))
+	for i, v := range ImporterOwnedSourceKinds {
+		marks[i] = "?"
+		args[i] = v
+	}
+	return ` AND NOT EXISTS (
+		    SELECT 1 FROM graph_evidence ie
+		    WHERE ie.` + ownerCol + ` = ` + outerTable + `.` + ownerCol + `
+		      AND ie.evidence_status IN ('valid','revalidated')
+		      AND ie.source_kind IN (` + strings.Join(marks, ",") + `)
+		  )`, args
+}
+
 // MarkEvidenceStaleByFiles marks all valid/revalidated evidence from the given file paths as stale.
 // Returns the count and the affected edge/node IDs.
 func (s *Store) MarkEvidenceStaleByFiles(filePaths []string) (staleCount int64, affectedEdgeIDs, affectedNodeIDs []int64, err error) {

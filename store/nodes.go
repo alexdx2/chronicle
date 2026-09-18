@@ -562,11 +562,13 @@ func (s *Store) UpdateNodeTrust(nodeID int64, confidence, freshness, trustScore 
 // has last_seen = this revision — marking the closed row would emit a bogus
 // stale event for a node that is still very much alive.
 func (s *Store) MarkStaleNodes(domainKey string, revisionID int64) (int64, error) {
+	keepImported, importedArgs := stillAssertedByAnImporter("graph_nodes", "node_id")
+	args := append([]any{domainKey, revisionID}, importedArgs...)
 	rows, err := s.db.Query(`
 		SELECT node_id, node_key FROM graph_nodes
 		WHERE domain_key=? AND status='active' AND last_seen_revision_id < ?
-		  AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
-		ORDER BY node_key`, domainKey, revisionID)
+		  AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)`+keepImported+`
+		ORDER BY node_key`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("MarkStaleNodes select: %w", err)
 	}
