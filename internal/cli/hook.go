@@ -11,7 +11,9 @@ import (
 
 	"github.com/alexdx2/chronicle-core/freshness"
 	"github.com/alexdx2/chronicle-core/gitutil"
+	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/internal/wiring"
+	"github.com/alexdx2/chronicle-core/registry"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
 )
@@ -260,6 +262,16 @@ func hookAdvisoryFor(dbPath, repoDir string) string {
 		return "" // ghost DB: no scan has ever happened here
 	}
 
+	// This open consumes the journal sync like any other, and the sync is
+	// consumed exactly once. Running on every tool call, the hook is very often
+	// the first process to open the store after a `git pull` merged events —
+	// and skipping the recompute here does not defer it to the next opener, it
+	// destroys it: that opener sees JournalSyncApplied() == 0 and correctly
+	// does nothing, leaving replay's placeholder trust on the merged nodes and
+	// edges for good. The cost is paid only on an open that actually applied
+	// events, which is rare; a wrong trust score is not.
+	recalculateTrustAfterSync(s)
+
 	rep, err := freshness.Compute(repoDir, repoLabel(repoDir), "", s)
 	if err != nil || rep.Message == "" {
 		return ""
@@ -331,4 +343,21 @@ func installGitPostCommit() error {
 		return err
 	}
 	return os.WriteFile(hookPath, []byte(script), 0755)
+}
+
+// recalculateTrustAfterSync pays the debt this process took on by being the one
+// whose store.Open applied merged journal events. Best-effort and silent: the
+// hook's job is an advisory line, and it must not fail a tool call over this.
+//
+// Defaults are enough for a registry here — trust is computed from evidence,
+// and nothing in that computation reads a project's type definitions.
+func recalculateTrustAfterSync(s *store.Store) {
+	if s.JournalSyncApplied() <= 0 {
+		return
+	}
+	reg, err := registry.LoadDefaults()
+	if err != nil {
+		return
+	}
+	_ = graph.New(s, reg).RecalculateTrustAfterJournalSync()
 }

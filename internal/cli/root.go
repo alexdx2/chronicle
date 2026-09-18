@@ -239,10 +239,8 @@ func openGraph() *graph.Graph {
 
 	// Sync-on-open replays merged journal events with placeholder trust —
 	// recompute derived trust/confidence so statuses match a verified rebuild.
-	if s.JournalSyncApplied() > 0 {
-		if err := g.RecalculateAllTrust(); err != nil {
-			fmt.Fprintf(os.Stderr, "chronicle: trust recalculation after journal sync failed: %v\n", err)
-		}
+	if err := g.RecalculateTrustAfterJournalSync(); err != nil {
+		fmt.Fprintf(os.Stderr, "chronicle: trust recalculation after journal sync failed: %v\n", err)
 	}
 	return g
 }

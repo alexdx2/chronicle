@@ -363,6 +363,29 @@ func (g *Graph) RecalculateEdgeTrust(edgeID int64) error {
 	return g.store.UpdateEdgeTrust(edgeID, confidence, freshness, trustScore, status)
 }
 
+// RecalculateTrustAfterJournalSync recomputes derived trust when THIS process's
+// store.Open was the one that applied merged journal events, and does nothing
+// otherwise. Every opener must call it.
+//
+// Trust is derived from evidence and never journaled, so replay writes
+// placeholders and leaves the real values to be recomputed. The sync is also
+// consumed exactly once: whichever process opens the store first after a
+// `git pull` marks the events applied, and every opener after it sees
+// JournalSyncApplied() == 0 and correctly skips the work. That makes "the
+// opener that applied the events owes the recompute" an invariant rather than
+// a convention — an opener that skips it does not merely defer the cost, it
+// destroys it, and the merged nodes and edges keep replay's placeholder 1.0
+// for good while every answer reports them as fully trusted.
+//
+// It is a method on Graph rather than a step inside store.Open because trust
+// is the graph's model, not the store's.
+func (g *Graph) RecalculateTrustAfterJournalSync() error {
+	if g.store.JournalSyncApplied() <= 0 {
+		return nil
+	}
+	return g.RecalculateAllTrust()
+}
+
 // RecalculateAllTrust recomputes trust for every current node and edge.
 // Used after journal replay — trust is derived, never journaled.
 func (g *Graph) RecalculateAllTrust() error {
