@@ -910,3 +910,75 @@ export class AController {
 	// back. That is the same gap one level up and wants its own change; this
 	// test would pass for the wrong reason if it claimed otherwise.
 }
+
+// A model IS its name, and the structural extractor says so in a `name` field —
+// the natural shape for a declaration. Fact has no name field, so until the
+// resolver learned to read it every prisma model and enum in a repo resolved to
+// ONE nameless node: `data:model:<domain>:` with an empty qualified name,
+// collecting every model's evidence. `data:enum:<domain>:` likewise.
+func TestRefreshNamesPrismaModelsAndEnums(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/schema.prisma", `model Order {
+  id     String      @id @default(cuid())
+  status OrderStatus @default(OPEN)
+  total  Int
+}
+
+enum OrderStatus {
+  OPEN
+  PAID
+  VOID
+}
+`, "a prisma schema")
+	runRefreshIn(t, dir, "--quiet")
+
+	for _, key := range []string{"data:model:d:order", "data:enum:d:order-status"} {
+		if got := nodeStatus(t, dir, key); got != "active" {
+			t.Errorf("%s is %q, want active", key, got)
+		}
+	}
+	// The nameless collector must not exist in either shape.
+	for _, key := range []string{"data:model:d:", "data:enum:d:"} {
+		if got := nodeStatus(t, dir, key); got != "" {
+			t.Errorf("a nameless node %q exists with status %q", key, got)
+		}
+	}
+}
+
+// A decorator whose argument is an imported constant — @Processor(MAIL_QUEUE)
+// rather than @Processor('mail') — yields a fact with no target. Carrying on
+// named the topic `contract:topic:<domain>:`, which is not a topic: it is one
+// nameless node every such decorator in the repo collapses into, wired by hard
+// 0.95 edges, so one unresolved constant made every producer look like it
+// publishes to the same place.
+func TestRefreshRefusesANamelessTopic(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/mail.processor.ts", `import { Processor } from '@nestjs/bull';
+import { MAIL_QUEUE } from './queues';
+
+@Processor(MAIL_QUEUE)
+export class MailProcessor {
+  handle() { return 1; }
+}
+`, "a processor keyed by an imported constant")
+	runRefreshIn(t, dir, "--quiet")
+
+	for _, key := range []string{"contract:topic:d:", "contract:topic:d"} {
+		if got := nodeStatus(t, dir, key); got != "" {
+			t.Errorf("a nameless topic %q exists with status %q", key, got)
+		}
+	}
+	// Nothing may point at it either: an edge to a node that was refused is a
+	// dangling hard claim.
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	edges, err := s.ListEdges(store.EdgeFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		if strings.HasSuffix(e.ToNodeKey, "contract:topic:d:") || e.ToNodeID == 0 {
+			t.Errorf("edge %q points at a refused node (to_id=%d)", e.EdgeKey, e.ToNodeID)
+		}
+	}
+}

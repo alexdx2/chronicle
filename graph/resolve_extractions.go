@@ -1751,6 +1751,18 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if strings.ToLower(fact.Transport) == "local" {
 			return counts, nil, nil
 		}
+		// A decorator whose argument is an imported constant — @Processor(MAIL_QUEUE)
+		// rather than @Processor('mail') — yields a fact with no target. Carrying
+		// on would name the topic `contract:topic:<domain>:`, which is not a
+		// topic: it is one nameless node that every such decorator in the repo
+		// collapses into, wired by hard 0.95 edges. One unresolved constant would
+		// make every producer look like it publishes to the same place.
+		//
+		// In deterministic mode the file is queued as unresolved instead, which
+		// is the honest answer and the one a reader can act on.
+		if strings.TrimSpace(fact.To) == "" {
+			return counts, g.detNoteUnresolved(filePath, "produces", "", nil), nil
+		}
 		// WebSocket pushes (SignalR Clients.*.SendAsync, socket.io emit) are
 		// client fan-out, not broker topics — no topic node.
 		if strings.ToLower(fact.Transport) == "websocket" || strings.EqualFold(fact.Method, "SendAsync") {
@@ -1791,6 +1803,18 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// transport=local means in-process EventEmitter calls — no broker node, no graph edge.
 		if strings.ToLower(fact.Transport) == "local" {
 			return counts, nil, nil
+		}
+		// A decorator whose argument is an imported constant — @Processor(MAIL_QUEUE)
+		// rather than @Processor('mail') — yields a fact with no target. Carrying
+		// on would name the topic `contract:topic:<domain>:`, which is not a
+		// topic: it is one nameless node that every such decorator in the repo
+		// collapses into, wired by hard 0.95 edges. One unresolved constant would
+		// make every producer look like it publishes to the same place.
+		//
+		// In deterministic mode the file is queued as unresolved instead, which
+		// is the honest answer and the one a reader can act on.
+		if strings.TrimSpace(fact.To) == "" {
+			return counts, g.detNoteUnresolved(filePath, "consumes", "", nil), nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -2435,6 +2459,23 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 	// already build canonical keys via canonicalNodeKey; this is the guard
 	// that keeps a future caller from writing a second spelling.
 	nodeKey = canonicalNodeKey(nodeKey)
+
+	// A key with nothing after the last colon names no entity. It reaches here
+	// when a fact's target was empty and the caller built the key anyway —
+	// `data:model:<domain>:` from a prisma fact whose name never arrived, or
+	// `contract:topic:<domain>:` from a decorator whose argument was an
+	// imported constant. canonicalNodeKey cannot save it: NormalizeNodeKey
+	// rejects it and the malformed key is returned unchanged.
+	//
+	// The node that follows is worse than nothing. It is nameless, it is a
+	// single node every such fact in the domain collapses into, and it collects
+	// hard edges — so one unresolved decorator makes every producer in the repo
+	// look like it publishes to the same topic. Refusing leaves the fact
+	// unresolved, which is a state the graph already knows how to report.
+	if qualifiedNameOf(nodeKey) == "" {
+		return 0
+	}
+
 	id, err := g.store.GetNodeIDByKey(nodeKey)
 	if err == nil {
 		// Patch FilePath if the existing node has none and we have one
@@ -3087,6 +3128,20 @@ func normalizeFacts(raw string) string {
 						delete(fact, alias)
 						break
 					}
+				}
+			}
+		}
+
+		// A model or an enum IS its name, so that is where the target lives.
+		// The structural extractor emits {"kind":"model","name":"User"}, which
+		// is the natural shape for a declaration — and Fact has no name field,
+		// so without this the target was empty and every prisma model in the
+		// repo resolved to one nameless node.
+		if kind == "model" || kind == "enum" {
+			if _, ok := fact["to"]; !ok {
+				if v, ok := fact["name"].(string); ok && strings.TrimSpace(v) != "" {
+					fact["to"] = v
+					delete(fact, "name")
 				}
 			}
 		}
@@ -4631,4 +4686,18 @@ func (g *Graph) findServiceByFlatName(domainKey, name string) *store.NodeRow {
 		}
 	}
 	return nil
+}
+
+// qualifiedNameOf returns everything after the third colon of a node key —
+// the entity's own name inside layer:type:domain:qualified_name.
+//
+// A qualified name may itself contain colons (an endpoint is
+// contract:endpoint:d:get:/a/items), so this splits off the three fixed
+// segments rather than taking the last field.
+func qualifiedNameOf(nodeKey string) string {
+	parts := strings.SplitN(nodeKey, ":", 4)
+	if len(parts) < 4 {
+		return ""
+	}
+	return strings.TrimSpace(parts[3])
 }
