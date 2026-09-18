@@ -30,8 +30,15 @@ type ChangedFile struct {
 // the first space in a path. A consumer that replaces per-file knowledge reads
 // a missing file as "nothing changed here", which is the worst possible
 // failure — it is indistinguishable from the truth.
+//
+// --end-of-options for the same reason, one level up: base and head are data,
+// not flags. They reach here from a review_report tool argument an agent chose,
+// so without it a base of "--output=<path>" is read by git as an option — it
+// truncates that file, writes an empty diff, and exits 0, which this function
+// then reports as "no files changed". Verified: the file goes to zero bytes
+// with exit 0 unflagged, and git refuses with exit 128 flagged.
 func ChangedFiles(repoRoot, base, head string) ([]ChangedFile, error) {
-	args := []string{"diff", "--name-status", "-M", "-z"}
+	args := []string{"diff", "--name-status", "-M", "-z", "--end-of-options"}
 	if head == "" {
 		args = append(args, base)
 	} else {
@@ -91,7 +98,7 @@ func splitNUL(out string) []string {
 
 // Show returns the content of path at ref (git show ref:path).
 func Show(repoRoot, ref, path string) ([]byte, error) {
-	out, err := gitBytes(repoRoot, "show", ref+":"+path)
+	out, err := gitBytes(repoRoot, "show", "--end-of-options", ref+":"+path)
 	if err != nil {
 		return nil, fmt.Errorf("git show %s:%s: %w", ref, path, err)
 	}
@@ -100,7 +107,7 @@ func Show(repoRoot, ref, path string) ([]byte, error) {
 
 // MergeBase returns the merge base of ref and HEAD.
 func MergeBase(repoRoot, ref string) (string, error) {
-	out, err := git(repoRoot, "merge-base", ref, "HEAD")
+	out, err := git(repoRoot, "merge-base", "--end-of-options", ref, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("git merge-base %s HEAD: %w", ref, err)
 	}

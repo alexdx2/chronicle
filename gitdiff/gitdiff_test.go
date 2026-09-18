@@ -180,3 +180,54 @@ func TestChangedFilesRenameCarriesBothPaths(t *testing.T) {
 		t.Errorf("old path = %q, want %q", ren.OldPath, before)
 	}
 }
+
+// A base or head that begins with "-" is data, not a flag. Unflagged, git reads
+// `--output=<path>` as an option: it truncates that file, writes an empty diff
+// and exits 0, so the caller is told "nothing changed" while a file on disk has
+// been destroyed. base and head arrive from a review_report tool argument an
+// agent chose, so this is reachable without touching the repo.
+func TestChangedFilesRefusesAnOptionShapedRef(t *testing.T) {
+	dir := initRepo(t)
+	canary := filepath.Join(dir, "canary.txt")
+	if err := os.WriteFile(canary, []byte("intact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, base, head string }{
+		{"base only", "--output=" + canary, ""},
+		{"base with head", "--output=" + canary, "HEAD"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := ChangedFiles(dir, tc.base, tc.head)
+			if err == nil {
+				t.Fatalf("an option-shaped ref was accepted, returning %d files", len(files))
+			}
+			got, rerr := os.ReadFile(canary)
+			if rerr != nil {
+				t.Fatalf("canary unreadable after the call: %v", rerr)
+			}
+			if string(got) != "intact\n" {
+				t.Fatalf("canary = %q, want it untouched", got)
+			}
+		})
+	}
+}
+
+func TestShowAndMergeBaseRefuseAnOptionShapedRef(t *testing.T) {
+	dir := initRepo(t)
+	canary := filepath.Join(dir, "canary.txt")
+	if err := os.WriteFile(canary, []byte("intact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Show(dir, "--output="+canary, "a.txt"); err == nil {
+		t.Fatal("Show accepted an option-shaped ref")
+	}
+	if _, err := MergeBase(dir, "--output="+canary); err == nil {
+		t.Fatal("MergeBase accepted an option-shaped ref")
+	}
+	got, err := os.ReadFile(canary)
+	if err != nil || string(got) != "intact\n" {
+		t.Fatalf("canary = %q (err %v), want it untouched", got, err)
+	}
+}

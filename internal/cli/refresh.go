@@ -151,11 +151,7 @@ func runRefresh(quiet, noStructural bool, structuralBatch int) {
 // sentence the no-op case prints instead of JSON, and a non-empty one means the
 // verification phase has nothing JSON-worthy to report.
 func verifyPhase(g *graph.Graph, domainKey, base, head string) (*graph.RefreshResult, string, string, error) {
-	touchedAll, err := gitDiffFiles(base, "d") // added/copied/modified/renamed/type-changed
-	if err != nil {
-		return nil, "", "", err
-	}
-	deletedAll, err := gitDiffFiles(base, "D") // deleted only
+	touchedAll, deletedAll, err := refreshDiffFiles(base, head)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -489,19 +485,40 @@ func latestRevisionAnyDomain(g *graph.Graph) *store.Revision {
 	return rev
 }
 
-// gitDiffFiles returns files matching a diff-filter between base..HEAD.
-func gitDiffFiles(base, filter string) ([]string, error) {
-	out, err := gitOutput("diff", "--name-only", "--diff-filter="+filter, base+"..HEAD")
-	if err != nil {
-		return nil, fmt.Errorf("git diff failed (base %s): %w", base, err)
+// refreshDiffFiles lists what changed and what was deleted between base and
+// head, through the same reader phase 2 uses.
+//
+// Phase 1 used to run its own `git diff --name-only` and split on newlines,
+// which lost two kinds of file. A path with a non-ASCII byte came back
+// C-quoted — `"src/caf\303\251.ts"`, quotation marks included — so it matched
+// no extension, matched no evidence row, and left phase 1 concluding that
+// nothing it knows about changed: the graph then stamped verified@HEAD over a
+// file whose evidence it never looked at. And a rename reported only the new
+// path, so the old one kept asserting facts about a file that no longer exists.
+//
+// gitdiff.ChangedFiles reads NUL-separated records with core.quotePath off, so
+// neither can happen, and both phases now see one diff.
+func refreshDiffFiles(base, head string) (touched, deleted []string, err error) {
+	files, derr := gitdiff.ChangedFiles(repoDirForGit(), base, head)
+	if derr != nil {
+		return nil, nil, fmt.Errorf("git diff failed (base %s): %w", base, derr)
 	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			files = append(files, line)
+	for _, f := range files {
+		switch f.Status {
+		case "D":
+			deleted = append(deleted, f.Path)
+		case "R":
+			// A rename is both: the new path changed, and the old one stops
+			// asserting anything at all.
+			touched = append(touched, f.Path)
+			if f.OldPath != "" {
+				deleted = append(deleted, f.OldPath)
+			}
+		default:
+			touched = append(touched, f.Path)
 		}
 	}
-	return files, nil
+	return touched, deleted, nil
 }
 
 func gitOutput(args ...string) (string, error) {
