@@ -191,9 +191,16 @@ func (s *Store) applyJournalEvent(ev flushedEvent) error {
 			return fmt.Errorf("node_rekey %s: %w", ev.Key, err)
 		}
 		newKey := str("new_key")
+		// Same rewrite as Store.RekeyNode, layer and node_type included: they
+		// are part of the key, and a replay that left them behind would make
+		// the rebuilt db disagree with the live one about a node's type —
+		// exactly what `journal verify` exists to catch.
+		layer, nodeType := layerAndTypeOf(newKey)
 		if _, err := s.db.Exec(
-			`UPDATE graph_nodes SET node_key = ?, file_path = ? WHERE node_id = ?`,
-			newKey, nullableStr(str("file_path")), nodeID); err != nil {
+			`UPDATE graph_nodes SET node_key = ?, file_path = ?,
+			        layer = COALESCE(NULLIF(?,''), layer), node_type = COALESCE(NULLIF(?,''), node_type)
+			 WHERE node_id = ?`,
+			newKey, nullableStr(str("file_path")), layer, nodeType, nodeID); err != nil {
 			return fmt.Errorf("node_rekey %s: %w", ev.Key, err)
 		}
 		return s.rekeyNodeEdges(nodeID, newKey)

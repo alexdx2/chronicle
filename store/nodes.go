@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // NodeRow represents a row in graph_nodes.
@@ -459,9 +460,18 @@ func (s *Store) DeleteNode(key string) error {
 // event keyed by the OLD key carries the whole rewrite — replay re-applies the
 // same UPDATEs after resolving the node by its old key.
 func (s *Store) RekeyNode(nodeID int64, oldKey, newKey, filePath string, revisionID int64) error {
+	// layer and node_type come WITH the key, because they are part of it:
+	// a node keyed code:controller:d:src/x whose node_type still says provider
+	// contradicts itself, and every reader that filters by type — impact,
+	// search, the C4 views — answers about the type rather than the key.
+	// Rekeying a node and leaving its type behind is how one node came to be
+	// two different things depending on which column you asked.
+	layer, nodeType := layerAndTypeOf(newKey)
 	if _, err := s.db.Exec(
-		`UPDATE graph_nodes SET node_key = ?, file_path = ?, last_seen_revision_id = ? WHERE node_id = ?`,
-		newKey, nullableStr(filePath), revisionID, nodeID); err != nil {
+		`UPDATE graph_nodes SET node_key = ?, file_path = ?, last_seen_revision_id = ?,
+		        layer = COALESCE(NULLIF(?,''), layer), node_type = COALESCE(NULLIF(?,''), node_type)
+		 WHERE node_id = ?`,
+		newKey, nullableStr(filePath), revisionID, layer, nodeType, nodeID); err != nil {
 		return fmt.Errorf("RekeyNode node update: %w", err)
 	}
 	if err := s.rekeyNodeEdges(nodeID, newKey); err != nil {
@@ -643,4 +653,15 @@ func (s *Store) CountNodesByStatus(domainKey, status string) (int, error) {
 		return 0, fmt.Errorf("CountNodesByStatus: %w", err)
 	}
 	return n, nil
+}
+
+// layerAndTypeOf reads the two fixed segments a node key opens with:
+// layer:type:domain:qualified_name. Empty strings for a key that does not have
+// them, so a caller leaves the stored values alone rather than blanking them.
+func layerAndTypeOf(nodeKey string) (layer, nodeType string) {
+	parts := strings.SplitN(nodeKey, ":", 4)
+	if len(parts) < 4 {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }

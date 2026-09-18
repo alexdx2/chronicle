@@ -903,12 +903,13 @@ export class AController {
 	if got := nodeStatus(t, dir, "contract:endpoint:d:get:/a/items"); got != "active" {
 		t.Errorf("the route the file still declares was retired too: %q", got)
 	}
-	// NOT asserted here: the controller node itself is retired by this
-	// re-extraction, and was before this change too — creation evidence for a
-	// node that HAS a file of its own is still written once, on the run that
-	// minted it, so a later re-extraction of the same file does not hand it
-	// back. That is the same gap one level up and wants its own change; this
-	// test would pass for the wrong reason if it claimed otherwise.
+	// And the file itself survives its own edit. Creation evidence for a node
+	// that HAS a file used to be written once, on the run that minted it, so
+	// re-extracting a CHANGED file did not hand it back and the replacement
+	// contract retired a controller that was still right there in the source.
+	if got := nodeStatus(t, dir, "code:controller:d:src/a-controller"); got != "active" {
+		t.Errorf("the edited controller is %q, want active — its file still declares it", got)
+	}
 }
 
 // A model IS its name, and the structural extractor says so in a `name` field —
@@ -979,6 +980,123 @@ export class MailProcessor {
 	for _, e := range edges {
 		if strings.HasSuffix(e.ToNodeKey, "contract:topic:d:") || e.ToNodeID == 0 {
 			t.Errorf("edge %q points at a refused node (to_id=%d)", e.EdgeKey, e.ToNodeID)
+		}
+	}
+}
+
+// The file index decides what a class name means. A role-scoped writer keeps a
+// STANDING row per file, so scoping the index to one revision showed it only
+// the files THIS run looked at — and an import of a file structured in an
+// earlier commit fell through to class-name inference and minted a second,
+// mistyped node for a path that already had one.
+func TestRefreshImportAcrossCommitsDoesNotMintATwin(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/app.module.ts", `import { Module } from '@nestjs/common';
+import { AService } from './a.service';
+
+@Module({ providers: [AService] })
+export class AppModule {}
+`, "a module")
+	runRefreshIn(t, dir, "--quiet")
+	if got := nodeStatus(t, dir, "code:module:d:src/app-module"); got != "active" {
+		t.Fatalf("fixture: the module is %q, want active", got)
+	}
+
+	// A LATER commit imports it. The module's own row is not in this run's
+	// revision; only a standing lookup finds it.
+	writeCommit(t, dir, "src/boot.ts", `import { AppModule } from './app.module';
+
+export function boot() { return AppModule; }
+`, "something imports the module")
+	runRefreshIn(t, dir, "--quiet")
+
+	if got := nodeStatus(t, dir, "code:provider:d:src/app-module"); got != "" {
+		t.Errorf("a mistyped twin code:provider:d:src/app-module exists (%q) beside the module", got)
+	}
+	if got := nodeStatus(t, dir, "code:module:d:src/app-module"); got != "active" {
+		t.Errorf("the real module node is %q, want active", got)
+	}
+
+	// One path, one node.
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	nodes, err := s.ListNodes(store.NodeFilter{Domain: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, n := range nodes {
+		if n.FilePath == "" || n.Layer != "code" || n.Status != "active" {
+			continue
+		}
+		if prev, dup := seen[n.FilePath]; dup {
+			t.Errorf("two active code nodes for %s: %s and %s", n.FilePath, prev, n.NodeKey)
+		}
+		seen[n.FilePath] = n.NodeKey
+	}
+}
+
+// A code node's key embeds the type the file turned out to be, so a file that
+// gains a @Controller where it had @Injectable asks for a new key for a path
+// that is already spoken for. Minting one left TWO active nodes for one file:
+// inbound edges kept pointing at the old type while the new facts landed on the
+// new one, and impact answered about whichever half the caller reached.
+func TestRefreshMovesANodeWhenItsFileChangesType(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/x.service.ts", `import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class XService {
+  list() { return []; }
+}
+`, "a service")
+	writeCommit(t, dir, "src/y.controller.ts", `import { XService } from './x.service';
+
+@Controller('y')
+export class YController {
+  constructor(private readonly x: XService) {}
+
+  @Get('items')
+  list() { return this.x.list(); }
+}
+`, "something injects it")
+	runRefreshIn(t, dir, "--quiet")
+	if got := nodeStatus(t, dir, "code:provider:d:src/x-service"); got != "active" {
+		t.Fatalf("fixture: the service is %q, want active", got)
+	}
+
+	// The same file becomes a controller.
+	writeCommit(t, dir, "src/x.service.ts", `@Controller('x')
+export class XService {
+  @Get('items')
+  list() { return []; }
+}
+`, "the service becomes a controller")
+	runRefreshIn(t, dir, "--quiet")
+
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	nodes, err := s.ListNodes(store.NodeFilter{Domain: "d", Layer: "code", Status: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forFile []string
+	for _, n := range nodes {
+		if n.FilePath == "src/x.service.ts" {
+			forFile = append(forFile, n.NodeKey+" ("+n.NodeType+")")
+		}
+	}
+	if len(forFile) != 1 {
+		t.Errorf("one file, %d active code nodes: %v", len(forFile), forFile)
+	}
+	// The row must not contradict its own key.
+	for _, n := range nodes {
+		if n.FilePath != "src/x.service.ts" {
+			continue
+		}
+		parts := strings.SplitN(n.NodeKey, ":", 4)
+		if len(parts) == 4 && parts[1] != n.NodeType {
+			t.Errorf("node %s says node_type=%q", n.NodeKey, n.NodeType)
 		}
 	}
 }

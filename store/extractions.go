@@ -122,12 +122,20 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 			return existingID, true, nil
 		}
 		// Same primary fact kind already stored for this file — dedup.
+		//
+		// Scoped to the same conversation, exactly like the lookup above. The
+		// structural phase records an import fact for nearly every file it
+		// reads, so an unscoped match hit ITS standing row for any scan row
+		// whose first fact was an import: the scan's facts were dropped
+		// (written=false), chronicle_import_extractions reported the file as
+		// deduped, and the id handed back belonged to another writer's row.
 		primaryKind := extractPrimaryKind(factsJSON)
 		var existingWithKind int64
 		if primaryKind != "" {
 			s.db.QueryRow(`
 				SELECT extraction_id FROM scan_extractions
 				WHERE domain_key = ? AND file_path = ? AND facts_json LIKE ?
+				  AND COALESCE(extraction_role,'single') NOT IN ('flow', '`+StructuralExtractionRole+`')
 				LIMIT 1
 			`, domainKey, filePath, "%\"kind\":\""+primaryKind+"\"%").Scan(&existingWithKind)
 			if existingWithKind > 0 {
@@ -296,6 +304,49 @@ func (s *Store) ListExtractions(revisionID int64, domainKey string) ([]Extractio
 	rows, err := s.db.Query(q, revisionID, domainKey)
 	if err != nil {
 		return nil, fmt.Errorf("ListExtractions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ExtractionRow
+	for rows.Next() {
+		var r ExtractionRow
+		if err := rows.Scan(&r.ExtractionID, &r.RevisionID, &r.DomainKey,
+			&r.FilePath, &r.Status, &r.FromType, &r.ExtractionRole,
+			&r.VoteGroup, &r.VoteIndex,
+			&r.FactsJSON, &r.ErrorMessage, &r.Metadata, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ListStandingExtractionsByRole returns one writer's CURRENT rows for a domain,
+// across every revision.
+//
+// It exists for the structural phase, whose rows are a standing answer rather
+// than a history: SaveStructuralExtraction keeps one row per (domain, file) and
+// re-points it at whatever revision last touched the file. Asking for a single
+// revision therefore returns only the files THIS run happened to look at, and
+// the resolver's file index — which decides what a class name means — has never
+// heard of the rest of the repo. A relative import of a file structured three
+// commits ago then falls through to class-name inference and mints a second,
+// mistyped node for a path that already has one.
+//
+// Role-scoped on purpose. The rule the index rests on is "whoever is resolving
+// indexes their own rows"; this widens the revision scope without mixing two
+// writers' accounts of the same file.
+func (s *Store) ListStandingExtractionsByRole(domainKey, role string) ([]ExtractionRow, error) {
+	q := `SELECT extraction_id, revision_id, domain_key, file_path, status,
+	             COALESCE(from_type,''), COALESCE(extraction_role,'single'),
+	             COALESCE(vote_group,''), COALESCE(vote_index,0),
+	             facts_json, COALESCE(error_message,''), COALESCE(metadata,'{}'), created_at
+	      FROM scan_extractions
+	      WHERE domain_key = ? AND COALESCE(extraction_role,'single') = ?
+	      ORDER BY extraction_id`
+	rows, err := s.db.Query(q, domainKey, role)
+	if err != nil {
+		return nil, fmt.Errorf("ListStandingExtractionsByRole: %w", err)
 	}
 	defer rows.Close()
 

@@ -547,14 +547,16 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	// edges.
 	var allScanned []store.ExtractionRow
 	if opts.ExtractionRole != "" {
-		allScanned, _ = g.store.ListExtractions(revisionID, domainKey)
-		filtered := allScanned[:0:0]
-		for _, e := range allScanned {
-			if e.ExtractionRole == opts.ExtractionRole {
-				filtered = append(filtered, e)
-			}
-		}
-		allScanned = filtered
+		// Every revision, not just this one. A role-scoped writer keeps a
+		// STANDING row per file — the structural phase replaces its answer and
+		// re-points it at whatever revision last touched the file — so asking
+		// for one revision returns only the files this run looked at, and the
+		// index has never heard of the rest of the repo. An import of a file
+		// structured three commits ago then fell through to class-name
+		// inference and minted a second, mistyped node for a path that already
+		// had one: `code:provider:d:src/app-module` alongside
+		// `code:module:d:src/app-module`, with the edge pointing at the twin.
+		allScanned, _ = g.store.ListStandingExtractionsByRole(domainKey, opts.ExtractionRole)
 	} else {
 		allScanned, _ = g.store.ListScanExtractions(revisionID, domainKey)
 	}
@@ -843,16 +845,34 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
 				resolvedPath = strings.TrimSuffix(resolvedPath, ext)
 			}
+			// Which real file is behind the specifier. An import names a module,
+			// not a file: "./x.service" is x.service.ts, .tsx, .js or .jsx, and
+			// only the index knows which of them the graph has actually read.
+			targetFile := g.importTargetFile(resolvedPath)
+
 			// Determine node type: check scanFileIndex first, then infer from class name.
 			nodeType := g.scanFileIndex.byPath[resolvedPath+".ts"]
 			if nodeType == "" {
 				nodeType = g.scanFileIndex.byPath[resolvedPath]
 			}
+			if targetFile != "" && nodeType == "" {
+				nodeType = g.scanFileIndex.byPath[targetFile]
+			}
 			if nodeType == "" && len(fact.Symbols) > 0 {
 				nodeType = inferNodeTypeFromClassName(fact.Symbols[0])
 			}
 			toNodeKey = typedNodeKeyFromFile(domainKey, resolvedPath, nodeType)
-			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, inferNameFromPath(resolvedPath), resolvedPath)
+
+			// The KEY drops the extension by convention; the node's file_path
+			// must not. resolvedPath was passed as both, so an import target
+			// got file_path "src/x.service" — a path no file has and no diff
+			// ever names, which put its evidence outside every file-scoped
+			// supersede and left the node active after its file was gone.
+			//
+			// Empty when the graph has not read the target yet: that is the
+			// honest answer for a placeholder, and ensureNodeID fills the real
+			// path in when the file is finally scanned.
+			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, inferNameFromPath(resolvedPath), targetFile)
 		} else {
 			// Bare (non-relative) import — use existing alias / stem resolution.
 			// Check if target already exists as a different type (e.g. controller)
@@ -2486,31 +2506,65 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 				g.store.UpsertNode(*existing)
 			}
 		}
-		// Re-assert a file-less node the file still declares.
+		// Re-assert a node the file being resolved still declares.
 		//
 		// Under the replacement contract a file's rows survive only by being
-		// handed back, and creation evidence used to be written once, on the
-		// run that minted the node. That was survivable only while the row
-		// named no file and so fell outside every supersede scope — the same
-		// gap that let a deleted endpoint stay active forever. Now that the
-		// row names its declaring file, the file has to keep saying so, or the
-		// next re-extraction of an unchanged file would retire an endpoint it
-		// still serves.
+		// handed back, and creation evidence was written once, on the run that
+		// minted the node. That was survivable only while the row named no file
+		// and so fell outside every supersede scope. It stops being survivable
+		// the moment such a row names a file — and it was never right for a
+		// node that has a file of its own: re-extracting a CHANGED file did not
+		// hand its own creation row back, so the contract retired the node
+		// while the file still declared it. Edit a controller and it vanished
+		// from the graph.
+		//
+		// The condition is "this node's file is the file being resolved". An
+		// import target is somebody else's node: attributing an observation of
+		// it to the importer would file the row under the wrong file's keep
+		// set, and the target's own resolve re-asserts it anyway.
 		//
 		// AddEvidence dedups, so this re-observes the existing row rather than
 		// writing a second one, and detNoteEvidenceID puts its id in the keep
-		// set. Deterministic mode only, and only inside a file's own resolve:
-		// that is where the contract applies.
-		if filePath == "" && g.det != nil && g.det.currentFile != "" {
+		// set. Deterministic mode only: that is where the contract applies.
+		if g.det != nil && g.det.currentFile != "" &&
+			(filePath == "" || filePath == g.det.currentFile) {
 			g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, name, filePath,
 				"chronicle:resolve:ensure_node", "referenced_entity"))
 		}
 		return id
 	}
 
-	// Key doesn't exist — check if a stem-based node with the same name exists.
-	// This happens when an import fact created a node from a class name (stem key)
-	// before the actual file was scanned (path key).
+	// Key doesn't exist — but this file may already have a node under a
+	// DIFFERENT type. A code node's key embeds from_type, so a file that gains
+	// a @Controller where it had @Injectable asks for a new key for a path that
+	// is already spoken for. Minting one leaves two active nodes for one file:
+	// inbound edges keep pointing at the old type while the new facts land on
+	// the new one, and impact answers about whichever half the caller happened
+	// to reach.
+	//
+	// The node moves instead. It keeps its id, its evidence and its edges — the
+	// file is the same file; only what it turned out to be has changed — and
+	// RekeyNode carries layer and node_type across with the key.
+	if filePath != "" && isCodeKey(nodeKey) {
+		if existing := g.activeCodeNodeForFile(domainKey, filePath); existing != nil && existing.NodeKey != nodeKey {
+			g.noteEvidenceErr(g.store.RekeyNode(existing.NodeID, existing.NodeKey, nodeKey, filePath, revisionID))
+			g.detResetNameIndex()
+			// The moved node needs its existence re-asserted under the new key
+			// in THIS run, like any other node the file still declares: the row
+			// that justified it was written for the old key and this run does
+			// not hand it back, so the replacement contract would retire the
+			// node it just moved.
+			if g.det != nil && g.det.currentFile == filePath {
+				g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, name, filePath,
+					"chronicle:resolve:ensure_node", "referenced_entity"))
+			}
+			return existing.NodeID
+		}
+	}
+
+	// Or a stem-based node with the same name: an import fact created a node
+	// from a class name (stem key) before the actual file was scanned (path
+	// key).
 	if filePath != "" && name != "" {
 		existing := g.findNodeByNameInDomain(domainKey, name)
 		if existing != nil && existing.Layer == "code" && existing.FilePath == "" {
@@ -4700,4 +4754,57 @@ func qualifiedNameOf(nodeKey string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[3])
+}
+
+// isCodeKey reports whether a key names a node in the code layer — the only
+// layer whose key embeds the type a file turned out to be, and so the only one
+// where a file changing shape asks for a different key.
+func isCodeKey(nodeKey string) bool {
+	return strings.HasPrefix(nodeKey, "code:")
+}
+
+// activeCodeNodeForFile finds this domain's current code node for a file path,
+// whatever type it is keyed as. Exactly one is expected; when the graph already
+// holds more (from before the rekey below existed) the first by key is taken,
+// so the choice is at least stable across runs.
+func (g *Graph) activeCodeNodeForFile(domainKey, filePath string) *store.NodeRow {
+	if filePath == "" {
+		return nil
+	}
+	nodes, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey, Layer: "code", Status: "active"})
+	if err != nil {
+		return nil
+	}
+	var best *store.NodeRow
+	for i := range nodes {
+		if nodes[i].FilePath != filePath {
+			continue
+		}
+		if best == nil || nodes[i].NodeKey < best.NodeKey {
+			best = &nodes[i]
+		}
+	}
+	return best
+}
+
+// importTargetFile maps an extension-less module path to the real file the
+// graph has read for it, or "" when it has read none.
+//
+// A relative import names a module: "./x.service" is x.service.ts, .tsx, .js or
+// .jsx, and which one it is is not a guess the resolver may make — a fabricated
+// extension is a file_path no diff will ever name. The index is the only thing
+// that knows, because it is built from files something actually extracted.
+func (g *Graph) importTargetFile(resolvedPath string) string {
+	if resolvedPath == "" {
+		return ""
+	}
+	if _, ok := g.scanFileIndex.byPath[resolvedPath]; ok {
+		return resolvedPath
+	}
+	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
+		if _, ok := g.scanFileIndex.byPath[resolvedPath+ext]; ok {
+			return resolvedPath + ext
+		}
+	}
+	return ""
 }
