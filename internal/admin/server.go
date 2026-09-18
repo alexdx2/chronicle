@@ -18,6 +18,7 @@ import (
 
 	dashboard "github.com/alexdx2/chronicle-core/admin"
 	"github.com/alexdx2/chronicle-core/diagrams"
+	"github.com/alexdx2/chronicle-core/freshness"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/manifest"
@@ -383,6 +384,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/low-confidence", s.handleLowConfidence)
 	mux.HandleFunc("/api/scans", s.handleScans)
 	mux.HandleFunc("/api/freshness", s.handleFreshness)
+	mux.HandleFunc("/api/upkeep", s.handleUpkeep)
 	mux.HandleFunc("/api/validate", s.handleValidate)
 	mux.HandleFunc("/api/graph/domains", s.handleGraphDomains)
 	mux.HandleFunc("/api/graph", s.handleGraph)
@@ -731,6 +733,25 @@ func (s *Server) handleFreshness(w http.ResponseWriter, r *http.Request) {
 		dir = paths.GitDir()
 	}
 	rep, err := mcp.FreshnessReportForDomain(s.getGraph(), dir, s.getDomain(r))
+	if err != nil {
+		httpError(w, err, 500)
+		return
+	}
+	httpJSON(w, rep)
+}
+
+// handleUpkeep answers "is anything keeping this graph current", which
+// /api/freshness deliberately cannot: freshness is read on every poll and may
+// only touch the database, while this walks HEAD's tree and reads hook files
+// off disk. Its own endpoint so the cost is paid by the panel that asks for it.
+func (s *Server) handleUpkeep(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	dir := s.projectPath
+	s.mu.RUnlock()
+	if dir == "" {
+		dir = paths.GitDir()
+	}
+	rep, err := freshness.ComputeUpkeep(dir, "", s.getDomain(r), s.getStore(), freshness.UpkeepOptions{})
 	if err != nil {
 		httpError(w, err, 500)
 		return

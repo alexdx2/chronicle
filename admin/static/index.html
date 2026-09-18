@@ -29,6 +29,22 @@
 }
 .knowledge-line{font-size:11px;color:var(--text-muted);font-family:var(--font-mono)}
 .knowledge-line.stale,.knowledge-line.diverged{color:var(--error)}
+/* Knowledge upkeep: is anything keeping this graph current, and how far does it reach */
+.upkeep{margin-bottom:16px}
+.upkeep-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)}
+.upkeep-row:last-child{border-bottom:none}
+.upkeep-mark{width:16px;text-align:center;font-weight:700;flex:0 0 auto}
+.upkeep-mark.on{color:var(--success)}
+.upkeep-mark.off{color:var(--error)}
+.upkeep-name{flex:0 0 190px;font-weight:600;font-size:13px}
+.upkeep-what{color:var(--text-muted);font-size:12px;flex:1}
+.upkeep-fix{font-family:var(--font-mono);font-size:11px;background:var(--error-light);color:var(--error);padding:2px 7px;border-radius:4px;white-space:nowrap}
+.upkeep-path{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+.meter{height:6px;border-radius:3px;background:var(--border);overflow:hidden;min-width:120px;flex:1}
+.meter>span{display:block;height:100%;background:var(--success);transition:width .3s}
+.meter.partial>span{background:#c9902f}
+.meter.none>span{background:var(--error)}
+.badge.warn{background:#fdf0d0;color:#8a6b3e}
 body{font-family:var(--font-serif);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;background-image:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(139,115,85,0.02) 3px,rgba(139,115,85,0.02) 6px)}
 a{color:var(--primary);text-decoration:none}
 /* Native controls pick up the warm theme instead of browser-default blue */
@@ -581,6 +597,83 @@ button,input,select,textarea{font-family:inherit}
       <div class="label">Discoveries</div>
     </div>
   </div>
+
+  <!-- SECTION:knowledge_upkeep:start -->
+  <!-- Knowledge upkeep. Freshness says how OLD the graph is; this says whether
+       anything is keeping it current and how much of the repo it ever reached.
+       A stale graph and an unattended one look alike from a distance and need
+       opposite answers: the first wants a scan, the second wants the hook that
+       would have made the scan unnecessary. -->
+  <div class="card upkeep" x-show="upkeep">
+    <div class="card-header">
+      <h3>Knowledge upkeep</h3>
+      <span class="badge" :class="upkeep?.status === 'ok' ? 'ok' : (upkeep?.status === 'unattended' ? 'err' : 'warn')"
+            x-text="upkeep?.status ?? ''"></span>
+    </div>
+    <div class="card-body">
+      <div class="upkeep-row">
+        <span class="upkeep-mark" :class="upkeep?.commit_hook?.installed ? 'on' : 'off'"
+              x-text="upkeep?.commit_hook?.installed ? '\u2713' : '\u2715'"></span>
+        <span class="upkeep-name">Commit hook</span>
+        <span class="upkeep-what">refreshes the graph after every commit</span>
+        <template x-if="upkeep?.commit_hook?.installed">
+          <span class="upkeep-path" x-text="upkeep.commit_hook.path" :title="upkeep.commit_hook.path"></span>
+        </template>
+        <template x-if="upkeep && !upkeep.commit_hook?.installed">
+          <span class="upkeep-fix" x-text="upkeep.commit_hook?.fix"></span>
+        </template>
+      </div>
+
+      <div class="upkeep-row">
+        <span class="upkeep-mark" :class="upkeep?.agent_hook?.installed ? 'on' : 'off'"
+              x-text="upkeep?.agent_hook?.installed ? '\u2713' : '\u2715'"></span>
+        <span class="upkeep-name">Agent nudge</span>
+        <span class="upkeep-what">tells the agent how old an answer is before it leans on it</span>
+        <template x-if="upkeep?.agent_hook?.installed">
+          <span class="upkeep-path" x-text="upkeep.agent_hook.path" :title="upkeep.agent_hook.path"></span>
+        </template>
+        <template x-if="upkeep && !upkeep.agent_hook?.installed">
+          <span class="upkeep-fix" x-text="upkeep.agent_hook?.fix"></span>
+        </template>
+      </div>
+
+      <div class="upkeep-row">
+        <span class="upkeep-mark" :class="(upkeep?.coverage?.missing ?? 0) === 0 ? 'on' : 'off'"
+              x-text="(upkeep?.coverage?.missing ?? 0) === 0 ? '\u2713' : '\u2715'"></span>
+        <span class="upkeep-name">Coverage</span>
+        <div class="meter" :class="(upkeep?.coverage?.percent ?? 0) >= 100 ? '' : ((upkeep?.coverage?.percent ?? 0) > 0 ? 'partial' : 'none')">
+          <span :style="{width: (upkeep?.coverage?.percent ?? 0) + '%'}"></span>
+        </div>
+        <span class="upkeep-what" style="flex:0 0 auto"
+              x-text="(upkeep?.coverage?.known ?? 0) + ' / ' + (upkeep?.coverage?.supported ?? 0) + ' files read'"></span>
+        <template x-if="(upkeep?.coverage?.missing ?? 0) > 0">
+          <span class="upkeep-fix" x-text="upkeep.coverage.missing + ' never read'"></span>
+        </template>
+      </div>
+
+      <!-- How far the working tree has moved past the knowledge. Read from the
+           freshness report so the panel and the header line cannot disagree. -->
+      <!-- The mark follows the freshness STATUS, not the commit count: a
+           diverged graph has no meaningful distance to HEAD, so counting zero
+           commits behind would put a tick next to knowledge that describes a
+           history this checkout does not have. -->
+      <div class="upkeep-row" x-show="freshness">
+        <span class="upkeep-mark" :class="['fresh','verified','structured'].includes(freshness?.status) ? 'on' : 'off'"
+              x-text="['fresh','verified','structured'].includes(freshness?.status) ? '\u2713' : '\u2715'"></span>
+        <span class="upkeep-name">Behind HEAD</span>
+        <span class="upkeep-what" x-text="freshness ? freshness.message : ''"></span>
+      </div>
+
+      <div class="upkeep-row" x-show="upkeep?.scan">
+        <span class="upkeep-mark on">&#8635;</span>
+        <span class="upkeep-name">Scan in progress</span>
+        <div class="meter partial"><span :style="{width: (upkeep?.scan?.percent ?? 0) + '%'}"></span></div>
+        <span class="upkeep-what" style="flex:0 0 auto"
+              x-text="(upkeep?.scan?.phase ?? '') + ' \u00b7 ' + (upkeep?.scan?.extracted_files ?? 0) + ' / ' + (upkeep?.scan?.total_files ?? 0) + ' files'"></span>
+      </div>
+    </div>
+  </div>
+  <!-- SECTION:knowledge_upkeep:end -->
 
   <!-- Content grid -->
   <div class="content-grid">
@@ -1894,6 +1987,7 @@ function dashboard() {
     revision: '',
     lastScan: '',
     freshness: null,
+    upkeep: null,
     wsConnected: false,
     stats: {},
     requests: [],
@@ -2355,6 +2449,7 @@ function dashboard() {
         }
       } catch(e) { console.error('scans:', e); }
       await this.fetchFreshness();
+      await this.fetchUpkeep();
     },
 
     async fetchFreshness() {
@@ -2362,6 +2457,18 @@ function dashboard() {
         const r = await fetch('/api/freshness?domain=' + encodeURIComponent(this.domain || ''));
         this.freshness = await r.json();
       } catch(e) { console.error('freshness:', e); }
+    },
+
+    // Upkeep is its own call because it costs more than freshness does: it
+    // walks HEAD's tree and reads hook files off disk, where freshness only
+    // reads the database. A failed fetch leaves the panel hidden rather than
+    // showing zeros, which would read as "nothing is installed".
+    async fetchUpkeep() {
+      try {
+        const r = await fetch('/api/upkeep?domain=' + encodeURIComponent(this.domain || ''));
+        if (!r.ok) { this.upkeep = null; return; }
+        this.upkeep = await r.json();
+      } catch(e) { this.upkeep = null; console.error('upkeep:', e); }
     },
 
     async fetchValidation() {

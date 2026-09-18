@@ -433,3 +433,60 @@ func TestHookAdvisoryGhostDBNeverCreatesMarker(t *testing.T) {
 		t.Fatal("a silent advisory must not create the rate-limit marker")
 	}
 }
+
+// --git-path honours core.hooksPath, so in a repo using husky or lefthook the
+// path Chronicle writes to is the project's own TRACKED hook script. Replacing
+// it would delete the user's lint-and-test run and show up as a modified file
+// in git status.
+func TestHookInstallGitRefusesToOverwriteSomebodyElsesHook(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	gitRun(t, dir, "config", "core.hooksPath", ".husky")
+	if err := os.MkdirAll(filepath.Join(dir, ".husky"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	theirs := "#!/bin/sh\nnpm run lint && npm test\n"
+	hook := filepath.Join(dir, ".husky", "post-commit")
+	if err := os.WriteFile(hook, []byte(theirs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	restore := chdir(t, dir)
+	defer restore()
+
+	err := installGitPostCommit()
+	if err == nil {
+		t.Fatal("Chronicle overwrote a hook it did not write")
+	}
+	got, rerr := os.ReadFile(hook)
+	if rerr != nil || string(got) != theirs {
+		t.Fatalf("their hook = %q (err %v), want it untouched", got, rerr)
+	}
+
+	// Our own hook is still ours to rewrite: that is how the baked-in binary
+	// path gets refreshed after a move or an upgrade.
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\n"+freshness.CommitHookMarker+" old\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := installGitPostCommit(); err != nil {
+		t.Fatalf("re-installing over our own hook: %v", err)
+	}
+	after, _ := os.ReadFile(hook)
+	if !strings.Contains(string(after), "refresh --quiet") {
+		t.Errorf("re-install did not write the refresh line: %q", after)
+	}
+}
+
+// chdir moves into dir for the duration of a test; installGitPostCommit reads
+// the repo from the process's working directory.
+func chdir(t *testing.T, dir string) func() {
+	t.Helper()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return func() { os.Chdir(prev) }
+}

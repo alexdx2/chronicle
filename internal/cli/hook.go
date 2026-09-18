@@ -158,8 +158,11 @@ func newHookFireCmd() *cobra.Command {
 }
 
 // hookFireMarker is the stable substring identifying our hook command across
-// the absolute-path variations baked in at install time.
-func hookFireMarker() string { return "hook fire" }
+// the absolute-path variations baked in at install time. It lives in freshness
+// because that is where the DETECTOR lives — the upkeep panel reports whether
+// this hook is installed, and a marker with two copies is a panel that goes on
+// saying "not installed" after the installer's wording changes.
+func hookFireMarker() string { return freshness.AgentHookMarker }
 
 // --- pure settings transforms (unit-tested) --------------------------------
 
@@ -338,7 +341,24 @@ func installGitPostCommit() error {
 	}
 	exe, _ := os.Executable()
 	hookPath := filepath.Join(hooks, "post-commit")
-	script := fmt.Sprintf("#!/bin/sh\n# Chronicle: zero-token structural refresh after each commit\n%q refresh --quiet >/dev/null 2>&1 &\n", exe)
+	script := fmt.Sprintf("#!/bin/sh\n%s zero-token structural refresh after each commit\n%q refresh --quiet >/dev/null 2>&1 &\n",
+		freshness.CommitHookMarker, exe)
+
+	// Never write over somebody else's hook. --git-path honours
+	// core.hooksPath, so in a repo using husky or lefthook this path is the
+	// project's own TRACKED .husky/post-commit — installing Chronicle used to
+	// replace their lint-and-test script with ours and show up as a modified
+	// file in git status. An untracked hand-written hook under .git/hooks is
+	// no less theirs.
+	//
+	// Re-running the install over our own hook is still fine: that is how the
+	// baked-in binary path gets refreshed after a move or an upgrade.
+	if existing, err := os.ReadFile(hookPath); err == nil &&
+		!strings.Contains(string(existing), freshness.CommitHookMarker) {
+		return fmt.Errorf("%s already exists and was not written by Chronicle — "+
+			"add this line to it yourself instead:\n  %q refresh --quiet >/dev/null 2>&1 &", hookPath, exe)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0755); err != nil {
 		return err
 	}
