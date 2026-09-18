@@ -739,3 +739,174 @@ func TestRefreshSweepSeesQuotedAndSpacedPaths(t *testing.T) {
 		t.Fatal("no structural pointer")
 	}
 }
+
+// nodeStatus reports a node's status, or "" when the graph has no such node.
+func nodeStatus(t *testing.T, dir, key string) string {
+	t.Helper()
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	n, err := s.GetNodeByKey(key)
+	if err != nil || n == nil {
+		return ""
+	}
+	return n.Status
+}
+
+// drainSweep runs the bounded sweep until the structural pointer reaches HEAD.
+func drainSweep(t *testing.T, dir string, batch string) {
+	t.Helper()
+	for i := 0; i < 12; i++ {
+		runRefreshIn(t, dir, "--quiet", "--structural-batch="+batch)
+		if structuralSHA(t, dir) == strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD")) {
+			return
+		}
+	}
+	t.Fatal("the sweep never drained")
+}
+
+// A sweep lists what HEAD HAS, so nothing in it can report a deletion. Across
+// the several runs a bounded drain takes, a file extracted by an earlier batch
+// can be deleted before the last one finishes — and it simply stops appearing.
+// Its evidence and edges outlived it under a pointer that then said complete,
+// and its content record could never be re-read nor dropped, so the next pack
+// bump wedged on a backlog that could not drain.
+func TestRefreshSweepRetiresAFileDeletedMidDrain(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "a controller")
+	writeCommit(t, dir, "src/later.controller.ts", laterCtrlSource, "another controller")
+
+	// One file per run, so the drain spans commits.
+	runRefreshIn(t, dir, "--quiet", "--structural-batch=1")
+	runRefreshIn(t, dir, "--quiet", "--structural-batch=1")
+	func() {
+		s := openRepoStore(t, dir)
+		defer s.Close()
+		if _, _, ok, _ := s.GetStructuralHash("d", "src/a.controller.ts"); !ok {
+			t.Skip("the sweep order did not reach a.controller.ts first; nothing to test here")
+		}
+	}()
+	if got := nodeStatus(t, dir, "contract:endpoint:d:get:/a/items"); got != "active" {
+		t.Fatalf("fixture: the endpoint is %q, want active before the deletion", got)
+	}
+
+	gitRun(t, dir, "rm", "-q", "src/a.controller.ts")
+	gitRun(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "drop a controller")
+	drainSweep(t, dir, "1")
+
+	if got := nodeStatus(t, dir, "contract:endpoint:d:get:/a/items"); got == "active" {
+		t.Error("an endpoint of a file deleted mid-drain is still active")
+	}
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, _, ok, _ := s.GetStructuralHash("d", "src/a.controller.ts"); ok {
+		t.Error("a content record survived the file; a pack bump would wedge on it forever")
+	}
+}
+
+// supportedFilesAtHead narrows the sweep to the domain's scan globs so it
+// cannot claim files another domain owns. The incremental path has to agree,
+// or a file the sweep deliberately skipped is claimed by this domain the
+// moment a later commit happens to touch it.
+func TestRefreshIncrementalHonoursTheDomainScanScope(t *testing.T) {
+	dir, _ := structuralRepo(t)
+
+	// Out of scope: the manifest's domain "d" includes only src/**.
+	writeCommit(t, dir, "other/x.controller.ts", ctrlSource, "out of scope, before the pointer")
+	drainSweep(t, dir, "0")
+	if got := nodeStatus(t, dir, "contract:endpoint:d:get:/a/items"); got != "" {
+		t.Fatalf("fixture: the sweep claimed an out-of-scope file (%q)", got)
+	}
+
+	// A later commit touches another out-of-scope file: the incremental path
+	// sees it in the diff and must skip it for the same reason.
+	writeCommit(t, dir, "other/later.controller.ts", laterCtrlSource, "out of scope, after the pointer")
+	runRefreshIn(t, dir, "--quiet")
+
+	if got := nodeStatus(t, dir, "contract:endpoint:d:post:/later/things"); got != "" {
+		t.Errorf("the incremental path claimed an out-of-scope file: endpoint is %q", got)
+	}
+	s := openRepoStore(t, dir)
+	defer s.Close()
+	if _, _, ok, _ := s.GetStructuralHash("d", "other/later.controller.ts"); ok {
+		t.Error("an out-of-scope file got a content record from the incremental path")
+	}
+}
+
+// Forgetting a branch-only content record only means "look at this file
+// again", and the look is driven by the diff — which, after the pointer fell
+// back, does not mention those files at all. Their structure came from a branch
+// nobody merged, so leaving them active is the graph asserting code this
+// history does not contain, under a pointer that says complete.
+func TestRefreshRebaseFallbackRetiresBranchOnlyStructure(t *testing.T) {
+	dir, scanned := structuralRepo(t)
+
+	gitRun(t, dir, "checkout", "-q", "-b", "side")
+	writeCommit(t, dir, "src/side.controller.ts", ctrlSource, "side: a controller")
+	runRefreshIn(t, dir, "--quiet")
+	if got := nodeStatus(t, dir, "contract:endpoint:d:get:/a/items"); got != "active" {
+		t.Fatalf("fixture: the side branch's endpoint is %q, want active", got)
+	}
+
+	gitRun(t, dir, "checkout", "-q", "main")
+	if strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD")) != scanned {
+		t.Fatal("fixture: main should still be at the scanned commit")
+	}
+	writeCommit(t, dir, "src/main.controller.ts", laterCtrlSource, "main: a controller")
+
+	runRefreshIn(t, dir, "--quiet")
+
+	if got := nodeStatus(t, dir, "contract:endpoint:d:get:/a/items"); got == "active" {
+		t.Error("structure from an unreachable branch is still active under a complete pointer")
+	}
+	if got := nodeStatus(t, dir, "contract:endpoint:d:post:/later/things"); got != "active" {
+		t.Errorf("this branch's own commit was not structured: endpoint is %q", got)
+	}
+}
+
+// An endpoint is an address, not a file, so its node has no file_path of its
+// own — but the controller that declares it does. Attributing the creation
+// evidence to that controller is what puts the endpoint inside the replacement
+// contract: drop one route and keep the file, and that route has to stop being
+// asserted while everything else the file still says survives. Without it the
+// row was in no file's supersede scope, so the endpoint stayed active with
+// valid evidence and impact kept reporting a route the code no longer serves.
+func TestRefreshRetiresARouteDroppedFromASurvivingFile(t *testing.T) {
+	const twoRoutes = `import { AService } from './a.service';
+
+@Controller('a')
+export class AController {
+  constructor(private readonly a: AService) {}
+
+  @Get('items')
+  list() { return this.a.list(); }
+
+  @Post('things')
+  make() { return this.a.list(); }
+}
+`
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/a.controller.ts", twoRoutes, "a controller with two routes")
+	runRefreshIn(t, dir, "--quiet")
+	for _, key := range []string{"contract:endpoint:d:get:/a/items", "contract:endpoint:d:post:/a/things"} {
+		if got := nodeStatus(t, dir, key); got != "active" {
+			t.Fatalf("fixture: %s is %q, want active", key, got)
+		}
+	}
+
+	// Same file, same class, one route removed.
+	writeCommit(t, dir, "src/a.controller.ts", ctrlSource, "drop the POST route")
+	runRefreshIn(t, dir, "--quiet")
+
+	if got := nodeStatus(t, dir, "contract:endpoint:d:post:/a/things"); got == "active" {
+		t.Error("a route the file no longer declares is still active")
+	}
+	if got := nodeStatus(t, dir, "contract:endpoint:d:get:/a/items"); got != "active" {
+		t.Errorf("the route the file still declares was retired too: %q", got)
+	}
+	// NOT asserted here: the controller node itself is retired by this
+	// re-extraction, and was before this change too — creation evidence for a
+	// node that HAS a file of its own is still written once, on the run that
+	// minted it, so a later re-extraction of the same file does not hand it
+	// back. That is the same gap one level up and wants its own change; this
+	// test would pass for the wrong reason if it claimed otherwise.
+}

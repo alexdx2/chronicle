@@ -227,9 +227,21 @@ func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.
 	}
 
 	base, sweep, forgetAfter := structuralBase(g.Store(), gitDir, domainKey)
+	var forgotten []string
 	if forgetAfter > 0 {
 		// The pointer was earned on a branch this checkout cannot reach; the
 		// content records those runs wrote go with it.
+		//
+		// Listed before they are dropped, because dropping a record only means
+		// "look at this file again" and the look is driven by the diff — which,
+		// now that the pointer has fallen back, does not mention these files at
+		// all. Left alone, their nodes and edges keep asserting structure from
+		// a branch nobody merged while the pointer says complete.
+		var err error
+		forgotten, err = g.Store().StructuralHashPathsAfter(domainKey, forgetAfter)
+		if err != nil {
+			return nil, err
+		}
 		if _, err := g.Store().DeleteStructuralHashesAfter(domainKey, forgetAfter); err != nil {
 			return nil, err
 		}
@@ -243,10 +255,25 @@ func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.
 		if err != nil {
 			return nil, err
 		}
-		if len(files) == 0 {
+		// A sweep lists what HEAD HAS, so nothing in it can say a file is gone.
+		// Across the several runs a drain takes, a file extracted by an earlier
+		// batch can be deleted before the last one finishes: it silently stops
+		// appearing, and its evidence, its edges and its content record outlive
+		// it under a pointer that then stamps complete. Worse, that record can
+		// never be re-read (git show fails) nor dropped, so the next pack bump
+		// puts it in a backlog that cannot drain and the pointer wedges.
+		//
+		// What the domain has a record for but HEAD no longer carries is
+		// exactly that set.
+		deleted, err := goneFromHead(g.Store(), domainKey, files)
+		if err != nil {
+			return nil, err
+		}
+		if len(files) == 0 && len(deleted) == 0 {
 			return nil, nil
 		}
 		in.Changed = files
+		in.Deleted = deleted
 		return structuralFn(g, in)
 	}
 
@@ -268,21 +295,56 @@ func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.
 	if err != nil {
 		return nil, fmt.Errorf("structural diff (base %s): %w", shortSHA(base), err)
 	}
+	// The same scope the sweep enforces. supportedFilesAtHead narrows to the
+	// domain's scan globs so the sweep cannot claim files another domain owns;
+	// without the same filter here, a file the sweep deliberately skipped was
+	// claimed by this domain the moment a later commit happened to touch it,
+	// and the two entry points disagreed about what the domain contains.
+	inScope := domainScopeFilter(domainKey)
 	for _, f := range files {
+		if !inScope(f.Path) && !(f.OldPath != "" && inScope(f.OldPath)) {
+			continue
+		}
 		switch f.Status {
 		case "D":
 			in.Deleted = append(in.Deleted, f.Path)
 		case "R":
 			// A rename is both: the new path has to be read, and the old one
-			// stops asserting anything at all.
-			in.Changed = append(in.Changed, f.Path)
-			if f.OldPath != "" {
+			// stops asserting anything at all. Each side is judged on its own
+			// scope — a file renamed into or out of the domain is a real
+			// addition or a real removal for it.
+			if inScope(f.Path) {
+				in.Changed = append(in.Changed, f.Path)
+			}
+			if f.OldPath != "" && inScope(f.OldPath) {
 				in.Deleted = append(in.Deleted, f.OldPath)
 			}
 		default:
 			in.Changed = append(in.Changed, f.Path)
 		}
 	}
+	// Files the pointer's fallback forgot are not in this diff — the branch
+	// that structured them is unreachable, so nothing since the new base
+	// mentions them. Whatever HEAD still has is re-read under the base this run
+	// can actually stand behind; the rest is gone and says so.
+	if len(forgotten) > 0 {
+		atHead, gone, err := splitByPresenceAtHead(gitDir, forgotten)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range atHead {
+			if inScope(p) {
+				in.Changed = append(in.Changed, p)
+			}
+		}
+		for _, p := range gone {
+			if inScope(p) {
+				in.Deleted = append(in.Deleted, p)
+			}
+		}
+	}
+	in.Changed = dedupePaths(in.Changed)
+	in.Deleted = dedupePaths(in.Deleted)
 	if len(in.Changed) == 0 && len(in.Deleted) == 0 {
 		// Nothing structural in the diff — but the pointer still has to reach
 		// HEAD, or a run of docs-only commits leaves the graph looking as if
@@ -324,6 +386,72 @@ func structuralBase(s *store.Store, repoDir, domainKey string) (base string, swe
 //
 // HEAD's tree, not the index: the phase reads committed blobs, and a file that
 // is staged but never committed has nothing at HEAD to read.
+// goneFromHead returns the files this domain has a structural record for that
+// HEAD no longer offers — deleted, or moved out of the domain's scan scope.
+// Either way the domain must stop asserting their structure.
+func goneFromHead(s *store.Store, domainKey string, atHead []string) ([]string, error) {
+	recorded, err := s.FilesWithStructuralHash(domainKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(recorded) == 0 {
+		return nil, nil
+	}
+	present := make(map[string]struct{}, len(atHead))
+	for _, p := range atHead {
+		present[p] = struct{}{}
+	}
+	var gone []string
+	for _, p := range recorded {
+		if _, ok := present[p]; !ok {
+			gone = append(gone, p)
+		}
+	}
+	return gone, nil
+}
+
+// splitByPresenceAtHead sorts paths into those HEAD still carries and those it
+// does not, from one tree listing rather than a subprocess per path.
+func splitByPresenceAtHead(gitDir string, paths []string) (atHead, gone []string, err error) {
+	out, err := gitutil.RunRaw(gitDir, "-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", "-z", "HEAD")
+	if err != nil {
+		return nil, nil, fmt.Errorf("structural: git ls-tree HEAD: %w", err)
+	}
+	present := map[string]struct{}{}
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			present[p] = struct{}{}
+		}
+	}
+	for _, p := range paths {
+		if _, ok := present[p]; ok {
+			atHead = append(atHead, p)
+		} else {
+			gone = append(gone, p)
+		}
+	}
+	return atHead, gone, nil
+}
+
+// dedupePaths keeps the first occurrence of each path. The structural input is
+// assembled from several sources — the diff, the pointer's forgotten set — and
+// they can legitimately name the same file.
+func dedupePaths(paths []string) []string {
+	if len(paths) < 2 {
+		return paths
+	}
+	seen := make(map[string]struct{}, len(paths))
+	out := paths[:0]
+	for _, p := range paths {
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
 func supportedFilesAtHead(gitDir, domainKey string) ([]string, error) {
 	// -z with quoting off, for the same reason gitdiff.ChangedFiles uses them:
 	// core.quotePath renders a non-ASCII path as a quoted C string, and

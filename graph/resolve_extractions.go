@@ -2445,6 +2445,25 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 				g.store.UpsertNode(*existing)
 			}
 		}
+		// Re-assert a file-less node the file still declares.
+		//
+		// Under the replacement contract a file's rows survive only by being
+		// handed back, and creation evidence used to be written once, on the
+		// run that minted the node. That was survivable only while the row
+		// named no file and so fell outside every supersede scope — the same
+		// gap that let a deleted endpoint stay active forever. Now that the
+		// row names its declaring file, the file has to keep saying so, or the
+		// next re-extraction of an unchanged file would retire an endpoint it
+		// still serves.
+		//
+		// AddEvidence dedups, so this re-observes the existing row rather than
+		// writing a second one, and detNoteEvidenceID puts its id in the keep
+		// set. Deterministic mode only, and only inside a file's own resolve:
+		// that is where the contract applies.
+		if filePath == "" && g.det != nil && g.det.currentFile != "" {
+			g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, name, filePath,
+				"chronicle:resolve:ensure_node", "referenced_entity"))
+		}
 		return id
 	}
 
@@ -2487,9 +2506,30 @@ func (g *Graph) addCreationEvidence(nodeKey string, revisionID int64, name, file
 	}
 	sourceKind := "file"
 	locator := filePath
+	evidenceFile := filePath
 	if filePath == "" {
 		sourceKind = "synthetic"
 		locator = nodeKey
+		// A node with no file of its OWN is still asserted BY one: an endpoint
+		// is an address rather than a file, but some controller declares it,
+		// and when that controller is deleted or drops the route the endpoint
+		// stops being asserted by anything.
+		//
+		// Saying so requires the row to name the declaring file, because the
+		// replacement contract is scoped by it: SupersedeEvidenceNotIn closes
+		// "rows of this extractor on this file that the resolve did not hand
+		// back". A row with no file_path is in no file's scope, so it was
+		// never closed — the endpoint stayed active with valid evidence after
+		// its only declaration was gone, and impact kept reporting it.
+		//
+		// Only inside a file's own resolve. A post-pass (derived flows,
+		// service containment) runs with no open extraction and really is
+		// nobody's observation; detStampEvidence makes the same distinction
+		// for the same reason, and detNoteEvidenceID already files this row's
+		// id under currentFile, so the keep set protects it on re-extraction.
+		if g.det != nil {
+			evidenceFile = g.det.currentFile
+		}
 	}
 	assertion, _ := json.Marshal(map[string]string{"kind": assertionKind, "name": name})
 	extractorVersion, metadata := "1.0", "{}"
@@ -2498,7 +2538,7 @@ func (g *Graph) addCreationEvidence(nodeKey string, revisionID int64, name, file
 		TargetKind:          "node",
 		NodeID:              id,
 		SourceKind:          sourceKind,
-		FilePath:            filePath,
+		FilePath:            evidenceFile,
 		Locator:             locator,
 		ExtractorID:         extractorID,
 		ExtractorVersion:    extractorVersion,

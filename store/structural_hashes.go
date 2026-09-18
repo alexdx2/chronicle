@@ -169,6 +169,72 @@ func (s *Store) FilesWithStructuralHashNotOnPack(domain, pack string, limit int)
 	return out, nil
 }
 
+// structuralHashPaths runs one listing query over a domain's records and
+// returns the file paths, stripped of the key prefix.
+func (s *Store) structuralHashPaths(what, where string, args ...any) ([]string, error) {
+	rows, err := s.db.Query(`SELECT key FROM project_settings WHERE `+where+` ORDER BY key ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("%s scan: %w", what, err)
+		}
+		out = append(out, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s rows: %w", what, err)
+	}
+	return out, nil
+}
+
+// FilesWithStructuralHash lists every file this domain has a content record
+// for — everything the structural phase has ever looked at and remembers
+// looking at.
+//
+// It is how the sweep learns what it is no longer being shown. The sweep lists
+// HEAD's tree, so a file that was extracted by an earlier batch and deleted
+// before the drain finished simply stops appearing: nothing in the diff says it
+// is gone, and its evidence, its edges and its record would outlive it while
+// `complete: true` is stamped over the difference.
+func (s *Store) FilesWithStructuralHash(domain string) ([]string, error) {
+	prefix := structuralHashKeyPrefix(domain)
+	keys, err := s.structuralHashPaths("FilesWithStructuralHash",
+		`substr(key, 1, ?) = ?`, len(prefix), prefix)
+	if err != nil {
+		return nil, err
+	}
+	for i, k := range keys {
+		keys[i] = strings.TrimPrefix(k, prefix)
+	}
+	return keys, nil
+}
+
+// StructuralHashPathsAfter lists the files DeleteStructuralHashesAfter would
+// forget, so the caller can act on them before they are dropped.
+//
+// Forgetting a record only means "look at this file again", and the look is
+// driven by the diff — which, after the pointer fell back, no longer mentions
+// these files at all. Their nodes, edges and evidence stay active, asserting
+// structure that came from a branch this checkout cannot reach, while the
+// pointer says complete. The caller re-reads the ones HEAD still has and
+// supersedes the rest.
+func (s *Store) StructuralHashPathsAfter(domain string, revisionID int64) ([]string, error) {
+	prefix := structuralHashKeyPrefix(domain)
+	keys, err := s.structuralHashPaths("StructuralHashPathsAfter",
+		`substr(key, 1, ?) = ? AND `+structuralRevExpr+` > ?`, len(prefix), prefix, revisionID)
+	if err != nil {
+		return nil, err
+	}
+	for i, k := range keys {
+		keys[i] = strings.TrimPrefix(k, prefix)
+	}
+	return keys, nil
+}
+
 // DeleteStructuralHashesAfter forgets every record this domain wrote after
 // revisionID, so those files are looked at again.
 //
