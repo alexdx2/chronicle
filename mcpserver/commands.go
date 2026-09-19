@@ -199,98 +199,104 @@ __STAGES__`,
 3. Call chronicle_diagram_build with the appropriate payload
 4. Share the returned URL with user: "Open {url} to see the diagram"
 
-## When to use node_keys vs nodes
+## Build every diagram from the graph
 
-- **node_keys**: resolve REAL entities from the graph DB. Use for Domain Detail, Flow, Impact — when you need actual services/controllers/providers.
-- **nodes**: SYNTHETIC diagram-only entities. Use for domains, infrastructure, external actors — things that represent groups or systems, not individual code entities.
-- **NEVER use node_keys for Overview** — Overview shows domains as collapsed blocks, not individual services.
-- **Domain Detail mixes both**: node_keys for services inside the target domain + nodes for neighboring domains.
+Use **view_spec**. It is the view algebra — scope, expand, filter, group,
+collapse, layout — evaluated against the graph, so every node and edge on the
+picture is one the graph actually holds.
+
+A domain block is not something you write by hand: it is group:domain +
+collapse, which draws the same block with real members behind it and real
+aggregated edges between blocks. The same goes for a service block
+(group:service) and a module block (group:module).
+
+The modes are chosen by PRECEDENCE, not merged: view_spec wins over node_keys,
+which wins over nodes/edges. Passing several means the others are dropped. The
+reply names the mode it used and lists everything it ignored — read it.
+
+**nodes/edges are a last resort**, for something the graph genuinely does not
+contain (a system nobody has scanned, a proposal). They are stored verbatim:
+no key is looked up, no relationship is checked. They render marked "asserted"
+with a dashed outline and a count in the view bar, because a reader takes a
+diagram as evidence about the system. Never use them for anything the graph
+already knows.
+
+**annotations** and **steps** apply in every mode.
 
 ## Diagram Type Catalog
 
 ### Type 1: Overview (Context Diagram)
 Trigger: "show architecture", "overview", "how is the system organized", "high-level diagram"
-Purpose: Domains as blocks, infrastructure as bridges, external systems as actors. NO individual services — only domain blocks.
+Purpose: Domains as blocks. NO individual services — only domain blocks.
 
-CRITICAL: Use ONLY "nodes" (synthetic). NEVER use "node_keys". Each domain from the manifest becomes ONE node with kind "domain".
-
-Construction:
-1. Call chronicle_domain_list to get all domains
-2. Each domain → one node with kind "domain". Infrastructure from manifest → kind "infrastructure". External systems → kind "external".
-3. Edges: aggregated cross-domain relationships with protocol labels (HTTP, async, data)
-4. Call chronicle_diagram_build with nodes + edges ONLY — no node_keys
+group:domain + collapse IS this diagram: each domain becomes one block holding
+its real nodes, and the edges between blocks are the real cross-domain edges,
+aggregated with a weight. Leave scope.domain out to cover every domain.
 
 Example:
   chronicle_diagram_build(
     title: "Overview: {project} Architecture",
-    nodes: '[{"key":"domain:core-api","label":"Core API","kind":"domain"},{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"},{"key":"ext:stripe","label":"Stripe","kind":"external"}]',
-    edges: '[{"from":"domain:core-api","to":"infra:kafka","label":"publish order.created","kind":"async"}]'
+    view_spec: '{"scope":{},"group":{"by":"domain"},"collapse":true,"layout":{"preset":"c1"}}'
   )
 
 ### Type 2: Domain Detail
 Trigger: "show X in detail", "what's inside X", "expand X"
 Purpose: One domain expanded with services inside. Other domains as collapsed blocks.
 
-Construction:
-1. Call chronicle_node_list(domain="{target}") to get services in the target domain
-2. Use node_keys for real services in the target domain
-3. Add synthetic nodes (kind "domain") for neighboring domains
-4. Add infrastructure nodes if domain uses async
-5. Set groups: {"field":"domain"} for visual grouping
+Scope to the domain and group by service: each service becomes a block of its
+own components, and anything the domain talks to arrives through its real
+edges. Nothing needs to be added by hand.
 
 Example:
   chronicle_diagram_build(
     title: "Domain: Core API",
-    node_keys: '["service:code:core:OrdersService","service:code:core:PaymentsService"]',
-    nodes: '[{"key":"domain:crm","label":"CRM","kind":"domain"},{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"}]',
-    edges: '[{"from":"service:code:core:OrdersService","to":"infra:kafka","label":"publish order.created","kind":"async"},{"from":"infra:kafka","to":"domain:crm","label":"consume","kind":"async"}]',
-    groups: '{"field":"domain"}'
+    view_spec: '{"scope":{"domain":"core"},"group":{"by":"service"},"collapse":true,"layout":{"preset":"c2"}}'
   )
 
 ### Type 3: Request Flow
 Trigger: "how does X flow to Y", "trace a request", "explain how X calls Y"
 Purpose: Trace a request path across domains. Domains as swimlanes.
 
-Construction:
-1. Identify start and end from user's question
-2. Call chronicle_query_path(from, to) to get the path
-3. Use node_keys for all nodes on the path
-4. Set groups: {"field":"domain"} for domain swimlanes
-5. Build steps array: each step = one hop, active nodes highlighted (#f59e0b), others dimmed
+expand.mode "path" traces the shortest path between two nodes and returns the
+hops in view.trace — you do not have to know them in advance, and nothing on
+the picture is a hop the graph does not have. Group by domain for swimlanes.
+steps still apply: build them from view.trace after the call.
 
 Example:
   chronicle_diagram_build(
     title: "Flow: Create Order",
-    node_keys: '["service:code:mobile:Gateway","service:code:core:OrdersService"]',
-    nodes: '[{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"}]',
-    groups: '{"field":"domain"}',
-    steps: '[{"title":"Entry","description":"Mobile sends POST /orders","highlights":{"service:code:mobile:Gateway":"#f59e0b"}},{"title":"Processing","description":"OrdersService validates","highlights":{"service:code:core:OrdersService":"#f59e0b"}}]'
+    view_spec: '{"scope":{"domain":"core","nodes":["service:code:mobile:Gateway","service:code:core:OrdersService"]},"expand":{"mode":"path"},"group":{"by":"domain"},"layout":{"preset":"path"}}',
+    steps: '[{"title":"Entry","description":"Mobile sends POST /orders","highlights":{"service:code:mobile:Gateway":"#f59e0b"}}]'
   )
 
 ### Type 4: Dependency Map (Impact)
 Trigger: "what depends on X", "what breaks if I change X", "blast radius"
 Purpose: Show what a change affects. Grouped by domain with heatmap.
 
-Construction:
-1. Call chronicle_impact(node_key) or chronicle_query_deps + chronicle_query_reverse_deps
-2. Collect affected nodes up to 2 hops / 15 nodes
-3. Use node_keys for all affected nodes
-4. Set groups: {"field":"domain"}
-5. Use annotations for heatmap: changed (#ef4444), direct (#f59e0b), indirect (#eab308)
+expand direction "in" from the changed node IS the blast radius: everything
+that reaches it, to any depth, computed by the engine rather than assembled
+from two query calls. Collapse by service to keep it readable. Use annotations
+for the heatmap: changed (#ef4444), direct (#f59e0b), indirect (#eab308).
 
 Example:
   chronicle_diagram_build(
     title: "Impact: Changing OrdersService",
-    node_keys: '["service:code:core:OrdersService","service:code:core:PaymentsService","service:code:crm:CrmConsumer"]',
-    groups: '{"field":"domain"}',
-    annotations: '{"service:code:core:OrdersService":{"highlight":"#ef4444","note":"CHANGED"},"service:code:crm:CrmConsumer":{"highlight":"#f59e0b","note":"Consumes order.created events"}}'
+    view_spec: '{"scope":{"nodes":["service:code:core:OrdersService"]},"expand":{"direction":"in","depth":99},"group":{"by":"service"},"collapse":true,"layout":{"preset":"impact"}}',
+    annotations: '{"service:code:core:OrdersService":{"highlight":"#ef4444","note":"CHANGED"}}'
   )
 
 ### Type 5: Federation Topology
 Trigger: "show topology", "how do domains connect", "federation overview", "cross-repo map"
 Purpose: Domains as blocks connected by cross-repo edges. Shows how independently-scanned repos relate.
 
-CRITICAL: Use ONLY "nodes" (synthetic). NEVER use "node_keys". Each domain → one node with kind "domain".
+Within ONE repo, this is Type 1: view_spec with group:domain + collapse.
+
+Across repos it is not, yet: the view algebra evaluates against a single
+store, so a picture spanning members has to be assembled from per-member
+queries and passed as nodes/edges. It will render marked "asserted", which is
+correct — nothing verified those cross-repo edges as one graph. Say so when
+you share it, and prefer a per-repo view_spec whenever the question fits in
+one repo.
 
 Construction:
 1. Call chronicle_query_stats("") for aggregated stats
@@ -367,7 +373,8 @@ Example:
 
 - Node kinds: domain, infrastructure, external, service, endpoint, model, topic, queue, database
 - Edge kinds: http, async, data, structural
-- NEVER exceed 15 real nodes (node_keys). Synthetic nodes (domain/infra/external) don't count.
+- Prefer view_spec. Reach for nodes/edges only for something the graph does not contain; they render marked "asserted" and are excluded from nothing.
+- NEVER exceed 15 real nodes. Collapsing (group + collapse:true) is how a big view stays readable — it keeps every node, folded into blocks that carry their real members.
 - Infrastructure is ALWAYS explicit — show Kafka/Redis/RabbitMQ as nodes between publisher and consumer. Never a direct edge from publisher to consumer.
 - Edge labels: always show protocol type (HTTP, publish, consume, uses).
 - Kafka topics: include topic names as edge labels.
