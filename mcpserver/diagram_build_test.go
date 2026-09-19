@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -350,4 +351,87 @@ func TestDiagramBuild_LegacyNodes_LegacySession(t *testing.T) {
 	if nodes, ok := session["nodes"].([]any); !ok || len(nodes) != 2 {
 		t.Errorf("stored nodes = %v, want 2 entries", session["nodes"])
 	}
+}
+
+// The renderer draws a canvas only for a session carrying a "view". node_keys
+// used to store a selection-only session, so every diagram the catalog builds
+// that way fell through to the no-canvas fallback.
+func TestDiagramBuild_NodeKeys_EmitsARenderableView(t *testing.T) {
+	g := newLabTestGraph(t)
+	tomKey, _ := seedTomJerry(t, g)
+
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title":     "Selection",
+		"domain":    "test",
+		"node_keys": `["` + tomKey + `"]`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := toolResultJSON(t, res)
+	if out["mode"] != "node_keys" {
+		t.Fatalf("mode = %v, want node_keys", out["mode"])
+	}
+
+	_, data, ok := diagrams.Default.Get(out["session_id"].(string))
+	if !ok {
+		t.Fatal("session not stored")
+	}
+	var sess map[string]any
+	if err := json.Unmarshal([]byte(data), &sess); err != nil {
+		t.Fatal(err)
+	}
+	view, ok := sess["view"].(map[string]any)
+	if !ok {
+		t.Fatalf("session carries no view, so nothing renders: keys %v", sessionKeys(sess))
+	}
+	// The seed's neighbour must survive as a boundary node with its edge:
+	// a one-node selection that drops them renders as an orphan.
+	if n := len(view["nodes"].([]any)); n != 2 {
+		t.Fatalf("view nodes = %d, want the seed plus its boundary neighbour", n)
+	}
+	if e := len(view["edges"].([]any)); e != 1 {
+		t.Fatalf("view edges = %d, want the edge to the neighbour", e)
+	}
+}
+
+// A call the tool's own catalog documents (Type 2) passes node_keys AND
+// nodes/edges/groups. Precedence keeps the first and drops the rest, so the
+// reply has to name what it dropped instead of reporting a complete diagram.
+func TestDiagramBuild_ReportsWhatItIgnored(t *testing.T) {
+	g := newLabTestGraph(t)
+	tomKey, _ := seedTomJerry(t, g)
+
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title":     "Domain detail",
+		"domain":    "test",
+		"node_keys": `["` + tomKey + `"]`,
+		"nodes":     `[{"key":"domain:crm","label":"CRM","kind":"domain"}]`,
+		"edges":     `[{"from":"domain:crm","to":"` + tomKey + `","kind":"http"}]`,
+		"groups":    `{"field":"domain"}`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := toolResultJSON(t, res)
+	got, _ := out["ignored"].([]any)
+	var names []string
+	for _, v := range got {
+		names = append(names, v.(string))
+	}
+	want := []string{"nodes", "edges", "groups"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("ignored = %v, want %v", names, want)
+	}
+}
+
+func sessionKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

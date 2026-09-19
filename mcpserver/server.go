@@ -2588,11 +2588,13 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func diagramBuildTool() mcp.Tool {
 	return mcp.NewTool("chronicle_diagram_build",
-		mcp.WithDescription(`Build a live diagram through the unified view-model engine. PRIMARY mode: provide view_spec — a full view-algebra ViewSpec evaluated by BuildView. Alternative: node_keys — nodes are resolved from the graph DB and lifted to a C3-shaped custom selection (components + internal edges + boundary). Returns session URL.
+		mcp.WithDescription(`Build a live diagram through the unified view-model engine. PRIMARY mode: provide view_spec — a full view-algebra ViewSpec evaluated by BuildView. Alternative: node_keys — the same engine scoped to those nodes, with their 1-hop neighbours kept as dimmed boundary nodes so nothing renders as an orphan. Returns session URL.
+
+The reply names the mode it used and lists, under "ignored", every parameter you supplied that the mode does not read. Modes are chosen by precedence, NOT merged: passing node_keys together with nodes/edges/groups keeps the node_keys view and drops the rest. Check "ignored" — a diagram missing what you asked for is otherwise indistinguishable from a complete one.
 
 Modes (priority order):
 - View algebra (primary): provide view_spec — {"scope":{"domain":"...","service"|"nodes"|"flow":...},"expand":{"direction":"out|in|both","depth":N,"edges":[...],"mode":"neighbors|path"},"filter":{...},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset":"c1|c2|c3|deps|impact|path|custom"}}. expand.mode "path" needs scope.nodes=[A,B] and traces the shortest path.
-- Graph-backed: provide node_keys — viewmodel.BuildSelection resolves nodes, discovers internal edges and one-hop boundary edges.
+- Graph-backed: provide node_keys — evaluated as scope.nodes through the same view algebra (internal edges plus one-hop boundary nodes and their edges).
 - Legacy view model: provide explicit nodes + edges — stored as a legacy session for the old card viewer.
 
 Node kinds: service, endpoint, model, domain, infrastructure, external, topic, queue, database
@@ -2712,6 +2714,7 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		var session map[string]any
 		var nodeCount, edgeCount int
 		missing := []string{}
+		mode := ""
 
 		if viewSpecRaw != "" {
 			// PRIMARY path: full view-algebra spec → BuildView. The session
@@ -2741,30 +2744,44 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 				"view":      view,
 				"selection": selectionProjection(view, title),
 			}
+			mode = "view_spec"
 			nodeCount = len(view.Nodes) + len(view.Groups)
 			edgeCount = len(view.Edges)
 			if view.Missing != nil {
 				missing = view.Missing
 			}
 		} else if len(nodeKeys) > 0 {
-			// node_keys path: selection sugar over the view-model engine.
-			// Keeps writing the "selection"-shaped session the current
-			// frontend renderer reads.
-			sel, err := viewmodel.BuildSelection(g.Store(), domain, nodeKeys, title)
+			// node_keys path: sugar for scope.nodes over the SAME engine, so
+			// it emits a real View.
+			//
+			// It used to call BuildSelection, whose payload the renderer
+			// cannot draw — it draws a canvas only for a session carrying a
+			// "view" — so every node_keys diagram fell through to the
+			// no-canvas fallback. Going through the algebra also stops a
+			// seed's neighbours being thrown away: scope.nodes materializes
+			// them as dimmed boundary nodes and keeps the edges, where
+			// BuildSelection dropped both and rendered orphans.
+			spec := viewmodel.ViewSpec{
+				Scope:  viewmodel.ScopeSpec{Domain: domain, Nodes: nodeKeys},
+				Layout: viewmodel.LayoutSpec{Preset: "custom"},
+			}
+			view, err := viewmodel.BuildView(g.Store(), spec)
 			if err != nil {
-				return errorResult(fmt.Errorf("build selection: %w", err)), nil
+				return errorResult(fmt.Errorf("build view: %w", err)), nil
 			}
 			session = map[string]any{
 				"kind":      "viewmodel",
 				"level":     "custom",
 				"title":     title,
 				"domain":    domain,
-				"selection": sel,
+				"view":      view,
+				"selection": selectionProjection(view, title),
 			}
-			nodeCount = len(sel.Components)
-			edgeCount = len(sel.InternalEdges)
-			if sel.Missing != nil {
-				missing = sel.Missing
+			mode = "node_keys"
+			nodeCount = len(view.Nodes) + len(view.Groups)
+			edgeCount = len(view.Edges)
+			if view.Missing != nil {
+				missing = view.Missing
 			}
 		} else {
 			// LEGACY path: explicit nodes/edges view model, wrapped so the
@@ -2783,6 +2800,7 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 					session[f] = v
 				}
 			}
+			mode = "legacy"
 			if nodes, ok := parsed["nodes"].([]any); ok {
 				nodeCount = len(nodes)
 			}
@@ -2810,11 +2828,48 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		return jsonResult(map[string]any{
 			"session_id": sessionID,
 			"url":        url,
+			"mode":       mode,
+			"ignored":    ignoredParams(mode, args),
 			"node_count": nodeCount,
 			"edge_count": edgeCount,
 			"missing":    missing,
 		}), nil
 	}
+}
+
+// diagramModeInputs names, per mode, the parameters that mode actually reads.
+// Everything else a caller supplied is dropped, and the caller has to be told
+// which: the modes are chosen by precedence, so a call carrying node_keys AND
+// nodes/edges/groups — the shape this tool's own catalog documents — silently
+// kept the first and threw the rest away, while "missing": [] said nothing was
+// lost. Reporting an empty diagram as a complete one is worse than refusing to
+// draw it.
+var diagramModeInputs = map[string][]string{
+	"view_spec": {"view_spec"},
+	"node_keys": {"node_keys"},
+	"legacy":    {"nodes", "edges", "groups", "hide_edges"},
+}
+
+// diagramPassThrough are read whatever the mode is, so they are never ignored.
+var diagramPassThrough = []string{"title", "domain", "annotations", "steps"}
+
+// ignoredParams lists the non-empty parameters this call supplied that the
+// chosen mode does not read, in a stable order.
+func ignoredParams(mode string, args map[string]any) []string {
+	used := map[string]bool{}
+	for _, f := range diagramModeInputs[mode] {
+		used[f] = true
+	}
+	for _, f := range diagramPassThrough {
+		used[f] = true
+	}
+	out := []string{}
+	for _, f := range []string{"view_spec", "node_keys", "nodes", "edges", "groups", "hide_edges"} {
+		if !used[f] && strParam(args, f) != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
