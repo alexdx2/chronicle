@@ -193,6 +193,10 @@ button,input,select,textarea{font-family:inherit}
 .tb-menu button:hover{background:var(--primary-light)}
 .tb-menu button .tbm-hint{font-size:9px;color:var(--text-muted)}
 .btn-ico{width:15px;height:15px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* Asserted-element warning in the view breadcrumb */
+.crumb-asserted{margin-left:8px;font-family:var(--font-mono);font-size:10px;letter-spacing:.04em;
+  background:var(--warning-bg,#fdf0d0);color:var(--warning-text);border:1px dashed var(--warning);
+  padding:2px 8px;border-radius:10px;cursor:help;white-space:nowrap}
 /* View-mode breadcrumb */
 .crumb-row{display:flex;align-items:center;gap:4px;font-size:12px;padding:5px 12px;background:var(--card);border-bottom:1px solid var(--border);flex-wrap:wrap}
 .crumb{display:inline-flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:3px 10px;border-radius:6px;font-size:12px;font-family:inherit;color:var(--text-muted);transition:background .15s,color .15s}
@@ -1000,6 +1004,15 @@ button,input,select,textarea{font-family:inherit}
           <span class="muted" style="font-size:10px;margin-left:6px;cursor:help"
                 title="Each step is an independent query over the WHOLE graph — results are not scoped to the previous view. The trail is navigation history; click any step to go back.">
             each step queries the full graph</span>
+        </template>
+        <!-- Asserted elements were written by whoever built the diagram, not
+             read from the graph. The dashed outline says which ones; this says
+             what the dashes mean, because a reader who does not know takes the
+             whole picture as evidence. -->
+        <template x-if="assertedCount() > 0">
+          <span class="crumb-asserted" :title="assertedCount() + ' element(s) on this diagram were written by hand, not derived from the graph. Nothing verified them.'">
+            <span x-text="assertedCount()"></span> asserted &mdash; not from the graph
+          </span>
         </template>
         <template x-if="viewLoading">
           <span style="color:var(--text-muted);font-size:10px;margin-left:8px">Building view…</span>
@@ -2500,6 +2513,17 @@ function dashboard() {
     // The scan list earns its space only when it says something the line above
     // does not: that there is more than one scan to choose between, or that one
     // could not be used. One answering scan on its own is already the line.
+    // How many elements on the current view nothing verified. Counting the
+    // view (not the session) means it follows drill-ins and filters, so the
+    // warning never outlives the elements it is about.
+    assertedCount() {
+      const v = this.viewStack.length ? this.viewStack[this.viewStack.length - 1].view : null;
+      if (!v) return 0;
+      const n = (v.nodes || []).filter(x => x.asserted).length;
+      const e = (v.edges || []).filter(x => x.asserted).length;
+      return n + e;
+    },
+
     showScans() {
       const scans = this.freshness?.scans ?? [];
       return scans.length > 1 || scans.some(sc => sc.use === 'skipped' || sc.use === 'gone');
@@ -5905,7 +5929,12 @@ function dashboard() {
         try { data = JSON.parse(data); } catch (e) { data = null; }
       }
 
-      if (data && data.kind === 'viewmodel' && data.view) {
+      // Any session carrying a view renders — including a legacy one, whose
+      // view is built from the caller's own nodes/edges with every element
+      // flagged asserted. kind stays as the record of where it came from;
+      // gating the canvas on it left hand-authored diagrams showing a bare
+      // list of names instead of the picture the caller asked for.
+      if (data && data.view) {
         // Full View payload → same adapter → same renderer
         if (data.domain) this.viewDomain = this.viewDomain || data.domain;
         const title = data.title || data.view.title || (raw && raw.title) || 'Custom view';

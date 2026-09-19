@@ -67,6 +67,13 @@ type VNode struct {
 	// included so in-view components whose only edges cross the boundary
 	// don't render as orphans. Renderers draw boundary nodes dimmed.
 	Boundary bool `json:"boundary,omitempty"`
+	// Asserted marks a node the caller wrote rather than one this engine read
+	// out of the graph. Nothing verifies it: not the key, not the name, not
+	// the type. A diagram is read as a statement about the system, so an
+	// unverifiable element that renders identically to a derived one is the
+	// cheapest possible way to launder a guess into evidence. Renderers draw
+	// asserted elements distinctly and say so.
+	Asserted bool `json:"asserted,omitempty"`
 }
 
 // VEdge is a rendered arrow. With collapse=true, From/To are group keys (or
@@ -80,6 +87,11 @@ type VEdge struct {
 	Label         string   `json:"label,omitempty"`
 	Weight        int      `json:"weight"`
 	CollapsedFrom []string `json:"collapsed_from,omitempty"`
+	// Asserted marks an edge the caller wrote — see VNode.Asserted. An
+	// asserted edge is the more dangerous of the two: it claims a
+	// relationship between two things, which is exactly what a reader takes
+	// a diagram to be evidence of.
+	Asserted bool `json:"asserted,omitempty"`
 }
 
 // VBoundary lists edges crossing the view boundary, reusing the C3

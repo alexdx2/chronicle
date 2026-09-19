@@ -202,6 +202,9 @@ function adaptView(view, baseLookup) {
       // via the renderer's existing ref pattern (_isRef → opacity 0.4).
       _isRef: !!n.boundary,
       _boundary: !!n.boundary,
+      // Written by the caller, not read from the graph — the renderer draws
+      // these distinctly so an unverified claim never passes for a derived one.
+      _asserted: !!n.asserted,
       // View-specific salience (registry-driven). _renderMode is the UI source
       // of truth; _tier is diagnostic. Used to hide/dim low-salience nodes.
       _renderMode: n.render_mode || '',
@@ -244,6 +247,7 @@ function adaptView(view, baseLookup) {
       confidence: 1,
       trust_score: 1,
       _kind: e.kind,
+      _asserted: !!e.asserted,
       _label: e.label || '',
     };
   });

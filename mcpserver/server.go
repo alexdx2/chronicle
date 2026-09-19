@@ -2800,6 +2800,13 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 					session[f] = v
 				}
 			}
+			// Give the legacy shape a view too, so it renders at all — but
+			// every element marked asserted. These nodes and edges were
+			// written by the caller: no key was looked up, no relationship
+			// was checked. Rendering them exactly like graph-derived ones is
+			// how a guess becomes evidence, so the view carries the
+			// distinction and the renderer shows it.
+			session["view"] = assertedView(title, parsed["nodes"], parsed["edges"])
 			mode = "legacy"
 			if nodes, ok := parsed["nodes"].([]any); ok {
 				nodeCount = len(nodes)
@@ -2835,6 +2842,48 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 			"missing":    missing,
 		}), nil
 	}
+}
+
+// assertedView lifts caller-written nodes/edges into a View whose every
+// element is flagged asserted. Entries it cannot read are skipped rather than
+// guessed at: a node with no key cannot be drawn, and an edge whose ends are
+// missing would be an arrow between nothing.
+func assertedView(title string, rawNodes, rawEdges any) *viewmodel.View {
+	v := &viewmodel.View{Title: title, Nodes: []viewmodel.VNode{}, Edges: []viewmodel.VEdge{}, Groups: []viewmodel.VGroup{}}
+
+	str := func(m map[string]any, k string) string {
+		s, _ := m[k].(string)
+		return s
+	}
+	if list, ok := rawNodes.([]any); ok {
+		for _, item := range list {
+			n, ok := item.(map[string]any)
+			if !ok || str(n, "key") == "" {
+				continue
+			}
+			name := str(n, "label")
+			if name == "" {
+				name = str(n, "key")
+			}
+			v.Nodes = append(v.Nodes, viewmodel.VNode{
+				Key: str(n, "key"), Name: name, Type: str(n, "kind"),
+				Layer: str(n, "kind"), Asserted: true,
+			})
+		}
+	}
+	if list, ok := rawEdges.([]any); ok {
+		for _, item := range list {
+			e, ok := item.(map[string]any)
+			if !ok || str(e, "from") == "" || str(e, "to") == "" {
+				continue
+			}
+			v.Edges = append(v.Edges, viewmodel.VEdge{
+				From: str(e, "from"), To: str(e, "to"), Kind: str(e, "kind"),
+				Label: str(e, "label"), Weight: 1, Asserted: true,
+			})
+		}
+	}
+	return v
 }
 
 // diagramModeInputs names, per mode, the parameters that mode actually reads.

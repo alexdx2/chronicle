@@ -435,3 +435,94 @@ func sessionKeys(m map[string]any) []string {
 	sort.Strings(out)
 	return out
 }
+
+// Hand-written nodes and edges must render — a bare list of names is not the
+// picture the caller asked for — but never as if the graph backed them.
+func TestDiagramBuild_LegacyNodesRenderButAreMarkedAsserted(t *testing.T) {
+	g := newLabTestGraph(t)
+
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title":  "Overview",
+		"domain": "test",
+		"nodes":  `[{"key":"domain:core","label":"Core","kind":"domain"},{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"}]`,
+		"edges":  `[{"from":"domain:core","to":"infra:kafka","label":"publish","kind":"async"}]`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := toolResultJSON(t, res)
+	if out["mode"] != "legacy" {
+		t.Fatalf("mode = %v, want legacy", out["mode"])
+	}
+
+	_, data, ok := diagrams.Default.Get(out["session_id"].(string))
+	if !ok {
+		t.Fatal("session not stored")
+	}
+	var sess struct {
+		Kind string `json:"kind"`
+		View *struct {
+			Nodes []viewmodel.VNode `json:"nodes"`
+			Edges []viewmodel.VEdge `json:"edges"`
+		} `json:"view"`
+	}
+	if err := json.Unmarshal([]byte(data), &sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Kind != "legacy" {
+		t.Fatalf("kind = %q, want legacy — the session must still record where it came from", sess.Kind)
+	}
+	if sess.View == nil {
+		t.Fatal("no view, so the diagram does not render at all")
+	}
+	if len(sess.View.Nodes) != 2 || len(sess.View.Edges) != 1 {
+		t.Fatalf("view = %d nodes / %d edges, want 2/1", len(sess.View.Nodes), len(sess.View.Edges))
+	}
+	for _, n := range sess.View.Nodes {
+		if !n.Asserted {
+			t.Fatalf("node %q is not marked asserted — nothing looked it up", n.Key)
+		}
+	}
+	for _, e := range sess.View.Edges {
+		if !e.Asserted {
+			t.Fatalf("edge %s->%s is not marked asserted — nothing verified the relationship", e.From, e.To)
+		}
+	}
+}
+
+// A graph-derived view must NOT be flagged: the marking only means something
+// if it separates the two.
+func TestDiagramBuild_GraphDerivedViewIsNotAsserted(t *testing.T) {
+	g := newLabTestGraph(t)
+	tomKey, _ := seedTomJerry(t, g)
+
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title": "Derived", "domain": "test", "node_keys": `["` + tomKey + `"]`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := toolResultJSON(t, res)
+	_, data, _ := diagrams.Default.Get(out["session_id"].(string))
+	var sess struct {
+		View struct {
+			Nodes []viewmodel.VNode `json:"nodes"`
+			Edges []viewmodel.VEdge `json:"edges"`
+		} `json:"view"`
+	}
+	if err := json.Unmarshal([]byte(data), &sess); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range sess.View.Nodes {
+		if n.Asserted {
+			t.Fatalf("graph-derived node %q is flagged asserted", n.Key)
+		}
+	}
+	for _, e := range sess.View.Edges {
+		if e.Asserted {
+			t.Fatalf("graph-derived edge %s->%s is flagged asserted", e.From, e.To)
+		}
+	}
+}

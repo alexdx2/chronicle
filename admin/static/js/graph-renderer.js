@@ -259,6 +259,10 @@ export class GraphRenderer {
         return cat ? cat.color : '#666';
       })
       .attr('stroke-width', 1.5)
+      // An asserted edge claims a relationship nothing checked — the most
+      // dangerous thing on a diagram, because a reader takes an arrow as
+      // evidence that the connection exists.
+      .attr('stroke-dasharray', e => e._asserted ? '3,3' : null)
       .attr('fill', 'none')
       .attr('marker-end', 'url(#arrowhead)')
       .attr('opacity', e => (marks.path && marks.path.size > 0) ?
@@ -318,7 +322,12 @@ export class GraphRenderer {
       // Primary salience gets a heavier border; collapsed/badge nodes get a
       // dashed border to read as "folded / secondary form".
       .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : (d._tier === 'primary' ? 2 : 1.2))
-      .attr('stroke-dasharray', d => (d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null);
+      // An asserted node was written by whoever built the diagram, not read
+      // from the graph, so it gets its own fine dash — distinct from the
+      // '4,2' a collapsed/badge node uses, and winning over it: "nothing
+      // verified this" outranks "this is a folded form".
+      .attr('stroke-dasharray', d => d._asserted ? '2,3'
+        : ((d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null));
 
     nodeG.append('text')
       .attr('text-anchor', 'middle').attr('dy', -2)
