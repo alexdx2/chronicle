@@ -69,3 +69,19 @@ func TestExitCodeSeparatesAnswerFromFailure(t *testing.T) {
 		t.Errorf("a non-exec error must be -1 (git never ran), got %d", got)
 	}
 }
+
+// A commit can sit on many branches or none, so the only commit whose branch
+// is knowable is the one checked out. Labelling any other with whatever branch
+// happens to be current would put "main" on a scan of a feature commit.
+func TestBranchAtOnlyAnswersForHEAD(t *testing.T) {
+	dir, sha := repo(t)
+	if got := BranchAt(dir, sha); got == "" {
+		t.Fatalf("BranchAt(HEAD) = %q, want the current branch", got)
+	}
+	if got := BranchAt(dir, "0123456789abcdef0123456789abcdef01234567"); got != "" {
+		t.Fatalf("BranchAt(other commit) = %q, want empty", got)
+	}
+	if got := BranchAt(dir, ""); got != "" {
+		t.Fatalf("BranchAt(\"\") = %q, want empty", got)
+	}
+}

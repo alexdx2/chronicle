@@ -6,6 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/alexdx2/chronicle-core/gitutil"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -56,6 +58,7 @@ func newRevisionCreateCmd() *cobra.Command {
 				Mode:        mode,
 				Metadata:    metadata,
 				Merge:       store.MergeableRevisionMetadata(metadata),
+				Branch:      gitutil.BranchAt(paths.GitDir(), afterSHA),
 			})
 			if err != nil {
 				outputError(err)

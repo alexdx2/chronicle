@@ -40,6 +40,22 @@
 .upkeep-what{color:var(--text-muted);font-size:12px;flex:1}
 .upkeep-fix{font-family:var(--font-mono);font-size:11px;background:var(--error-light);color:var(--error);padding:2px 7px;border-radius:4px;white-space:nowrap}
 .upkeep-path{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+/* The scans this graph holds. Shown only when there is more than one, or when
+   one of them had to be skipped: a single answering scan is already what the
+   line above says, and repeating it would be noise. */
+.upkeep-scans{padding-top:8px;margin-top:2px;border-top:1px solid var(--border)}
+.upkeep-scans-head{font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted);margin-bottom:5px}
+.scan-row{display:grid;grid-template-columns:16px auto 84px auto 1fr;gap:9px;align-items:baseline;padding:3px 0;font-family:var(--font-mono);font-size:11px}
+.scan-rad{color:var(--border);line-height:1}
+.scan-sha{background:var(--card-alt);padding:1px 6px;border-radius:4px;color:var(--text-secondary)}
+.scan-at,.scan-branch{color:var(--text-muted);white-space:nowrap}
+.scan-use{color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scan-row.answering .scan-rad{color:var(--primary)}
+.scan-row.answering .scan-sha{background:var(--primary);color:var(--text-on-dark)}
+.scan-row.answering .scan-use{color:var(--text);font-weight:600}
+.scan-row.skipped .scan-use{color:var(--warning-text)}
+.scan-row.skipped .scan-sha,.scan-row.skipped .scan-at,.scan-row.skipped .scan-branch{opacity:.65}
+.scan-row.gone .scan-use{color:var(--error)}
 .meter{height:6px;border-radius:3px;background:var(--border);overflow:hidden;min-width:120px;flex:1}
 .meter>span{display:block;height:100%;background:var(--success);transition:width .3s}
 .meter.partial>span{background:#c9902f}
@@ -662,6 +678,24 @@ button,input,select,textarea{font-family:inherit}
               x-text="['fresh','verified','structured'].includes(freshness?.status) ? '\u2713' : '\u2715'"></span>
         <span class="upkeep-name">Behind HEAD</span>
         <span class="upkeep-what" x-text="freshness ? freshness.message : ''"></span>
+      </div>
+
+      <!-- Which scan is answering, and why not one of the others. A newer scan
+           that HEAD does not descend from is real knowledge about another
+           branch: without this list the graph looks merely behind, and the
+           reader has no way to tell that a fresher scan exists and was
+           deliberately not used. -->
+      <div class="upkeep-scans" x-show="showScans()">
+        <div class="upkeep-scans-head">Scans in this graph</div>
+        <template x-for="sc in (freshness?.scans ?? [])" :key="sc.sha">
+          <div class="scan-row" :class="sc.use">
+            <span class="scan-rad" x-text="sc.use === 'answering' ? '\u25C9' : '\u25CB'"></span>
+            <span class="scan-sha" x-text="(sc.sha || '').slice(0,7)"></span>
+            <span class="scan-at" x-text="(sc.at || '').slice(0,10)"></span>
+            <span class="scan-branch" x-text="sc.branch || '\u2014'"></span>
+            <span class="scan-use" x-text="scanNote(sc)" :title="scanNote(sc)"></span>
+          </div>
+        </template>
       </div>
 
       <div class="upkeep-row" x-show="upkeep?.scan">
@@ -2463,6 +2497,29 @@ function dashboard() {
     // walks HEAD's tree and reads hook files off disk, where freshness only
     // reads the database. A failed fetch leaves the panel hidden rather than
     // showing zeros, which would read as "nothing is installed".
+    // The scan list earns its space only when it says something the line above
+    // does not: that there is more than one scan to choose between, or that one
+    // could not be used. One answering scan on its own is already the line.
+    showScans() {
+      const scans = this.freshness?.scans ?? [];
+      return scans.length > 1 || scans.some(sc => sc.use === 'skipped' || sc.use === 'gone');
+    },
+
+    scanNote(sc) {
+      switch (sc.use) {
+        case 'answering':
+          return sc.commits > 0
+            ? 'answering \u2014 ' + sc.commits + (sc.commits === 1 ? ' commit back' : ' commits back')
+            : 'answering \u2014 your HEAD';
+        case 'skipped':
+          return 'skipped \u2014 your HEAD does not descend from it';
+        case 'gone':
+          return 'commit not in this repository any more';
+        default:
+          return 'superseded';
+      }
+    },
+
     async fetchUpkeep() {
       try {
         const r = await fetch('/api/upkeep?domain=' + encodeURIComponent(this.domain || ''));

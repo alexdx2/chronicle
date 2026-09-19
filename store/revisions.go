@@ -122,6 +122,17 @@ func (s *Store) GetRevision(id int64) (*Revision, error) {
 // re-verify existing knowledge and layer imports (metadata.layer) only carry
 // one layer, so neither may move the scanned SHA. ErrNotFound when none.
 func (s *Store) LatestScanRevision(domainKey string) (*Revision, error) {
+	q, args := scanRevisionQuery(domainKey)
+	q += ` LIMIT 1`
+	return s.oneRevision("LatestScanRevision", q, args...)
+}
+
+// scanRevisionQuery is the one definition of "a scan revision", newest first.
+// LatestScanRevision and ListScanRevisions must not drift apart: the list is
+// what a reader falls back through when the newest scan turns out to be
+// unusable, so a row missing from one and present in the other would make the
+// fallback disagree with the pointer it is meant to replace.
+func scanRevisionQuery(domainKey string) (string, []any) {
 	q := `SELECT ` + revisionCols + ` FROM graph_revisions
 	      WHERE trigger_kind != 'git_hook' AND ` + revisionLayerExpr + ` IS NULL`
 	var args []any
@@ -129,8 +140,43 @@ func (s *Store) LatestScanRevision(domainKey string) (*Revision, error) {
 		q += ` AND domain_key = ?`
 		args = append(args, domainKey)
 	}
-	q += ` ORDER BY revision_id DESC LIMIT 1`
-	return s.oneRevision("LatestScanRevision", q, args...)
+	return q + ` ORDER BY revision_id DESC`, args
+}
+
+// ListScanRevisions returns the newest scan revisions of domainKey, newest
+// first, at most limit of them (limit <= 0 means a default of 20). Unlike
+// LatestScanRevision it returns an empty slice rather than ErrNotFound when
+// the domain has never been scanned: "which scans exist" is a question with a
+// legitimate empty answer.
+func (s *Store) ListScanRevisions(domainKey string, limit int) ([]*Revision, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	q, args := scanRevisionQuery(domainKey)
+	q += ` LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ListScanRevisions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Revision
+	for rows.Next() {
+		r := &Revision{}
+		if err := rows.Scan(
+			&r.RevisionID, &r.DomainKey, &r.GitBeforeSHA, &r.GitAfterSHA,
+			&r.TriggerKind, &r.Mode, &r.CreatedAt, &r.Metadata,
+		); err != nil {
+			return nil, fmt.Errorf("ListScanRevisions: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ListScanRevisions: %w", err)
+	}
+	return out, nil
 }
 
 // revisionKindExpr reads metadata.kind defensively, like revisionLayerExpr.
@@ -321,6 +367,62 @@ type RevisionClaim struct {
 	// Layer names the single layer this writer imported, when it imported one
 	// ("ui" for a surface import). It sets the claim's rank and nothing else.
 	Layer string
+
+	// Branch is the branch HEAD was on when this writer ran, recorded as
+	// metadata.branch and used only as a label — "this scan was taken on
+	// main". It is stored because it cannot be recovered later: the commit
+	// alone does not say which branch was checked out, and by the time anyone
+	// reads the row the branch may have moved on or been deleted.
+	//
+	// Only a scan-rank claim records it. A hook refresh or a layer import
+	// lands on whatever commit it finds, so its branch says nothing about
+	// where the graph's knowledge came from.
+	Branch string
+}
+
+// branchLabel is the branch this claim may record: only a scan speaks for
+// where the graph's code knowledge was read, so only a scan-rank claim
+// contributes one.
+func (c RevisionClaim) branchLabel() string {
+	if c.rank() != revisionRankScan {
+		return ""
+	}
+	return c.Branch
+}
+
+// hasBranch reports whether a metadata document already names a branch.
+// Unreadable metadata counts as "already named": we do not overwrite what we
+// cannot read.
+func hasBranch(meta string) bool {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(meta), &m); err != nil {
+		return true
+	}
+	b, _ := m["branch"].(string)
+	return b != ""
+}
+
+// withBranch adds metadata.branch to a metadata JSON document, leaving it
+// untouched when there is no branch to add or when the document is not JSON we
+// can safely rewrite — a metadata string we cannot parse is somebody else's
+// record, and dropping it to add a label would be the worse trade.
+func withBranch(meta, branch string) string {
+	if branch == "" {
+		return meta
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(meta), &m); err != nil || m == nil {
+		return meta
+	}
+	if existing, ok := m["branch"].(string); ok && existing != "" {
+		return meta
+	}
+	m["branch"] = branch
+	out, err := json.Marshal(m)
+	if err != nil {
+		return meta
+	}
+	return string(out)
 }
 
 func (c RevisionClaim) rank() int {
@@ -378,6 +480,7 @@ func (s *Store) ClaimRevision(c RevisionClaim) (int64, bool, error) {
 		if strings.TrimSpace(meta) == "" {
 			meta = "{}"
 		}
+		meta = withBranch(meta, c.branchLabel())
 		id, cerr := s.CreateRevision(c.DomainKey, c.BeforeSHA, c.AfterSHA, c.TriggerKind, c.Mode, meta)
 		if cerr != nil {
 			return 0, false, cerr
@@ -390,6 +493,13 @@ func (s *Store) ClaimRevision(c RevisionClaim) (int64, bool, error) {
 	merge := map[string]any{}
 	for k, v := range c.Merge {
 		merge[k] = v
+	}
+	// A scan that joins a row the hook created still has to record where it
+	// was read: the commonest flow is a post-commit refresh naming the commit
+	// first and the scan arriving second, and a branch label written only on
+	// the create path would be missing in exactly that case.
+	if b := c.branchLabel(); b != "" && !hasBranch(existing.Metadata) {
+		merge["branch"] = b
 	}
 
 	if c.rank() > revisionRowRank(existing) {

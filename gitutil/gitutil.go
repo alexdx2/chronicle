@@ -67,3 +67,33 @@ func withDir(dir string, args []string) []string {
 	}
 	return append([]string{"-C", dir}, args...)
 }
+
+// Branch is the branch HEAD points at in dir, or "" when there is none to
+// name: a detached HEAD, an unborn branch, or no git at all. Callers record it
+// as a label — "this was scanned on main" — so a value that is not a branch
+// name is worse than no value, and "HEAD" (what rev-parse prints when
+// detached) is exactly that.
+func Branch(dir string) string {
+	out, err := Output(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil || out == "HEAD" {
+		return ""
+	}
+	return out
+}
+
+// BranchAt is the branch a commit was reached on, which is knowable only when
+// that commit is the one currently checked out. Asking "which branch is sha
+// on" has no single answer — a commit can sit on many branches or none — so
+// anything but HEAD returns "": a label that might be wrong is worse than a
+// missing one, and the caller that records it (a scan naming a commit it did
+// not check out, a backfill) has nothing true to say about a branch.
+func BranchAt(dir, sha string) string {
+	if sha == "" {
+		return ""
+	}
+	head, err := Output(dir, "rev-parse", "HEAD")
+	if err != nil || head != sha {
+		return ""
+	}
+	return Branch(dir)
+}

@@ -532,3 +532,137 @@ func TestStructuredCarriesTheFilesWithNoAnswer(t *testing.T) {
 		t.Fatalf("line invents failures: %q", r.Line())
 	}
 }
+
+// scanAt records a scan revision the way a scan does: a plain claim on a
+// commit, carrying the branch it was taken on.
+func scanAt(t *testing.T, s *store.Store, domain, sha, branch string) {
+	t.Helper()
+	if _, _, err := s.ClaimRevision(store.RevisionClaim{
+		DomainKey: domain, AfterSHA: sha, TriggerKind: "manual", Mode: "full",
+		Metadata: "{}", Branch: branch,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func scanUse(r *Report, sha string) string {
+	for _, e := range r.Scans {
+		if e.SHA == sha {
+			return e.Use
+		}
+	}
+	return "<absent>"
+}
+
+// The newest scan is not automatically the one that can answer. Scanning a
+// feature branch and then checking main back out must not make the graph speak
+// for the feature branch while a usable scan of main sits right below it.
+func TestNewerScanOnAnotherBranchDoesNotAnswer(t *testing.T) {
+	dir, s := newRepo(t)
+	base := commit(t, dir, "a.ts")
+	scanAt(t, s, "d", base, "main")
+
+	git(t, dir, "checkout", "-q", "-b", "feat")
+	featSHA := commit(t, dir, "f.ts")
+	scanAt(t, s, "d", featSHA, "feat")
+
+	git(t, dir, "checkout", "-q", "main")
+	commit(t, dir, "m.ts")
+
+	r, err := Compute(dir, "r", "d", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Scanned == nil || r.Scanned.SHA != base {
+		t.Fatalf("answering scan = %+v, want the main scan %s", r.Scanned, base[:7])
+	}
+	if r.Status == StatusDiverged {
+		t.Fatalf("status = diverged, but a scan of this very branch is available")
+	}
+	if r.Unscanned.Commits != 1 {
+		t.Fatalf("commits behind = %d, want 1", r.Unscanned.Commits)
+	}
+	if got := scanUse(r, featSHA); got != ScanSkipped {
+		t.Fatalf("feature-branch scan use = %q, want %q", got, ScanSkipped)
+	}
+	if got := scanUse(r, base); got != ScanAnswering {
+		t.Fatalf("main scan use = %q, want %q", got, ScanAnswering)
+	}
+}
+
+// Nothing on this line of history means nothing to answer with: the report
+// must say diverged rather than fall through to a usable-looking older scan.
+func TestNoScanOnThisLineStaysDiverged(t *testing.T) {
+	dir, s := newRepo(t)
+	commit(t, dir, "a.ts")
+	git(t, dir, "checkout", "-q", "-b", "feat")
+	f1 := commit(t, dir, "f1.ts")
+	scanAt(t, s, "d", f1, "feat")
+	f2 := commit(t, dir, "f2.ts")
+	scanAt(t, s, "d", f2, "feat")
+	git(t, dir, "checkout", "-q", "main")
+
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Status != StatusDiverged {
+		t.Fatalf("status = %q, want diverged", r.Status)
+	}
+	if got := scanUse(r, f1); got != ScanSkipped {
+		t.Fatalf("f1 use = %q, want skipped", got)
+	}
+	if got := scanUse(r, f2); got != ScanSkipped {
+		t.Fatalf("f2 use = %q, want skipped", got)
+	}
+}
+
+// A scan records which branch it was taken on, because the commit alone does
+// not remember and the branch may be gone by the time anyone reads the row.
+func TestScanCarriesTheBranchItWasTakenOn(t *testing.T) {
+	dir, s := newRepo(t)
+	sha := commit(t, dir, "a.ts")
+	scanAt(t, s, "d", sha, "main")
+
+	r, _ := Compute(dir, "r", "d", s)
+	if r.Scanned == nil || r.Scanned.Branch != "main" {
+		t.Fatalf("scanned branch = %+v, want main", r.Scanned)
+	}
+	if len(r.Scans) != 1 || r.Scans[0].Branch != "main" {
+		t.Fatalf("scan list = %+v, want one entry on main", r.Scans)
+	}
+}
+
+// A scan whose commit git cannot find is not "zero commits behind" — every
+// distance against a missing commit computes as nothing at all.
+func TestScanOnAMissingCommitIsMarkedGone(t *testing.T) {
+	dir, s := newRepo(t)
+	real := commit(t, dir, "a.ts")
+	scanAt(t, s, "d", real, "main")
+	ghost := "0123456789abcdef0123456789abcdef01234567"
+	scanAt(t, s, "d", ghost, "main")
+
+	r, _ := Compute(dir, "r", "d", s)
+	if got := scanUse(r, ghost); got != ScanGone {
+		t.Fatalf("missing-commit scan use = %q, want %q", got, ScanGone)
+	}
+	if r.Scanned == nil || r.Scanned.SHA != real {
+		t.Fatalf("answering scan = %+v, want the real commit", r.Scanned)
+	}
+}
+
+// The knowledge line is what an agent reads before trusting an answer. When an
+// older scan is answering because a newer one belongs to another branch, the
+// line has to say so — "behind" and "behind, and there is fresher knowledge
+// about somewhere else" are different warnings.
+func TestLineNamesTheScanItHadToSkip(t *testing.T) {
+	dir, s := newRepo(t)
+	base := commit(t, dir, "a.ts")
+	scanAt(t, s, "d", base, "main")
+	git(t, dir, "checkout", "-q", "-b", "feat")
+	scanAt(t, s, "d", commit(t, dir, "f.ts"), "feat")
+	git(t, dir, "checkout", "-q", "main")
+	commit(t, dir, "m.ts")
+
+	r, _ := Compute(dir, "r", "d", s)
+	if !strings.Contains(r.Message, "1 newer scan on feat not on this branch") {
+		t.Fatalf("line = %q, want it to name the skipped feat scan", r.Message)
+	}
+}

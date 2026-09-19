@@ -31,7 +31,12 @@ type Point struct {
 	Files      int    `json:"files,omitempty"`  // scanned: scan_runs.extracted_files of that revision, 0 if unknown
 	Nodes      int    `json:"nodes,omitempty"`  // scanned: graph_nodes count at compute time
 	Source     string `json:"source,omitempty"` // ui: metadata.source
-	Branch     string `json:"branch,omitempty"` // head only
+	// Branch names the branch this point was taken on: read from git for the
+	// head, read back from the scan's own metadata for a scan (a commit does
+	// not remember which branch was checked out when it was read). Empty when
+	// nothing recorded it — a detached HEAD, or a scan written before the
+	// branch was stored.
+	Branch string `json:"branch,omitempty"`
 	// OldRules is the structural point's backlog: files whose deterministic
 	// evidence was written by an older rules pack and so still need
 	// re-extraction, even though nothing in them changed.
@@ -66,6 +71,38 @@ type Touched struct {
 	EvidenceStale int `json:"evidence_stale"`
 }
 
+// How a scan relates to the checkout being reported on.
+const (
+	// ScanAnswering is the scan the report speaks for — the newest one that
+	// HEAD actually descends from.
+	ScanAnswering = "answering"
+	// ScanSkipped is a NEWER scan that cannot answer here, because HEAD does
+	// not descend from it. Branch off main, scan the branch, check main back
+	// out, and the branch's scan is this: real knowledge, about a line of
+	// history you are not on.
+	ScanSkipped = "skipped"
+	// ScanSuperseded is an older scan on the answering scan's own line: usable
+	// in principle, simply further back than one already chosen.
+	ScanSuperseded = "superseded"
+	// ScanGone is a scan whose commit git cannot find at all — rebased,
+	// amended or force-pushed away.
+	ScanGone = "gone"
+)
+
+// ScanEntry is one scan this graph holds, and what it is to the current
+// checkout. The list exists because "which commit does this graph describe"
+// has no useful answer without "and why not one of the others": a skipped
+// scan that is newer than the answering one is the difference between a graph
+// that is merely behind and one that was built somewhere else.
+type ScanEntry struct {
+	SHA        string `json:"sha"`
+	At         string `json:"at,omitempty"`
+	RevisionID int64  `json:"revision_id,omitempty"`
+	Branch     string `json:"branch,omitempty"` // recorded at scan time; "" when unknown
+	Use        string `json:"use"`              // answering | skipped | superseded | gone
+	Commits    int    `json:"commits,omitempty"`  // answering only: commits between it and HEAD
+}
+
 // Report is the whole answer: one struct for the tool, the dashboard and the
 // knowledge line.
 type Report struct {
@@ -76,6 +113,7 @@ type Report struct {
 	Scanned     *Point            `json:"scanned"`    // nil when empty
 	Structured  *Point            `json:"structured"` // nil when no structural phase ever completed
 	Verified    *Point            `json:"verified"`   // nil when never refreshed
+	Scans       []ScanEntry       `json:"scans,omitempty"`
 	Unscanned   Distance          `json:"unscanned"`
 	Touched     Touched           `json:"touched"`
 	Layers      map[string]*Point `json:"layers"` // "code" (= scanned), "ui" when a surface import exists
@@ -148,14 +186,18 @@ func Compute(repoDir, repo, domain string, s *store.Store) (*Report, error) {
 		Head:   gitHead(repoDir),
 	}
 
-	scanRev, err := latest(s.LatestScanRevision(domain))
+	scanRev, scans, err := pickScan(repoDir, domain, r.Head, s)
 	if err != nil {
 		return nil, err
 	}
+	r.Scans = scans
 	// A revision that recorded no commit pins nothing: reporting it as
 	// Scanned would contradict the "empty" status it still produces.
 	if scanRev != nil && scanRev.GitAfterSHA != "" {
-		p := &Point{SHA: scanRev.GitAfterSHA, At: scanRev.CreatedAt, RevisionID: scanRev.RevisionID}
+		p := &Point{
+			SHA: scanRev.GitAfterSHA, At: scanRev.CreatedAt,
+			RevisionID: scanRev.RevisionID, Branch: revisionBranch(scanRev),
+		}
 		if run, err := s.GetScanRunByRevision(scanRev.RevisionID); err == nil && run != nil {
 			p.Files = run.ExtractedFiles
 		}
@@ -373,6 +415,18 @@ func (r *Report) body() string {
 		}
 	}
 
+	// A newer scan that cannot answer here is not a detail. The agent is
+	// being handed an older scan on purpose, and saying only "3 unscanned
+	// commits" would let it read the graph as merely behind when the fresher
+	// knowledge it might expect is real, just about another branch.
+	if n, br := r.skippedScans(); n > 0 {
+		skipped := plural(n, "newer scan", "newer scans")
+		if br != "" {
+			skipped += " on " + br
+		}
+		parts = append(parts, skipped+" not on this branch")
+	}
+
 	if r.Structured != nil && r.Structured.OldRules > 0 {
 		parts = append(parts, plural(r.Structured.OldRules, "file on old rules", "files on old rules"))
 	}
@@ -518,4 +572,109 @@ func metadataString(raw, key string) string {
 		return v
 	}
 	return ""
+}
+
+// maxScanCandidates bounds how far back pickScan will look for a scan the
+// current HEAD descends from. A graph accumulates a scan per rescan, and
+// walking all of them would mean a git call per row on every knowledge line;
+// beyond a handful of branch switches the honest answer is "rescan", not a
+// scan from months ago.
+const maxScanCandidates = 12
+
+// pickScan chooses the scan that answers for this checkout, and describes the
+// others.
+//
+// The rule is the nearest USABLE scan, not the newest one: a scan can only
+// speak for a working tree whose HEAD descends from it, because everything it
+// says about a file is a claim about that file at that commit. Taking the
+// newest row unconditionally — which is what LatestScanRevision alone does —
+// means that scanning a feature branch and then checking main back out leaves
+// the graph answering from the feature branch, while a perfectly usable scan
+// of main sits one row below it.
+//
+// Without git there is nothing to test ancestry against, so the newest scan
+// stands and the list says nothing it cannot support. When no scan is an
+// ancestor the newest one is still returned — resolveStatus reports diverged
+// off it — but every entry is marked for what it is, so the caller can say
+// "no usable scan" rather than quietly answering from another branch.
+func pickScan(repoDir, domain string, head *Point, s *store.Store) (*store.Revision, []ScanEntry, error) {
+	revs, err := s.ListScanRevisions(domain, maxScanCandidates)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(revs) == 0 {
+		return nil, nil, nil
+	}
+
+	newest := revs[0]
+	if head == nil || head.SHA == "" {
+		return newest, nil, nil
+	}
+
+	var chosen *store.Revision
+	entries := make([]ScanEntry, 0, len(revs))
+	for _, rev := range revs {
+		e := ScanEntry{
+			SHA: rev.GitAfterSHA, At: rev.CreatedAt,
+			RevisionID: rev.RevisionID, Branch: revisionBranch(rev),
+		}
+		switch {
+		case rev.GitAfterSHA == "":
+			// A revision that named no commit pins nothing; it is not a
+			// position in history and cannot be chosen or compared.
+			continue
+		case !gitOK(repoDir, "cat-file", "-e", rev.GitAfterSHA+"^{commit}"):
+			e.Use = ScanGone
+		case chosen != nil:
+			e.Use = ScanSuperseded
+		case rev.GitAfterSHA == head.SHA ||
+			gitOK(repoDir, "merge-base", "--is-ancestor", rev.GitAfterSHA, "HEAD"):
+			e.Use = ScanAnswering
+			e.Commits = gitCount(repoDir, rev.GitAfterSHA+"..HEAD")
+			chosen = rev
+		default:
+			e.Use = ScanSkipped
+		}
+		entries = append(entries, e)
+	}
+
+	if chosen == nil {
+		return newest, entries, nil
+	}
+	return chosen, entries, nil
+}
+
+// skippedScans counts the scans newer than the answering one that HEAD does
+// not descend from, and names their branch when they all share one — "on feat"
+// is worth saying, "on feat, main, feat" is not.
+func (r *Report) skippedScans() (int, string) {
+	n, branch := 0, ""
+	for _, e := range r.Scans {
+		if e.Use != ScanSkipped {
+			continue
+		}
+		n++
+		switch {
+		case n == 1:
+			branch = e.Branch
+		case branch != e.Branch:
+			branch = ""
+		}
+	}
+	return n, branch
+}
+
+// revisionBranch reads metadata.branch off a revision, defensively: metadata
+// we cannot parse simply names no branch.
+func revisionBranch(rev *store.Revision) string {
+	if rev == nil {
+		return ""
+	}
+	var md struct {
+		Branch string `json:"branch"`
+	}
+	if err := json.Unmarshal([]byte(rev.Metadata), &md); err != nil {
+		return ""
+	}
+	return md.Branch
 }

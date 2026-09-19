@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alexdx2/chronicle-core/diagrams"
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
@@ -199,6 +200,7 @@ func revisionCreateHandler(g *graph.Graph) server.ToolHandlerFunc {
 			Mode:        mode,
 			Metadata:    metadata,
 			Merge:       store.MergeableRevisionMetadata(metadata),
+			Branch:      gitutil.BranchAt(serverRepoDir(), afterSHA),
 		})
 		if err != nil {
 			return errorResult(err), nil
