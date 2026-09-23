@@ -351,3 +351,83 @@ func TestDiagramBuild_LegacyNodes_LegacySession(t *testing.T) {
 		t.Errorf("stored nodes = %v, want 2 entries", session["nodes"])
 	}
 }
+
+// An agent cannot open the dashboard: the tool answers with the diagram
+// itself — mermaid and structured text rendered from the SAME View the
+// URL shows — and a named preset is enough to ask for it.
+func TestDiagramBuild_Preset_ReturnsMermaidAndText(t *testing.T) {
+	g := newLabTestGraph(t)
+	seedTomJerry(t, g)
+
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title":  "Containers",
+		"domain": "test",
+		"preset": "c2",
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	out := toolResultJSON(t, res)
+	mermaid, _ := out["mermaid"].(string)
+	// The seeded edge has no evidence rows, so the arrow is honestly dashed.
+	if !strings.Contains(mermaid, "flowchart TB") || !strings.Contains(mermaid, `tom -.->|"HTTP"| jerry`) {
+		t.Errorf("mermaid = %q, want a flowchart with a dashed (no-evidence) tom → jerry HTTP arrow", mermaid)
+	}
+	text, _ := out["text"].(string)
+	if !strings.Contains(text, "# Containers") || !strings.Contains(text, "- tom → jerry: HTTP") {
+		t.Errorf("text = %q, want the title and the arrow line", text)
+	}
+	if url, _ := out["url"].(string); !strings.Contains(url, "#c4/s/") {
+		t.Errorf("url = %q", url)
+	}
+	if lvl, _ := out["level"].(string); lvl != "c2" {
+		t.Errorf("level = %q, want c2", lvl)
+	}
+}
+
+// deps/impact/path/flow presets take their subject from target.
+func TestDiagramBuild_Preset_Target(t *testing.T) {
+	g := newLabTestGraph(t)
+	tomKey, jerryKey := seedTomJerry(t, g)
+
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title":  "Impact",
+		"domain": "test",
+		"preset": "impact",
+		"target": jerryKey,
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	out := toolResultJSON(t, res)
+	text, _ := out["text"].(string)
+	if !strings.Contains(text, "tom") || !strings.Contains(text, "jerry") {
+		t.Errorf("impact of jerry should show tom depending on it:\n%s", text)
+	}
+	res, err = h(context.Background(), makeRevisionRequest(map[string]any{
+		"title": "Path", "domain": "test", "preset": "path", "target": tomKey + "," + jerryKey,
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	out = toolResultJSON(t, res)
+	if mermaid, _ := out["mermaid"].(string); !strings.HasPrefix(mermaid, "flowchart LR") {
+		t.Errorf("path renders left→right: %q", mermaid)
+	}
+}
+
+func TestDiagramBuild_UnknownPreset(t *testing.T) {
+	g := newLabTestGraph(t)
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title": "x", "domain": "test", "preset": "c9",
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("unknown preset must be an error, got %v", res.Content)
+	}
+}

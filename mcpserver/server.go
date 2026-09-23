@@ -2588,18 +2588,24 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func diagramBuildTool() mcp.Tool {
 	return mcp.NewTool("chronicle_diagram_build",
-		mcp.WithDescription(`Build a live diagram through the unified view-model engine. PRIMARY mode: provide view_spec — a full view-algebra ViewSpec evaluated by BuildView. Alternative: node_keys — nodes are resolved from the graph DB and lifted to a C3-shaped custom selection (components + internal edges + boundary). Returns session URL.
+		mcp.WithDescription(`Build a diagram that answers one architecture question, from the graph, through the view engine — and get it back in three forms at once: "mermaid" (paste into an answer, a PR, a wiki page), "text" (structured, evidence per element) and "url" (the same view live in the dashboard). Every element carries provenance (confidence, evidence count, file:line); hidden nodes are listed with reasons; arrows fold graph edges ("HTTP ×3").
 
-Modes (priority order):
-- View algebra (primary): provide view_spec — {"scope":{"domain":"...","service"|"nodes"|"flow":...},"expand":{"direction":"out|in|both","depth":N,"edges":[...],"mode":"neighbors|path"},"filter":{...},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset":"c1|c2|c3|deps|impact|path|custom"}}. expand.mode "path" needs scope.nodes=[A,B] and traces the shortest path.
-- Graph-backed: provide node_keys — viewmodel.BuildSelection resolves nodes, discovers internal edges and one-hop boundary edges.
-- Legacy view model: provide explicit nodes + edges — stored as a legacy session for the old card viewer.
-
-Node kinds: service, endpoint, model, domain, infrastructure, external, topic, queue, database
-Edge kinds: http, async, data, structural`),
+PRIMARY: preset (+ target). Presets are the questions:
+- c1      — who is outside and how do we touch them (system box, external systems, declared infra)
+- c2      — which deployable containers exist and how they talk (services, topics inside their broker, protocol on every arrow)
+- c3      — how one container is built (target = service key or name; modules, components, endpoints, boundary)
+- deps    — what target depends on (target = node key), grouped by service
+- impact  — what breaks if target changes (target = node key); subject on top, dependents below
+- path    — how A reaches B (target = "A,B" node keys), left→right
+- flow    — one flow's composition (target = flow node key)
+- data | api | services | flows — lenses over the whole domain
+Alternative: view_spec — a full ViewSpec {"scope":{"domain","service"|"nodes"|"flow"},"expand":{"direction","depth","edges","mode":"neighbors|path"},"filter":{"layers","edge_kinds","exclude_types","name","min_confidence"},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset"}}.
+Or node_keys — a custom selection of real nodes (edges discovered). Never hand-author nodes/edges for things that exist in the graph; the legacy nodes+edges payload is only for entities the graph does not know (e.g. a planned system).`),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
-		mcp.WithString("domain", mcp.Description("Domain key used to scope node resolution for node_keys, and the default scope.domain for view_spec (optional — empty means all domains)")),
-		mcp.WithString("view_spec", mcp.Description("Full ViewSpec JSON (view algebra: scope/expand/filter/group/collapse/layout). Takes priority over node_keys.")),
+		mcp.WithString("preset", mcp.Description("Named question: c1|c2|c3|deps|impact|path|flow|data|api|services|flows")),
+		mcp.WithString("target", mcp.Description("Subject for c3 (service key or name), deps/impact/flow (node key), path (\"A,B\")")),
+		mcp.WithString("domain", mcp.Description("Domain key (defaults to the graph's largest domain)")),
+		mcp.WithString("view_spec", mcp.Description("Full ViewSpec JSON (view algebra: scope/expand/filter/group/collapse/layout). Used when preset is empty; takes priority over node_keys.")),
 		mcp.WithString("nodes", mcp.Description("LEGACY: JSON array of DiagramNode: [{\"key\":\"...\",\"label\":\"...\",\"kind\":\"domain|infrastructure|external|service|...\",\"source_key\":\"optional\",\"domain\":\"optional\"}]")),
 		mcp.WithString("edges", mcp.Description("LEGACY: JSON array of DiagramEdge: [{\"from\":\"node_key\",\"to\":\"node_key\",\"label\":\"HTTP\",\"kind\":\"http|async|data|structural\"}]")),
 		mcp.WithString("node_keys", mcp.Description("JSON array of graph node_key strings to resolve from DB. Edges auto-discovered.")),
@@ -2700,10 +2706,12 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 
 		viewSpecRaw := strParam(args, "view_spec")
+		preset := strParam(args, "preset")
+		target := strParam(args, "target")
 
 		_, hasNodes := parsed["nodes"]
-		if viewSpecRaw == "" && len(nodeKeys) == 0 && !hasNodes {
-			return errorResult(fmt.Errorf("at least one of 'view_spec', 'node_keys' or 'nodes' is required")), nil
+		if preset == "" && viewSpecRaw == "" && len(nodeKeys) == 0 && !hasNodes {
+			return errorResult(fmt.Errorf("one of 'preset', 'view_spec', 'node_keys' or 'nodes' is required")), nil
 		}
 
 		sessionID := newDiagramSessionID()
@@ -2712,24 +2720,49 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		var session map[string]any
 		var nodeCount, edgeCount int
 		missing := []string{}
+		// view is the engine's answer whenever the request went through it:
+		// it renders to mermaid/text for the agent alongside the URL.
+		var view *viewmodel.View
+		level := "custom"
 
-		if viewSpecRaw != "" {
-			// PRIMARY path: full view-algebra spec → BuildView. The session
-			// stores the View under "view" AND a best-effort Selection
-			// projection under "selection" so the current renderer (which
-			// reads .selection) can draw it until the V3 renderer lands.
-			var spec viewmodel.ViewSpec
+		var spec viewmodel.ViewSpec
+		haveSpec := false
+		if preset != "" {
+			if !viewmodel.IsPreset(preset) {
+				return errorResult(fmt.Errorf("unknown preset %q (want one of %s)", preset, strings.Join(viewmodel.Presets, "|"))), nil
+			}
+			if domain == "" {
+				domain = largestDomain(g.Store())
+			}
+			spec = viewmodel.PresetSpec(preset, domain, target)
+			haveSpec = true
+		} else if viewSpecRaw != "" {
 			if err := json.Unmarshal([]byte(viewSpecRaw), &spec); err != nil {
 				return errorResult(fmt.Errorf("invalid view_spec JSON: %w", err)), nil
 			}
 			if spec.Scope.Domain == "" {
 				spec.Scope.Domain = domain
 			}
-			view, err := viewmodel.BuildView(g.Store(), spec)
+			if spec.Scope.Domain == "" {
+				spec.Scope.Domain = largestDomain(g.Store())
+			}
+			haveSpec = true
+		}
+
+		if haveSpec {
+			// PRIMARY path: view-algebra spec → BuildView. The session
+			// stores the View under "view" AND a best-effort Selection
+			// projection under "selection" so the current renderer (which
+			// reads .selection) can draw it until the V3 renderer lands.
+			v, err := viewmodel.BuildView(g.Store(), spec)
 			if err != nil {
 				return errorResult(fmt.Errorf("build view: %w", err)), nil
 			}
-			level := spec.Layout.Preset
+			view = v
+			if view.Title == "" || preset != "" {
+				view.Title = title
+			}
+			level = spec.Layout.Preset
 			if level == "" {
 				level = "custom"
 			}
@@ -2765,6 +2798,19 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 			edgeCount = len(sel.InternalEdges)
 			if sel.Missing != nil {
 				missing = sel.Missing
+			}
+			// The same selection as a View (scope.nodes), so the agent gets
+			// mermaid/text for a custom selection too.
+			selDomain := domain
+			if selDomain == "" {
+				selDomain = keyDomain(nodeKeys[0])
+			}
+			if v, err := viewmodel.BuildView(g.Store(), viewmodel.ViewSpec{
+				Scope: viewmodel.ScopeSpec{Domain: selDomain, Nodes: nodeKeys},
+				Group: viewmodel.GroupSpec{By: "none"}, Layout: viewmodel.LayoutSpec{Preset: "custom"},
+			}); err == nil {
+				v.Title = title
+				view = v
 			}
 		} else {
 			// LEGACY path: explicit nodes/edges view model, wrapped so the
@@ -2807,14 +2853,49 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		// not SQLite — a server restart clears the Live Session tab.
 		diagrams.Default.Save(sessionID, title, string(data))
 
-		return jsonResult(map[string]any{
+		out := map[string]any{
 			"session_id": sessionID,
 			"url":        url,
+			"level":      level,
 			"node_count": nodeCount,
 			"edge_count": edgeCount,
 			"missing":    missing,
-		}), nil
+		}
+		if view != nil {
+			out["title"] = view.Title
+			out["mermaid"] = viewmodel.RenderMermaid(view)
+			out["text"] = viewmodel.RenderText(view)
+			if len(view.Hidden) > 0 {
+				out["hidden"] = view.Hidden
+			}
+			if len(view.Groups) > 0 {
+				out["group_count"] = len(view.Groups)
+			}
+		}
+		return jsonResult(out), nil
 	}
+}
+
+// largestDomain picks the domain with the most active nodes — the default
+// scope when a caller names none (a single-repo store has exactly one).
+func largestDomain(st *store.Store) string {
+	nodes, err := st.ListNodes(store.NodeFilter{})
+	if err != nil {
+		return ""
+	}
+	counts := map[string]int{}
+	for _, n := range nodes {
+		if n.Status == "active" {
+			counts[n.DomainKey]++
+		}
+	}
+	best, bestN := "", -1
+	for d, c := range counts {
+		if c > bestN || (c == bestN && d < best) {
+			best, bestN = d, c
+		}
+	}
+	return best
 }
 
 // ---------------------------------------------------------------------------

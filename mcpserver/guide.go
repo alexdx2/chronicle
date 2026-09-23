@@ -153,8 +153,8 @@ func ExtractionGuide(technology string) string {
 		"hints":         "For framework-specific tips, call chronicle_extraction_hints(). But hints are OPTIONAL — the universal extraction rules above work for any codebase.",
 
 		"diagrams": map[string]any{
-			"when": "When explaining architecture, offer to show a live diagram",
-			"how":  "chronicle_diagram_create() → share URL → chronicle_diagram_update() with {nodes, edges}",
+			"when": "When explaining architecture, show a diagram built from the graph",
+			"how":  "chronicle_diagram_build(title, preset: c1|c2|c3|deps|impact|path|flow, target?) → paste mermaid, share url",
 		},
 	}
 

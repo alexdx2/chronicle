@@ -190,207 +190,76 @@ __STAGES__`,
 5. Call chronicle_admin_url
 6. Summarize: nodes, edges, layers, last scan, discoveries, domain terms, dashboard URL`,
 
-	"diagram": `Live diagram for the user. Use the Diagram Type Catalog below to construct diagrams.
+	"diagram": `Diagram for the user — one question, one diagram, from the graph.
 
-## How to Create a Diagram
+## Rule
+Never hand-author nodes or edges for things the graph knows. chronicle_diagram_build
+builds the diagram from the graph through the view engine: it decides what is
+visible at the chosen altitude (salience), folds graph edges into arrows ("HTTP ×3"),
+frames topics inside their broker, dims what is outside the scope, and lists what it
+hid and why. You choose the QUESTION (preset) and the SUBJECT (target).
 
-1. Identify the diagram type from the user's question (see catalog below)
-2. Query the graph to gather data for the diagram type
-3. Call chronicle_diagram_build with the appropriate payload
-4. Share the returned URL with user: "Open {url} to see the diagram"
+## How
+1. Pick the preset from the user's question (table below).
+2. Resolve the subject when one is needed: chronicle_node_search / chronicle_node_list
+   for a node key, or a service name for c3.
+3. Call chronicle_diagram_build(title, preset, target?, domain?).
+4. Answer with the "mermaid" block (the diagram itself, paste it) and the "url"
+   ("open {url} for the live version"). Use "text" when the reader wants evidence per
+   element, or when you need to reason about the diagram. Mention "hidden" if it is
+   non-empty ("2 DTOs and 1 cache are hidden: …").
 
-## When to use node_keys vs nodes
+## Presets — the questions
+| User asks | preset | target |
+|---|---|---|
+| "architecture overview", "context", "who do we talk to" | c1 | — |
+| "how is the system organized", "services", "how do they communicate" | c2 | — |
+| "what's inside X", "how is X built", "components of X" | c3 | service key or name |
+| "what does X depend on" | deps | node key |
+| "what breaks if I change X", "blast radius", "who uses X" | impact | node key |
+| "how does A reach B", "trace A to B" | path | "A,B" (two node keys) |
+| "show the flow / use case X" | flow | flow node key |
+| "data model", "entities" | data | — |
+| "API surface", "endpoints" | api | — |
+| "all flows / use cases" | flows | — |
 
-- **node_keys**: resolve REAL entities from the graph DB. Use for Domain Detail, Flow, Impact — when you need actual services/controllers/providers.
-- **nodes**: SYNTHETIC diagram-only entities. Use for domains, infrastructure, external actors — things that represent groups or systems, not individual code entities.
-- **NEVER use node_keys for Overview** — Overview shows domains as collapsed blocks, not individual services.
-- **Domain Detail mixes both**: node_keys for services inside the target domain + nodes for neighboring domains.
+Examples:
+  chronicle_diagram_build(title: "Containers", preset: "c2")
+  chronicle_diagram_build(title: "Inside arena-api", preset: "c3", target: "arena-api")
+  chronicle_diagram_build(title: "Impact of Score", preset: "impact", target: "data:model:tom-and-jerry:score")
+  chronicle_diagram_build(title: "Attack → scoreboard", preset: "path", target: "contract:endpoint:tom-and-jerry:post:/arena/attack,service:service:tom-and-jerry:scoreboardapi")
 
-## Diagram Type Catalog
+## Custom selection
+A hand-picked set of real nodes (e.g. "show me these five things together"):
+  chronicle_diagram_build(title: "...", node_keys: '["key1","key2"]')
+Edges between them are discovered from the graph; you still get mermaid/text/url.
 
-### Type 1: Overview (Context Diagram)
-Trigger: "show architecture", "overview", "how is the system organized", "high-level diagram"
-Purpose: Domains as blocks, infrastructure as bridges, external systems as actors. NO individual services — only domain blocks.
+## Reading the output
+- Solid arrow: hard, evidence-backed edge. Dashed: inferred, no evidence, or confidence < 70%.
+  Dotted: synthesized (declared in the manifest, or a bypassed node). Say so when it matters.
+- A frame marked "inferred" (e.g. topics under the only declared broker) is a reasonable
+  placement, not evidence.
+- "hidden" lists what the altitude hides (DTOs, helpers, isolated infra) with the reason.
+  chronicle_salience_explain(node_key, level) explains one node in depth.
 
-CRITICAL: Use ONLY "nodes" (synthetic). NEVER use "node_keys". Each domain from the manifest becomes ONE node with kind "domain".
+## Things the graph does not know
+Only for planned or external systems that have no node (a future service, a vendor
+box), pass nodes/edges explicitly — and say in the answer that those are not from the
+graph. Never mix hand-authored nodes with real node_keys for the same entity.`,
 
-Construction:
-1. Call chronicle_domain_list to get all domains
-2. Each domain → one node with kind "domain". Infrastructure from manifest → kind "infrastructure". External systems → kind "external".
-3. Edges: aggregated cross-domain relationships with protocol labels (HTTP, async, data)
-4. Call chronicle_diagram_build with nodes + edges ONLY — no node_keys
+	"topology": `Domain topology — how this graph's domains connect through external references:
 
-Example:
-  chronicle_diagram_build(
-    title: "Overview: {project} Architecture",
-    nodes: '[{"key":"domain:core-api","label":"Core API","kind":"domain"},{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"},{"key":"ext:stripe","label":"Stripe","kind":"external"}]',
-    edges: '[{"from":"domain:core-api","to":"infra:kafka","label":"publish order.created","kind":"async"}]'
-  )
+1. Call chronicle_query_stats("") for node/edge counts per domain
+2. Call chronicle_node_list with status="external" to find every external node reference
+3. Group externals by (source domain → target domain); target domain is the node_key's
+   3rd segment (e.g. "tomandjerry" in "contract:topic:tomandjerry:battle-results")
+4. Report the text summary: N domains, N cross-domain references, N unresolved, one line
+   per domain pair with the edge types involved
+5. For a picture, do NOT invent domain boxes: build the connections diagram from the real
+   nodes (see /chronicle-connections). Domain-level topology diagrams across repos are a
+   Chronicle Pro federation view.`,
 
-### Type 2: Domain Detail
-Trigger: "show X in detail", "what's inside X", "expand X"
-Purpose: One domain expanded with services inside. Other domains as collapsed blocks.
-
-Construction:
-1. Call chronicle_node_list(domain="{target}") to get services in the target domain
-2. Use node_keys for real services in the target domain
-3. Add synthetic nodes (kind "domain") for neighboring domains
-4. Add infrastructure nodes if domain uses async
-5. Set groups: {"field":"domain"} for visual grouping
-
-Example:
-  chronicle_diagram_build(
-    title: "Domain: Core API",
-    node_keys: '["service:code:core:OrdersService","service:code:core:PaymentsService"]',
-    nodes: '[{"key":"domain:crm","label":"CRM","kind":"domain"},{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"}]',
-    edges: '[{"from":"service:code:core:OrdersService","to":"infra:kafka","label":"publish order.created","kind":"async"},{"from":"infra:kafka","to":"domain:crm","label":"consume","kind":"async"}]',
-    groups: '{"field":"domain"}'
-  )
-
-### Type 3: Request Flow
-Trigger: "how does X flow to Y", "trace a request", "explain how X calls Y"
-Purpose: Trace a request path across domains. Domains as swimlanes.
-
-Construction:
-1. Identify start and end from user's question
-2. Call chronicle_query_path(from, to) to get the path
-3. Use node_keys for all nodes on the path
-4. Set groups: {"field":"domain"} for domain swimlanes
-5. Build steps array: each step = one hop, active nodes highlighted (#f59e0b), others dimmed
-
-Example:
-  chronicle_diagram_build(
-    title: "Flow: Create Order",
-    node_keys: '["service:code:mobile:Gateway","service:code:core:OrdersService"]',
-    nodes: '[{"key":"infra:kafka","label":"Kafka","kind":"infrastructure"}]',
-    groups: '{"field":"domain"}',
-    steps: '[{"title":"Entry","description":"Mobile sends POST /orders","highlights":{"service:code:mobile:Gateway":"#f59e0b"}},{"title":"Processing","description":"OrdersService validates","highlights":{"service:code:core:OrdersService":"#f59e0b"}}]'
-  )
-
-### Type 4: Dependency Map (Impact)
-Trigger: "what depends on X", "what breaks if I change X", "blast radius"
-Purpose: Show what a change affects. Grouped by domain with heatmap.
-
-Construction:
-1. Call chronicle_impact(node_key) or chronicle_query_deps + chronicle_query_reverse_deps
-2. Collect affected nodes up to 2 hops / 15 nodes
-3. Use node_keys for all affected nodes
-4. Set groups: {"field":"domain"}
-5. Use annotations for heatmap: changed (#ef4444), direct (#f59e0b), indirect (#eab308)
-
-Example:
-  chronicle_diagram_build(
-    title: "Impact: Changing OrdersService",
-    node_keys: '["service:code:core:OrdersService","service:code:core:PaymentsService","service:code:crm:CrmConsumer"]',
-    groups: '{"field":"domain"}',
-    annotations: '{"service:code:core:OrdersService":{"highlight":"#ef4444","note":"CHANGED"},"service:code:crm:CrmConsumer":{"highlight":"#f59e0b","note":"Consumes order.created events"}}'
-  )
-
-### Type 5: Federation Topology
-Trigger: "show topology", "how do domains connect", "federation overview", "cross-repo map"
-Purpose: Domains as blocks connected by cross-repo edges. Shows how independently-scanned repos relate.
-
-CRITICAL: Use ONLY "nodes" (synthetic). NEVER use "node_keys". Each domain → one node with kind "domain".
-
-Construction:
-1. Call chronicle_query_stats("") for aggregated stats
-2. Call chronicle_node_list with status="external" to find all external nodes
-3. Group external nodes by source domain → target domain (extract domain from node_key's 3rd segment)
-4. For each domain: create one node with kind "domain", metadata with node/edge/service counts
-5. For each domain pair: aggregate edge types into one label (e.g., "CONSUMES_TOPIC ×2, CALLS_SERVICE ×1")
-6. Pick edge kind: if any CONSUMES_TOPIC/PUBLISHES_TOPIC → "async", else if CALLS_ENDPOINT/CALLS_SERVICE → "http", else "data"
-7. Annotate domains with unresolved externals: {"highlight":"#fbbf24","note":"N unresolved"}
-8. Call chronicle_diagram_build
-
-Example:
-  chronicle_diagram_build(
-    title: "Federation Topology",
-    nodes: '[{"key":"domain:tomandjerry","label":"tom-and-jerry","kind":"domain","metadata":{"nodes":"60","services":"4"}},{"key":"domain:orders","label":"orders","kind":"domain","metadata":{"nodes":"21","services":"2"}},{"key":"domain:analytics","label":"analytics","kind":"domain","metadata":{"nodes":"29","services":"1"}}]',
-    edges: '[{"from":"domain:analytics","to":"domain:tomandjerry","label":"CONSUMES_TOPIC, CALLS_SERVICE, CALLS_ENDPOINT, USES_MODEL, READS_DB","kind":"async"},{"from":"domain:analytics","to":"domain:orders","label":"CONSUMES_TOPIC, DEPENDS_ON_DOMAIN","kind":"async"}]',
-    annotations: '{"domain:analytics":{"note":"9 external refs, 1 unresolved","highlight":"#fbbf24"}}'
-  )
-
-### Type 6: Cross-repo Connections
-Trigger: "show connections", "cross-repo edges", "what connects the repos", "external nodes"
-Purpose: Detailed view of every cross-repo edge — actual nodes that cross boundaries, not domain-level aggregation.
-
-Construction:
-1. Call chronicle_node_list with status="external" to find all external nodes
-2. For each external node: note its node_key, the edge type connecting to it (from edge_list), and source node
-3. Collect source providers (local nodes) and external targets
-4. Use node_keys for source providers + resolved targets (auto-discovers edges between them)
-5. Add synthetic nodes (kind "external") for unresolved externals
-6. Set groups: {"field":"domain"} to group by domain
-7. Annotate unresolved nodes: {"highlight":"#fbbf24","note":"UNRESOLVED — no matching repo"}
-8. Cap at 20 node_keys. If more, show top-connected domains only.
-
-Example:
-  chronicle_diagram_build(
-    title: "Cross-repo Connections",
-    node_keys: '["code:provider:analytics:battlestatsconsumer","code:provider:analytics:leaderboardclient","contract:topic:tomandjerry:battle-results","service:service:tomandjerry:spectators-api"]',
-    nodes: '[{"key":"ext:ghost-api","label":"ghost-api","kind":"external","domain":"nonexistent"}]',
-    edges: '[{"from":"code:provider:analytics:ghostserviceclient","to":"ext:ghost-api","label":"CALLS_SERVICE","kind":"http"}]',
-    groups: '{"field":"domain"}',
-    annotations: '{"ext:ghost-api":{"highlight":"#fbbf24","note":"UNRESOLVED — no matching repo"}}'
-  )
-
-### Type 7: Federated Impact
-Trigger: "federated impact", "cross-repo blast radius", "what breaks across repos if I change X"
-Purpose: Like Type 4 (Impact) but explicitly shows cross-repo boundary crossings with steps per depth level.
-
-Construction:
-1. Call chronicle_impact(node_key, max_depth=4, min_score=0)
-2. Group impacted nodes by depth level
-3. Use node_keys for changed node + up to 15 highest-scoring impacted nodes
-4. Set groups: {"field":"domain"} — CRITICAL for showing repo boundaries
-5. Annotations — score-based heatmap:
-   - Changed node: {"highlight":"#ef4444","note":"CHANGED"}
-   - Score >= 70: {"highlight":"#f87171","note":"score: N — EDGE_CHAIN"}
-   - Score >= 40: {"highlight":"#fb923c","note":"score: N — EDGE_CHAIN"}
-   - Score < 40: {"highlight":"#fbbf24","note":"score: N — EDGE_CHAIN"}
-   - Cross-repo nodes: append " [cross-repo]" to note
-6. Steps: one per depth level + final "Full blast radius" step
-   - Step 1: "Direct dependents" — highlights depth-1 nodes
-   - Step N: "Transitive (depth N)" — highlights depth-N nodes
-   - Final: "Full blast radius" — all impacted nodes highlighted
-
-Example:
-  chronicle_diagram_build(
-    title: "Impact: battle-results topic",
-    node_keys: '["contract:topic:tomandjerry:battle-results","code:provider:tomandjerry:battleresultconsumer","code:provider:analytics:battlestatsconsumer","code:provider:analytics:analyticsservice","code:controller:analytics:dashboardcontroller"]',
-    groups: '{"field":"domain"}',
-    annotations: '{"contract:topic:tomandjerry:battle-results":{"highlight":"#ef4444","note":"CHANGED"},"code:provider:tomandjerry:battleresultconsumer":{"highlight":"#f87171","note":"score: 75.0 — CONSUMES_TOPIC"},"code:provider:analytics:battlestatsconsumer":{"highlight":"#f87171","note":"score: 75.0 — CONSUMES_TOPIC [cross-repo]"},"code:provider:analytics:analyticsservice":{"highlight":"#fb923c","note":"score: 53.4 — CONSUMES_TOPIC → INJECTS"},"code:controller:analytics:dashboardcontroller":{"highlight":"#fbbf24","note":"score: 38.1 — CONSUMES_TOPIC → INJECTS → INJECTS"}}',
-    steps: '[{"title":"Direct dependents","description":"Nodes that directly consume battle-results","highlights":{"code:provider:tomandjerry:battleresultconsumer":"#f87171","code:provider:analytics:battlestatsconsumer":"#f87171"}},{"title":"Transitive (depth 2)","description":"Nodes that inject the direct consumers","highlights":{"code:provider:analytics:analyticsservice":"#fb923c"}},{"title":"Transitive (depth 3)","description":"Controllers depending on AnalyticsService","highlights":{"code:controller:analytics:dashboardcontroller":"#fbbf24"}},{"title":"Full blast radius","description":"All 4 impacted nodes across 2 repos","highlights":{"code:provider:tomandjerry:battleresultconsumer":"#f87171","code:provider:analytics:battlestatsconsumer":"#f87171","code:provider:analytics:analyticsservice":"#fb923c","code:controller:analytics:dashboardcontroller":"#fbbf24"}}]'
-  )
-
-## Cross-cutting Rules
-
-- Node kinds: domain, infrastructure, external, service, endpoint, model, topic, queue, database
-- Edge kinds: http, async, data, structural
-- NEVER exceed 15 real nodes (node_keys). Synthetic nodes (domain/infra/external) don't count.
-- Infrastructure is ALWAYS explicit — show Kafka/Redis/RabbitMQ as nodes between publisher and consumer. Never a direct edge from publisher to consumer.
-- Edge labels: always show protocol type (HTTP, publish, consume, uses).
-- Kafka topics: include topic names as edge labels.
-- Annotate focal nodes explaining WHY they matter.
-- Use groups: {"field":"domain"} for types 2-4 to show domain boundaries.`,
-
-	"topology": `Federation topology — show how domains connect:
-
-1. Call chronicle_query_stats("") for aggregated node/edge counts per domain
-2. Call chronicle_node_list with status="external" to find all external node references
-3. Group externals by domain pair:
-   - Extract source domain from the repo/context that has the external node
-   - Extract target domain from the node_key (3rd segment, e.g., "tomandjerry" from "contract:topic:tomandjerry:battle-results")
-   - Aggregate edge types per domain pair
-4. Build the diagram following Type 5 (Federation Topology) from the diagram catalog:
-   - One synthetic "domain" node per domain with metadata (node count, edge count, service count)
-   - One edge per domain pair with aggregated edge type labels
-   - Annotate domains that have unresolved externals with yellow highlight
-5. Call chronicle_diagram_build
-6. Share the URL: "Open {url} to see the federation topology"
-7. Also provide a text summary: N domains, N cross-repo edges, N unresolved`,
-
-	"connections": `Cross-repo connections — show every edge that crosses repo boundaries:
+	"connections": `Cross-boundary connections — every edge that leaves this graph's domains:
 
 1. Call chronicle_node_list with status="external" to find all external nodes
 2. For each external node:
@@ -400,14 +269,10 @@ Example:
 3. Group results two ways:
    a. By edge type: CONSUMES_TOPIC (N), CALLS_SERVICE (N), CALLS_ENDPOINT (N), etc.
    b. By domain pair: analytics→tomandjerry (N links), analytics→orders (N links)
-4. Build the diagram following Type 6 (Cross-repo Connections) from the diagram catalog:
-   - node_keys for source providers and resolved target nodes
-   - Synthetic "external" nodes for unresolved references
-   - Group by domain
-   - Annotate unresolved nodes in yellow
-5. Call chronicle_diagram_build
-6. Share the URL: "Open {url} to see cross-repo connections"
-7. Report text summary:
+4. Diagram: chronicle_diagram_build(title: "Cross-boundary connections", node_keys: [source nodes + external target nodes])
+   — real nodes only; the engine discovers the edges. Unresolved externals are real
+   nodes too (status external), so they appear; say in the answer which ones are unresolved.
+5. Answer with the mermaid block and the URL, then the text summary:
    - N external nodes total, N resolved, N unresolved
    - Breakdown by edge type
    - Breakdown by domain pair
@@ -439,9 +304,9 @@ User makes DIRECTORY-level decisions, not file-level.`,
 - /chronicle-services — Service architecture
 - /chronicle-update — Incremental update (changed files only)
 - /chronicle-verify — Verify low-confidence edges with code evidence
-- /chronicle-diagram — Live architecture diagram
-- /chronicle-topology — Federation domain topology map
-- /chronicle-connections — Cross-repo edge inventory
+- /chronicle-diagram — Architecture diagram from the graph (mermaid + text + live URL)
+- /chronicle-topology — Domain topology through external references
+- /chronicle-connections — Cross-boundary edge inventory
 - /chronicle-surface — Import a product's surface extract (screens/panels/controls) into the ui layer
 - /chronicle-status — Current graph state
 - /chronicle-version — MCP identity (codename + fingerprint — call before scan)

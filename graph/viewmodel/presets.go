@@ -2,6 +2,7 @@ package viewmodel
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/store"
 )
@@ -24,6 +25,8 @@ const DepthUnbounded = 99
 //	         EVERY service in one view, no per-service boundary pass)
 //	deps   — scope:{nodes:[target]} · expand:{out,∞} · group:service · collapse
 //	impact — scope:{nodes:[target]} · expand:{in,∞} · group:service · collapse
+//	path   — scope:{nodes:[A,B]} · expand:{mode:path} · group:none (target "A,B")
+//	flow   — scope:{flow:target} · group:none (the flow's composition)
 //
 // Lens presets (the dashboard view bar, replacing the old client-side
 // graph-presets.js filtering):
@@ -36,8 +39,42 @@ const DepthUnbounded = 99
 //	           each carrying its trigger endpoint as VNode.Detail)
 //
 // target is the service key/name for c3 and the node key for deps/impact.
+// Presets lists every named preset PresetSpec accepts, in menu order.
+var Presets = []string{"c1", "c2", "c3", "deps", "impact", "path", "flow", "data", "api", "services", "flows"}
+
+// IsPreset reports whether level names a known preset.
+func IsPreset(level string) bool {
+	for _, p := range Presets {
+		if p == level {
+			return true
+		}
+	}
+	return false
+}
+
 func PresetSpec(level, domain, target string) ViewSpec {
 	switch level {
+	case "path":
+		// target = "A,B" (two node keys); the shortest path between them.
+		var nodes []string
+		for _, k := range strings.Split(target, ",") {
+			if k = strings.TrimSpace(k); k != "" {
+				nodes = append(nodes, k)
+			}
+		}
+		return ViewSpec{
+			Scope:  ScopeSpec{Domain: domain, Nodes: nodes},
+			Expand: &ExpandSpec{Mode: "path"},
+			Group:  GroupSpec{By: "none"},
+			Layout: LayoutSpec{Preset: "path"},
+		}
+	case "flow":
+		// target = flow node key; the flow's composition (trigger + REQUIRES).
+		return ViewSpec{
+			Scope:  ScopeSpec{Domain: domain, Flow: target},
+			Group:  GroupSpec{By: "none"},
+			Layout: LayoutSpec{Preset: "flow"},
+		}
 	case "data":
 		return ViewSpec{
 			Scope:  ScopeSpec{Domain: domain},
@@ -150,6 +187,14 @@ func BuildPreset(st *store.Store, level, domain, target string) (*View, error) {
 		v.Title = fmt.Sprintf("Dependencies — %s", target)
 	case "impact":
 		v.Title = fmt.Sprintf("Impact — %s", target)
+	case "path":
+		if v.Title == "" {
+			v.Title = fmt.Sprintf("Path — %s", target)
+		}
+	case "flow":
+		if v.Title == "" {
+			v.Title = fmt.Sprintf("Flow — %s", target)
+		}
 	case "data":
 		v.Title = fmt.Sprintf("Data Models — %s", domain)
 	case "api":
