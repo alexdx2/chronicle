@@ -1481,3 +1481,54 @@ func (s *Store) EvidenceOwnersSupersededIn(revisionID int64) (nodeIDs, edgeIDs [
 	}
 	return nodeIDs, edgeIDs, nil
 }
+
+// EvidenceSummary is the per-target provenance digest a diagram element
+// carries: how many rows back it and where the best one lives.
+type EvidenceSummary struct {
+	Count int    `json:"count"`
+	Ref   string `json:"ref,omitempty"` // "file:line" (or "file") of the first valid positive row
+}
+
+// EvidenceSummaries digests graph_evidence in one pass: counts and a
+// best-evidence ref per node and per edge. Only positive rows that still
+// stand (valid, revalidated, stale-awaiting-reverification) count;
+// invalidated/superseded/negative rows do not. Ref prefers valid rows,
+// then the lowest evidence_id, so it is stable across runs.
+func (s *Store) EvidenceSummaries() (nodes map[int64]EvidenceSummary, edges map[int64]EvidenceSummary, err error) {
+	rows, err := s.db.Query(`
+		SELECT target_kind, COALESCE(node_id,0), COALESCE(edge_id,0),
+		       COALESCE(file_path,''), COALESCE(line_start,0), evidence_status
+		FROM graph_evidence
+		WHERE evidence_polarity = 'positive'
+		  AND evidence_status IN ('valid','revalidated','stale')
+		ORDER BY CASE evidence_status WHEN 'valid' THEN 0 WHEN 'revalidated' THEN 1 ELSE 2 END, evidence_id`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	nodes = make(map[int64]EvidenceSummary)
+	edges = make(map[int64]EvidenceSummary)
+	for rows.Next() {
+		var kind, file, status string
+		var nid, eid int64
+		var line int
+		if err := rows.Scan(&kind, &nid, &eid, &file, &line, &status); err != nil {
+			return nil, nil, err
+		}
+		target := nodes
+		id := nid
+		if kind == "edge" {
+			target, id = edges, eid
+		}
+		sum := target[id]
+		sum.Count++
+		if sum.Ref == "" && file != "" {
+			sum.Ref = file
+			if line > 0 {
+				sum.Ref = fmt.Sprintf("%s:%d", file, line)
+			}
+		}
+		target[id] = sum
+	}
+	return nodes, edges, rows.Err()
+}

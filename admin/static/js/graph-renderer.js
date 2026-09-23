@@ -272,23 +272,60 @@ export class GraphRenderer {
 
     const edgeG = g.selectAll('.edge-g').data(simEdges).enter().append('g').attr('class', 'edge-g');
 
+    const edgePathD = e => {
+      if (e._points && e._points.length >= 2) {
+        return 'M' + e._points.map(p => p.x + ',' + p.y).join('L');
+      }
+      return `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`;
+    };
+    // Provenance on the stroke: an arrow the graph only inferred, or that
+    // no evidence row backs, is dashed; a synthesized arrow (uses_infra,
+    // "via") is dotted. Solid = hard, evidence-backed.
+    const edgeDash = e => {
+      if (e.derivation === 'synthesized') return '2,3';
+      if (e.derivation === 'inferred' || e.derivation === 'unknown') return '6,3';
+      if (e.derivation !== 'view' && e._evidenceCount === 0) return '6,3';
+      if (typeof e.confidence === 'number' && e.confidence < 0.7) return '6,3';
+      return null;
+    };
+
+    // Wide invisible hit area so an arrow is clickable/hoverable like a card.
+    edgeG.append('path')
+      .attr('class', 'edge-hit')
+      .attr('d', edgePathD)
+      .attr('stroke', 'transparent')
+      .attr('stroke-width', 12)
+      .attr('fill', 'none')
+      .style('cursor', callbacks.onEdgeClick ? 'pointer' : 'default');
+
     edgeG.append('path')
       .attr('class', 'edge-path')
-      .attr('d', e => {
-        if (e._points && e._points.length >= 2) {
-          return 'M' + e._points.map(p => p.x + ',' + p.y).join('L');
-        }
-        return `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`;
-      })
+      .attr('d', edgePathD)
       .attr('stroke', e => {
         const cat = edgeCategoryLookup[e.edge_type];
         return cat ? cat.color : '#666';
       })
       .attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', edgeDash)
       .attr('fill', 'none')
       .attr('marker-end', 'url(#arrowhead)')
       .attr('opacity', e => (marks.path && marks.path.size > 0) ?
         (e._isPath ? 1 : 0.3) : 0.7);
+
+    edgeG.on('mouseenter', (event, e) => {
+      self._showEdgeTooltip(event, e, edgeCategoryLookup);
+      d3.select(event.currentTarget).select('.edge-path').attr('stroke-width', 3);
+    });
+    edgeG.on('mousemove', (event) => self._moveTooltip(event));
+    edgeG.on('mouseleave', (event) => {
+      self._hideTooltip();
+      d3.select(event.currentTarget).select('.edge-path').attr('stroke-width', 1.5);
+    });
+    edgeG.on('click', (event, e) => {
+      if (!callbacks.onEdgeClick) return;
+      event.stopPropagation();
+      callbacks.onEdgeClick(e);
+    });
 
     // Edge labels sit on the routed path (its middle point), not on the
     // straight source→target chord, and read at 10px with a background halo
@@ -358,12 +395,22 @@ export class GraphRenderer {
       .attr('x', -nw / 2).attr('y', -nh / 2)
       .attr('width', nw).attr('height', nh)
       .attr('rx', 6).attr('ry', 6)
-      .attr('fill', d => self.layerColor(d.layer) + '40')
-      .attr('stroke', d => self.layerColor(d.layer))
+      // Stale cards grey out (awaiting re-verification); contradicted
+      // cards keep their layer fill but get a red border.
+      .attr('fill', d => d.status === 'stale' ? '#e8e2d8' : self.layerColor(d.layer) + '40')
+      .attr('stroke', d => d.status === 'stale' ? '#9a8f7f' : (d.status === 'contradicted' ? '#c25757' : self.layerColor(d.layer)))
       // Primary salience gets a heavier border; collapsed/badge nodes get a
       // dashed border to read as "folded / secondary form".
       .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : (d._tier === 'primary' ? 2 : 1.2))
-      .attr('stroke-dasharray', d => (d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null);
+      .attr('stroke-dasharray', d => (d.status === 'stale' || d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null);
+
+    // Status tag (stale / contradicted) in the card's top-left corner.
+    nodeG.filter(d => d.status === 'stale' || d.status === 'contradicted').append('text')
+      .attr('class', 'node-status')
+      .attr('x', -nw / 2 + 5).attr('y', -nh / 2 + 10)
+      .attr('font-size', 8).attr('font-weight', 700)
+      .attr('fill', d => d.status === 'stale' ? '#9a8f7f' : '#c25757')
+      .text(d => d.status);
 
     nodeG.append('text')
       .attr('text-anchor', 'middle').attr('dy', -2)
@@ -555,7 +602,35 @@ export class GraphRenderer {
       '<div class="nht-type">' + esc(d.node_type || '') + (d.layer ? ' · ' + esc(d.layer) : '') + '</div>' +
       (d.file_path ? '<div class="nht-type" style="font-family:var(--font-mono)">' + esc(d.file_path) + '</div>' : '') +
       (d._renderMode && d._renderMode !== 'box' ? '<div class="nht-type">' + esc(d._renderMode) + (d._salienceReason ? ' · ' + esc(d._salienceReason) : '') + '</div>' : '') +
+      (typeof d.confidence === 'number' && !d._vgroup
+        ? '<div class="nht-type">' + (d.status && d.status !== 'active' ? esc(d.status) + ' · ' : '') +
+          'confidence ' + Math.round((d.trust_score ?? d.confidence) * 100) + '% · ' +
+          (d._evidenceCount ? d._evidenceCount + ' evidence' : 'no evidence') +
+          (d._evidenceRef ? ' · ' + esc(d._evidenceRef) : '') + '</div>'
+        : '') +
       '<div class="nht-hint">click — select · double-click — drill</div>';
+    el.style.display = 'block';
+    this._moveTooltip(event);
+  }
+
+  _showEdgeTooltip(event, e, lookup) {
+    const el = this._tooltipEl();
+    const esc = t => String(t || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    const cat = (lookup || {})[e.edge_type];
+    const kind = e._kind || e.edge_type;
+    const from = e._fromName || (e.source && e.source.name) || e.from_node_id;
+    const to = e._toName || (e.target && e.target.name) || e.to_node_id;
+    let prov = '';
+    if (e.derivation === 'synthesized') prov = 'synthesized (no graph edge)';
+    else if (e.derivation && e.derivation !== 'view') {
+      prov = esc(e.derivation) + ' · confidence ' + Math.round((e.trust_score ?? e.confidence ?? 1) * 100) + '% · ' +
+        (e._evidenceCount ? e._evidenceCount + ' evidence' : 'no evidence');
+    }
+    el.innerHTML =
+      '<div class="nht-name">' + esc(from) + ' → ' + esc(to) + '</div>' +
+      '<div class="nht-type">' + esc(cat ? cat.shortLabel : kind) + (e.weight > 1 ? ' · ' + e.weight + ' edges' : '') + '</div>' +
+      (prov ? '<div class="nht-type">' + prov + '</div>' : '') +
+      '<div class="nht-hint">click — inspect evidence</div>';
     el.style.display = 'block';
     this._moveTooltip(event);
   }

@@ -90,11 +90,20 @@ type VNode struct {
 	// included so in-view components whose only edges cross the boundary
 	// don't render as orphans. Renderers draw boundary nodes dimmed.
 	Boundary bool `json:"boundary,omitempty"`
+	// Provenance, straight from the graph row and its evidence: a card
+	// that cannot say how sure it is and where its proof lives is a
+	// drawing, not memory. Status is omitted when active.
+	Confidence    float64 `json:"confidence,omitempty"`
+	Trust         float64 `json:"trust,omitempty"`
+	Status        string  `json:"status,omitempty"`
+	EvidenceCount int     `json:"evidence_count,omitempty"`
+	EvidenceRef   string  `json:"evidence_ref,omitempty"`
 }
 
 // VEdge is a rendered arrow. With collapse=true, From/To are group keys (or
-// node keys for ungrouped free-standing nodes), Weight counts the component
-// edges and CollapsedFrom holds their edge keys for drill-in.
+// node keys for ungrouped free-standing nodes). Weight counts the component
+// graph edges and CollapsedFrom holds their edge keys (in every view, so an
+// arrow can always be inspected down to evidence).
 // Direction is the DIAGRAM's: CONSUMES_TOPIC arrows run topic → consumer
 // (message flow), although the graph stores the dependency consumer →
 // topic; CALLS_ENDPOINT lifted onto a service group is drawn as
@@ -107,6 +116,61 @@ type VEdge struct {
 	Label         string   `json:"label,omitempty"`
 	Weight        int      `json:"weight"`
 	CollapsedFrom []string `json:"collapsed_from,omitempty"`
+	// Provenance of the arrow: the WEAKEST component edge's confidence,
+	// trust and derivation (hard < linked < inferred < unknown), and the
+	// SUM of evidence rows behind all components. Synthesized arrows
+	// (uses_infra, "via" bypass) carry Derivation "synthesized".
+	Confidence    float64 `json:"confidence,omitempty"`
+	Trust         float64 `json:"trust,omitempty"`
+	Derivation    string  `json:"derivation,omitempty"`
+	EvidenceCount int     `json:"evidence_count,omitempty"`
+}
+
+// derivationRank orders derivation kinds from strongest to weakest.
+func derivationRank(d string) int {
+	switch d {
+	case "hard":
+		return 0
+	case "linked":
+		return 1
+	case "inferred":
+		return 2
+	}
+	return 3
+}
+
+// addEdgeProvenance folds one component edge into an arrow: weakest
+// confidence/trust/derivation, summed evidence. Call after Weight++.
+func addEdgeProvenance(ve *VEdge, e *store.EdgeRow, evidence int) {
+	if ve.Weight <= 1 || ve.Derivation == "" {
+		ve.Confidence, ve.Trust, ve.Derivation = e.Confidence, e.TrustScore, e.DerivationKind
+		if ve.Derivation == "" {
+			ve.Derivation = "unknown"
+		}
+	} else {
+		if e.Confidence < ve.Confidence {
+			ve.Confidence = e.Confidence
+		}
+		if e.TrustScore < ve.Trust {
+			ve.Trust = e.TrustScore
+		}
+		if derivationRank(e.DerivationKind) > derivationRank(ve.Derivation) {
+			ve.Derivation = e.DerivationKind
+		}
+	}
+	ve.EvidenceCount += evidence
+}
+
+// nodeProvenance fills a VNode's provenance from its row and evidence digest.
+func nodeProvenance(v *VNode, n *store.NodeRow, sum store.EvidenceSummary) {
+	v.Confidence, v.Trust = n.Confidence, n.TrustScore
+	if n.Status != "" && n.Status != "active" {
+		v.Status = n.Status
+	}
+	v.EvidenceCount, v.EvidenceRef = sum.Count, sum.Ref
+	if v.EvidenceRef == "" && n.FilePath != "" {
+		v.EvidenceRef = n.FilePath
+	}
 }
 
 // VBoundary lists edges crossing the view boundary, reusing the C3
@@ -273,6 +337,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return nil, err
 	}
 	active := activeEdges(allEdges)
+
+	// Provenance digest (one query): evidence counts + best ref per target.
+	nodeSum, edgeSum, err := st.EvidenceSummaries()
+	if err != nil {
+		nodeSum, edgeSum = map[int64]store.EvidenceSummary{}, map[int64]store.EvidenceSummary{}
+	}
 
 	nodeByID := make(map[int64]*store.NodeRow, len(nodes))
 	nodeByKey := make(map[string]*store.NodeRow, len(nodes))
@@ -919,6 +989,8 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			edgeOrder = append(edgeOrder, k)
 		}
 		ve.Weight++
+		addEdgeProvenance(ve, e, edgeSum[e.EdgeID].Count)
+		ve.CollapsedFrom = append(ve.CollapsedFrom, e.EdgeKey)
 	}
 
 	for i := range domEdges {
@@ -989,9 +1061,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				edgeOrder = append(edgeOrder, k)
 			}
 			ve.Weight++
-			if spec.Collapse {
-				ve.CollapsedFrom = append(ve.CollapsedFrom, e.EdgeKey)
-			}
+			addEdgeProvenance(ve, e, edgeSum[e.EdgeID].Count)
+			// Component edge keys ride along in every view (not only
+			// collapsed ones): an arrow is inspectable — "why does this
+			// exist" resolves to graph edges and their evidence.
+			ve.CollapsedFrom = append(ve.CollapsedFrom, e.EdgeKey)
 
 		case fIn && !tIn:
 			if pathMode {
@@ -1064,7 +1138,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// 1-hop neighbors of a pinned node that are OUTSIDE the view materialize
 	// as dimmed Boundary nodes with their connecting edges (same mechanism as
 	// the C3 boundary materialization) — the "show linked entities" feel.
-	addPinEdge := func(fromKey, toKey, kind, transport string) {
+	addPinEdge := func(fromKey, toKey, kind, transport string, e *store.EdgeRow) {
 		k := edgeKeyT{fromKey, toKey, kind, transport}
 		ve := edgeAcc[k]
 		if ve == nil {
@@ -1073,6 +1147,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			edgeOrder = append(edgeOrder, k)
 		}
 		ve.Weight++
+		if e != nil {
+			addEdgeProvenance(ve, e, edgeSum[e.EdgeID].Count)
+			ve.CollapsedFrom = append(ve.CollapsedFrom, e.EdgeKey)
+		} else if ve.Derivation == "" {
+			ve.Derivation = "synthesized"
+		}
 	}
 	if len(pinned) > 0 {
 		for i := range domEdges {
@@ -1091,11 +1171,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			}
 			if pinned[fid] && inView[fid] && !inView[tid] && !explicitlyRemoved(nodeByID[tid]) {
 				boundaryIDs[tid] = true
-				addPinEdge(pf, pt, e.EdgeType, edgeTransport(e, nodeByID))
+				addPinEdge(pf, pt, e.EdgeType, edgeTransport(e, nodeByID), e)
 			}
 			if pinned[tid] && inView[tid] && !inView[fid] && !explicitlyRemoved(nodeByID[fid]) {
 				boundaryIDs[fid] = true
-				addPinEdge(pf, pt, e.EdgeType, edgeTransport(e, nodeByID))
+				addPinEdge(pf, pt, e.EdgeType, edgeTransport(e, nodeByID), e)
 			}
 		}
 		// Pinned endpoints render as nodes; their EXPOSES_ENDPOINT hierarchy
@@ -1105,7 +1185,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			if !pinned[epID] || !inView[epID] || !inView[exID] {
 				continue
 			}
-			addPinEdge(renderedKey(exID), nodeByID[epID].NodeKey, "EXPOSES_ENDPOINT", "local")
+			addPinEdge(renderedKey(exID), nodeByID[epID].NodeKey, "EXPOSES_ENDPOINT", "local", nil)
 		}
 	}
 
@@ -1201,7 +1281,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 							continue
 						}
 						fanOut[en.to]++
-						ve = &VEdge{From: fromKey, To: toKey, Kind: en.kind, Label: label}
+						ve = &VEdge{From: fromKey, To: toKey, Kind: en.kind, Label: label, Derivation: "synthesized"}
 						synAcc[sk] = ve
 						synOrder = append(synOrder, sk)
 					}
@@ -1246,7 +1326,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			BoundaryCrossing: crossing[n.NodeID],
 			UserOverride:     userOv,
 		})
-		view.Nodes = append(view.Nodes, VNode{
+		vn := VNode{
 			Key:        n.NodeKey,
 			Name:       n.Name,
 			Type:       n.NodeType,
@@ -1259,7 +1339,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			RenderMode: string(sal.RenderMode),
 
 			SalienceReason: sal.Reason,
-		})
+		}
+		nodeProvenance(&vn, n, nodeSum[id])
+		view.Nodes = append(view.Nodes, vn)
 	}
 	// Materialized boundary targets (service-scoped views): free-standing,
 	// marked Boundary so renderers can dim them.
@@ -1268,13 +1350,15 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			continue
 		}
 		n := nodeByID[id]
-		view.Nodes = append(view.Nodes, VNode{
+		vn := VNode{
 			Key:      n.NodeKey,
 			Name:     n.Name,
 			Type:     n.NodeType,
 			Layer:    n.Layer,
 			Boundary: true,
-		})
+		}
+		nodeProvenance(&vn, n, nodeSum[id])
+		view.Nodes = append(view.Nodes, vn)
 	}
 	sort.Slice(view.Nodes, func(i, j int) bool { return view.Nodes[i].Key < view.Nodes[j].Key })
 
@@ -1320,7 +1404,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				label = "db"
 			}
 			infraEdges = append(infraEdges, VEdge{
-				From: domain, To: n.NodeKey, Kind: "uses_infra", Label: label, Weight: 1,
+				From: domain, To: n.NodeKey, Kind: "uses_infra", Label: label, Weight: 1, Derivation: "synthesized",
 			})
 		}
 		sort.Slice(infraEdges, func(i, j int) bool { return infraEdges[i].To < infraEdges[j].To })

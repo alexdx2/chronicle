@@ -2203,6 +2203,39 @@ func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id str
 }
 
 func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
+	// POST {"edge_keys":[...]} → provenance per arrow component: each
+	// resolved edge with its evidence rows, unknown keys reported as
+	// missing. This is how a collapsed C2 arrow ("calls ×3") explains
+	// itself without going through a node.
+	if r.Method == http.MethodPost {
+		var body struct {
+			EdgeKeys []string `json:"edge_keys"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			httpError(w, err, 400)
+			return
+		}
+		type edgeEvidence struct {
+			Edge     store.EdgeRow       `json:"edge"`
+			Evidence []store.EvidenceRow `json:"evidence"`
+		}
+		out := []edgeEvidence{}
+		missing := []string{}
+		for _, k := range body.EdgeKeys {
+			e, err := s.getStore().GetEdgeByKey(k)
+			if err != nil || e == nil {
+				missing = append(missing, k)
+				continue
+			}
+			ev, _ := s.getStore().ListEvidenceByEdge(e.EdgeID)
+			if ev == nil {
+				ev = []store.EvidenceRow{}
+			}
+			out = append(out, edgeEvidence{Edge: *e, Evidence: ev})
+		}
+		httpJSON(w, map[string]any{"edges": out, "missing": missing})
+		return
+	}
 	nodeKey := r.URL.Query().Get("node_key")
 	if nodeKey == "" {
 		httpJSON(w, []any{})

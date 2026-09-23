@@ -231,6 +231,13 @@ function adaptView(view, baseLookup) {
       _renderMode: n.render_mode || '',
       _tier: n.tier || '',
       _salienceReason: n.salience_reason || '',
+      // Provenance (from the graph row + evidence digest): the card can
+      // say how sure it is and where its proof lives.
+      confidence: n.confidence,
+      trust_score: n.trust,
+      status: n.status || 'active',
+      _evidenceCount: n.evidence_count || 0,
+      _evidenceRef: n.evidence_ref || '',
     });
   });
 
@@ -240,6 +247,8 @@ function adaptView(view, baseLookup) {
   // label (e.g. C1 uses_infra: "events"/"cache") get an overlay entry keyed
   // by kind|label so the label renders verbatim.
   const lookupOverlay = {};
+  const nameOf = {};
+  nodes.forEach(n => { nameOf[n.node_key] = n.name; });
   const edges = (view.edges || []).map(e => {
     let edgeType = e.kind;
     const base = baseLookup[e.kind] || baseLookup[String(e.kind).toUpperCase()];
@@ -265,11 +274,16 @@ function adaptView(view, baseLookup) {
       transport: e.transport || '',
       weight: e.weight || 1,
       collapsed_from: e.collapsed_from || [],
-      derivation: 'view',
-      confidence: 1,
-      trust_score: 1,
+      // Provenance of the arrow: weakest component's derivation/confidence/
+      // trust, summed evidence. Synthesized arrows (uses_infra, via) say so.
+      derivation: e.derivation || 'view',
+      confidence: (e.confidence === undefined || e.confidence === null) ? 1 : e.confidence,
+      trust_score: (e.trust === undefined || e.trust === null) ? 1 : e.trust,
+      _evidenceCount: e.evidence_count || 0,
       _kind: e.kind,
       _label: e.label || '',
+      _fromName: nameOf[e.from] || e.from,
+      _toName: nameOf[e.to] || e.to,
     };
   });
 

@@ -1385,6 +1385,84 @@ button,input,select,textarea{font-family:inherit}
     </div>
   </div>
 </div>
+<!-- Bottom panel for a selected ARROW (view mode): what the arrow is made
+     of and the evidence behind each component edge. -->
+<div class="bottom-panel" data-testid="edge-detail-panel" x-show="selectedEdge && !selectedNode && viewActive" x-cloak x-transition>
+  <template x-if="selectedEdge">
+    <div>
+      <div class="bottom-panel-header">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <strong style="font-size:14px"><span x-text="selectedEdge.from"></span> → <span x-text="selectedEdge.to"></span></strong>
+          <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0e9dd;color:var(--text-secondary)"
+                x-text="selectedEdge.kind + (selectedEdge.weight > 1 ? ' ×' + selectedEdge.weight : '')"></span>
+          <template x-if="selectedEdge.label"><span style="font-size:10px;color:var(--text-muted)" x-text="selectedEdge.label"></span></template>
+          <template x-if="selectedEdge.derivation === 'synthesized'">
+            <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#fdf0d0;color:#b8963e">synthesized — no graph edge, derived from the manifest or a bypassed node</span>
+          </template>
+          <template x-if="selectedEdge.derivation && selectedEdge.derivation !== 'synthesized' && selectedEdge.derivation !== 'view'">
+            <span style="font-size:10px;color:var(--text-muted)">
+              <span x-text="selectedEdge.derivation"></span> ·
+              confidence <strong x-text="Math.round((selectedEdge.trust ?? selectedEdge.confidence ?? 1)*100)+'%'"
+                :style="{color: (selectedEdge.trust ?? selectedEdge.confidence ?? 1)>=0.85?'#2d6a30':(selectedEdge.trust ?? selectedEdge.confidence ?? 1)>=0.65?'#b8963e':'#c25757'}"></strong> ·
+              <span x-text="selectedEdge.evidence_count ? selectedEdge.evidence_count + ' evidence' : 'no evidence'"></span>
+            </span>
+          </template>
+        </div>
+        <button @click="selectedEdge=null;edgeEvidence=null" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:18px;padding:0 4px">&times;</button>
+      </div>
+      <div class="bottom-panel-body">
+        <div class="bottom-panel-col">
+          <h4>Graph edges behind this arrow</h4>
+          <template x-if="!edgeEvidence"><div class="muted-note">loading…</div></template>
+          <template x-if="edgeEvidence && edgeEvidence.edges.length === 0 && (edgeEvidence.missing||[]).length === 0">
+            <div class="muted-note">no graph edge — this arrow is synthesized</div>
+          </template>
+          <template x-if="edgeEvidence">
+            <div style="max-height:160px;overflow-y:auto">
+              <template x-for="(row, i) in edgeEvidence.edges" :key="row.edge.edge_key">
+                <div style="font-size:10px;padding:3px 0;border-bottom:1px solid var(--card-alt)">
+                  <div style="font-family:var(--font-mono);color:var(--text)" x-text="edgeShortKey(row.edge.edge_key)"></div>
+                  <div style="color:var(--text-muted)">
+                    <span x-text="row.edge.derivation_kind"></span> ·
+                    <span x-text="Math.round((row.edge.trust_score ?? row.edge.confidence ?? 1)*100)+'%'"></span> ·
+                    <span x-text="row.evidence.length + ' evidence'"></span>
+                    <template x-if="row.edge.verification_status && row.edge.verification_status !== 'unverified'"><span x-text="' · ' + row.edge.verification_status"></span></template>
+                  </div>
+                </div>
+              </template>
+              <template x-for="k in (edgeEvidence.missing||[])" :key="k">
+                <div style="font-size:10px;color:#c25757;padding:3px 0" x-text="'not in graph: ' + edgeShortKey(k)"></div>
+              </template>
+            </div>
+          </template>
+        </div>
+        <div class="bottom-panel-col">
+          <h4>Evidence</h4>
+          <template x-if="edgeEvidence && edgeEvidence.edges.some(r => r.evidence.length)">
+            <div style="max-height:160px;overflow-y:auto">
+              <template x-for="row in edgeEvidence.edges" :key="'ev-' + row.edge.edge_key">
+                <div>
+                  <template x-for="(ev, i) in row.evidence.slice(0, 8)" :key="ev.evidence_id || i">
+                    <div style="font-size:9px;padding:2px 0;border-bottom:1px solid var(--card-alt)">
+                      <span class="muted" x-text="(ev.assertion_kind || ev.source_kind) + (ev.evidence_status && ev.evidence_status !== 'valid' ? ' · ' + ev.evidence_status : '')"></span>
+                      <template x-if="ev.file_path">
+                        <div style="font-family:var(--font-mono);color:var(--text-secondary);user-select:all"
+                             x-text="ev.file_path + (ev.line_start ? ':' + ev.line_start : '')"></div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+          <template x-if="edgeEvidence && !edgeEvidence.edges.some(r => r.evidence.length)">
+            <div class="muted-note">no evidence recorded for these edges</div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
 <!-- Bottom panel for selected node -->
 <div class="bottom-panel" data-testid="node-detail-panel" x-show="selectedNode && (viewActive || graphMode==='tree' || graphMode==='explore')" x-cloak x-transition>
   <template x-if="selectedNode">
@@ -2150,6 +2228,8 @@ function dashboard() {
     editCategoryData: null,   // temp copy of the category being edited
     showEdgeLabels: true,     // global toggle for short labels
     showHiddenSalience: false, // reveal render_mode==hidden nodes (DTOs/helpers) in view mode
+    selectedEdge: null,        // arrow picked on the canvas (view mode)
+    edgeEvidence: null,        // POST /api/evidence result for selectedEdge.keys
     _salienceHiddenCount: 0,   // count of nodes hidden by salience in the last view render
     _hiddenSummary: [],        // [{layer,type,reason,count}] from the view engine
     hiddenDomains: [],        // string[] of domain_key values
@@ -5036,7 +5116,8 @@ function dashboard() {
           onDblClick: (d) => self.onViewNodeDblClick(d),
           onDrill: (d) => self.onViewNodeDblClick(d),
           onGroupDblClick: (name) => self.onViewGroupDblClick(name),
-          onBackgroundClick: () => { self.selectedNode = null; self.nodeEvidence = null; },
+          onBackgroundClick: () => { self.selectedNode = null; self.nodeEvidence = null; self.selectedEdge = null; self.edgeEvidence = null; },
+          onEdgeClick: (e) => self.onViewEdgeClick(e),
         },
         edgeCategoryLookup: lookup,
         showEdgeLabels: this.showEdgeLabels,
@@ -5091,7 +5172,38 @@ function dashboard() {
       this.viewSearch = (top.spec.filter && top.spec.filter.name) || '';
     },
 
+    // Click on an arrow: the arrow explains itself — its component graph
+    // edges and every evidence row behind them.
+    async onViewEdgeClick(e) {
+      this.selectedNode = null;
+      this.nodeEvidence = null;
+      this.selectedEdge = {
+        from: e._fromName || e.from_node_id, to: e._toName || e.to_node_id,
+        kind: e._kind || e.edge_type, label: e._label || '', weight: e.weight || 1,
+        derivation: e.derivation || '', confidence: e.confidence, trust: e.trust_score,
+        evidence_count: e._evidenceCount || 0, keys: e.collapsed_from || [],
+      };
+      this.edgeEvidence = null;
+      if (!this.selectedEdge.keys.length) { this.edgeEvidence = { edges: [], missing: [] }; return; }
+      try {
+        const r = await fetch('/api/evidence', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ edge_keys: this.selectedEdge.keys }) });
+        if (r.ok) this.edgeEvidence = await r.json();
+        else this.edgeEvidence = { edges: [], missing: this.selectedEdge.keys };
+      } catch (err) { this.edgeEvidence = { edges: [], missing: this.selectedEdge.keys }; }
+    },
+
+    edgeShortKey(k) {
+      // "layer:type:domain:path/to/file->layer:type:domain:x:TYPE" → "file → x (TYPE)"
+      const m = String(k || '').match(/^(.*)->(.*):([A-Z_]+)$/);
+      if (!m) return k;
+      const last = s => String(s).split('/').pop().split(':').pop();
+      return last(m[1]) + ' → ' + last(m[2]) + ' (' + m[3] + ')';
+    },
+
     onViewNodeClick(d) {
+      this.selectedEdge = null;
+      this.edgeEvidence = null;
       // Armed "Path to…": this click picks the target
       if (this.viewPathArmFrom) {
         const from = this.viewPathArmFrom;
