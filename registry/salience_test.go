@@ -338,3 +338,38 @@ func TestLoadDefaults_RoleVocabIsSemantic(t *testing.T) {
 		}
 	}
 }
+
+// Infrastructure and product-surface types must carry an explicit policy:
+// Resolve hides any type without one, which is exactly how Kafka/Redis
+// vanished from every C1/C2 and how ui.screen would vanish next.
+func TestLoadDefaults_InfraAndUITypesHavePolicy(t *testing.T) {
+	r, err := LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	p := r.SaliencePolicy()
+	for _, nt := range []string{"broker", "database", "cache", "queue", "infrastructure"} {
+		rule, ok := p.Rule("type:infra."+nt, "default")
+		if !ok || rule.Tier != "primary" || rule.RenderMode != "box" {
+			t.Errorf("infra.%s should default to primary/box: %+v ok=%v", nt, rule, ok)
+		}
+	}
+	if rule, ok := p.Rule("type:ui.screen", "default"); !ok || rule.RenderMode != "box" {
+		t.Errorf("ui.screen should default to box: %+v ok=%v", rule, ok)
+	}
+	if rule, ok := p.Rule("type:ui.screen", "c2"); !ok || rule.RenderMode != "badge" {
+		t.Errorf("ui.screen at c2 should be a badge (like endpoints): %+v ok=%v", rule, ok)
+	}
+	if rule, ok := p.Rule("type:ui.product", "default"); !ok || rule.RenderMode != "box" {
+		t.Errorf("ui.product should default to box: %+v ok=%v", rule, ok)
+	}
+	for _, nt := range []string{"panel", "control"} {
+		rule, ok := p.Rule("type:ui."+nt, "default")
+		if !ok || rule.RenderMode != "hidden" {
+			t.Errorf("ui.%s should default to hidden: %+v ok=%v", nt, rule, ok)
+		}
+		if rule, ok := p.Rule("type:ui."+nt, "focus"); !ok || rule.RenderMode != "expandable_detail" {
+			t.Errorf("ui.%s at focus should be expandable_detail: %+v ok=%v", nt, rule, ok)
+		}
+	}
+}

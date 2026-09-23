@@ -18,7 +18,7 @@ const DepthUnbounded = 99
 //
 //	c1     — scope:domain · group:domain · collapse (the legacy BuildC1 stays
 //	         for the artful /api/c4/c1 endpoint)
-//	c2     — scope:domain · filter:{edge_kinds:[sync,async]} · group:service · collapse
+//	c2     — scope:domain · filter:{edge_kinds:[sync,async], layers:[code,contract,service,infra]} · group:service · collapse
 //	c3     — scope:service · group:module · node-level edges + boundary
 //	         (empty target: scope:domain · group:service — components of
 //	         EVERY service in one view, no per-service boundary pass)
@@ -121,7 +121,9 @@ func PresetSpec(level, domain, target string) ViewSpec {
 			Scope: ScopeSpec{Domain: domain},
 			// Containers level: services + channels only. Data models/enums
 			// belong to C3 component views, not the container landscape.
-			Filter:   &FilterSpec{EdgeKinds: []string{"sync", "async"}, Layers: []string{"code", "contract", "service"}},
+			// infra is in: brokers frame their topics, and isolated infra
+			// (nothing touches it at this altitude) hides itself with a reason.
+			Filter:   &FilterSpec{EdgeKinds: []string{"sync", "async"}, Layers: []string{"code", "contract", "service", "infra"}},
 			Group:    GroupSpec{By: "service"},
 			Collapse: true,
 			Layout:   LayoutSpec{Preset: "c2"},

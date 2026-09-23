@@ -30,6 +30,20 @@ type View struct {
 	// views.
 	Trace   []string `json:"trace,omitempty"`
 	Missing []string `json:"missing,omitempty"`
+	// Hidden accounts for every node the view carries with
+	// render_mode=hidden, grouped by (layer, type, reason) — nothing leaves
+	// a diagram silently. Reasons are salience Decision.Reason tokens
+	// (policy key, noise:<class>, user_override, no_policy) or "isolated"
+	// (infrastructure nobody touches in this view).
+	Hidden []HiddenEntry `json:"hidden,omitempty"`
+}
+
+// HiddenEntry is one line of the hidden-node summary.
+type HiddenEntry struct {
+	Layer  string `json:"layer"`
+	Type   string `json:"type"`
+	Reason string `json:"reason"`
+	Count  int    `json:"count"`
 }
 
 // VGroup is a grouping frame (service, module, layer or domain).
@@ -38,6 +52,11 @@ type VGroup struct {
 	Name  string         `json:"name"`
 	Kind  string         `json:"kind"`
 	Stats map[string]int `json:"stats"`
+	// Inferred marks a frame whose membership is not backed by a graph
+	// edge (e.g. topics framed by the only declared broker); Note says on
+	// what basis, so the frame never passes for evidence.
+	Inferred bool   `json:"inferred,omitempty"`
+	Note     string `json:"note,omitempty"`
 }
 
 // VNode is a node card. Endpoint pills come from EXPOSES_ENDPOINT edges and
@@ -62,6 +81,10 @@ type VNode struct {
 	// hidden); Tier is diagnostic. Renderers style/hide nodes accordingly.
 	Tier       string `json:"tier,omitempty"`
 	RenderMode string `json:"render_mode,omitempty"`
+	// SalienceReason is the decisive salience layer for this node (see
+	// salience.Decision.Reason) — the one-token answer to "why is it drawn
+	// like that", carried so hidden nodes can be explained in place.
+	SalienceReason string `json:"salience_reason,omitempty"`
 	// Boundary marks a materialized 1-hop boundary target of a
 	// service-scoped view (C3): the node sits OUTSIDE the scope but is
 	// included so in-view components whose only edges cross the boundary
@@ -72,6 +95,10 @@ type VNode struct {
 // VEdge is a rendered arrow. With collapse=true, From/To are group keys (or
 // node keys for ungrouped free-standing nodes), Weight counts the component
 // edges and CollapsedFrom holds their edge keys for drill-in.
+// Direction is the DIAGRAM's: CONSUMES_TOPIC arrows run topic → consumer
+// (message flow), although the graph stores the dependency consumer →
+// topic; CALLS_ENDPOINT lifted onto a service group is drawn as
+// CALLS_SERVICE (one arrow per conversation).
 type VEdge struct {
 	From          string   `json:"from"`
 	To            string   `json:"to"`
@@ -583,6 +610,70 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return id
 	}
 
+	// ---- broker frames ----
+	// A topic lives inside its broker (C2 canon). Membership comes from a
+	// BELONGS_TO edge when the graph has one; otherwise from the topic's
+	// transport matching a broker by name/type; otherwise, with exactly one
+	// declared broker, that broker — inferred, and the frame says so.
+	brokerOf := make(map[int64]int64)     // topic id → broker id
+	brokerBasis := make(map[int64]string) // broker id → basis note ("" = evidence)
+	if groupBy == "service" {
+		var brokers []*store.NodeRow
+		for id := range inView {
+			if n := nodeByID[id]; n.Layer == "infra" && (n.NodeType == "broker" || n.NodeType == "queue") {
+				brokers = append(brokers, n)
+			}
+		}
+		sort.Slice(brokers, func(i, j int) bool { return brokers[i].NodeKey < brokers[j].NodeKey })
+		if len(brokers) > 0 {
+			for i := range domEdges {
+				e := &domEdges[i]
+				if e.EdgeType != "BELONGS_TO" {
+					continue
+				}
+				if fn, tn := nodeByID[e.FromNodeID], nodeByID[e.ToNodeID]; fn != nil && tn != nil && fn.NodeType == "topic" && tn.Layer == "infra" && inView[fn.NodeID] && inView[tn.NodeID] {
+					brokerOf[fn.NodeID] = tn.NodeID
+				}
+			}
+			// Deterministic order (sorted topic keys) so the basis note is
+			// stable across builds; a frame whose topics needed the weakest
+			// basis (the only declared broker) says that, not the strongest.
+			topicIDs := make([]int64, 0)
+			for id := range inView {
+				if n := nodeByID[id]; n.NodeType == "topic" && brokerOf[id] == 0 {
+					topicIDs = append(topicIDs, id)
+				}
+			}
+			sort.Slice(topicIDs, func(i, j int) bool { return nodeByID[topicIDs[i]].NodeKey < nodeByID[topicIDs[j]].NodeKey })
+			basisRank := map[string]int{"transport matches broker": 1, "only declared broker": 2}
+			setBasis := func(bid int64, basis string) {
+				if basisRank[basis] > basisRank[brokerBasis[bid]] {
+					brokerBasis[bid] = basis
+				}
+			}
+			for _, id := range topicIDs {
+				n := nodeByID[id]
+				tr := strings.ToLower(topicTransport(*n))
+				for _, b := range brokers {
+					bn := strings.ToLower(b.Name)
+					if (tr != "" && strings.Contains(bn, tr)) || (tr == "queue" && b.NodeType == "queue") {
+						brokerOf[id] = b.NodeID
+						setBasis(b.NodeID, "transport matches broker")
+						break
+					}
+				}
+				if brokerOf[id] == 0 && len(brokers) == 1 {
+					brokerOf[id] = brokers[0].NodeID
+					setBasis(brokers[0].NodeID, "only declared broker")
+				}
+			}
+		}
+	}
+	frameGroups := make(map[string]bool) // group keys rendered as frames even when collapsed
+	for _, bid := range brokerOf {
+		frameGroups[nodeByID[bid].NodeKey] = true
+	}
+
 	// ---- e. group assignment ----
 	// Pinned service spotlight (carve-out): when grouping by domain (C1) a
 	// pinned service node must not dissolve into the domain box as an orphan
@@ -609,7 +700,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		isSvc := n.Layer == "service" && n.NodeType == "service"
 		switch groupBy {
 		case "service":
-			if isSvc {
+			if isSvc || frameGroups[n.NodeKey] {
 				return "group"
 			}
 		case "module":
@@ -629,6 +720,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	groupOf := func(n *store.NodeRow) string {
 		switch groupBy {
 		case "service":
+			if bid, ok := brokerOf[n.NodeID]; ok {
+				return nodeByID[bid].NodeKey
+			}
 			if svc := owned[n.NodeID]; svc != nil {
 				return svc.NodeKey
 			}
@@ -696,6 +790,10 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		n := nodeByID[id]
 		if structuralKind(n) == "group" {
 			addGroup(n.NodeKey, n.Name, n.NodeType)
+			if basis := brokerBasis[id]; basis != "" {
+				groupsByKey[n.NodeKey].Inferred = true
+				groupsByKey[n.NodeKey].Note = basis
+			}
 		}
 	}
 	for _, g := range memberGroup {
@@ -731,7 +829,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		if structuralKind(n) == "group" {
 			return n.NodeKey
 		}
-		if g := memberGroup[id]; g != "" {
+		if g := memberGroup[id]; g != "" && !frameGroups[g] {
 			return g
 		}
 		return n.NodeKey
@@ -865,10 +963,28 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			} else {
 				fromKey, toKey = nodeByID[fid].NodeKey, nodeByID[tid].NodeKey
 			}
-			k := edgeKeyT{fromKey, toKey, e.EdgeType, edgeTransport(e, nodeByID)}
+			kind := e.EdgeType
+			// One arrow per conversation: a call to another service's
+			// endpoint, lifted to that service's group, IS a service call
+			// at container altitude — it merges with the parallel
+			// CALLS_SERVICE arrow (weight accumulates, collapsed_from keeps
+			// both edge kinds for drill-in).
+			if kind == "CALLS_ENDPOINT" && spec.Collapse {
+				if g := groupsByKey[toKey]; g != nil && g.Kind == "service" {
+					kind = "CALLS_SERVICE"
+				}
+			}
+			// Message flow direction: the graph stores CONSUMES_TOPIC as
+			// consumer → topic (a dependency); the diagram draws messages
+			// going topic → consumer, so publisher → topic → consumer reads
+			// in one direction.
+			if kind == "CONSUMES_TOPIC" {
+				fromKey, toKey = toKey, fromKey
+			}
+			k := edgeKeyT{fromKey, toKey, kind, edgeTransport(e, nodeByID)}
 			ve := edgeAcc[k]
 			if ve == nil {
-				ve = &VEdge{From: fromKey, To: toKey, Kind: e.EdgeType, Transport: k.transport, Weight: 0}
+				ve = &VEdge{From: fromKey, To: toKey, Kind: kind, Transport: k.transport, Weight: 0}
 				edgeAcc[k] = ve
 				edgeOrder = append(edgeOrder, k)
 			}
@@ -911,7 +1027,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			case "CONSUMES_TOPIC":
 				// Consumption flows from the channel to the consumer.
 				addIn(toNode.Name, "async")
-				addBoundaryEdge(fid, toNode, e, e.EdgeType, false)
+				addBoundaryEdge(fid, toNode, e, e.EdgeType, true)
 			}
 			// Other kinds crossing the boundary (INJECTS, USES_MODEL, …) are
 			// intentionally not boundary entries: models show as pills.
@@ -969,13 +1085,17 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			}
 			fid := retarget(e.FromNodeID)
 			tid := retarget(e.ToNodeID)
+			pf, pt := nodeByID[fid].NodeKey, nodeByID[tid].NodeKey
+			if e.EdgeType == "CONSUMES_TOPIC" {
+				pf, pt = pt, pf // message flow direction (see the in-view case)
+			}
 			if pinned[fid] && inView[fid] && !inView[tid] && !explicitlyRemoved(nodeByID[tid]) {
 				boundaryIDs[tid] = true
-				addPinEdge(nodeByID[fid].NodeKey, nodeByID[tid].NodeKey, e.EdgeType, edgeTransport(e, nodeByID))
+				addPinEdge(pf, pt, e.EdgeType, edgeTransport(e, nodeByID))
 			}
 			if pinned[tid] && inView[tid] && !inView[fid] && !explicitlyRemoved(nodeByID[fid]) {
 				boundaryIDs[fid] = true
-				addPinEdge(nodeByID[fid].NodeKey, nodeByID[tid].NodeKey, e.EdgeType, edgeTransport(e, nodeByID))
+				addPinEdge(pf, pt, e.EdgeType, edgeTransport(e, nodeByID))
 			}
 		}
 		// Pinned endpoints render as nodes; their EXPOSES_ENDPOINT hierarchy
@@ -1107,7 +1227,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	roleByNode := resolveRolesByNode(st)
 	crossing := boundaryCrossings(domEdges, owned)
 	for id, g := range memberGroup {
-		if spec.Collapse && g != "" {
+		if spec.Collapse && g != "" && !frameGroups[g] {
 			continue // grouped members fold into their VGroup
 		}
 		n := nodeByID[id]
@@ -1137,6 +1257,8 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			Detail:     flowTrigger[id],
 			Tier:       string(sal.Tier),
 			RenderMode: string(sal.RenderMode),
+
+			SalienceReason: sal.Reason,
 		})
 	}
 	// Materialized boundary targets (service-scoped views): free-standing,
@@ -1205,6 +1327,29 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		view.Edges = append(view.Edges, infraEdges...)
 	}
 
+	// Isolated infrastructure: declared infra nobody touches in THIS view
+	// does not answer the view's question (C2 "how do containers talk") —
+	// hidden, revealable, and accounted for below. C1 keeps declared infra
+	// because it synthesizes the uses_infra edges above.
+	touched := make(map[string]bool)
+	for _, e := range view.Edges {
+		touched[e.From] = true
+		touched[e.To] = true
+	}
+	for i := range view.Nodes {
+		n := &view.Nodes[i]
+		if n.Layer != "infra" || n.RenderMode == string(salience.RenderHidden) || touched[n.Key] || n.Group != "" {
+			continue
+		}
+		if nn := nodeByKey[n.Key]; nn != nil && pinned[nn.NodeID] {
+			continue
+		}
+		n.Tier = string(salience.TierDetail)
+		n.RenderMode = string(salience.RenderHidden)
+		n.SalienceReason = "isolated"
+	}
+	view.Hidden = hiddenSummary(view.Nodes)
+
 	if len(bIn) > 0 || len(bOut) > 0 {
 		sortIncoming(bIn)
 		sortOutgoing(bOut)
@@ -1229,6 +1374,44 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 	}
 	return view, nil
+}
+
+// hiddenSummary aggregates hidden VNodes by (layer, type, reason), sorted
+// by count desc then key, so the biggest silence is named first.
+func hiddenSummary(nodes []VNode) []HiddenEntry {
+	type k struct{ layer, typ, reason string }
+	acc := make(map[k]int)
+	for i := range nodes {
+		n := &nodes[i]
+		if n.RenderMode != string(salience.RenderHidden) {
+			continue
+		}
+		reason := n.SalienceReason
+		if reason == "" {
+			reason = "policy"
+		}
+		acc[k{n.Layer, n.Type, reason}]++
+	}
+	if len(acc) == 0 {
+		return nil
+	}
+	out := make([]HiddenEntry, 0, len(acc))
+	for kk, c := range acc {
+		out = append(out, HiddenEntry{Layer: kk.layer, Type: kk.typ, Reason: kk.reason, Count: c})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		if out[i].Layer != out[j].Layer {
+			return out[i].Layer < out[j].Layer
+		}
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		return out[i].Reason < out[j].Reason
+	})
+	return out
 }
 
 // ---------- path search ----------

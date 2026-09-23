@@ -56,6 +56,8 @@ export class GraphRenderer {
     callbacks = {},
     edgeCategoryLookup = {},
     showEdgeLabels = true,
+    rankDir = LAYOUT.rankDir,
+    groupMeta = {},
   }) {
     if (!this._container) return;
     this._container.innerHTML = '';
@@ -78,8 +80,10 @@ export class GraphRenderer {
       nodes.forEach(n => {
         // Infra nodes are shared resources — never inside domain groups
         // Shared resources always float outside domain groups
+        // …unless the VIEW placed the node in a frame explicitly (_group):
+        // a topic inside its broker frame is the view engine's decision.
         const sharedTypes = new Set(['broker', 'database', 'cache', 'queue', 'infrastructure', 'external_system', 'topic', 'async_channel']);
-        if (n.layer === 'infra' || sharedTypes.has(n.node_type)) return;
+        if (!n._group && (n.layer === 'infra' || sharedTypes.has(n.node_type))) return;
         const gk = n._group || n[groupField];
         if (gk) {
           if (!groupMap[gk]) groupMap[gk] = [];
@@ -104,7 +108,7 @@ export class GraphRenderer {
     if (typeof dagre !== 'undefined') {
       gDag = new dagre.graphlib.Graph({ compound: useCompound });
       gDag.setGraph({
-        rankdir: LAYOUT.rankDir, ranksep: LAYOUT.rankSep,
+        rankdir: rankDir || LAYOUT.rankDir, ranksep: LAYOUT.rankSep,
         nodesep: LAYOUT.nodeSep, edgesep: LAYOUT.edgeSep,
         marginx: LAYOUT.marginX, marginy: LAYOUT.marginY,
       });
@@ -180,6 +184,7 @@ export class GraphRenderer {
 
     this._currentEdges = simEdges;
 
+    const self = this;
     const svg = d3.select(this._container).append('svg')
       .attr('class', 'graph-svg')
       .attr('width', '100%').attr('height', '100%')
@@ -208,9 +213,13 @@ export class GraphRenderer {
       const pad = 80;
       const bx = Math.min(...xs) - pad, by = Math.min(...ys) - pad;
       const bw = Math.max(...xs) - bx + pad * 2, bh = Math.max(...ys) - by + pad * 2;
-      // Fit the smaller dimension and pan along the larger one. Fitting both
-      // (min) renders wide graphs as an illegible band; readable beats complete.
-      const scale = Math.min(Math.max(width / bw, height / bh, 0.4), 1.5);
+      // Fit everything when it stays readable (node text is 11px; below
+      // ~0.55 it turns to fuzz). Beyond that, keep 0.55 and center on the
+      // content — both edges are cut equally and panning is obvious. The
+      // old "fit the smaller dimension" rule cut off whole frames on the
+      // first paint, which read as a broken diagram.
+      const fitAll = Math.min(width / bw, height / bh);
+      const scale = Math.min(Math.max(fitAll, 0.55), 1.5);
       const cx = bx + bw / 2, cy = by + bh / 2;
       const tx = width / 2 - cx * scale;
       const ty = height / 2 - cy * scale;
@@ -223,15 +232,32 @@ export class GraphRenderer {
         const gNode = gDag.node('group_' + gk);
         if (!gNode) return;
         const gg = boxGroup.append('g').attr('class', 'domain-g');
-        gg.append('rect')
+        const meta = groupMeta[gk] || {};
+        // Frame color follows the group's own layer (a broker frame is
+        // infra-blue, a service frame service-red); inferred frames are
+        // dashed and say on what basis they exist.
+        const frameColor = meta.layer ? self.layerColor(meta.layer) : null;
+        const rect = gg.append('rect')
           .attr('class', 'domain-box')
           .attr('x', gNode.x - gNode.width / 2).attr('y', gNode.y - gNode.height / 2)
           .attr('width', gNode.width).attr('height', gNode.height);
-        gg.append('text')
+        if (frameColor) rect.attr('stroke', frameColor);
+        if (meta.inferred) rect.attr('stroke-dasharray', '6,3');
+        const label = gg.append('text')
           .attr('class', 'domain-label')
           .attr('x', gNode.x - gNode.width / 2 + 10)
-          .attr('y', gNode.y - gNode.height / 2 + 14)
-          .text(gk.toUpperCase());
+          .attr('y', gNode.y - gNode.height / 2 + 14);
+        if (frameColor) label.attr('fill', frameColor);
+        label.text(gk.toUpperCase() + (meta.kind && meta.kind !== 'service' && meta.kind !== 'domain' ? ' · ' + meta.kind : ''));
+        if (meta.inferred && meta.note) {
+          gg.append('text')
+            .attr('class', 'domain-note')
+            .attr('x', gNode.x - gNode.width / 2 + 10)
+            .attr('y', gNode.y - gNode.height / 2 + 26)
+            .attr('font-size', 8).attr('fill', 'var(--text-muted, #8a7355)')
+            .attr('font-style', 'italic')
+            .text('inferred: ' + meta.note);
+        }
         // Group frames are drillable (e.g. C3-all service frame → that
         // service's focused C3). The handler decides what a group means.
         if (callbacks.onGroupDblClick) {
@@ -264,21 +290,40 @@ export class GraphRenderer {
       .attr('opacity', e => (marks.path && marks.path.size > 0) ?
         (e._isPath ? 1 : 0.3) : 0.7);
 
+    // Edge labels sit on the routed path (its middle point), not on the
+    // straight source→target chord, and read at 10px with a background halo
+    // — a diagram whose arrows have no readable protocol answers nothing.
+    const labelPoint = e => {
+      if (e._points && e._points.length >= 2) {
+        const pts = e._points;
+        if (pts.length % 2 === 1) return pts[(pts.length - 1) / 2];
+        const a = pts[pts.length / 2 - 1], b = pts[pts.length / 2];
+        return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      }
+      return { x: (e.source.x + e.target.x) / 2, y: (e.source.y + e.target.y) / 2 };
+    };
     if (showEdgeLabels) {
       edgeG.append('text')
-        .attr('class', 'edge-label')
-        .attr('x', e => (e.source.x + e.target.x) / 2)
-        .attr('y', e => (e.source.y + e.target.y) / 2 - 6)
+        .attr('class', 'view-edge-label')
+        .attr('x', e => labelPoint(e).x)
+        .attr('y', e => labelPoint(e).y - 5)
         .attr('text-anchor', 'middle')
-        .attr('fill', 'var(--text-muted, #888)')
-        .attr('font-size', 9)
+        .attr('fill', e => {
+          const cat = edgeCategoryLookup[e.edge_type];
+          return cat ? cat.color : 'var(--text-secondary, #5c4e3c)';
+        })
+        .attr('font-size', 10)
+        .attr('font-weight', 600)
+        .attr('paint-order', 'stroke')
+        .attr('stroke', 'var(--bg, #faf6ef)')
+        .attr('stroke-width', 3)
+        .attr('stroke-linejoin', 'round')
         .text(e => {
           const cat = edgeCategoryLookup[e.edge_type];
           return cat ? cat.shortLabel : '';
         });
     }
 
-    const self = this;
     const nw = LAYOUT.nodeWidth, nh = LAYOUT.nodeHeight;
 
     const nodeG = g.selectAll('.node-g').data(simNodes).enter().append('g')
@@ -382,7 +427,7 @@ export class GraphRenderer {
               const eg = edgeG.filter(ed => ed === e);
               eg.select('.edge-path').attr('d',
                 `M${e.source.x},${e.source.y}L${e.target.x},${e.target.y}`);
-              eg.select('.edge-label')
+              eg.select('.view-edge-label')
                 .attr('x', (e.source.x + e.target.x) / 2)
                 .attr('y', (e.source.y + e.target.y) / 2 - 6);
             }
@@ -509,6 +554,7 @@ export class GraphRenderer {
       '<div class="nht-name">' + esc(d.name || d.node_key) + '</div>' +
       '<div class="nht-type">' + esc(d.node_type || '') + (d.layer ? ' · ' + esc(d.layer) : '') + '</div>' +
       (d.file_path ? '<div class="nht-type" style="font-family:var(--font-mono)">' + esc(d.file_path) + '</div>' : '') +
+      (d._renderMode && d._renderMode !== 'box' ? '<div class="nht-type">' + esc(d._renderMode) + (d._salienceReason ? ' · ' + esc(d._salienceReason) : '') + '</div>' : '') +
       '<div class="nht-hint">click — select · double-click — drill</div>';
     el.style.display = 'block';
     this._moveTooltip(event);

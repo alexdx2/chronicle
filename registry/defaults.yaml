@@ -326,6 +326,23 @@ salience:
     # (C2 shows them as counts/pills on services, not as separate boxes).
     "type:contract.endpoint":    { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
     "type:contract.topic":       { default: { tier: primary, render_mode: box } }
+    # infrastructure the manifest declares (broker, database, cache, queue):
+    # first-class boxes at every altitude — C1 draws them as the system's
+    # dependencies, C2 frames topics inside their broker. A type with no
+    # policy is hidden, which is how Kafka once vanished from every diagram.
+    "type:infra.broker":         { default: { tier: primary, render_mode: box } }
+    "type:infra.database":       { default: { tier: primary, render_mode: box } }
+    "type:infra.cache":          { default: { tier: primary, render_mode: box } }
+    "type:infra.queue":          { default: { tier: primary, render_mode: box } }
+    "type:infra.infrastructure": { default: { tier: primary, render_mode: box } }
+    # product surface (imported via chronicle surface): products and screens
+    # are what a user meets — boxes; at container altitude a screen is a
+    # count on its product (badge), like endpoints on services. Panels and
+    # controls are detail: hidden until a focus view expands them.
+    "type:ui.product":           { default: { tier: primary, render_mode: box } }
+    "type:ui.screen":            { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
+    "type:ui.panel":             { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
+    "type:ui.control":           { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
     # model: collapsed background in C2/C3, but the SUBJECT (primary box) in the data lens.
     "type:data.model":           { default: { tier: secondary, render_mode: collapsed_group }, data: { tier: primary, render_mode: box } }
     "type:data.entity":          { default: { tier: primary, render_mode: box } }

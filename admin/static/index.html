@@ -283,6 +283,10 @@ button,input,select,textarea{font-family:inherit}
 .graph-svg .via-pill{fill:#fdf0d0;stroke:#b8963e;stroke-width:0.5;rx:4}
 .graph-svg .edge-short-label { font-size:8px; fill:#b8a898; pointer-events:none; text-anchor:middle; }
 .graph-svg.hide-edge-labels .edge-short-label { display:none; }
+/* View-mode arrow labels (protocol: calls ×3, pub, sub): readable at rest,
+   halo against the canvas. Fill is set per edge (category color). */
+.graph-svg .view-edge-label{font-size:10px;font-weight:600;paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-linejoin:round;pointer-events:none;text-anchor:middle}
+.graph-svg.hide-edge-labels .view-edge-label{display:none}
 .graph-svg.has-highlight .edge-short-label.dimmed { display:none; }
 .graph-svg.has-highlight .edge-short-label.highlighted { display:block; font-size:10px; font-weight:600; }
 /* Domain boxes (Architecture mode) */
@@ -1155,6 +1159,12 @@ button,input,select,textarea{font-family:inherit}
                      @change="showHiddenSalience = $event.target.checked; renderViewMode()">
               <span>Show hidden<span x-show="!showHiddenSalience && _salienceHiddenCount" x-text="' (+' + _salienceHiddenCount + ')'" style="color:var(--text-muted)"></span></span>
             </label>
+            <!-- Why hidden: the engine's summary, one line per (type, reason). -->
+            <div data-testid="hidden-summary" x-show="_hiddenSummary.length" style="margin:4px 0 0 18px;font-size:9px;color:var(--text-muted);line-height:1.5">
+              <template x-for="h in _hiddenSummary" :key="h.layer + h.type + h.reason">
+                <div><span x-text="h.count + ' ' + h.type"></span> <span style="opacity:.75" x-text="'— ' + hiddenReasonLabel(h.reason)"></span></div>
+              </template>
+            </div>
           </div>
 
           <!-- Layers & types (Explore): ONE taxonomy. The layer checkbox is
@@ -2063,13 +2073,6 @@ function dashboard() {
     projectName: '',
     graphData: { nodes: [], edges: [] },
     graphMode: 'explore',
-    // C4 Zoom state
-    zoomLevel: 'c2',
-    zoomScope: {},
-    zoomLens: 'all',
-    zoomMode: 'explore',
-    zoomDomainData: [],
-    zoomBreadcrumbs: [],
     graphController: null,
     modeController: null,
     graphPreset: 'all',
@@ -2148,6 +2151,7 @@ function dashboard() {
     showEdgeLabels: true,     // global toggle for short labels
     showHiddenSalience: false, // reveal render_mode==hidden nodes (DTOs/helpers) in view mode
     _salienceHiddenCount: 0,   // count of nodes hidden by salience in the last view render
+    _hiddenSummary: [],        // [{layer,type,reason,count}] from the view engine
     hiddenDomains: [],        // string[] of domain_key values
     minConfidence: 0,
     // Three-state filter per node_type: 'show' | 'collapse' | 'hide'
@@ -2224,6 +2228,8 @@ function dashboard() {
         this.tab = 'graph';
         this.graphMode = 'explore';
         this._initViewLevel = path.split('/')[2];
+        // /graph/c3?service=<key|name> deep-links one service's C3.
+        this._initViewService = new URLSearchParams(window.location.search).get('service') || '';
         this._bootViewPending = true; // no default-render flash: wait for the view
       } else if (path === '/graph' || path.startsWith('/graph')) {
         this.tab = 'graph';
@@ -2287,9 +2293,11 @@ function dashboard() {
           // restores it) — entering both would double-push the view stack.
           if (this._initViewLevel) {
             const lvl = this._initViewLevel;
+            const svc = this._initViewService || '';
             this._initViewLevel = null;
+            this._initViewService = '';
             if (!(location.hash.indexOf('#v/') === 0 || location.hash.indexOf('#c4') === 0)) {
-              await this.enterViewLevel(lvl);
+              await this.enterViewLevel(lvl, svc || undefined);
             }
           }
 
@@ -3082,262 +3090,6 @@ function dashboard() {
       const focusName = d.name || d.domain_key || '';
       this.applyFocus(focusName);
       this.renderGraph();
-    },
-
-    setZoom(level) {
-      if (level === 'c3' && !this.zoomScope.container) {
-        this.zoomLevel = 'c2'; this.renderGraph(); return;
-      }
-      if (level === 'c4' && !this.zoomScope.domain) {
-        if (this.zoomScope.container) { this.zoomLevel = 'c3'; } else { this.zoomLevel = 'c2'; }
-        this.renderGraph(); return;
-      }
-      if (level === 'focus' && !this.zoomScope.node) {
-        if (this.zoomScope.domain) { this.zoomLevel = 'c4'; } else { this.zoomLevel = 'c2'; }
-        this.renderGraph(); return;
-      }
-      this.zoomLevel = level;
-      this.updateBreadcrumbs();
-      this.renderGraph();
-    },
-
-    updateBreadcrumbs() {
-      const bc = [];
-      const self = this;
-      bc.push({ label: 'Platform', action() { self.zoomScope = {}; self.setZoom('c1'); } });
-      if (this.zoomLevel !== 'c1') {
-        bc.push({ label: 'Containers', action() { self.zoomScope = {}; self.setZoom('c2'); } });
-      }
-      if (this.zoomScope.container && ['c3','c4','focus'].includes(this.zoomLevel)) {
-        const cName = this.zoomScope.containerName || this.zoomScope.container;
-        bc.push({ label: cName, action() { self.zoomScope = { container: self.zoomScope.container, containerName: self.zoomScope.containerName }; self.setZoom('c3'); } });
-      }
-      if (this.zoomScope.domain && ['c4','focus'].includes(this.zoomLevel)) {
-        const dName = this.zoomScope.domainName || this.zoomScope.domain;
-        bc.push({ label: dName, action() { self.zoomScope = { container: self.zoomScope.container, containerName: self.zoomScope.containerName, domain: self.zoomScope.domain, domainName: self.zoomScope.domainName }; self.setZoom('c4'); } });
-      }
-      if (this.zoomScope.node && this.zoomLevel === 'focus') {
-        bc.push({ label: this.zoomScope.nodeName || this.zoomScope.node });
-      }
-      this.zoomBreadcrumbs = bc;
-    },
-
-    renderZoomView() {
-      const container = this.$refs.graphCanvas || document.getElementById('graph-canvas');
-      if (!container) return;
-      const allNodes = this.graphData.nodes || [];
-      const allEdges = this.graphData.edges || [];
-      switch (this.zoomLevel) {
-        case 'c1': this.renderC1(container, allNodes, allEdges); break;
-        case 'c2': this.renderC2(container, allNodes, allEdges); break;
-        case 'c3': this.renderC3(container, allNodes, allEdges); break;
-        case 'c4': this.renderC4(container, allNodes, allEdges); break;
-        case 'focus': this.renderFocus(container, allNodes, allEdges); break;
-        default: this.renderC2(container, allNodes, allEdges);
-      }
-    },
-
-    renderC1(container, allNodes, allEdges) {
-      const serviceCount = allNodes.filter(n => n.layer === 'service').length;
-      const modelCount = allNodes.filter(n => n.node_type === 'model' || n.node_type === 'enum').length;
-      const epCount = allNodes.filter(n => n.node_type === 'endpoint').length;
-      const flowCount = allNodes.filter(n => n.layer === 'flow').length;
-      const externals = allNodes.filter(n => n.node_type === 'external_system');
-      const infra = allNodes.filter(n => n.layer === 'infra');
-      let html = '<div style="display:flex;flex-direction:column;align-items:center;gap:24px;padding:20px">';
-      if (externals.length > 0) {
-        html += '<div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px">External Systems</div>';
-        html += '<div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">';
-        externals.forEach(n => {
-          html += '<div style="background:var(--card);border:1px dashed var(--border);border-radius:6px;padding:10px 14px;text-align:center;min-width:100px"><div style="font-size:10px;color:var(--text-secondary)">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:var(--text-muted)">' + n.node_type + '</div></div>';
-        });
-        html += '</div><div style="width:1px;height:16px;background:var(--border)"></div>';
-      }
-      html += '<div style="background:linear-gradient(135deg,#fff,#f0e9dd);border:2px solid var(--primary);border-radius:10px;padding:18px 32px;text-align:center;cursor:pointer;transition:border-color .2s,transform .2s" onmouseover="this.style.borderColor=\'var(--text)\'" onmouseout="this.style.borderColor=\'var(--primary)\'" onclick="document.querySelector(\'[x-data]\').__x.$data.setZoom(\'c2\')"><div style="font-size:14px;color:var(--text)">Platform</div><div style="font-size:8px;color:var(--text-muted);margin-top:4px">' + serviceCount + ' services \xb7 ' + modelCount + ' models \xb7 ' + epCount + ' endpoints \xb7 ' + flowCount + ' flows</div><div style="font-size:8px;color:var(--text-muted);margin-top:6px">Click to drill down \u2192</div></div>';
-      if (infra.length > 0) {
-        html += '<div style="width:1px;height:16px;background:var(--border)"></div><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px">Infrastructure</div><div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">';
-        infra.forEach(n => { html += '<div style="background:#dcf5dd;border:1px solid var(--success);border-radius:6px;padding:8px 12px;text-align:center;min-width:90px"><div style="font-size:10px;color:var(--success)">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:var(--success)">' + n.node_type + '</div></div>'; });
-        html += '</div>';
-      }
-      html += '</div>';
-      container.innerHTML = html;
-    },
-
-    renderC2(container, allNodes, allEdges) {
-      const containers = {};
-      allNodes.forEach(n => {
-        const key = n.repo_name || n.domain_key || '_default';
-        if (!containers[key]) containers[key] = { key, nodes: [], layers: {}, types: {}, domains: new Set() };
-        containers[key].nodes.push(n);
-        containers[key].layers[n.layer] = (containers[key].layers[n.layer] || 0) + 1;
-        containers[key].types[n.node_type] = (containers[key].types[n.node_type] || 0) + 1;
-        if (n.domain_key) containers[key].domains.add(n.domain_key);
-      });
-      const nodeContainer = {};
-      allNodes.forEach(n => { nodeContainer[n.node_id] = n.repo_name || n.domain_key || '_default'; });
-      const edgeSet = new Set();
-      const uniqueCross = [];
-      allEdges.forEach(e => {
-        const from = nodeContainer[e.from_node_id], to = nodeContainer[e.to_node_id];
-        if (from && to && from !== to) {
-          const k = from + '\u2192' + to + ':' + e.edge_type;
-          if (!edgeSet.has(k)) { edgeSet.add(k); uniqueCross.push({ from, to, type: e.edge_type }); }
-        }
-      });
-      const cList = Object.values(containers).sort((a, b) => b.nodes.length - a.nodes.length);
-      let html = '<div style="padding:16px;max-width:900px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px">Containers</div><div style="display:flex;gap:12px;flex-wrap:wrap">';
-      cList.forEach(c => {
-        const epCount = c.layers['contract'] || 0;
-        const domCount = c.domains.size;
-        const modCount = (c.types['module'] || 0) + (c.types['controller'] || 0) + (c.types['provider'] || 0);
-        const safeKey = c.key.replace(/'/g, "\\'");
-        html += '<div style="background:linear-gradient(135deg,#fff,#f0e9dd);border:2px solid var(--border);border-radius:8px;padding:14px 18px;min-width:180px;flex:1;max-width:240px;cursor:pointer;transition:border-color .2s,transform .2s" onmouseover="this.style.borderColor=\'var(--primary)\';this.style.transform=\'translateY(-1px)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.transform=\'\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC3(\'' + safeKey + '\',\'' + safeKey + '\')"><div style="font-size:12px;color:var(--text);font-weight:600">' + c.key + '</div><div style="font-size:9px;color:var(--text-muted);margin-top:2px">' + c.nodes.length + ' nodes</div><div style="display:flex;gap:8px;margin-top:8px;font-size:9px;color:var(--text-muted)">' + (epCount ? '<span><b style="color:var(--primary)">' + epCount + '</b> endpoints</span>' : '') + (domCount > 1 ? '<span><b style="color:var(--primary)">' + domCount + '</b> domains</span>' : '') + (modCount ? '<span><b style="color:var(--primary)">' + modCount + '</b> components</span>' : '') + '</div><div style="font-size:8px;color:var(--text-muted);margin-top:6px">\u2192 domains</div></div>';
-      });
-      html += '</div>';
-      if (uniqueCross.length > 0) {
-        html += '<div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin:16px 0 8px">Connections</div>';
-        uniqueCross.slice(0, 20).forEach(e => {
-          html += '<div style="font-size:10px;color:var(--text-secondary);padding:2px 0"><span style="color:var(--primary);font-weight:500">' + e.from + '</span> <span style="font-size:8px;color:var(--text-muted);background:var(--card-alt);padding:1px 4px;border-radius:2px;margin:0 4px">' + e.type + '</span> <span style="color:var(--primary);font-weight:500">' + e.to + '</span></div>';
-        });
-      }
-      html += '</div>';
-      container.innerHTML = html;
-    },
-
-    drillToC3(containerKey, containerName) {
-      this.zoomScope = { container: containerKey, containerName: containerName || containerKey };
-      this.zoomLevel = 'c3';
-      this.updateBreadcrumbs();
-      this.renderGraph();
-    },
-
-    renderC3(container, allNodes, allEdges) {
-      const scope = this.zoomScope.container;
-      if (!scope) { this.renderC2(container, allNodes, allEdges); return; }
-      const containerNodes = allNodes.filter(n => (n.repo_name || n.domain_key || '_default') === scope);
-      const domains = {};
-      containerNodes.forEach(n => {
-        const dk = n.domain_key || '_unassigned';
-        if (!domains[dk]) domains[dk] = { key: dk, nodes: [], layers: {}, types: {}, endpoints: 0, models: 0, events: 0, modules: 0 };
-        const d = domains[dk];
-        d.nodes.push(n); d.layers[n.layer] = (d.layers[n.layer] || 0) + 1; d.types[n.node_type] = (d.types[n.node_type] || 0) + 1;
-        if (n.node_type === 'endpoint') d.endpoints++;
-        if (n.node_type === 'model' || n.node_type === 'enum') d.models++;
-        if (n.node_type === 'topic' || n.node_type === 'event') d.events++;
-        if (['module','controller','provider','gateway','resolver'].includes(n.node_type)) d.modules++;
-      });
-      const nodeDomain = {};
-      containerNodes.forEach(n => { nodeDomain[n.node_id] = n.domain_key || '_unassigned'; });
-      const crossDomains = {};
-      allEdges.forEach(e => {
-        const fd = nodeDomain[e.from_node_id], td = nodeDomain[e.to_node_id];
-        if (fd && td && fd !== td) { if (!crossDomains[fd]) crossDomains[fd] = new Set(); crossDomains[fd].add(td); }
-      });
-      const dList = Object.values(domains).sort((a, b) => b.nodes.length - a.nodes.length);
-      let html = '<div style="padding:16px;max-width:900px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px">Domains inside ' + (this.zoomScope.containerName || scope) + '</div>';
-      dList.forEach(d => {
-        const connected = crossDomains[d.key] ? [...crossDomains[d.key]].join(', ') : '';
-        const tags = [];
-        if (d.endpoints) tags.push(d.endpoints + ' ep');
-        if (d.modules) tags.push(d.modules + ' mod');
-        if (d.models) tags.push(d.models + ' models');
-        if (d.events) tags.push(d.events + ' events');
-        const safeKey = d.key.replace(/'/g, "\\'");
-        html += '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px 18px;margin-bottom:10px;cursor:pointer;transition:border-color .15s,background .15s;display:flex;justify-content:space-between;align-items:flex-start" onmouseover="this.style.borderColor=\'var(--text-muted)\';this.style.background=\'var(--bg)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.background=\'var(--card)\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToC4(\'' + safeKey + '\',\'' + safeKey + '\')"><div><div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:2px">' + d.key + '</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + tags.map(t => '<span style="font-size:8px;color:var(--text-secondary);background:var(--card-alt);padding:2px 6px;border-radius:3px">' + t + '</span>').join('') + '</div></div><div style="text-align:right">' + (connected ? '<div style="font-size:8px;color:var(--text-muted)">Connected: <b style="color:var(--text-secondary)">' + connected + '</b></div>' : '') + '<div style="font-size:8px;color:var(--text-muted);margin-top:4px">\u2192 components</div></div></div>';
-      });
-      html += '</div>';
-      container.innerHTML = html;
-    },
-
-    drillToC4(domainKey, domainName) {
-      this.zoomScope = { ...this.zoomScope, domain: domainKey, domainName: domainName || domainKey };
-      this.zoomLevel = 'c4';
-      this.updateBreadcrumbs();
-      this.renderGraph();
-    },
-
-    renderC4(container, allNodes, allEdges) {
-      const domain = this.zoomScope.domain;
-      if (!domain) { this.renderC3(container, allNodes, allEdges); return; }
-      let domNodes = allNodes.filter(n => n.domain_key === domain);
-      if (this.zoomLens === 'api') domNodes = domNodes.filter(n => ['controller','resolver','endpoint','gateway','guard','interceptor','pipe'].includes(n.node_type) || n.layer === 'contract');
-      else if (this.zoomLens === 'data') domNodes = domNodes.filter(n => ['model','enum','repository','schema'].includes(n.node_type) || n.layer === 'data');
-      else if (this.zoomLens === 'events') domNodes = domNodes.filter(n => ['topic','event','consumer','producer','queue'].includes(n.node_type));
-      const roleMap = { 'controller':'API','resolver':'API','gateway':'API','guard':'API','interceptor':'API','pipe':'API','provider':'Application','service':'Application','module':'Module','model':'Domain / Data','enum':'Domain / Data','repository':'Domain / Data','schema':'Domain / Data','endpoint':'Contracts','topic':'Events','event':'Events','consumer':'Events','producer':'Events','queue':'Events' };
-      const groups = {};
-      domNodes.forEach(n => { const role = roleMap[n.node_type] || 'Other'; if (!groups[role]) groups[role] = []; groups[role].push(n); });
-      const domNodeIds = new Set(domNodes.map(n => n.node_id));
-      const nodeById = {}; allNodes.forEach(n => { nodeById[n.node_id] = n; });
-      const extDeps = [], extSeen = new Set();
-      allEdges.forEach(e => {
-        if (domNodeIds.has(e.from_node_id) && !domNodeIds.has(e.to_node_id)) {
-          const target = nodeById[e.to_node_id];
-          if (target && !extSeen.has(target.node_id)) { extSeen.add(target.node_id); extDeps.push({ ...target, _edgeType: e.edge_type }); }
-        }
-      });
-      if (extDeps.length > 0) groups['External Dependencies'] = extDeps;
-      const domEdges = {};
-      allEdges.forEach(e => { if (domNodeIds.has(e.from_node_id) && domNodeIds.has(e.to_node_id)) { if (!domEdges[e.from_node_id]) domEdges[e.from_node_id] = []; domEdges[e.from_node_id].push(e); } });
-      const typeColors = { 'module':'var(--code)','controller':'var(--code)','resolver':'var(--code)','gateway':'var(--code)','provider':'var(--code)','service':'var(--service)','model':'var(--data)','enum':'var(--data)','repository':'var(--data)','endpoint':'var(--contract)','topic':'var(--contract)','event':'var(--contract)','guard':'var(--code)','interceptor':'var(--code)','consumer':'var(--code)','producer':'var(--code)' };
-      const roleOrder = ['Module','API','Application','Domain / Data','Contracts','Events','External Dependencies','Other'];
-      let html = '<div style="padding:16px;max-width:1000px">';
-      roleOrder.forEach(role => {
-        const items = groups[role]; if (!items || items.length === 0) return;
-        const isExt = role === 'External Dependencies';
-        html += '<div style="margin-bottom:14px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:6px">' + role + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
-        items.forEach(n => {
-          const color = typeColors[n.node_type] || '#b8a898';
-          const edges = domEdges[n.node_id] || [];
-          const edgeSummary = edges.slice(0, 3).map(e => { const t = nodeById[e.to_node_id]; return t ? '\u2192 ' + t.name : ''; }).filter(Boolean).join(', ');
-          const safeName = (n.name || '').replace(/'/g, "\\'");
-          html += '<div style="background:var(--card);border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:6px;padding:8px 12px;min-width:140px;max-width:200px;flex:1;cursor:pointer;transition:border-color .15s,background .15s;' + (isExt ? 'border-style:dashed;border-left-style:solid;' : '') + '" onmouseover="this.style.borderColor=\'var(--primary)\';this.style.background=\'var(--bg)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.background=\'var(--card)\'" onclick="document.querySelector(\'[x-data]\').__x.$data.drillToFocus(' + n.node_id + ',\'' + safeName + '\')"><div style="font-size:10px;color:var(--text);font-weight:500">' + (n.name || n.node_key) + '</div><div style="font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.3px">' + n.node_type + '</div>' + (edgeSummary ? '<div style="font-size:8px;color:var(--text-muted);margin-top:3px">' + edgeSummary + '</div>' : '') + (isExt && n._edgeType ? '<div style="font-size:8px;color:var(--warning-text);margin-top:2px">' + n._edgeType + '</div>' : '') + '</div>';
-        });
-        html += '</div></div>';
-      });
-      html += '</div>';
-      container.innerHTML = html;
-    },
-
-    drillToFocus(nodeId, nodeName) {
-      this.zoomScope = { ...this.zoomScope, node: nodeId, nodeName: nodeName };
-      this.zoomLevel = 'focus';
-      this.updateBreadcrumbs();
-      this.renderGraph();
-    },
-
-    renderFocus(container, allNodes, allEdges) {
-      const nodeId = this.zoomScope.node;
-      if (!nodeId) { this.renderC4(container, allNodes, allEdges); return; }
-      const nodeById = {}; allNodes.forEach(n => { nodeById[n.node_id] = n; });
-      const centerNode = nodeById[nodeId];
-      if (!centerNode) { container.innerHTML = '<div style="padding:20px;color:var(--text-muted)">Node not found</div>'; return; }
-      const incoming = [], outgoing = [];
-      allEdges.forEach(e => {
-        if (e.to_node_id === nodeId && nodeById[e.from_node_id]) incoming.push({ node: nodeById[e.from_node_id], type: e.edge_type });
-        if (e.from_node_id === nodeId && nodeById[e.to_node_id]) outgoing.push({ node: nodeById[e.to_node_id], type: e.edge_type });
-      });
-      const deps = outgoing.filter(e => ['INJECTS','IMPORTS','CALLS_SYMBOL','REQUIRES'].includes(e.type));
-      const endpoints = outgoing.filter(e => ['EXPOSES_ENDPOINT','HANDLES_OPERATION'].includes(e.type));
-      const models = outgoing.filter(e => ['USES_MODEL','READS_DB','WRITES_DB','REFERENCES_MODEL'].includes(e.type));
-      const events = outgoing.filter(e => ['PUBLISHES_TOPIC','CONSUMES_TOPIC','USES_QUEUE'].includes(e.type));
-      const other = outgoing.filter(e => !deps.includes(e) && !endpoints.includes(e) && !models.includes(e) && !events.includes(e));
-      function renderRing(label, arrow, items) {
-        if (items.length === 0) return '';
-        let h = '<div style="margin-bottom:14px"><div style="font-size:9px;color:var(--text-muted);margin-bottom:6px"><span style="color:var(--text-muted)">' + arrow + '</span> ' + label + '</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
-        items.forEach(e => { h += '<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 12px;text-align:center;min-width:110px"><div style="font-size:10px;color:var(--text)">' + (e.node.name || e.node.node_key) + '</div><div style="font-size:8px;color:var(--text-muted);margin-top:1px">' + e.type + '</div></div>'; });
-        return h + '</div></div>';
-      }
-      let html = '<div style="padding:16px;max-width:700px;margin:0 auto">';
-      html += '<div style="background:linear-gradient(135deg,#fff,#f0e9dd);border:2px solid var(--primary);border-radius:8px;padding:14px 20px;text-align:center;margin-bottom:20px"><div style="font-size:14px;color:var(--text)">' + (centerNode.name || centerNode.node_key) + '</div><div style="font-size:9px;color:var(--text-muted)">' + centerNode.node_type + ' \xb7 ' + (centerNode.domain_key || '') + '</div></div>';
-      html += renderRing('Incoming (who calls this)', '\u2190', incoming);
-      html += renderRing('Dependencies', '\u2192', deps);
-      html += renderRing('Endpoints', '\u2197', endpoints);
-      html += renderRing('Data (models)', '\u2193', models);
-      html += renderRing('Events', '\u26a1', events);
-      if (other.length > 0) html += renderRing('Other', '\xb7', other);
-      html += '<div style="background:var(--card-alt);border:1px solid var(--bg);border-radius:6px;padding:10px 14px;margin-top:16px"><div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Evidence</div><div style="font-size:9px;color:var(--text-secondary)">' + (centerNode.file_path ? '<div><b style="color:var(--text-secondary)">File:</b> ' + centerNode.file_path + '</div>' : '') + '<div><b style="color:var(--text-secondary)">Confidence:</b> ' + ((centerNode.trust_score ?? centerNode.confidence) || 'N/A') + '</div><div><b style="color:var(--text-secondary)">Status:</b> ' + (centerNode.status || 'active') + '</div></div></div>';
-      html += '</div>';
-      container.innerHTML = html;
     },
 
     setPreset(preset) {
@@ -5048,13 +4800,22 @@ function dashboard() {
       }
       if (level === 'c3') {
         const services = this.getViewServices();
+        // A deep link may carry the service KEY; the picker/drill use names.
+        const byKey = (this.graphData.nodes || []).find(n => n.node_type === 'service' && n.node_key === c3Service);
+        if (byKey) c3Service = byKey.name;
         // Explicit choice: c3Service argument (drill/demo/deep link) or a
         // service node selected right now → that service's focused C3.
-        // No service context → C3 of ALL services (domain-wide, grouped
-        // by service; presetSpec('c3') without target).
+        // No service context → choose a service first. A component view
+        // of EVERY service at once is a hairball, not an answer; the
+        // picker offers it as an explicit "all services" escape.
         const explicit = (c3Service && services.includes(c3Service)) ? c3Service
-          : (selName && services.includes(selName)) ? selName : '';
+          : (selName && services.includes(selName)) ? selName
+          : (services.length === 1 ? services[0] : '');
         this.viewService = explicit;
+        if (!explicit && services.length > 1 && c3Service !== '*') {
+          await this.renderServicePicker(domain, services);
+          return;
+        }
         await this.pushViewSpec(ViewAdapter.presetSpec('c3', domain, explicit || undefined), { pristine: true });
       } else {
         await this.pushViewSpec(ViewAdapter.presetSpec(level, domain), { pristine: true });
@@ -5253,6 +5014,9 @@ function dashboard() {
         }
       }
       this._salienceHiddenCount = salienceHidden;
+      // The engine's hidden summary: every hidden node by (type, reason) —
+      // "+3 hidden" is never a mystery.
+      this._hiddenSummary = adapted.hidden || [];
       const lookup = Object.assign({}, this.edgeCategoryLookup, adapted.lookupOverlay);
       // "Hide CONTAINS/OWNS" applies to hierarchy-ish edges when a view
       // carries any (rare — collapsed views fold them into groups).
@@ -5276,6 +5040,8 @@ function dashboard() {
         },
         edgeCategoryLookup: lookup,
         showEdgeLabels: this.showEdgeLabels,
+        rankDir: adapted.rankDir,
+        groupMeta: adapted.groupMeta || {},
       });
       // Blank canvas (Custom view, empty scope.nodes): replace the generic
       // empty-state with the palette drag hint.
@@ -5294,6 +5060,8 @@ function dashboard() {
         spec: top.spec,
         stack: this.viewStack.map(v => v.title || (v.spec && v.spec.layout && v.spec.layout.preset) || '?'),
         salience_hidden_count: this._salienceHiddenCount || 0,
+        hidden_summary: this._hiddenSummary || [],
+        rank_dir: adapted.rankDir || 'TB',
         nodes: adapted.nodes.map(n => ({ key: n.node_key, name: n.name, type: n.node_type, layer: n.layer, group: n._group || null, boundary: !!n._isRef, detail: n._subtitle || '', render_mode: n._renderMode || '', tier: n._tier || '' })),
         edges: edges.map(e => ({ from: e.from_node_key || e.from_node_id, to: e.to_node_key || e.to_node_id, kind: e._kind || e.edge_type, weight: e._weight || 1, label: e._label || '' })),
         groups: (adapted.groups && adapted.groups.field) ? [...new Set(adapted.nodes.map(n => n._group).filter(Boolean))] : [],
@@ -5376,6 +5144,50 @@ function dashboard() {
       }
     },
 
+    // C3 without a target: pick the container first. Cards come from the C2
+    // view (its group stats are the honest per-service numbers), so the
+    // picker and the diagram never disagree.
+    async renderServicePicker(domain, services) {
+      const container = document.getElementById('graph-canvas');
+      if (!container) return;
+      if (this._bootViewPending) { this._bootViewPending = false; this.loading.graph = false; }
+      this.viewLoading = true;
+      let stats = {};
+      try {
+        const r = await fetch('/api/view', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(ViewAdapter.presetSpec('c2', domain)) });
+        if (r.ok) {
+          const v = await r.json();
+          (v.groups || []).forEach(g => { if (g.kind === 'service') stats[g.name] = g.stats || {}; });
+        }
+      } catch (e) { /* stats are decoration; the picker still works */ }
+      this.viewLoading = false;
+      const esc = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      let html = '<div data-testid="c3-service-picker" style="padding:40px 48px;max-width:960px;margin:0 auto">';
+      html += '<div style="font-size:15px;color:var(--text);margin-bottom:4px">Components of which service?</div>';
+      html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:18px">C3 answers “how is one container built”. Pick a service; each card shows what the container exposes and holds.</div>';
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px">';
+      services.forEach(name => {
+        const st = stats[name] || {};
+        html += '<div class="c3-pick-card" data-service="' + esc(name) + '" style="border:1.5px solid var(--service);border-radius:8px;padding:12px 14px;cursor:pointer;background:#fff">' +
+          '<div style="font-size:13px;color:var(--text);font-weight:600">' + esc(name) + '</div>' +
+          '<div style="font-size:10px;color:var(--text-muted);margin-top:6px">' +
+            (st.endpoints || 0) + ' endpoints · ' + (st.nodes || 0) + ' components · ' + (st.models || 0) + ' models</div>' +
+          '<div style="font-size:9px;color:var(--service);margin-top:8px;font-weight:600">→ open C3</div></div>';
+      });
+      html += '</div>';
+      html += '<div style="margin-top:18px;font-size:10px;color:var(--text-muted)">Need the whole picture? <a href="#" data-testid="c3-all-services" style="color:var(--primary)">All services in one view</a> — dense by design.</div>';
+      html += '</div>';
+      container.innerHTML = html;
+      const self = this;
+      container.querySelectorAll('.c3-pick-card').forEach(el => {
+        el.addEventListener('click', () => self.drillViewService(el.getAttribute('data-service')));
+      });
+      const all = container.querySelector('[data-testid="c3-all-services"]');
+      if (all) all.addEventListener('click', (ev) => { ev.preventDefault(); self.viewService = ''; self.pushViewSpec(ViewAdapter.presetSpec('c3', domain), { pristine: true }); });
+      window.__chronicleViewState = { mode: 'picker', preset: 'c3', services, nodes: [], edges: [] };
+    },
+
     drillViewService(name) {
       this.viewService = name;
       this.viewLevel = 'c3';
@@ -5389,6 +5201,18 @@ function dashboard() {
     // service's focused C3; other frames (modules, layers) are inert.
     onViewGroupDblClick(name) {
       if (this.getViewServices().includes(name)) this.drillViewService(name);
+    },
+
+    // Human wording for salience reasons (Decision.Reason tokens).
+    hiddenReasonLabel(reason) {
+      if (!reason) return 'policy';
+      if (reason === 'isolated') return 'nothing touches it in this view';
+      if (reason === 'no_policy') return 'type has no render policy';
+      if (reason === 'user_override') return 'hidden by you';
+      if (reason.indexOf('noise:') === 0) return reason.slice(6) + ' code';
+      if (reason.indexOf('type:') === 0) return 'render policy for ' + reason.slice(5);
+      if (reason.indexOf('role:') === 0) return 'role ' + reason.slice(5);
+      return reason;
     },
 
     // Breadcrumb "grouped by …" label — derived from the ACTIVE spec.

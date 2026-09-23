@@ -329,7 +329,9 @@ func TestResolve_DefaultPolicy_ProviderLevelAware(t *testing.T) {
 
 func TestResolve_DataLensPromotesModels(t *testing.T) {
 	r, err := registry.LoadDefaults()
-	if err != nil { t.Fatalf("LoadDefaults: %v", err) }
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
 	p := r.SaliencePolicy()
 	// In C2/C3 a model is collapsed background...
 	d := Resolve(p, Input{NodeType: "model", Layer: "data", Level: "c3"})
@@ -345,5 +347,40 @@ func TestResolve_DataLensPromotesModels(t *testing.T) {
 	d = Resolve(p, Input{NodeType: "enum", Layer: "data", Level: "data"})
 	if d.RenderMode != RenderBox {
 		t.Fatalf("enum in data lens: want box, got %s", d.RenderMode)
+	}
+}
+
+// A node hidden because its type has no policy must say so: "hidden" with a
+// silent trace is how whole layers (infra, ui) disappeared from diagrams.
+func TestResolve_UnknownType_ReasonIsNoPolicy(t *testing.T) {
+	d := Resolve(basePolicy(), Input{NodeType: "mystery", Layer: "code", Level: "default"})
+	if d.Reason != "no_policy" {
+		t.Fatalf("unknown type: want reason no_policy, got %q trace=%v", d.Reason, d.Trace)
+	}
+}
+
+func TestResolve_Reason_TracksDecisiveLayer(t *testing.T) {
+	cases := []struct {
+		name string
+		in   Input
+		want string
+	}{
+		{"type policy", Input{NodeType: "dto", Layer: "data", Level: "default"}, "type:data.dto"},
+		{"role policy", Input{NodeType: "endpoint", Layer: "contract", Role: "helper", Level: "default"}, "role:helper"},
+		{"noise", Input{NodeType: "endpoint", Layer: "contract", NoiseClass: "test", Level: "default"}, "noise:test"},
+	}
+	for _, c := range cases {
+		d := Resolve(basePolicy(), c.in)
+		if d.Reason != c.want {
+			t.Errorf("%s: want reason %q, got %q (trace %v)", c.name, c.want, d.Reason, d.Trace)
+		}
+	}
+}
+
+func TestResolve_UserOverride_ReasonIsUser(t *testing.T) {
+	m := RenderHidden
+	d := Resolve(basePolicy(), Input{NodeType: "endpoint", Layer: "contract", Level: "default", UserOverride: &Override{RenderMode: &m}})
+	if d.Reason != "user_override" {
+		t.Fatalf("want user_override, got %q", d.Reason)
 	}
 }

@@ -50,7 +50,12 @@ type Decision struct {
 	Promotable bool
 	MaxTier    Tier // "" = no cap
 	NoiseClass string
-	Trace      []string
+	// Reason names the decisive layer in one token, for hidden-node
+	// summaries ("+3 hidden: type:data.dto"): the type or role policy key
+	// that last set the mode, "noise:<class>", "user_override", or
+	// "no_policy" when the type has no policy at all (the silent-loss case).
+	Reason string
+	Trace  []string
 }
 
 // Override is a user-supplied pin that beats policy (last layer).
@@ -102,7 +107,10 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	d := Decision{Tier: TierDetail, RenderMode: RenderHidden}
 
 	// Layer 1: base policy by type.
-	applyKey(p, &d, typeKey(in.Layer, in.NodeType), in.Level)
+	if !applyKey(p, &d, typeKey(in.Layer, in.NodeType), in.Level) {
+		d.Reason = "no_policy"
+		d.Trace = append(d.Trace, typeKey(in.Layer, in.NodeType)+": no policy -> tier=detail mode=hidden")
+	}
 
 	// Effective claim confidence: <= 0 means "manually set role" => trusted.
 	conf := in.RoleConfidence
@@ -117,6 +125,7 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	// one extra box, a wrong demotion silently hides architecture.
 	if in.Role != "" && in.Role != "unknown" {
 		preTier, preMode := d.Tier, d.RenderMode
+		preReason := d.Reason
 		applyKey(p, &d, roleKey(in.Role), in.Level)
 		// Caps come from the roles: section (single source of truth).
 		if rr, ok := p.Role(in.Role); ok {
@@ -126,7 +135,7 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 		}
 		demoted := tierRank(d.Tier) < tierRank(preTier) || renderRank(d.RenderMode) < renderRank(preMode)
 		if demoted && conf < threshold {
-			d.Tier, d.RenderMode = preTier, preMode
+			d.Tier, d.RenderMode, d.Reason = preTier, preMode, preReason
 			d.Trace = append(d.Trace, fmt.Sprintf("role:%s demote_gated (confidence %.2f < %.2f) -> tier/mode restored", in.Role, conf, threshold))
 		}
 	}
@@ -169,6 +178,7 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 			d.NoiseClass = noiseClass
 			d.Tier = TierDetail
 			d.RenderMode = RenderHidden
+			d.Reason = "noise:" + noiseClass
 			tierRaised = false
 			d.Trace = append(d.Trace, "noise:"+noiseClass+" -> tier=detail mode=hidden")
 		}
@@ -179,6 +189,7 @@ func Resolve(p *registry.SaliencePolicy, in Input) Decision {
 	// Layer 5: user override — last word.
 	pinned := false
 	if in.UserOverride != nil {
+		d.Reason = "user_override"
 		if in.UserOverride.Tier != nil {
 			if tierRank(*in.UserOverride.Tier) > tierRank(d.Tier) {
 				tierRaised = true
@@ -244,15 +255,25 @@ func renderRank(m RenderMode) int {
 
 // applyKey merges the "default" rule then the level-specific rule for a policy
 // key into d (per-field, last-writer-wins for tier/render_mode).
-func applyKey(p *registry.SaliencePolicy, d *Decision, key, level string) {
+// applyKey merges the key's default rule then its level rule. Returns
+// whether any rule existed for the key; a matched key becomes the
+// Decision's Reason.
+func applyKey(p *registry.SaliencePolicy, d *Decision, key, level string) bool {
+	found := false
 	if rule, ok := p.Rule(key, "default"); ok {
 		mergeRule(d, key+":default", rule)
+		found = true
 	}
 	if level != "" && level != "default" {
 		if rule, ok := p.Rule(key, level); ok {
 			mergeRule(d, key+":"+level, rule)
+			found = true
 		}
 	}
+	if found {
+		d.Reason = key
+	}
+	return found
 }
 
 // mergeRule applies a RenderRule's non-empty fields onto d and records a trace line.

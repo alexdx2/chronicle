@@ -83,7 +83,9 @@ function presetSpec(level, domain, target) {
                group: { by: 'none' }, layout: { preset: 'flows' } };
     default: // c2
       // Containers level: services + channels only — data models/enums belong to C3.
-      return { scope: { domain }, filter: { edge_kinds: ['sync', 'async'], layers: ['code', 'contract', 'service'] },
+      // infra is in: brokers frame their topics; isolated infra hides itself
+      // with a reason (mirrors presets.go).
+      return { scope: { domain }, filter: { edge_kinds: ['sync', 'async'], layers: ['code', 'contract', 'service', 'infra'] },
                group: { by: 'service' }, collapse: true, layout: { preset: 'c2' } };
   }
 }
@@ -96,6 +98,15 @@ function specPath(domain, a, b) {
 function specFlow(domain, flowKey) {
   return { scope: { domain, flow: flowKey },
            group: { by: 'none' }, layout: { preset: 'flow' } };
+}
+
+function cardSubtitle(n) {
+  const parts = [n.type || ''];
+  const eps = (n.endpoints || []).length;
+  if (eps) parts.push(eps + (eps === 1 ? ' endpoint' : ' endpoints'));
+  const models = n.uses_models || [];
+  if (models.length) parts.push(models.length <= 2 ? models.join(', ') : models.length + ' models');
+  return parts.filter(Boolean).join(' · ') || null;
 }
 
 function shortName(key) {
@@ -144,7 +155,18 @@ function adaptView(view, baseLookup) {
   vnodes.forEach(n => { if (n.group) memberCount[n.group] = (memberCount[n.group] || 0) + 1; });
 
   const groupName = {};
-  vgroups.forEach(g => { groupName[g.key] = g.name; });
+  // groupMeta (keyed by the rendered group NAME, which is what the renderer
+  // keys frames by): kind/layer for frame styling, inferred+note so an
+  // inferred frame (topics in the only declared broker) says so on canvas.
+  const groupMeta = {};
+  vgroups.forEach(g => {
+    groupName[g.key] = g.name;
+    groupMeta[g.name] = {
+      key: g.key, kind: g.kind || '',
+      layer: String(g.key).includes(':') ? String(g.key).split(':')[0] : 'service',
+      inferred: !!g.inferred, note: g.note || '', stats: g.stats || {},
+    };
+  });
 
   const nodes = [];
 
@@ -195,9 +217,11 @@ function adaptView(view, baseLookup) {
       _group: n.group ? (groupName[n.group] || n.group) : null,
       _endpoints: n.endpoints || [],
       _usesModels: n.uses_models || [],
-      // Detail (e.g. a flow's trigger endpoint "GET /api/score") renders as
-      // the node subtitle via the renderer's existing _subtitle hook.
-      _subtitle: n.detail || null,
+      // Subtitle: a flow's trigger endpoint ("GET /api/score"), else what
+      // the card holds at this altitude — "controller · 4 endpoints",
+      // "provider · BattleEvent" — so a C3 card answers what it exposes and
+      // touches without opening the details panel.
+      _subtitle: n.detail || cardSubtitle(n),
       // Materialized boundary targets (C3): normal layer styling, dimmed
       // via the renderer's existing ref pattern (_isRef → opacity 0.4).
       _isRef: !!n.boundary,
@@ -206,6 +230,7 @@ function adaptView(view, baseLookup) {
       // of truth; _tier is diagnostic. Used to hide/dim low-salience nodes.
       _renderMode: n.render_mode || '',
       _tier: n.tier || '',
+      _salienceReason: n.salience_reason || '',
     });
   });
 
@@ -253,10 +278,17 @@ function adaptView(view, baseLookup) {
     nodes,
     edges,
     groups: useGroups ? { field: '_group' } : null,
+    groupMeta,
     lookupOverlay,
     missing: view.missing || [],
     trace: view.trace || [],
     boundary: view.boundary || null,
+    hidden: view.hidden || [],
+    // Layout direction follows the question: a path/flow reads left→right
+    // in step order; impact puts the changed node on top and dependents
+    // below by distance (edges point INTO the subject, so BT); everything
+    // else is the top-down Dagre default.
+    rankDir: (preset === 'path' || preset === 'flow') ? 'LR' : (preset === 'impact' ? 'BT' : 'TB'),
   };
 }
 

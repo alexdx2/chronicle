@@ -11,15 +11,14 @@ package viewmodel
 //  1. Edge kinds. Legacy C2 emits renderer-friendly kinds ("http"/"async" +
 //     label); the algebra keeps raw graph edge types (CALLS_SERVICE,
 //     PUBLISHES_TOPIC, ...). Tests map raw types to the legacy classes.
-//  2. CONSUMES_TOPIC direction. Legacy C2 renders consumption flipped
-//     (topic → consumer, label "consumes"); the algebra keeps the graph
-//     direction (consumer → topic). Tests flip legacy consumes edges back.
+//  2. CONSUMES_TOPIC direction. Both render consumption in message-flow
+//     direction (topic → consumer); the graph stores consumer → topic.
 //  3. CALLS_ENDPOINT lifting. Legacy C2 lifts only CALLS_SERVICE; the
 //     algebra also lifts CALLS_ENDPOINT (endpoint absorbed into its exposing
-//     controller → its service group). In the demo graph every
-//     CALLS_ENDPOINT parallels a CALLS_SERVICE between the same service
-//     pair, so we assert (a) CALLS_SERVICE-only set == legacy http set
-//     exactly, and (b) CALLS_ENDPOINT adds no service pair beyond it.
+//     controller → its service group) and MERGES it into the CALLS_SERVICE
+//     arrow of the same service pair (one arrow per conversation). So the
+//     collapsed CALLS_SERVICE pair set == legacy http set exactly, and no
+//     CALLS_ENDPOINT arrow survives at C2.
 //  4. C3 ungrouped fallback. group.by=module falls back to the owning
 //     service for components without a CONTAINS parent (battle.queue in
 //     arena-api). Legacy C3 renders those inside the service boundary but in
@@ -28,6 +27,10 @@ package viewmodel
 //     components.
 //  5. Boundary "Via". Legacy keeps the first-seen via component; equivalence
 //     is asserted on (ToName, ToKind, Kind) / (FromName, Kind) sets.
+//  7. Broker frames. The algebra frames topics inside their broker (an
+//     infra VGroup, inferred from the only declared broker when no
+//     BELONGS_TO edge exists); legacy C2 has no broker notion. Tests skip
+//     broker/queue groups and allow topics a non-service group.
 //  6. Cross-service INJECTS. The live demo DB contains two INJECTS edges
 //     that cross service boundaries (arena.service and jerry.service both
 //     inject tom-api's prisma.service — a canonical-resolution artifact;
@@ -77,9 +80,13 @@ func TestViewC2EquivalentToLegacy(t *testing.T) {
 		t.Fatalf("BuildPreset(c2): %v", err)
 	}
 
-	// --- group keys == legacy service keys ---
+	// --- group keys == legacy service keys (note 7: the algebra also frames
+	// topics inside their broker; that infra frame is not a service) ---
 	gotGroups := map[string]bool{}
 	for _, g := range view.Groups {
+		if g.Kind == "broker" || g.Kind == "queue" {
+			continue
+		}
 		gotGroups[g.Key] = true
 	}
 	wantGroups := map[string]bool{}
@@ -103,11 +110,9 @@ func TestViewC2EquivalentToLegacy(t *testing.T) {
 		case "http":
 			legacySync[pair{e.From, e.To}] = true
 		case "async":
-			if e.Label == "consumes" {
-				legacyAsync[pair{e.To, e.From}] = true // legacy renders topic→consumer
-			} else {
-				legacyAsync[pair{e.From, e.To}] = true
-			}
+			// Note 2 (updated): both legacy and the algebra draw consumption
+			// topic → consumer (message flow), so no flip is needed.
+			legacyAsync[pair{e.From, e.To}] = true
 		default:
 			t.Errorf("unexpected legacy C2 edge kind %q", e.Kind)
 		}
@@ -175,12 +180,13 @@ func TestViewC2EquivalentToLegacy(t *testing.T) {
 	}
 	eqPairSets(t, "async", viewAsync, legacyAsync)
 
-	// --- free-standing topic VNodes == legacy Topics ---
+	// --- topic VNodes == legacy Topics (note 7: topics sit in their broker
+	// frame, never in a service group) ---
 	gotTopics := map[string]bool{}
 	for _, n := range view.Nodes {
 		if n.Type == "topic" {
-			if n.Group != "" {
-				t.Errorf("topic %s should be free-standing, got group %q", n.Key, n.Group)
+			if strings.HasPrefix(n.Group, "service:") {
+				t.Errorf("topic %s must not belong to a service, got group %q", n.Key, n.Group)
 			}
 			gotTopics[n.Key] = true
 		}
