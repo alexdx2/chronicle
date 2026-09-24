@@ -47,7 +47,7 @@ This repo is the open-source core. Chronicle Pro is a separate private repo that
 - **Interfaces in core, implementations split.** `GraphQuerier` is in core (both `Graph` and `FederatedGraph` implement it). `GraphDiscoverer` is in core (`SingleRepoDiscoverer` in core, `MultiRepoDiscoverer` in pro).
 - **External nodes in core.** The `external` status and `node_aliases` table are core features. A single repo can have external nodes without federation — they just won't resolve until pro connects the dots.
 - **Resolution logic in pro.** The `ResolveExternal()` method that matches external nodes against aliases across repos is pro-only. Core stores the data, pro does the matching.
-- **Dashboard: pro is MVP copy.** Pro copies core's `index.html` and adds federation UI. This will drift. Long-term: core should expose plugin hooks.
+- **Dashboard: one template, slots.** Pro renders core's `index.html` through `admin.RenderDashboard(DashboardSlots)` and injects federation UI at the `SLOT:*` markers (tabs, state, routes, methods, view bar). Add a slot in core rather than forking the file.
 
 ## Architecture
 

@@ -96,7 +96,9 @@ export class GraphRenderer {
     const activeGroups = new Set(groupKeys);
     for (const [gk, members] of Object.entries(groupMap)) {
       if (!activeGroups.has(gk)) {
-        members.forEach(n => { n._group = null; });
+        // The frame is dissolved, the membership is not: the card keeps its
+        // group as a tag ("topic · orders") so it never reads as unaffiliated.
+        members.forEach(n => { n._group = null; n._dissolvedGroup = gk; });
       }
     }
     const useCompound = groupKeys.length > 0;
@@ -435,7 +437,7 @@ export class GraphRenderer {
       .attr('text-anchor', 'middle').attr('dy', 14)
       .attr('fill', d => self.layerColor(d.layer))
       .attr('font-size', 9).attr('opacity', 0.8)
-      .text(d => d._subtitle || d.node_type || '');
+      .text(d => (d._subtitle || d.node_type || '') + (d._dissolvedGroup ? ' · ' + d._dissolvedGroup : ''));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
     // bottom-right corner; click = callbacks.onDrill (same as dblclick).

@@ -132,7 +132,7 @@ for the instant demo.)
 | `chronicle deps X` | What X depends on |
 | `chronicle subgraph X` | The neighborhood around X in one call (trust-truncated) |
 | `chronicle path A B` | How A connects to B |
-| `chronicle diagram` | Live architecture diagram in browser |
+| `chronicle diagram` | Architecture diagram from the graph: mermaid + text in the answer, live view in the dashboard |
 | `chronicle hook install` | Nudge your AI agent to query the graph before grepping |
 
 New MCP tools for agents: `chronicle_node_search` (resolve a name to a node key), `chronicle_subgraph` (one-call neighborhood), and `chronicle_insights` (hubs, low-trust edges to verify, structural gaps).
@@ -146,7 +146,7 @@ The MCP server runs a web dashboard on localhost. It opens automatically on firs
 - **Overview** — graph stats, low-confidence edges, request log, growth chart
 - **Graph** — interactive graph explorer with tree, explore, and workspace modes
 - **Language** — domain glossary and naming violation checker
-- **Diagrams** — live architecture diagrams built from graph data
+- **Diagrams** — C1/C2/C3, lenses, deps/impact/path views built from the graph; every card and arrow carries its evidence
 - **Settings** — scan manifest, instruction packs, edge type config
 
 ## Data and privacy
