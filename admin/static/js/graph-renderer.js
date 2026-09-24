@@ -339,11 +339,22 @@ export class GraphRenderer {
       }
       return { x: (e.source.x + e.target.x) / 2, y: (e.source.y + e.target.y) / 2 };
     };
+    // Parallel arrows between the same two nodes (pub + sub, calls + sub)
+    // would stack their labels on one point: stagger them.
+    const pairIndex = new Map();
+    const pairSlot = new Map();
+    simEdges.forEach(e => {
+      const a = String(e.source.id), b = String(e.target.id);
+      const key = a < b ? a + '|' + b : b + '|' + a;
+      const n = pairIndex.get(key) || 0;
+      pairSlot.set(e, n);
+      pairIndex.set(key, n + 1);
+    });
     if (showEdgeLabels) {
       edgeG.append('text')
         .attr('class', 'view-edge-label')
         .attr('x', e => labelPoint(e).x)
-        .attr('y', e => labelPoint(e).y - 5)
+        .attr('y', e => labelPoint(e).y - 5 + (pairSlot.get(e) || 0) * 12)
         .attr('text-anchor', 'middle')
         .attr('fill', e => {
           const cat = edgeCategoryLookup[e.edge_type];

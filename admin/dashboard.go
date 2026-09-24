@@ -40,6 +40,9 @@ type DashboardSlots struct {
 	ExtraInit string
 	// ExtraMethods is inserted into the Alpine methods.
 	ExtraMethods string
+	// ViewBar is inserted into the Graph tab's view bar, after the lens
+	// menu (e.g. federation-level views: topology, connections).
+	ViewBar string
 	// EnabledTabs is a list of tab IDs to include. Empty means show all.
 	EnabledTabs []string
 	// DefaultTab overrides the initially active tab.
@@ -69,6 +72,7 @@ func RenderDashboard(slots DashboardSlots) string {
 	html = strings.Replace(html, "<!-- SLOT:AFTER_HEADER -->", slots.AfterHeader, 1)
 	html = strings.Replace(html, "<!-- SLOT:SETTINGS_TOP -->", slots.SettingsTop, 1)
 	html = strings.Replace(html, "<!-- SLOT:EXTRA_CONTENT -->", slots.ExtraContent, 1)
+	html = strings.Replace(html, "<!-- SLOT:VIEW_BAR -->", slots.ViewBar, 1)
 	html = strings.Replace(html, "// SLOT:EXTRA_STATE", slots.ExtraState, 1)
 	html = strings.Replace(html, "// SLOT:EXTRA_ROUTES", slots.ExtraRoutes, 1)
 	html = strings.Replace(html, "// SLOT:EXTRA_INIT", slots.ExtraInit, 1)

@@ -316,6 +316,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	if groupBy == "" {
 		groupBy = "none"
 	}
+	// flowDirection: topic consumption is drawn topic → consumer (message
+	// flow) except in dependency questions, where arrows mean "depends on".
+	flowDirection := spec.Layout.Preset != "impact" && spec.Layout.Preset != "deps"
 
 	// ---- a. load: active domain nodes + active edges within the domain ----
 	allNodes, err := st.ListNodes(store.NodeFilter{Domain: domain})
@@ -1049,8 +1052,10 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			// Message flow direction: the graph stores CONSUMES_TOPIC as
 			// consumer → topic (a dependency); the diagram draws messages
 			// going topic → consumer, so publisher → topic → consumer reads
-			// in one direction.
-			if kind == "CONSUMES_TOPIC" {
+			// in one direction. Dependency questions (deps/impact) keep the
+			// dependency direction: every arrow there means "depends on",
+			// and the subject stays where the layout puts it.
+			if kind == "CONSUMES_TOPIC" && flowDirection {
 				fromKey, toKey = toKey, fromKey
 			}
 			k := edgeKeyT{fromKey, toKey, kind, edgeTransport(e, nodeByID)}
@@ -1166,7 +1171,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			fid := retarget(e.FromNodeID)
 			tid := retarget(e.ToNodeID)
 			pf, pt := nodeByID[fid].NodeKey, nodeByID[tid].NodeKey
-			if e.EdgeType == "CONSUMES_TOPIC" {
+			if e.EdgeType == "CONSUMES_TOPIC" && flowDirection {
 				pf, pt = pt, pf // message flow direction (see the in-view case)
 			}
 			if pinned[fid] && inView[fid] && !inView[tid] && !explicitlyRemoved(nodeByID[tid]) {

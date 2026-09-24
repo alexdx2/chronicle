@@ -937,6 +937,8 @@ button,input,select,textarea{font-family:inherit}
         </div>
       </div>
 
+      <!-- SLOT:VIEW_BAR -->
+
       <!-- Overflow: rarely-needed views -->
       <div style="position:relative" @click.outside="overflowOpen=false">
         <div class="mode-toggle">
@@ -5244,7 +5246,13 @@ function dashboard() {
       // Service entity (collapsed C2 group box or service node) → its C3
       if (d.node_type === 'service') { this.drillViewService(d.name); return; }
       // C1 system box → C2 (consistent with C2→C3 dblclick)
-      if (d._vgroup && d.node_type === 'domain') { this.enterViewLevel('c2'); return; }
+      // A domain card (C1 system box, or a topology card in federation) →
+      // that domain's C2. A topology card names another domain: switch to it.
+      if (d._vgroup && d.node_type === 'domain') {
+        if (d.node_key && !String(d.node_key).includes(':') && d.node_key !== this.viewDomain) this.viewDomain = d.node_key;
+        this.enterViewLevel('c2');
+        return;
+      }
       if (d._vgroup) return; // other synthesized groups (modules)
       // Component node → its dependencies view
       if (d.node_key && String(d.node_key).includes(':')) {

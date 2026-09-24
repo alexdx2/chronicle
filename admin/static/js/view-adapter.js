@@ -81,6 +81,14 @@ function presetSpec(level, domain, target) {
       // into its flow-scoped composition (specFlow).
       return { scope: { domain }, filter: { layers: ['flow'] },
                group: { by: 'none' }, layout: { preset: 'flows' } };
+    // Federation-level views (Chronicle Pro serves them from /api/view;
+    // scope "*" means every domain in the federation).
+    case 'topology':
+      return { scope: { domain: '*' }, group: { by: 'domain' }, collapse: true,
+               layout: { preset: 'topology' } };
+    case 'connections':
+      return { scope: { domain: '*' }, group: { by: 'domain' }, collapse: false,
+               layout: { preset: 'connections' } };
     default: // c2
       // Containers level: services + channels only — data models/enums belong to C3.
       // infra is in: brokers frame their topics; isolated infra hides itself
@@ -131,6 +139,8 @@ function presetTitle(spec, view) {
   if (p === 'flows')    return 'Flows';
   if (p === 'flow')     return 'Flow: ' + ((view && view.title) || shortName(spec.scope && spec.scope.flow));
   if (p === 'custom')   return 'Custom';
+  if (p === 'topology')    return 'Federation topology';
+  if (p === 'connections') return 'Cross-repo connections';
   return (view && view.title) || 'View';
 }
 
