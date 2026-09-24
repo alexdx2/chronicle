@@ -103,3 +103,30 @@ func TestRenderTable_Marks(t *testing.T) {
 		t.Errorf("markdown row:\n%s", md)
 	}
 }
+
+// A frame (subgraph) whose title carries a folded mark note must not let
+// that note forge a real mermaid line break: the title goes through
+// mermaidEscape, which deliberately preserves a literal "<br/>" so the
+// renderer's own separators survive — so an agent note must be escaped to
+// text (mermaidText) before it ever reaches that pass.
+func TestRenderMermaid_FrameMarkNoteIsText(t *testing.T) {
+	v := sampleView()
+	v.Groups[0].Marks = []MarkRef{{Key: "contract:topic:shop:x", Name: "x", Kind: "breaks", Note: "a <br/> b"}}
+	m := RenderMermaid(v)
+	var line string
+	for _, l := range strings.Split(m, "\n") {
+		if strings.HasPrefix(l, "subgraph kafka[") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("no subgraph kafka[ line:\n%s", m)
+	}
+	if strings.Contains(line, "<br/>") {
+		t.Errorf("frame mark note leaked a real <br/> into mermaid markup: %s", line)
+	}
+	if !strings.Contains(line, "#lt;br/#gt;") {
+		t.Errorf("frame mark note not escaped as text: %s", line)
+	}
+}

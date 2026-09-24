@@ -378,7 +378,7 @@ func RenderMermaid(v *View) string {
 			title += " (" + g.Note + ")"
 		}
 		if len(g.Marks) > 0 {
-			title += " · " + clipRunes(markText(g.Marks, g.Key), 60)
+			title += " · " + mermaidText(clipRunes(markText(g.Marks, g.Key), 60))
 			if k := StrongestMark(g.Marks); k != "" {
 				styleLines = append(styleLines, fmt.Sprintf("style %s stroke:%s,stroke-width:3px", ids[g.Key], markColors[k]))
 			}
