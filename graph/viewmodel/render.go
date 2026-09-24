@@ -113,6 +113,69 @@ func pillsLabel(eps []Endpoint, max int) string {
 	return strings.Join(names, ", ")
 }
 
+// markColors are the stroke colors of mark kinds (the dashboard's
+// live-client.js MARK_COLORS carries the same values).
+var markColors = map[string]string{"breaks": "#c25757", "changed": "#d08a2e", "focus": "#3b6fd4", "note": "#8a7355"}
+
+// markText reads marks in one line: the element's own mark as "[kind]
+// note", marks folded into it as "name [kind] note", "; " between.
+func markText(refs []MarkRef, ownKey string) string {
+	parts := make([]string, 0, len(refs))
+	for _, r := range refs {
+		s := "[" + r.Kind + "]"
+		if r.Key != ownKey {
+			s = r.Name + " " + s
+		}
+		if r.Note != "" {
+			s += " " + r.Note
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// arrowMarkText reads an arrow's marks as "[kind] note": the arrow line
+// already names its ends.
+func arrowMarkText(refs []MarkRef) string {
+	parts := make([]string, 0, len(refs))
+	for _, r := range refs {
+		s := "[" + r.Kind + "]"
+		if r.Note != "" {
+			s += " " + r.Note
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// splitOwnMarks separates a group's own mark from marks folded into it.
+func splitOwnMarks(refs []MarkRef, ownKey string) (own, folded []MarkRef) {
+	for _, r := range refs {
+		if r.Key == ownKey {
+			own = append(own, r)
+		} else {
+			folded = append(folded, r)
+		}
+	}
+	return own, folded
+}
+
+// clipRunes shortens s to n characters (never inside a UTF-8 sequence),
+// marking the cut with "…".
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// mermaidText escapes untrusted text (agent notes) for a mermaid label: no
+// markup survives, not even <br/>.
+func mermaidText(s string) string {
+	return strings.NewReplacer(`"`, "#quot;", "<", "#lt;", ">", "#gt;", "|", "#124;", "\r", " ", "\n", " ").Replace(s)
+}
+
 // slug turns a display name into a mermaid-safe identifier.
 func slug(name string) string {
 	var b strings.Builder
@@ -180,7 +243,7 @@ func idTable(v *View) map[string]string {
 func mermaidEscape(s string) string {
 	const br = "\x00br\x00"
 	s = strings.ReplaceAll(s, "<br/>", br)
-	r := strings.NewReplacer(`"`, "#quot;", "<", "#lt;", ">", "#gt;", "\r", " ", "\n", " ")
+	r := strings.NewReplacer(`"`, "#quot;", "<", "#lt;", ">", "#gt;", "|", "#124;", "\r", " ", "\n", " ")
 	s = r.Replace(s)
 	return strings.ReplaceAll(s, br, "<br/>")
 }
@@ -227,6 +290,8 @@ func RenderMermaid(v *View) string {
 	}
 	ids := idTable(v)
 	var b strings.Builder
+	usedMarks := make(map[string]bool)
+	var classLines, styleLines, linkLines []string
 	fmt.Fprintf(&b, "flowchart %s\n", mermaidDirection(v))
 	if v.Title != "" {
 		fmt.Fprintf(&b, "%%%% %s\n", mermaidEscape(v.Title))
@@ -260,6 +325,13 @@ func RenderMermaid(v *View) string {
 		if p := nodeProvenanceText(&n); p != "" {
 			label += "<br/>" + p
 		}
+		if len(n.Marks) > 0 {
+			label += "<br/>" + mermaidText(clipRunes(markText(n.Marks, n.Key), 60))
+			if k := StrongestMark(n.Marks); k != "" {
+				classLines = append(classLines, fmt.Sprintf("class %s mark_%s", ids[n.Key], k))
+				usedMarks[k] = true
+			}
+		}
 		line := indent + ids[n.Key] + mermaidShape(n.Type, label)
 		if n.Boundary {
 			line += ":::boundary"
@@ -282,6 +354,13 @@ func RenderMermaid(v *View) string {
 			if st := groupStats(g.Stats); st != "" {
 				label += "<br/>" + st
 			}
+			if len(g.Marks) > 0 {
+				label += "<br/>" + mermaidText(clipRunes(markText(g.Marks, g.Key), 60))
+				if k := StrongestMark(g.Marks); k != "" {
+					classLines = append(classLines, fmt.Sprintf("class %s mark_%s", ids[g.Key], k))
+					usedMarks[k] = true
+				}
+			}
 			fmt.Fprintf(&b, "%s[\"%s\"]\n", ids[g.Key], mermaidEscape(label))
 			continue
 		}
@@ -297,6 +376,12 @@ func RenderMermaid(v *View) string {
 			title += ")"
 		} else if g.Note != "" {
 			title += " (" + g.Note + ")"
+		}
+		if len(g.Marks) > 0 {
+			title += " · " + clipRunes(markText(g.Marks, g.Key), 60)
+			if k := StrongestMark(g.Marks); k != "" {
+				styleLines = append(styleLines, fmt.Sprintf("style %s stroke:%s,stroke-width:3px", ids[g.Key], markColors[k]))
+			}
 		}
 		fmt.Fprintf(&b, "subgraph %s[\"%s\"]\n", ids[g.Key], mermaidEscape(title))
 		sort.Slice(ms, func(i, j int) bool { return ms[i].Key < ms[j].Key })
@@ -324,6 +409,7 @@ func RenderMermaid(v *View) string {
 		}
 		return edges[i].Kind < edges[j].Kind
 	})
+	drawnIdx := 0
 	for i := range edges {
 		e := &edges[i]
 		if !drawn[e.From] || !drawn[e.To] {
@@ -333,7 +419,28 @@ func RenderMermaid(v *View) string {
 		if arrowWeak(e) {
 			arrow = "-.->"
 		}
-		fmt.Fprintf(&b, "%s %s|\"%s\"| %s\n", ids[e.From], arrow, mermaidEscape(arrowLabel(e)), ids[e.To])
+		label := arrowLabel(e)
+		if k := StrongestMark(e.Marks); k != "" {
+			label += " · " + k
+			linkLines = append(linkLines, fmt.Sprintf("linkStyle %d stroke:%s,stroke-width:3px", drawnIdx, markColors[k]))
+			usedMarks[k] = true
+		}
+		fmt.Fprintf(&b, "%s %s|\"%s\"| %s\n", ids[e.From], arrow, mermaidEscape(label), ids[e.To])
+		drawnIdx++
+	}
+	for _, k := range MarkKinds {
+		if usedMarks[k] {
+			fmt.Fprintf(&b, "classDef mark_%s stroke:%s,stroke-width:3px\n", k, markColors[k])
+		}
+	}
+	for _, l := range classLines {
+		b.WriteString(l + "\n")
+	}
+	for _, l := range styleLines {
+		b.WriteString(l + "\n")
+	}
+	for _, l := range linkLines {
+		b.WriteString(l + "\n")
 	}
 	if boundary {
 		b.WriteString("classDef boundary stroke-dasharray:4 2,opacity:0.6\n")
@@ -418,14 +525,42 @@ func RenderMarkdown(v *View) string {
 	}
 	fmt.Fprintf(&b, "| %s |\n", strings.Join(v.Table.Columns, " | "))
 	fmt.Fprintf(&b, "|%s\n", strings.Repeat(" --- |", len(v.Table.Columns)))
-	for _, r := range v.Table.Rows {
-		cells := make([]string, len(r))
-		for i, c := range r {
+	for i, r := range v.Table.Rows {
+		row := append([]string(nil), r...)
+		if i < len(v.Table.Keys) && len(row) > 0 {
+			if refs := tableMarks(v, v.Table.Keys[i]); len(refs) > 0 {
+				row[len(row)-1] += " " + markText(refs, v.Table.Keys[i])
+			}
+		}
+		cells := make([]string, len(row))
+		for i, c := range row {
 			cells[i] = strings.ReplaceAll(c, "|", "\\|")
 		}
 		fmt.Fprintf(&b, "| %s |\n", strings.Join(cells, " | "))
 	}
 	return b.String()
+}
+
+// writeUnplaced lists marked keys this view does not draw.
+func writeUnplaced(b *strings.Builder, v *View) {
+	if len(v.Unplaced) == 0 {
+		return
+	}
+	b.WriteString("\n## Marked but not in this view\n")
+	for _, k := range v.Unplaced {
+		fmt.Fprintf(b, "- %s\n", k)
+	}
+	b.WriteString("(add view_spec.pin or use deps/impact to draw them)\n")
+}
+
+// tableMarks are the marks of a table row's subject node.
+func tableMarks(v *View, key string) []MarkRef {
+	for _, n := range v.Nodes {
+		if n.Key == key {
+			return n.Marks
+		}
+	}
+	return nil
 }
 
 // RenderText renders the View as structured plain text: header with the
@@ -468,7 +603,7 @@ func RenderText(v *View) string {
 	// line per row — the flows lens reads "## arena-api" then its flows.
 	if t := v.Table; t != nil {
 		last := ""
-		for _, r := range t.Rows {
+		for i, r := range t.Rows {
 			if len(r) == 0 {
 				continue
 			}
@@ -476,7 +611,13 @@ func RenderText(v *View) string {
 				fmt.Fprintf(&b, "\n## %s\n", r[0])
 				last = r[0]
 			}
-			b.WriteString("- " + strings.Join(r[1:], " → ") + "\n")
+			line := "- " + strings.Join(r[1:], " → ")
+			if i < len(t.Keys) {
+				if refs := tableMarks(v, t.Keys[i]); len(refs) > 0 {
+					line += " " + markText(refs, t.Keys[i])
+				}
+			}
+			b.WriteString(line + "\n")
 		}
 		if len(v.Hidden) > 0 {
 			b.WriteString("\n## Hidden\n")
@@ -484,6 +625,7 @@ func RenderText(v *View) string {
 				fmt.Fprintf(&b, "- %d %s — %s\n", h.Count, h.Type, h.Reason)
 			}
 		}
+		writeUnplaced(&b, v)
 		return b.String()
 	}
 
@@ -508,6 +650,9 @@ func RenderText(v *View) string {
 		line := fmt.Sprintf("- %s [%s]", n.Name, n.Type)
 		if n.Repo != "" {
 			line += " @" + n.Repo
+		}
+		if len(n.Marks) > 0 {
+			line += " " + markText(n.Marks, n.Key)
 		}
 		if n.Boundary {
 			line += " (outside scope)"
@@ -541,6 +686,14 @@ func RenderText(v *View) string {
 		head += ")"
 		if st := groupStats(g.Stats); st != "" {
 			head += " — " + st
+		}
+		if own, folded := splitOwnMarks(g.Marks, g.Key); len(own)+len(folded) > 0 {
+			if len(own) > 0 {
+				head += " · " + arrowMarkText(own)
+			}
+			if len(folded) > 0 {
+				head += " · marked: " + markText(folded, g.Key)
+			}
 		}
 		b.WriteString(head + "\n")
 		ms := members[g.Key]
@@ -580,6 +733,9 @@ func RenderText(v *View) string {
 			if e.Transport != "" && e.Transport != "http" && e.Transport != "local" {
 				line += " (" + e.Transport + ")"
 			}
+			if len(e.Marks) > 0 {
+				line += " " + arrowMarkText(e.Marks)
+			}
 			if p := edgeProvenanceText(e); p != "" {
 				line += " — " + p
 			}
@@ -605,6 +761,7 @@ func RenderText(v *View) string {
 			fmt.Fprintf(&b, "- %d %s — %s\n", h.Count, h.Type, h.Reason)
 		}
 	}
+	writeUnplaced(&b, v)
 	if len(v.Trace) > 0 {
 		b.WriteString("\n## Path\n")
 		var names2 []string
