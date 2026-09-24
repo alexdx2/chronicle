@@ -29,12 +29,14 @@ const DepthUnbounded = 99
 //
 // Lens presets (the dashboard view bar):
 //
-//	data     — filter:{layers:[data]} · group:none
-//	api      — filter:{layers:[contract,service]} · group:service · no collapse
+//	data     — filter:{layers:[data]} · group:service (owner; "owner unknown" frame)
+//	api      — filter:{layers:[contract], exclude_types:[topic], callers:[CALLS_ENDPOINT]}
+//	           · group:service (endpoints by provider, their callers by their
+//	           own service; topics belong to the C2 broker frame)
 //	services — filter:{layers:[service,code]} · group:service · collapse
-//	flows    — filter:{layers:[flow]} · group:none ("flow" in filter.layers
-//	           opts the otherwise-hidden flow layer in; flows render alone,
-//	           each carrying its trigger endpoint as VNode.Detail)
+//	flows    — filter:{layers:[flow]} · group:none · View.Table (a list:
+//	           service → endpoint → handler → flow; "flow" in filter.layers
+//	           opts the otherwise-hidden flow layer in)
 //
 // target is the service key/name for c3 and the node key for deps/impact.
 // Presets lists every named preset PresetSpec accepts, in menu order.
@@ -74,16 +76,22 @@ func PresetSpec(level, domain, target string) ViewSpec {
 			Layout: LayoutSpec{Preset: "flow"},
 		}
 	case "data":
+		// Models framed by the service that owns them (schema path, the
+		// one component that uses them, their referrers); the rest in an
+		// explicit "owner unknown" frame. Arrows: model references.
 		return ViewSpec{
 			Scope:  ScopeSpec{Domain: domain},
 			Filter: &FilterSpec{Layers: []string{"data"}},
-			Group:  GroupSpec{By: "none"},
+			Group:  GroupSpec{By: "service"},
 			Layout: LayoutSpec{Preset: "data"},
 		}
 	case "api":
+		// Who provides each endpoint (its service frames it) and who calls
+		// it (the calling components, framed by THEIR service, with the
+		// CALLS_ENDPOINT arrows). Nothing else from the code layer.
 		return ViewSpec{
 			Scope:    ScopeSpec{Domain: domain},
-			Filter:   &FilterSpec{Layers: []string{"contract", "service"}},
+			Filter:   &FilterSpec{Layers: []string{"contract"}, ExcludeTypes: []string{"topic"}, Callers: []string{"CALLS_ENDPOINT"}, EdgeKinds: []string{"CALLS_ENDPOINT"}},
 			Group:    GroupSpec{By: "service"},
 			Collapse: false,
 			Layout:   LayoutSpec{Preset: "api"},
@@ -97,9 +105,10 @@ func PresetSpec(level, domain, target string) ViewSpec {
 			Layout:   LayoutSpec{Preset: "services"},
 		}
 	case "flows":
-		// Flows LIST view: flows only — no endpoints, no code targets. Each
-		// flow VNode carries its trigger endpoint as Detail ("GET /api/score");
-		// dblclick drills into the flow-scoped composition (scope.Flow).
+		// Flows are a LIST, not a picture: View.Table holds one row per
+		// flow (service → endpoint → handler → flow); a row drills into the
+		// flow-scoped composition (scope.Flow). Flow VNodes ride along
+		// (provenance, hidden summary) and still carry the trigger as Detail.
 		return ViewSpec{
 			Scope:  ScopeSpec{Domain: domain},
 			Filter: &FilterSpec{Layers: []string{"flow"}},

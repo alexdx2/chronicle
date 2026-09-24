@@ -2601,7 +2601,10 @@ PRIMARY: preset (+ target). Presets are the questions:
 - impact  — what breaks if target changes (target = node key); subject on top, dependents below
 - path    — how A reaches B (target = "A,B" node keys), left→right
 - flow    — one flow's composition (target = flow node key)
-- data | api | services | flows — lenses over the whole domain
+- data     — data models framed by the service that owns them ("owner unknown" frame for the rest), model references as arrows
+- api      — who provides each endpoint (framed by its service) and who calls it (the calling components, framed by theirs)
+- services — services and how they talk, collapsed
+- flows    — a LIST, not a picture: "table" (service → endpoint → handler → flow) in "markdown" and "text"; mermaid is empty
 Alternative: view_spec — a full ViewSpec {"scope":{"domain","service"|"nodes"|"flow"},"expand":{"direction","depth","edges","mode":"neighbors|path"},"filter":{"layers","edge_kinds","exclude_types","name","min_confidence"},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset"}}.
 Or node_keys — a custom selection of real nodes (edges discovered). Everything drawn comes from the graph; there is no hand-authored diagram.`),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
@@ -2736,6 +2739,10 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 		if len(view.Hidden) > 0 {
 			out["hidden"] = view.Hidden
+		}
+		if view.Table != nil {
+			out["table"] = view.Table
+			out["markdown"] = viewmodel.RenderMarkdown(view)
 		}
 		return jsonResult(out), nil
 	}

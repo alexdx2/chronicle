@@ -213,6 +213,16 @@ button,input,select,textarea{font-family:inherit}
 .node-hover-tooltip{position:fixed;background:#2a2518;color:#f0e9dd;padding:6px 10px;border-radius:6px;font-size:11px;pointer-events:none;z-index:200;box-shadow:0 2px 12px rgba(0,0,0,0.3);max-width:280px;line-height:1.4}
 .node-hover-tooltip .nht-name{font-weight:600;margin-bottom:2px}
 .node-hover-tooltip .nht-type{font-size:9px;opacity:0.7}
+.node-hover-tooltip .nht-signal{color:#c25757;opacity:1}
+.view-table{padding:28px 40px;max-width:1100px;margin:0 auto;font-size:12px}
+.view-table h2{font-size:13px;font-weight:600;color:var(--text);margin:18px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--border,#e4dccf)}
+.view-table table{width:100%;border-collapse:collapse}
+.view-table th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);font-weight:600;padding:4px 10px}
+.view-table td{padding:5px 10px;border-top:1px solid var(--card-alt,#f2ede4);vertical-align:top}
+.view-table tr.row{cursor:pointer}
+.view-table tr.row:hover td{background:var(--card-alt,#f6f2ea)}
+.view-table td.mono{font-family:var(--font-mono);font-size:11px}
+.view-table .hint{font-size:10px;color:var(--text-muted);margin-top:14px}
 .node-hover-tooltip .nht-hint{font-size:9px;color:#b8963e;margin-top:4px;border-top:1px solid #3a3528;padding-top:4px}
 .bottom-panel{position:fixed;bottom:0;left:0;right:0;background:#faf6ef;border-top:2px solid var(--border);box-shadow:0 -4px 20px rgba(0,0,0,0.08);z-index:100;max-height:45vh;overflow-y:auto;transition:transform 0.2s}
 .bottom-panel-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#faf6ef;z-index:1}
@@ -3730,6 +3740,12 @@ function dashboard() {
       const renderer = await this._getViewRenderer();
       if (!renderer) return;
       const adapted = ViewAdapter.adaptView(top.view, this.edgeCategoryLookup);
+      // A list view (the flows lens): rows grouped by service, a row drills
+      // into its flow's composition. No picture — the answer is the list.
+      if (adapted.table) {
+        this.renderViewTable(top, adapted);
+        return;
+      }
       // Empty view: explain WHY instead of a silently blank canvas. The most
       // common cause is a scope.domain that owns no nodes (stale deep link,
       // mis-resolved default domain) — name it and offer the way out.
@@ -3937,6 +3953,62 @@ function dashboard() {
       }
     },
 
+    // Rows of a list view (View.table), grouped by the first column: the
+    // flows lens reads "arena-api" then its endpoints → handlers → flows.
+    renderViewTable(top, adapted) {
+      const container = document.getElementById('graph-canvas');
+      if (!container) return;
+      const esc = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      const t = adapted.table;
+      const cols = t.columns || [];
+      const rows = t.rows || [];
+      const keys = t.keys || [];
+      this._hiddenSummary = adapted.hidden || [];
+      this._salienceHiddenCount = 0;
+      let html = '<div class="view-table" data-testid="view-table">';
+      if (!rows.length) {
+        html += '<div style="padding:40px;text-align:center;color:var(--text-muted)">No rows — the graph has no ' + esc(cols[cols.length - 1] || 'rows') + ' in this domain.</div></div>';
+        container.innerHTML = html;
+        return;
+      }
+      let last = null;
+      rows.forEach((r, i) => {
+        if (r[0] !== last) {
+          if (last !== null) html += '</tbody></table>';
+          last = r[0];
+          html += '<h2>' + esc(r[0]) + '</h2><table><thead><tr>' + cols.slice(1).map(c => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>';
+        }
+        html += '<tr class="row" data-key="' + esc(keys[i] || '') + '" data-testid="view-table-row">' +
+          r.slice(1).map((c, j) => '<td class="' + (j === 0 ? 'mono' : '') + '">' + esc(c) + '</td>').join('') + '</tr>';
+      });
+      html += '</tbody></table>';
+      html += '<div class="hint">' + rows.length + ' ' + esc(cols[cols.length - 1] || 'rows') + (rows.length === 1 ? '' : 's') + ' · click a row to open that flow</div></div>';
+      container.innerHTML = html;
+      const self = this;
+      container.querySelectorAll('tr.row').forEach(el => {
+        el.addEventListener('click', () => {
+          const key = el.getAttribute('data-key');
+          if (!key) return;
+          self.selectedNode = null; self.nodeEvidence = null; self.viewLevel = '';
+          self.pushViewSpec(ViewAdapter.specFlow(self.viewDomain, key), { title: el.querySelector('td:last-child').textContent, pristine: true });
+        });
+      });
+      window.__chronicleViewState = {
+        mode: 'view',
+        preset: (top.spec && top.spec.layout && top.spec.layout.preset) || 'custom',
+        title: top.title || (top.view && top.view.title) || '',
+        spec: top.spec,
+        stack: this.viewStack.map(v => v.title || (v.spec && v.spec.layout && v.spec.layout.preset) || '?'),
+        salience_hidden_count: 0,
+        hidden_summary: this._hiddenSummary,
+        rank_dir: 'TB',
+        nodes: [], edges: [], groups: [], vgroups: [],
+        table: { columns: cols, rows: rows },
+        hidden: { structural: this.hideStructural },
+        structure: { groupBy: this.viewGroupBy(), collapse: this.viewCollapse() },
+      };
+    },
+
     // C3 without a target: pick the container first. Cards come from the C2
     // view (its group stats are the honest per-service numbers), so the
     // picker and the diagram never disagree.
@@ -3965,7 +4037,7 @@ function dashboard() {
         html += '<div class="c3-pick-card" data-service="' + esc(name) + '" style="border:1.5px solid var(--service);border-radius:8px;padding:12px 14px;cursor:pointer;background:#fff">' +
           '<div style="font-size:13px;color:var(--text);font-weight:600">' + esc(name) + '</div>' +
           '<div style="font-size:10px;color:var(--text-muted);margin-top:6px">' +
-            (st.endpoints || 0) + ' endpoints · ' + (st.nodes || 0) + ' components · ' + (st.models || 0) + ' models</div>' +
+            esc(ViewAdapter.statsLine(st) || 'nothing exposed yet') + '</div>' +
           '<div style="font-size:9px;color:var(--service);margin-top:8px;font-weight:600">→ open C3</div></div>';
       });
       html += '</div>';

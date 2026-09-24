@@ -18,7 +18,7 @@ func TestRenderMermaid_LiveC2(t *testing.T) {
 	t.Logf("\n%s", m)
 	for _, want := range []string{
 		`subgraph kafka["kafka · broker (inferred: only declared broker)"]`,
-		`battle_results(["battle-results"])`,
+		`battle_results(["battle-results<br/>confidence 60%"])`, // below the bar: the card says so
 		`arena_api -`, // arrows leave the arena-api card
 		`|"HTTP ×3"| jerry_api`,
 		`battle_results -`, // consumption drawn topic → consumer

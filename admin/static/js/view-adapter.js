@@ -67,18 +67,22 @@ function presetSpec(level, domain, target) {
                group: { by: 'service' }, collapse: false, layout: { preset: 'impact' } };
     // Lens presets (view bar) — mirror graph/viewmodel/presets.go
     case 'data':
+      // Models framed by the service that owns them; "owner unknown"
+      // frame for the rest (mirrors presets.go).
       return { scope: { domain }, filter: { layers: ['data'] },
-               group: { by: 'none' }, layout: { preset: 'data' } };
+               group: { by: 'service' }, layout: { preset: 'data' } };
     case 'api':
-      return { scope: { domain }, filter: { layers: ['contract', 'service'] },
+      // Endpoints framed by their provider, plus exactly the components
+      // that call them (framed by theirs) with the CALLS_ENDPOINT arrows.
+      return { scope: { domain }, filter: { layers: ['contract'], exclude_types: ['topic'], callers: ['CALLS_ENDPOINT'], edge_kinds: ['CALLS_ENDPOINT'] },
                group: { by: 'service' }, collapse: false, layout: { preset: 'api' } };
     case 'services':
       return { scope: { domain }, filter: { layers: ['service', 'code'] },
                group: { by: 'service' }, collapse: true, layout: { preset: 'services' } };
     case 'flows':
-      // Flows LIST view: flows only — each flow carries its trigger endpoint
-      // as detail (rendered as the node subtitle); dblclick a flow to drill
-      // into its flow-scoped composition (specFlow).
+      // Flows are a LIST (view.table: service → endpoint → handler → flow),
+      // rendered by renderViewTable; a row drills into its flow's
+      // composition (specFlow).
       return { scope: { domain }, filter: { layers: ['flow'] },
                group: { by: 'none' }, layout: { preset: 'flows' } };
     // Federation-level views (Chronicle Pro serves them from /api/view;
@@ -108,13 +112,50 @@ function specFlow(domain, flowKey) {
            group: { by: 'none' }, layout: { preset: 'flow' } };
 }
 
+// Frame stats in container language, same order and wording as the Go
+// renderer (viewmodel.groupStats): "5 endpoints · publishes 2 · calls 2
+// services". max caps the number of parts (a 120px card carries two per
+// line; the tooltip carries them all).
+const STAT_ORDER = ['services', 'endpoints', 'components', 'models', 'topics', 'publishes', 'consumes', 'calls', 'publishers', 'subscribers'];
+function plural(n, word) { return n === 1 ? word : word + 's'; }
+function statParts(stats, short) {
+  const out = [];
+  STAT_ORDER.forEach(k => {
+    const v = (stats || {})[k];
+    if (!v) return;
+    if (k === 'publishes' || k === 'consumes') out.push(k + ' ' + v);
+    else if (k === 'calls') out.push('calls ' + v + (short ? '' : ' ' + plural(v, 'service')));
+    else out.push(v + ' ' + plural(v, k.replace(/s$/, '')));
+  });
+  return out;
+}
+// max caps the parts (a card line holds two); short drops the noun after
+// "calls N" so the line fits a 120px card — the tooltip says it in full.
+function statsLine(stats, max, short) {
+  const parts = statParts(stats, short);
+  return (max ? parts.slice(0, max) : parts).join(' · ');
+}
+
+// Endpoint pills capped: "GET /foo, POST /bar, +6 more".
+function pillsLabel(eps, max) {
+  const names = [];
+  for (let i = 0; i < (eps || []).length; i++) {
+    if (i === max && eps.length > max) { names.push('+' + (eps.length - max) + ' more'); break; }
+    names.push(eps[i].name);
+  }
+  return names.join(', ');
+}
+
+// A component card's two subtitle lines: what it is (and, for a boundary
+// card, that it sits outside the scope), then what it exposes or uses.
 function cardSubtitle(n) {
-  const parts = [n.type || ''];
-  const eps = (n.endpoints || []).length;
-  if (eps) parts.push(eps + (eps === 1 ? ' endpoint' : ' endpoints'));
-  const models = n.uses_models || [];
-  if (models.length) parts.push(models.length <= 2 ? models.join(', ') : models.length + ' models');
-  return parts.filter(Boolean).join(' · ') || null;
+  const first = (n.boundary ? 'outside · ' : '') + (n.type || '');
+  let second = pillsLabel(n.endpoints || [], 1);
+  if (!second) {
+    const models = n.uses_models || [];
+    if (models.length) second = 'uses ' + (models.length <= 2 ? models.join(', ') : models.length + ' models');
+  }
+  return { first: first || null, second: second || '' };
 }
 
 function shortName(key) {
@@ -208,10 +249,11 @@ function adaptView(view, baseLookup) {
       _vgroup: true,
       _stats: stats,
       // A card's note (e.g. a topology card's "domain tomandjerry" under
-      // the repo name) leads the subtitle, then the stats.
-      _subtitle: (g.note && !g.inferred ? g.note + ' · ' : '') + (isDomainBox
-        ? (stats.services || 0) + ' services · ' + (stats.endpoints || 0) + ' endpoints'
-        : ''),
+      // the repo name) leads the subtitle; the stats follow in container
+      // language, two per line (the tooltip carries them all).
+      _subtitle: (g.note && !g.inferred ? g.note + ' · ' : '') + statsLine(stats, 2, true),
+      _subtitle2: statParts(stats, true).slice(2, 4).join(' · '),
+      _statsFull: statsLine(stats),
       // The C1 system box gets an explicit "→ drill" affordance (renderer
       // draws it; click = enter C2, same as dblclick).
       _drill: isDomainBox,
@@ -230,11 +272,13 @@ function adaptView(view, baseLookup) {
       _group: n.group || null,
       _endpoints: n.endpoints || [],
       _usesModels: n.uses_models || [],
-      // Subtitle: a flow's trigger endpoint ("GET /api/score"), else what
-      // the card holds at this altitude — "controller · 4 endpoints",
-      // "provider · BattleEvent" — so a C3 card answers what it exposes and
-      // touches without opening the details panel.
-      _subtitle: n.detail || cardSubtitle(n),
+      // Subtitle lines: a flow's trigger endpoint ("GET /api/score"), else
+      // what the card is (and "outside" for a boundary card), then what it
+      // exposes ("GET /arena/score, +3 more") or uses — a C3 card answers
+      // what it exposes and touches without opening the details panel.
+      _subtitle: n.detail || cardSubtitle(n).first,
+      _subtitle2: n.detail ? '' : cardSubtitle(n).second,
+      _pillsFull: pillsLabel(n.endpoints || [], 4),
       // Materialized boundary targets (C3): normal layer styling, dimmed
       // via the renderer's existing ref pattern (_isRef → opacity 0.4).
       _isRef: !!n.boundary,
@@ -313,6 +357,8 @@ function adaptView(view, baseLookup) {
     trace: view.trace || [],
     boundary: view.boundary || null,
     hidden: view.hidden || [],
+    // A list view (the flows lens): rows instead of a picture.
+    table: view.table || null,
     // Layout direction follows the question: a path/flow reads left→right
     // in step order; impact puts the changed node on top and dependents
     // below by distance (edges point INTO the subject, so BT); everything
@@ -321,5 +367,5 @@ function adaptView(view, baseLookup) {
   };
 }
 
-window.ViewAdapter = { b64urlEncode, b64urlDecode, presetSpec, specPath, specFlow, presetTitle, shortName, adaptView };
+window.ViewAdapter = { b64urlEncode, b64urlDecode, presetSpec, specPath, specFlow, presetTitle, shortName, adaptView, statsLine, pillsLabel };
 })();

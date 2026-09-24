@@ -115,27 +115,11 @@ func ownershipMap(nodes []store.NodeRow, edges []store.EdgeRow) map[int64]*store
 		return nil
 	}
 
-	for i := range nodes {
-		n := &nodes[i]
-		if n.Layer != "code" {
-			continue
-		}
-		if svc := containedBy(n.NodeID); svc != nil {
-			out[n.NodeID] = svc
-			continue
-		}
-		// A code repository named like a service IS that service's code root.
-		if n.NodeType == "repository" {
-			if svc, ok := svcByName[n.Name]; ok {
-				out[n.NodeID] = svc
-				continue
-			}
-		}
-		fp := n.FilePath
-		if fp == "" {
-			continue
-		}
-		// 2. Find the service whose root dir is the longest prefix of fp.
+	// byPath: 2. the service whose root dir is the longest prefix of fp;
+	// 3. services imported without file_path: the common repo convention
+	// names the service after its top-level dir ("arena-api/src/…" →
+	// service "arena-api").
+	byPath := func(fp string) *store.NodeRow {
 		bestLen := -1
 		var bestSvc *store.NodeRow
 		for _, se := range svcDirs {
@@ -155,18 +139,35 @@ func ownershipMap(nodes []store.NodeRow, edges []store.EdgeRow) map[int64]*store
 			}
 		}
 		if bestSvc == nil {
-			// 3. Services imported without file_path: the common repo
-			// convention names the service after its top-level dir
-			// ("arena-api/src/…" → service "arena-api").
 			for _, seg := range strings.Split(fp, "/") {
 				if svc, ok := svcByName[seg]; ok {
-					bestSvc = svc
-					break
+					return svc
 				}
 			}
 		}
-		if bestSvc != nil {
-			out[n.NodeID] = bestSvc
+		return bestSvc
+	}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Layer != "code" {
+			continue
+		}
+		if svc := containedBy(n.NodeID); svc != nil {
+			out[n.NodeID] = svc
+			continue
+		}
+		// A code repository named like a service IS that service's code root.
+		if n.NodeType == "repository" {
+			if svc, ok := svcByName[n.Name]; ok {
+				out[n.NodeID] = svc
+				continue
+			}
+		}
+		if n.FilePath == "" {
+			continue
+		}
+		if svc := byPath(n.FilePath); svc != nil {
+			out[n.NodeID] = svc
 		}
 	}
 	// Endpoints belong to the service whose component exposes them: the
@@ -181,6 +182,73 @@ func ownershipMap(nodes []store.NodeRow, edges []store.EdgeRow) map[int64]*store
 			if svc, ok := out[e.FromNodeID]; ok {
 				if _, taken := out[ep.NodeID]; !taken {
 					out[ep.NodeID] = svc
+				}
+			}
+		}
+	}
+	// Data models: a schema file under a service's root is that service's
+	// (path prefix, like code); otherwise the ONE service whose components
+	// use the model (USES_MODEL); an enum/model only referenced by owned
+	// models (REFERENCES_MODEL) inherits their single owner. A model two
+	// services use has no owner here — it is shared, not anyone's — and
+	// the data lens frames it as "owner unknown".
+	users := make(map[int64]map[int64]*store.NodeRow) // model → {svc id → svc}
+	for i := range edges {
+		e := &edges[i]
+		if e.EdgeType != "USES_MODEL" || !e.Active {
+			continue
+		}
+		if svc, ok := out[e.FromNodeID]; ok {
+			if users[e.ToNodeID] == nil {
+				users[e.ToNodeID] = make(map[int64]*store.NodeRow)
+			}
+			users[e.ToNodeID][svc.NodeID] = svc
+		}
+	}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Layer != "data" {
+			continue
+		}
+		if n.FilePath != "" {
+			if svc := byPath(n.FilePath); svc != nil {
+				out[n.NodeID] = svc
+				continue
+			}
+		}
+		if u := users[n.NodeID]; len(u) == 1 {
+			for _, svc := range u {
+				out[n.NodeID] = svc
+			}
+		}
+	}
+	// Referenced-only data (enums, value objects): owner of the referrers
+	// when they agree. Two passes settle chains (model → model → enum).
+	for pass := 0; pass < 2; pass++ {
+		referrers := make(map[int64]map[int64]*store.NodeRow)
+		for i := range edges {
+			e := &edges[i]
+			if e.EdgeType != "REFERENCES_MODEL" || !e.Active {
+				continue
+			}
+			if svc, ok := out[e.FromNodeID]; ok {
+				if referrers[e.ToNodeID] == nil {
+					referrers[e.ToNodeID] = make(map[int64]*store.NodeRow)
+				}
+				referrers[e.ToNodeID][svc.NodeID] = svc
+			}
+		}
+		for i := range nodes {
+			n := &nodes[i]
+			if n.Layer != "data" {
+				continue
+			}
+			if _, taken := out[n.NodeID]; taken {
+				continue
+			}
+			if r := referrers[n.NodeID]; len(r) == 1 {
+				for _, svc := range r {
+					out[n.NodeID] = svc
 				}
 			}
 		}

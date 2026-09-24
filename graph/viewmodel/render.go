@@ -63,19 +63,54 @@ func arrowWeak(e *VEdge) bool {
 	return e.Confidence < 0.7
 }
 
-// groupStats formats a group's stats in a fixed, meaningful order.
+// statOrder is the fixed, meaningful order of frame stats: what a frame
+// holds first, then whom it talks to. Verbs read "publishes 2", nouns
+// "5 endpoints".
+var statOrder = []string{"services", "endpoints", "components", "models", "topics", "publishes", "consumes", "calls", "publishers", "subscribers"}
+
+// groupStats formats a group's stats in container language:
+// "5 endpoints · publishes 2 · calls 2 services".
 func groupStats(stats map[string]int) string {
 	var parts []string
-	for _, k := range []string{"services", "endpoints", "models", "nodes"} {
-		if v := stats[k]; v > 0 {
-			label := k
-			if v == 1 {
-				label = strings.TrimSuffix(k, "s")
-			}
-			parts = append(parts, fmt.Sprintf("%d %s", v, label))
+	for _, k := range statOrder {
+		v := stats[k]
+		if v <= 0 {
+			continue
+		}
+		switch k {
+		case "publishes", "consumes":
+			parts = append(parts, fmt.Sprintf("%s %d", k, v))
+		case "calls":
+			parts = append(parts, fmt.Sprintf("calls %d %s", v, plural(v, "service")))
+		default:
+			parts = append(parts, fmt.Sprintf("%d %s", v, plural(v, strings.TrimSuffix(k, "s"))))
 		}
 	}
 	return strings.Join(parts, " · ")
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
+}
+
+// pillsLabel lists a card's endpoints capped at max: "GET /foo, POST /bar,
+// +6 more" — a card names what it exposes without turning into a list.
+func pillsLabel(eps []Endpoint, max int) string {
+	if len(eps) == 0 {
+		return ""
+	}
+	var names []string
+	for i, ep := range eps {
+		if i == max && len(eps) > max {
+			names = append(names, fmt.Sprintf("+%d more", len(eps)-max))
+			break
+		}
+		names = append(names, ep.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // slug turns a display name into a mermaid-safe identifier.
@@ -187,6 +222,9 @@ func mermaidDirection(v *View) string {
 // carrying their stats; hidden nodes are not drawn but are accounted for
 // in a trailing comment; weak-provenance arrows are dashed.
 func RenderMermaid(v *View) string {
+	if v.Table != nil {
+		return "" // a list view has no picture; see RenderMarkdown
+	}
 	ids := idTable(v)
 	var b strings.Builder
 	fmt.Fprintf(&b, "flowchart %s\n", mermaidDirection(v))
@@ -212,6 +250,15 @@ func RenderMermaid(v *View) string {
 		label := n.Name
 		if n.Repo != "" {
 			label += "<br/>@" + n.Repo
+		}
+		if n.Boundary {
+			label += "<br/>outside"
+		}
+		if p := pillsLabel(n.Endpoints, 2); p != "" {
+			label += "<br/>" + p
+		}
+		if p := nodeProvenanceText(&n); p != "" {
+			label += "<br/>" + p
 		}
 		line := indent + ids[n.Key] + mermaidShape(n.Type, label)
 		if n.Boundary {
@@ -239,7 +286,7 @@ func RenderMermaid(v *View) string {
 			continue
 		}
 		title := g.Name
-		if g.Kind != "" && g.Kind != "service" && g.Kind != "domain" {
+		if g.Kind != "" && g.Kind != "service" && g.Kind != "domain" && g.Kind != "unknown" {
 			title += " · " + g.Kind
 		}
 		if g.Inferred {
@@ -306,24 +353,79 @@ func RenderMermaid(v *View) string {
 
 func pct(f float64) string { return fmt.Sprintf("%d%%", int(f*100+0.5)) }
 
+// evidenceBar is the confidence below which provenance becomes a signal
+// worth a line — the same bar the dashboard uses to dash a stroke.
+const evidenceBar = 0.7
+
+// nodeProvenanceText is the evidence line of a card, printed ONLY on an
+// absolute signal: a non-active status, confidence below the bar
+// (including 0), or no evidence at all. A healthy node says nothing —
+// the line is an alarm, not a caption, and it never compares to the
+// rest of the graph (a uniformly weak graph must light up everywhere).
 func nodeProvenanceText(n *VNode) string {
 	var parts []string
 	if n.Status != "" && n.Status != "active" {
 		parts = append(parts, n.Status)
 	}
-	// Every node comes from a graph row: its confidence is always a fact,
-	// including 0 — which is exactly the value a reader must see.
 	c := n.Trust
 	if c == 0 && n.Confidence > 0 {
 		c = n.Confidence
 	}
-	parts = append(parts, "confidence "+pct(c))
-	if n.EvidenceCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d evidence", n.EvidenceCount))
-	} else {
+	if c < evidenceBar {
+		parts = append(parts, "confidence "+pct(c))
+	}
+	if n.EvidenceCount == 0 {
 		parts = append(parts, "no evidence")
 	}
 	return strings.Join(parts, " · ")
+}
+
+// edgeProvenanceText is the evidence line of an arrow, on signal only:
+// a non-hard derivation (linked is still evidence-backed and stays
+// silent; inferred/unknown/synthesized speak), confidence below the bar,
+// or no evidence behind a graph-backed arrow.
+func edgeProvenanceText(e *VEdge) string {
+	var parts []string
+	switch e.Derivation {
+	case "inferred", "unknown", "synthesized":
+		parts = append(parts, e.Derivation)
+	}
+	if e.Derivation == "synthesized" {
+		return strings.Join(parts, " · ")
+	}
+	c := e.Trust
+	if c == 0 && e.Confidence > 0 {
+		c = e.Confidence
+	}
+	if c < evidenceBar {
+		parts = append(parts, "confidence "+pct(c))
+	}
+	if e.EvidenceCount == 0 {
+		parts = append(parts, "no evidence")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// RenderMarkdown renders a list view (View.Table) as a markdown table.
+// Empty for picture views.
+func RenderMarkdown(v *View) string {
+	if v.Table == nil {
+		return ""
+	}
+	var b strings.Builder
+	if v.Title != "" {
+		fmt.Fprintf(&b, "# %s\n\n", v.Title)
+	}
+	fmt.Fprintf(&b, "| %s |\n", strings.Join(v.Table.Columns, " | "))
+	fmt.Fprintf(&b, "|%s\n", strings.Repeat(" --- |", len(v.Table.Columns)))
+	for _, r := range v.Table.Rows {
+		cells := make([]string, len(r))
+		for i, c := range r {
+			cells[i] = strings.ReplaceAll(c, "|", "\\|")
+		}
+		fmt.Fprintf(&b, "| %s |\n", strings.Join(cells, " | "))
+	}
+	return b.String()
 }
 
 // RenderText renders the View as structured plain text: header with the
@@ -362,6 +464,29 @@ func RenderText(v *View) string {
 	fmt.Fprintf(&b, "level: %s · domain: %s · %d groups · %d nodes · %d arrows · %d hidden\n",
 		level, v.Spec.Scope.Domain, len(v.Groups), visible, len(drawn), hidden)
 
+	// A list view: rows grouped by their first column (the service), one
+	// line per row — the flows lens reads "## arena-api" then its flows.
+	if t := v.Table; t != nil {
+		last := ""
+		for _, r := range t.Rows {
+			if len(r) == 0 {
+				continue
+			}
+			if r[0] != last {
+				fmt.Fprintf(&b, "\n## %s\n", r[0])
+				last = r[0]
+			}
+			b.WriteString("- " + strings.Join(r[1:], " → ") + "\n")
+		}
+		if len(v.Hidden) > 0 {
+			b.WriteString("\n## Hidden\n")
+			for _, h := range v.Hidden {
+				fmt.Fprintf(&b, "- %d %s — %s\n", h.Count, h.Type, h.Reason)
+			}
+		}
+		return b.String()
+	}
+
 	members := make(map[string][]VNode)
 	var free []VNode
 	names := make(map[string]string)
@@ -387,12 +512,8 @@ func RenderText(v *View) string {
 		if n.Boundary {
 			line += " (outside scope)"
 		}
-		if len(n.Endpoints) > 0 {
-			var eps []string
-			for _, ep := range n.Endpoints {
-				eps = append(eps, ep.Name)
-			}
-			line += " exposes " + strings.Join(eps, ", ")
+		if p := pillsLabel(n.Endpoints, 4); p != "" {
+			line += " exposes " + p
 		}
 		if len(n.UsesModels) > 0 {
 			line += " uses " + strings.Join(n.UsesModels, ", ")
@@ -459,24 +580,8 @@ func RenderText(v *View) string {
 			if e.Transport != "" && e.Transport != "http" && e.Transport != "local" {
 				line += " (" + e.Transport + ")"
 			}
-			var prov []string
-			if e.Derivation != "" {
-				prov = append(prov, e.Derivation)
-			}
-			if e.Derivation != "" && e.Derivation != "synthesized" {
-				c := e.Trust
-				if c == 0 && e.Confidence > 0 {
-					c = e.Confidence
-				}
-				prov = append(prov, pct(c))
-				if e.EvidenceCount > 0 {
-					prov = append(prov, fmt.Sprintf("%d evidence", e.EvidenceCount))
-				} else {
-					prov = append(prov, "no evidence")
-				}
-			}
-			if len(prov) > 0 {
-				line += " — " + strings.Join(prov, " · ")
+			if p := edgeProvenanceText(e); p != "" {
+				line += " — " + p
 			}
 			b.WriteString(line + "\n")
 		}

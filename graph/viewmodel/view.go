@@ -36,6 +36,20 @@ type View struct {
 	// (policy key, noise:<class>, user_override, no_policy) or "isolated"
 	// (infrastructure nobody touches in this view).
 	Hidden []HiddenEntry `json:"hidden,omitempty"`
+	// Table is set when the view's answer is a list, not a picture: the
+	// flows lens answers "which use cases exist, where do they enter, who
+	// handles them" as rows (service → endpoint → handler → flow). A table
+	// view draws no arrows; Nodes stay for provenance and the hidden
+	// summary, renderers show the table.
+	Table *VTable `json:"table,omitempty"`
+}
+
+// VTable is the tabular answer of a list view. Rows are sorted; Keys holds
+// each row's subject node key (the flow) for drill-in, parallel to Rows.
+type VTable struct {
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+	Keys    []string   `json:"keys"`
 }
 
 // HiddenEntry is one line of the hidden-node summary.
@@ -665,40 +679,48 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			bypassLayers[l] = true
 		}
 	}
+	// callerKeep: sources of filter.callers edges whose target passes the
+	// node filters (the API lens's "who calls this endpoint"). Computed
+	// before the filter loop so the caller survives its own layer's absence.
+	callerKeep := make(map[int64]bool)
+	if f != nil && len(f.Callers) > 0 {
+		callerKinds := make(map[string]bool, len(f.Callers))
+		for _, k := range f.Callers {
+			callerKinds[k] = true
+		}
+		for i := range domEdges {
+			e := &domEdges[i]
+			if !callerKinds[e.EdgeType] || !inView[e.FromNodeID] || !inView[e.ToNodeID] {
+				continue
+			}
+			if tn := nodeByID[e.ToNodeID]; tn != nil && nodePasses(tn) {
+				callerKeep[e.FromNodeID] = true
+			}
+		}
+	}
 	// removedBypass: nodes cut by the bypass selectors. Nodes cut by the
 	// plain filters (nodePasses) are simply dropped — they sever paths.
 	removedBypass := make(map[int64]bool)
 	// filteredOut accounts for what the view's own filters removed (layers,
 	// exclude_types, name, min_confidence, bypass): those nodes are not
 	// VNodes, so the hidden summary is the only place they are named.
-	type filteredKey struct{ layer, typ, reason string }
-	filteredCounts := make(map[filteredKey]int)
+	// Aggregated once frames are known: a service cut by filter.layers
+	// that comes back as the FRAME of its endpoints (the API lens) is not
+	// hidden, it is the frame.
+	filteredIDs := make(map[int64]string) // node id → reason
 	for id := range inView {
 		n := nodeByID[id]
 		if bypassTypes[n.NodeType] || bypassLayers[n.Layer] {
 			removedBypass[id] = true
 			delete(inView, id)
-			filteredCounts[filteredKey{n.Layer, n.NodeType, "filter:bypass"}]++
+			filteredIDs[id] = "filter:bypass"
 			continue
 		}
-		if !nodePasses(n) {
+		if !nodePasses(n) && !callerKeep[id] {
 			delete(inView, id)
-			filteredCounts[filteredKey{n.Layer, n.NodeType, "filter:" + filterReason(f, n)}]++
+			filteredIDs[id] = "filter:" + filterReason(f, n)
 		}
 	}
-	var filteredOut []HiddenEntry
-	for k, c := range filteredCounts {
-		filteredOut = append(filteredOut, HiddenEntry{Layer: k.layer, Type: k.typ, Reason: k.reason, Count: c})
-	}
-	sort.Slice(filteredOut, func(i, j int) bool {
-		if filteredOut[i].Count != filteredOut[j].Count {
-			return filteredOut[i].Count > filteredOut[j].Count
-		}
-		if filteredOut[i].Layer != filteredOut[j].Layer {
-			return filteredOut[i].Layer < filteredOut[j].Layer
-		}
-		return filteredOut[i].Type < filteredOut[j].Type
-	})
 
 	// Pinned keys (palette drops onto an existing view) join the view
 	// unconditionally: they bypass node filters and endpoint absorption and
@@ -770,9 +792,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// BELONGS_TO edge when the graph has one; otherwise from the topic's
 	// transport matching a broker by name/type; otherwise, with exactly one
 	// declared broker, that broker — inferred, and the frame says so.
+	// Membership is computed for every grouping (C1 needs it to tell a
+	// broker that carries topics from one nobody uses); only service
+	// grouping turns the broker into a frame.
 	brokerOf := make(map[int64]int64)     // topic id → broker id
 	brokerBasis := make(map[int64]string) // broker id → basis note ("" = evidence)
-	if groupBy == "service" {
+	{
 		var brokers []*store.NodeRow
 		for id := range inView {
 			if n := nodeByID[id]; n.Layer == "infra" && (n.NodeType == "broker" || n.NodeType == "queue") {
@@ -831,8 +856,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 	}
 	frameGroups := make(map[string]bool) // group keys rendered as frames even when collapsed
-	for _, bid := range brokerOf {
-		frameGroups[nodeByID[bid].NodeKey] = true
+	if groupBy == "service" {
+		for _, bid := range brokerOf {
+			frameGroups[nodeByID[bid].NodeKey] = true
+		}
+	} else {
+		brokerBasis = make(map[int64]string) // no frames, no basis notes
 	}
 
 	// ---- e. group assignment ----
@@ -878,6 +907,10 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 		return ""
 	}
+	// moduleless: service frames that hold components the scan attached to
+	// no module (C3 fallback) — the frame says so instead of passing for a
+	// module.
+	moduleless := make(map[string]bool)
 	groupOf := func(n *store.NodeRow) string {
 		switch groupBy {
 		case "service":
@@ -887,6 +920,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			if svc := owned[n.NodeID]; svc != nil {
 				return svc.NodeKey
 			}
+			// A data model nobody owns does not float: it sits in a frame
+			// that says the owner is unknown, so the gap is visible and
+			// fixable (path prefix, a USES_MODEL edge) rather than silent.
+			if n.Layer == "data" {
+				return unownedGroupKey
+			}
 		case "module":
 			if mid, ok := parentModule[n.NodeID]; ok {
 				if mn := nodeByID[mid]; mn != nil {
@@ -894,6 +933,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				}
 			}
 			if svc := owned[n.NodeID]; svc != nil {
+				moduleless[svc.NodeKey] = true
 				return svc.NodeKey // fallback: owning service
 			}
 		case "layer":
@@ -980,22 +1020,45 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 		if gn := nodeByKey[g]; gn != nil {
 			addGroup(g, gn.Name, gn.NodeType)
+		} else if g == unownedGroupKey {
+			addGroup(g, "owner unknown", "unknown")
+			groupsByKey[g].Note = "no service owns these"
 		} else {
 			addGroup(g, g, groupBy)
 		}
 	}
-	for id, g := range memberGroup {
-		if g == "" {
-			continue
-		}
-		vg := groupsByKey[g]
-		vg.Stats["nodes"]++
-		vg.Stats["endpoints"] += len(endpointPills[id])
-		vg.Stats["models"] += len(modelPills[id])
-		if n := nodeByID[id]; n.Layer == "service" && n.NodeType == "service" {
-			vg.Stats["services"]++ // C1 system-box label: "N services · M endpoints"
+	for key := range moduleless {
+		if vg := groupsByKey[key]; vg != nil && vg.Note == "" {
+			vg.Note = "not in any module"
 		}
 	}
+	type filteredKey struct{ layer, typ, reason string }
+	filteredCounts := make(map[filteredKey]int)
+	for id, reason := range filteredIDs {
+		n := nodeByID[id]
+		if groupsByKey[n.NodeKey] != nil {
+			continue // it is a frame, not a hidden node
+		}
+		filteredCounts[filteredKey{n.Layer, n.NodeType, reason}]++
+	}
+	var filteredOut []HiddenEntry
+	for k, c := range filteredCounts {
+		filteredOut = append(filteredOut, HiddenEntry{Layer: k.layer, Type: k.typ, Reason: k.reason, Count: c})
+	}
+	sort.Slice(filteredOut, func(i, j int) bool {
+		if filteredOut[i].Count != filteredOut[j].Count {
+			return filteredOut[i].Count > filteredOut[j].Count
+		}
+		if filteredOut[i].Layer != filteredOut[j].Layer {
+			return filteredOut[i].Layer < filteredOut[j].Layer
+		}
+		return filteredOut[i].Type < filteredOut[j].Type
+	})
+
+	// Frame stats speak the container's language — what it exposes,
+	// publishes, consumes and calls; what a broker carries and who talks
+	// to it; how many services a system box holds. Never "N nodes".
+	groupStatsFor(groupsByKey, memberGroup, nodeByID, domEdges, owned, brokerOf, endpointPills, modelPills, retarget)
 
 	// repKey: the rendered endpoint of a collapsed edge — group key for
 	// grouped members and for group nodes themselves, node key otherwise.
@@ -1472,6 +1535,51 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	}
 	sort.Slice(view.Nodes, func(i, j int) bool { return view.Nodes[i].Key < view.Nodes[j].Key })
 
+	// One arrow per conversation at component altitude too: a component
+	// that calls another service's endpoint (arrow to the exposing
+	// component) AND the service (arrow to its frame) is one conversation;
+	// the frame-level arrow folds into the endpoint-level one — weight and
+	// edge keys accumulate, provenance takes the weakest.
+	if !spec.Collapse {
+		endpointArrow := make(map[[2]string]*VEdge) // (from, frame) → CALLS_ENDPOINT arrow
+		for _, k := range edgeOrder {
+			ve := edgeAcc[k]
+			if ve.Kind != "CALLS_ENDPOINT" {
+				continue
+			}
+			if g := memberGroup[nodeIDByKey(nodeByKey, ve.To)]; g != "" && groupsByKey[g] != nil && groupsByKey[g].Kind == "service" {
+				key := [2]string{ve.From, g}
+				if endpointArrow[key] == nil {
+					endpointArrow[key] = ve
+				}
+			}
+		}
+		if len(endpointArrow) > 0 {
+			kept := edgeOrder[:0]
+			for _, k := range edgeOrder {
+				ve := edgeAcc[k]
+				if ve.Kind == "CALLS_SERVICE" {
+					if target := endpointArrow[[2]string{ve.From, ve.To}]; target != nil {
+						target.Weight += ve.Weight
+						target.CollapsedFrom = append(target.CollapsedFrom, ve.CollapsedFrom...)
+						if derivationRank(ve.Derivation) > derivationRank(target.Derivation) {
+							target.Derivation = ve.Derivation
+						}
+						if ve.Confidence < target.Confidence {
+							target.Confidence = ve.Confidence
+						}
+						if ve.Trust < target.Trust {
+							target.Trust = ve.Trust
+						}
+						target.EvidenceCount += ve.EvidenceCount
+						continue
+					}
+				}
+				kept = append(kept, k)
+			}
+			edgeOrder = kept
+		}
+	}
 	for _, k := range edgeOrder {
 		view.Edges = append(view.Edges, *edgeAcc[k])
 	}
@@ -1511,6 +1619,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			case "database":
 				label = "db"
 			}
+			// Infra the manifest declares but nothing in the graph touches
+			// (no topic inside it, no component using it) is a claim, not
+			// a fact: the arrow says so instead of passing for a use.
+			if !infraTouched(id, domEdges, brokerOf) {
+				label = "declared, no evidence"
+			}
 			infraEdges = append(infraEdges, VEdge{
 				From: domain, To: n.NodeKey, Kind: "uses_infra", Label: label, Weight: 1, Derivation: "synthesized",
 			})
@@ -1530,6 +1644,15 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	}
 	for i := range view.Nodes {
 		n := &view.Nodes[i]
+		// A module inside a service frame is hierarchy (its components are
+		// the cards; per-service C3 draws it as the frame) — a card with no
+		// arrows answers nothing here.
+		if groupBy == "service" && n.Type == "module" && n.RenderMode != string(salience.RenderHidden) && !touched[n.Key] {
+			n.Tier = string(salience.TierDetail)
+			n.RenderMode = string(salience.RenderHidden)
+			n.SalienceReason = "hierarchy"
+			continue
+		}
 		if n.Layer != "infra" || n.RenderMode == string(salience.RenderHidden) || touched[n.Key] || n.Group != "" {
 			continue
 		}
@@ -1541,6 +1664,13 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		n.SalienceReason = "isolated"
 	}
 	view.Hidden = append(hiddenSummary(view.Nodes), filteredOut...)
+
+	// The flows lens is a list, not a picture: every flow as a row —
+	// which service it enters through, at which endpoint, who handles it.
+	if spec.Layout.Preset == "flows" {
+		view.Table = flowsTable(inView, nodeByID, domEdges, exposerOf, owned)
+		view.Edges = nil
+	}
 
 	if len(bIn) > 0 || len(bOut) > 0 {
 		sort.Slice(bIn, func(i, j int) bool {

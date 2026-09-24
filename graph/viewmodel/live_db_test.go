@@ -113,8 +113,10 @@ func TestViewC1LiveTomAndJerry(t *testing.T) {
 	}
 	if e, ok := infraEdge[freeKey["redis"]]; !ok {
 		t.Errorf("missing uses_infra edge system box → redis; edges=%+v", view.Edges)
-	} else if e.Label != "cache" {
-		t.Errorf("redis uses_infra label=%q want cache", e.Label)
+	} else if e.Label != "declared, no evidence" {
+		// Nothing in the graph touches redis: the manifest declares it,
+		// the arrow must not pass for a use.
+		t.Errorf("redis uses_infra label=%q want \"declared, no evidence\"", e.Label)
 	}
 
 	// --- the system box connects to the external system ---
@@ -259,7 +261,7 @@ func TestViewPinServiceSpotlightC1(t *testing.T) {
 	if arenaGroup.Kind != "service" {
 		t.Errorf("carved group kind=%q want service", arenaGroup.Kind)
 	}
-	if arenaGroup.Stats["nodes"] == 0 {
+	if arenaGroup.Stats["components"] == 0 {
 		t.Errorf("carved group has no member stats: %+v", arenaGroup.Stats)
 	}
 	if domainGroup == nil {
@@ -276,11 +278,13 @@ func TestViewPinServiceSpotlightC1(t *testing.T) {
 	if got, want := domainGroup.Stats["services"], baseStats["services"]-1; got != want {
 		t.Errorf("box services=%d want %d", got, want)
 	}
-	if got := domainGroup.Stats["nodes"]; got >= baseStats["nodes"] {
-		t.Errorf("box nodes=%d did not shrink from %d", got, baseStats["nodes"])
+	// The system box speaks in services and endpoints: arena's endpoints
+	// left the box with it.
+	if got := domainGroup.Stats["endpoints"]; got >= baseStats["endpoints"] {
+		t.Errorf("box endpoints=%d did not shrink from %d", got, baseStats["endpoints"])
 	}
-	if got, want := domainGroup.Stats["nodes"]+arenaGroup.Stats["nodes"]+1, baseStats["nodes"]; got != want {
-		t.Errorf("box+carved+svc nodes=%d want %d (conservation)", got, want)
+	if got, want := domainGroup.Stats["endpoints"]+arenaGroup.Stats["endpoints"], baseStats["endpoints"]; got != want {
+		t.Errorf("box+carved endpoints=%d want %d (conservation)", got, want)
 	}
 	// Edges lift between the carved group and the domain box.
 	betweens := 0

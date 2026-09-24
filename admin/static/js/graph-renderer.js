@@ -28,6 +28,36 @@ const LAYER_COLORS = {
 };
 let layerColorCache = null;
 
+// Evidence is a line only on an absolute signal — the same rule as the
+// Go renderers (viewmodel.nodeProvenanceText): a non-active status,
+// confidence below the bar (including 0), or no evidence at all. A
+// healthy element says nothing; the bar is absolute, never relative to
+// the rest of the graph, so a uniformly weak graph lights up everywhere.
+const EVIDENCE_BAR = 0.7;
+function nodeSignalLine(d, esc) {
+  const parts = [];
+  if (d.status && d.status !== 'active') parts.push(esc(d.status));
+  let c = d.trust_score;
+  if (!c && d.confidence > 0) c = d.confidence;
+  c = c || 0;
+  if (c < EVIDENCE_BAR) parts.push('confidence ' + Math.round(c * 100) + '%');
+  if (!d._evidenceCount) parts.push('no evidence');
+  if (!parts.length) return '';
+  return '<div class="nht-type nht-signal">' + parts.join(' · ') + (d._evidenceRef ? ' · ' + esc(d._evidenceRef) : '') + '</div>';
+}
+function edgeSignalLine(e, esc) {
+  if (!e.derivation || e.derivation === 'view') return '';
+  const parts = [];
+  if (e.derivation === 'synthesized') return 'synthesized (no graph edge)';
+  if (e.derivation === 'inferred' || e.derivation === 'unknown') parts.push(esc(e.derivation));
+  let c = e.trust_score;
+  if (!c && e.confidence > 0) c = e.confidence;
+  c = c || 0;
+  if (c < EVIDENCE_BAR) parts.push('confidence ' + Math.round(c * 100) + '%');
+  if (!e._evidenceCount) parts.push('no evidence');
+  return parts.join(' · ');
+}
+
 export class GraphRenderer {
   constructor(container) {
     this._container = container;
@@ -259,7 +289,7 @@ export class GraphRenderer {
           .attr('x', gNode.x - gNode.width / 2 + 10)
           .attr('y', gNode.y - gNode.height / 2 + 14);
         if (frameColor) label.attr('fill', frameColor);
-        label.text(String(meta.label || gk).toUpperCase() + (meta.kind && meta.kind !== 'service' && meta.kind !== 'domain' ? ' · ' + meta.kind : ''));
+        label.text(String(meta.label || gk).toUpperCase() + (meta.kind && meta.kind !== 'service' && meta.kind !== 'domain' && meta.kind !== 'unknown' ? ' · ' + meta.kind : ''));
         if (meta.note) {
           gg.append('text')
             .attr('class', 'domain-note')
@@ -444,18 +474,26 @@ export class GraphRenderer {
       .text(d => d.status);
 
     nodeG.append('text')
-      .attr('text-anchor', 'middle').attr('dy', -2)
+      .attr('text-anchor', 'middle').attr('dy', d => d._subtitle2 ? -6 : -2)
       .attr('fill', 'var(--text, #333)').attr('font-size', 11)
       .text(d => {
         const name = d.name || d.node_key || d.id;
         return name.length > 18 ? name.slice(0, 16) + '...' : name;
       });
 
+    const clip = (t, max) => { t = String(t || ''); return t.length > max ? t.slice(0, max - 1) + '…' : t; };
     nodeG.append('text')
-      .attr('text-anchor', 'middle').attr('dy', 14)
+      .attr('text-anchor', 'middle').attr('dy', d => d._subtitle2 ? 8 : 14)
       .attr('fill', d => self.layerColor(d.layer))
       .attr('font-size', 9).attr('opacity', 0.8)
-      .text(d => (d._subtitle || d.node_type || '') + (d._dissolvedGroup && d._dissolvedGroup !== d._repo ? ' · ' + d._dissolvedGroup : ''));
+      .text(d => clip((d._subtitle || d.node_type || '') + (d._dissolvedGroup && d._dissolvedGroup !== d._repo ? ' · ' + d._dissolvedGroup : ''), 26));
+    // Second subtitle line: endpoint pills ("GET /x, +3 more") or the
+    // rest of a frame's stats; the tooltip carries the full text.
+    nodeG.filter(d => !!d._subtitle2).append('text')
+      .attr('text-anchor', 'middle').attr('dy', 19)
+      .attr('fill', 'var(--text-muted, #8a7355)')
+      .attr('font-size', 8).attr('opacity', 0.9)
+      .text(d => clip(d._subtitle2, 28));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
     // bottom-right corner; click = callbacks.onDrill (same as dblclick).
@@ -633,12 +671,10 @@ export class GraphRenderer {
       '<div class="nht-type">' + esc(d.node_type || '') + (d.layer ? ' · ' + esc(d.layer) : '') + (d._repo ? ' · repo ' + esc(d._repo) : '') + '</div>' +
       (d.file_path ? '<div class="nht-type" style="font-family:var(--font-mono)">' + esc(d.file_path) + '</div>' : '') +
       (d._renderMode && d._renderMode !== 'box' ? '<div class="nht-type">' + esc(d._renderMode) + (d._salienceReason ? ' · ' + esc(d._salienceReason) : '') + '</div>' : '') +
-      (typeof d.confidence === 'number' && !d._vgroup
-        ? '<div class="nht-type">' + (d.status && d.status !== 'active' ? esc(d.status) + ' · ' : '') +
-          'confidence ' + Math.round((d.trust_score ?? d.confidence) * 100) + '% · ' +
-          (d._evidenceCount ? d._evidenceCount + ' evidence' : 'no evidence') +
-          (d._evidenceRef ? ' · ' + esc(d._evidenceRef) : '') + '</div>'
-        : '') +
+      (d._vgroup && d._statsFull ? '<div class="nht-type">' + esc(d._statsFull) + '</div>' : '') +
+      (d._pillsFull ? '<div class="nht-type">exposes ' + esc(d._pillsFull) + '</div>' : '') +
+      (d._boundary ? '<div class="nht-type">outside this scope</div>' : '') +
+      (typeof d.confidence === 'number' && !d._vgroup ? nodeSignalLine(d, esc) : '') +
       '<div class="nht-hint">click — select · double-click — drill</div>';
     el.style.display = 'block';
     this._moveTooltip(event);
@@ -651,12 +687,7 @@ export class GraphRenderer {
     const kind = e._kind || e.edge_type;
     const from = e._fromName || (e.source && e.source.name) || e.from_node_id;
     const to = e._toName || (e.target && e.target.name) || e.to_node_id;
-    let prov = '';
-    if (e.derivation === 'synthesized') prov = 'synthesized (no graph edge)';
-    else if (e.derivation && e.derivation !== 'view') {
-      prov = esc(e.derivation) + ' · confidence ' + Math.round((e.trust_score ?? e.confidence ?? 1) * 100) + '% · ' +
-        (e._evidenceCount ? e._evidenceCount + ' evidence' : 'no evidence');
-    }
+    const prov = edgeSignalLine(e, esc);
     el.innerHTML =
       '<div class="nht-name">' + esc(from) + ' → ' + esc(to) + '</div>' +
       '<div class="nht-type">' + esc(cat ? cat.shortLabel : kind) + (e.weight > 1 ? ' · ' + e.weight + ' edges' : '') + '</div>' +

@@ -14,14 +14,14 @@ func sampleView() *View {
 		Spec:  ViewSpec{Scope: ScopeSpec{Domain: "shop"}, Group: GroupSpec{By: "service"}, Collapse: true, Layout: LayoutSpec{Preset: "c2"}},
 		Title: "C2 — shop",
 		Groups: []VGroup{
-			{Key: "infra:broker:kafka:9092", Name: "kafka", Kind: "broker", Stats: map[string]int{"nodes": 1}, Inferred: true, Note: "only declared broker"},
-			{Key: "service:service:shop:orders", Name: "orders", Kind: "service", Stats: map[string]int{"endpoints": 3, "nodes": 4}},
-			{Key: "service:service:shop:payments", Name: "payments", Kind: "service", Stats: map[string]int{"endpoints": 1, "nodes": 2}},
+			{Key: "infra:broker:kafka:9092", Name: "kafka", Kind: "broker", Stats: map[string]int{"topics": 1}, Inferred: true, Note: "only declared broker"},
+			{Key: "service:service:shop:orders", Name: "orders", Kind: "service", Stats: map[string]int{"endpoints": 3, "components": 4, "publishes": 1, "calls": 1}},
+			{Key: "service:service:shop:payments", Name: "payments", Kind: "service", Stats: map[string]int{"endpoints": 1, "components": 2}},
 		},
 		Nodes: []VNode{
 			{Key: "contract:topic:shop:order-created", Name: "order-created", Type: "topic", Layer: "contract", Group: "infra:broker:kafka:9092", Tier: "primary", RenderMode: "box", Confidence: 0.9, Trust: 0.9, EvidenceCount: 2},
 			{Key: "data:dto:shop:orderdto", Name: "OrderDto", Type: "dto", Layer: "data", Tier: "detail", RenderMode: "hidden", SalienceReason: "type:data.dto"},
-			{Key: "service:external_system:shop:stripe", Name: "stripe", Type: "external_system", Layer: "service", Tier: "primary", RenderMode: "box", Confidence: 1, Trust: 1},
+			{Key: "service:external_system:shop:stripe", Name: "stripe", Type: "external_system", Layer: "service", Tier: "primary", RenderMode: "box", Confidence: 1, Trust: 1, EvidenceCount: 1},
 		},
 		Edges: []VEdge{
 			{From: "service:service:shop:orders", To: "contract:topic:shop:order-created", Kind: "PUBLISHES_TOPIC", Transport: "kafka", Weight: 1, Confidence: 0.9, Trust: 0.9, Derivation: "hard", EvidenceCount: 1},
@@ -38,7 +38,7 @@ func TestRenderMermaid_Structure(t *testing.T) {
 		"flowchart TB",
 		`subgraph kafka["kafka · broker (inferred: only declared broker)"]`,
 		`order_created(["order-created"])`,
-		`orders["orders<br/>3 endpoints · 4 nodes"]`,
+		`orders["orders<br/>3 endpoints · 4 components · publishes 1 · calls 1 service"]`,
 		`stripe[["stripe"]]`,
 		`orders -->|"pub"| order_created`,
 		`orders -.->|"HTTP ×3"| payments`, // inferred, no evidence → dashed
@@ -92,11 +92,11 @@ func TestRenderText_Structure(t *testing.T) {
 		"# C2 — shop",
 		"level: c2 · domain: shop · 3 groups · 2 nodes · 3 arrows · 1 hidden",
 		"## kafka (broker, inferred: only declared broker)",
-		"- order-created [topic] confidence 90% · 2 evidence",
-		"## orders (service) — 3 endpoints · 4 nodes",
+		"- order-created [topic]\n", // healthy: no evidence line
+		"## orders (service) — 3 endpoints · 4 components · publishes 1 · calls 1 service",
 		"## Arrows",
-		"- orders → order-created: pub (kafka) — hard · 90% · 1 evidence",
-		"- orders → payments: HTTP ×3 — inferred · 60% · no evidence",
+		"- orders → order-created: pub (kafka)\n", // hard, evidence-backed: silent
+		"- orders → payments: HTTP ×3 — inferred · confidence 60% · no evidence",
 		"## Hidden",
 		"- 1 dto — type:data.dto",
 	} {

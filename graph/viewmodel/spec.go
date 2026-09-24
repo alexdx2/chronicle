@@ -75,6 +75,13 @@ type FilterSpec struct {
 	// sever paths.
 	BypassTypes  []string `json:"bypass_types,omitempty"`
 	BypassLayers []string `json:"bypass_layers,omitempty"`
+	// Callers keeps the SOURCE nodes of edges of these kinds whenever the
+	// target passes the node filters, even if the source's own layer is
+	// filtered out. The API lens is filter.layers=[contract] +
+	// callers=[CALLS_ENDPOINT]: endpoints framed by their providing
+	// service, plus exactly the components that call them (framed by
+	// theirs) — nothing else from the code layer.
+	Callers []string `json:"callers,omitempty"`
 }
 
 // GroupSpec selects the grouping key: service|module|layer|domain|none.

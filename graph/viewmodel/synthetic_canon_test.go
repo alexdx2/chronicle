@@ -146,7 +146,7 @@ func TestSynthetic_EvidencePropagation(t *testing.T) {
 				t.Errorf("zero-confidence linked call must stay 0/linked: %+v", e)
 			}
 			txt := RenderText(c2)
-			if !strings.Contains(txt, "shop-api → mail-api: HTTP — linked · 0% · no evidence") {
+			if !strings.Contains(txt, "shop-api → mail-api: HTTP — confidence 0% · no evidence") {
 				t.Errorf("text should say 0%%, not hide it:\n%s", txt)
 			}
 			if !strings.Contains(RenderMermaid(c2), `shop_api -.->|"HTTP"| mail_api`) {
