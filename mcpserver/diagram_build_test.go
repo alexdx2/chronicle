@@ -9,7 +9,6 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/alexdx2/chronicle-core/diagrams"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 	"github.com/alexdx2/chronicle-core/store"
@@ -70,197 +69,7 @@ func toolResultJSON(t *testing.T, res *mcplib.CallToolResult) map[string]any {
 	return out
 }
 
-func TestDiagramBuild_NodeKeys_ViewmodelSession(t *testing.T) {
-	g := newLabTestGraph(t)
-	st := g.Store()
 
-	tomKey := "service:service:test:tom"
-	jerryKey := "service:service:test:jerry"
-
-	tomID, err := st.UpsertNode(store.NodeRow{
-		NodeKey: tomKey, Layer: "service", NodeType: "service",
-		DomainKey: "test", Name: "tom", Status: "active",
-		Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
-	})
-	if err != nil {
-		t.Fatalf("upsert tom: %v", err)
-	}
-	jerryID, err := st.UpsertNode(store.NodeRow{
-		NodeKey: jerryKey, Layer: "service", NodeType: "service",
-		DomainKey: "test", Name: "jerry", Status: "active",
-		Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
-	})
-	if err != nil {
-		t.Fatalf("upsert jerry: %v", err)
-	}
-	if _, err := st.UpsertEdge(store.EdgeRow{
-		EdgeKey:    tomKey + "->" + jerryKey + ":CALLS_SERVICE",
-		FromNodeID: tomID, ToNodeID: jerryID, EdgeType: "CALLS_SERVICE",
-		DerivationKind: "hard", Active: true,
-		Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
-	}); err != nil {
-		t.Fatalf("upsert edge: %v", err)
-	}
-
-	h := diagramBuildHandler(g)
-	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
-		"title":     "Tom & Jerry Selection",
-		"domain":    "test",
-		"node_keys": `["` + tomKey + `","` + jerryKey + `"]`,
-	}))
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	out := toolResultJSON(t, res)
-
-	// --- Result shape ---
-	sessionID, _ := out["session_id"].(string)
-	if sessionID == "" {
-		t.Fatal("missing session_id in result")
-	}
-	url, _ := out["url"].(string)
-	if !strings.Contains(url, "#c4/s/"+sessionID) {
-		t.Errorf("url %q does not contain #c4/s/%s", url, sessionID)
-	}
-	if nc := int(out["node_count"].(float64)); nc != 2 {
-		t.Errorf("node_count = %d, want 2", nc)
-	}
-	if ec := int(out["edge_count"].(float64)); ec < 1 {
-		t.Errorf("edge_count = %d, want >= 1", ec)
-	}
-	if missing, ok := out["missing"].([]any); !ok || len(missing) != 0 {
-		t.Errorf("missing = %v, want empty array", out["missing"])
-	}
-
-	// --- Session in the in-process registry (not persisted to SQLite) ---
-	title, dataJSON, ok := diagrams.Default.Get(sessionID)
-	if !ok {
-		t.Fatalf("session %s not in registry", sessionID)
-	}
-	if title != "Tom & Jerry Selection" {
-		t.Errorf("stored title = %q", title)
-	}
-	t.Logf("session JSON: %s", dataJSON)
-
-	var session struct {
-		Kind      string `json:"kind"`
-		Level     string `json:"level"`
-		Title     string `json:"title"`
-		Domain    string `json:"domain"`
-		Selection struct {
-			Level      string `json:"level"`
-			Components []struct {
-				Key  string `json:"key"`
-				Name string `json:"name"`
-			} `json:"components"`
-			InternalEdges []struct {
-				From string `json:"from"`
-				To   string `json:"to"`
-				Kind string `json:"kind"`
-			} `json:"internal_edges"`
-		} `json:"selection"`
-	}
-	if err := json.Unmarshal([]byte(dataJSON), &session); err != nil {
-		t.Fatalf("unmarshal stored session: %v", err)
-	}
-	if session.Kind != "viewmodel" {
-		t.Errorf("kind = %q, want viewmodel", session.Kind)
-	}
-	if session.Level != "custom" || session.Selection.Level != "custom" {
-		t.Errorf("level = %q / selection.level = %q, want custom", session.Level, session.Selection.Level)
-	}
-	if session.Domain != "test" {
-		t.Errorf("domain = %q, want test", session.Domain)
-	}
-	if len(session.Selection.Components) != 2 {
-		t.Fatalf("selection has %d components, want 2", len(session.Selection.Components))
-	}
-	if len(session.Selection.InternalEdges) < 1 {
-		t.Fatalf("selection has %d internal edges, want >= 1", len(session.Selection.InternalEdges))
-	}
-	ie := session.Selection.InternalEdges[0]
-	if ie.From != tomKey || ie.To != jerryKey || ie.Kind != "calls_service" {
-		t.Errorf("internal edge = %+v, want %s -> %s (calls_service)", ie, tomKey, jerryKey)
-	}
-}
-
-func TestDiagramBuild_ViewSpec_Session(t *testing.T) {
-	g := newLabTestGraph(t)
-	tomKey, jerryKey := seedTomJerry(t, g)
-
-	spec := `{"scope":{"domain":"test","nodes":["` + tomKey + `","` + jerryKey + `"]},"group":{"by":"none"},"layout":{"preset":"custom"}}`
-
-	h := diagramBuildHandler(g)
-	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
-		"title":     "View Spec Session",
-		"view_spec": spec,
-	}))
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	out := toolResultJSON(t, res)
-
-	sessionID, _ := out["session_id"].(string)
-	if sessionID == "" {
-		t.Fatal("missing session_id")
-	}
-	if url, _ := out["url"].(string); !strings.Contains(url, "#c4/s/"+sessionID) {
-		t.Errorf("url %q does not contain #c4/s/%s", url, sessionID)
-	}
-	if nc := int(out["node_count"].(float64)); nc != 2 {
-		t.Errorf("node_count = %d, want 2", nc)
-	}
-	if ec := int(out["edge_count"].(float64)); ec != 1 {
-		t.Errorf("edge_count = %d, want 1", ec)
-	}
-
-	_, dataJSON, ok := diagrams.Default.Get(sessionID)
-	if !ok {
-		t.Fatalf("session %s not in registry", sessionID)
-	}
-	var session map[string]any
-	if err := json.Unmarshal([]byte(dataJSON), &session); err != nil {
-		t.Fatalf("unmarshal stored session: %v", err)
-	}
-	if session["kind"] != "viewmodel" {
-		t.Errorf("kind = %v, want viewmodel", session["kind"])
-	}
-	if session["level"] != "custom" {
-		t.Errorf("level = %v, want custom (layout.preset)", session["level"])
-	}
-
-	// --- "view": the full View JSON ---
-	view, ok := session["view"].(map[string]any)
-	if !ok {
-		t.Fatalf("session missing 'view' object: %s", dataJSON)
-	}
-	if nodes, ok := view["nodes"].([]any); !ok || len(nodes) != 2 {
-		t.Errorf("view.nodes = %v, want 2 entries", view["nodes"])
-	}
-	if edges, ok := view["edges"].([]any); !ok || len(edges) != 1 {
-		t.Errorf("view.edges = %v, want 1 entry", view["edges"])
-	}
-	if _, ok := view["spec"].(map[string]any); !ok {
-		t.Errorf("view.spec missing (views must be self-describing)")
-	}
-
-	// --- "selection": best-effort projection for the current renderer ---
-	sel, ok := session["selection"].(map[string]any)
-	if !ok {
-		t.Fatalf("session missing 'selection' projection: %s", dataJSON)
-	}
-	if comps, ok := sel["components"].([]any); !ok || len(comps) != 2 {
-		t.Errorf("selection.components = %v, want 2 entries", sel["components"])
-	}
-	ies, ok := sel["internal_edges"].([]any)
-	if !ok || len(ies) != 1 {
-		t.Fatalf("selection.internal_edges = %v, want 1 entry", sel["internal_edges"])
-	}
-	ie, _ := ies[0].(map[string]any)
-	if ie["from"] != tomKey || ie["to"] != jerryKey || ie["kind"] != "calls_service" {
-		t.Errorf("projected edge = %v, want %s -> %s (calls_service)", ie, tomKey, jerryKey)
-	}
-}
 
 func TestQueryDeps_ViewURL(t *testing.T) {
 	g := newLabTestGraph(t)
@@ -311,46 +120,6 @@ func TestQueryDeps_ViewURL(t *testing.T) {
 	}
 }
 
-func TestDiagramBuild_LegacyNodes_LegacySession(t *testing.T) {
-	g := newLabTestGraph(t)
-
-	h := diagramBuildHandler(g)
-	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
-		"title": "Legacy Overview",
-		"nodes": `[{"key":"a","label":"A","kind":"domain"},{"key":"b","label":"B","kind":"external"}]`,
-		"edges": `[{"from":"a","to":"b","label":"HTTP","kind":"http"}]`,
-	}))
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-	out := toolResultJSON(t, res)
-
-	sessionID, _ := out["session_id"].(string)
-	if sessionID == "" {
-		t.Fatal("missing session_id")
-	}
-	if nc := int(out["node_count"].(float64)); nc != 2 {
-		t.Errorf("node_count = %d, want 2", nc)
-	}
-	if ec := int(out["edge_count"].(float64)); ec != 1 {
-		t.Errorf("edge_count = %d, want 1", ec)
-	}
-
-	_, dataJSON, ok := diagrams.Default.Get(sessionID)
-	if !ok {
-		t.Fatalf("session %s not in registry", sessionID)
-	}
-	var session map[string]any
-	if err := json.Unmarshal([]byte(dataJSON), &session); err != nil {
-		t.Fatalf("unmarshal stored session: %v", err)
-	}
-	if session["kind"] != "legacy" {
-		t.Errorf("kind = %v, want legacy", session["kind"])
-	}
-	if nodes, ok := session["nodes"].([]any); !ok || len(nodes) != 2 {
-		t.Errorf("stored nodes = %v, want 2 entries", session["nodes"])
-	}
-}
 
 // An agent cannot open the dashboard: the tool answers with the diagram
 // itself — mermaid and structured text rendered from the SAME View the
@@ -378,8 +147,8 @@ func TestDiagramBuild_Preset_ReturnsMermaidAndText(t *testing.T) {
 	if !strings.Contains(text, "# Containers") || !strings.Contains(text, "- tom → jerry: HTTP") {
 		t.Errorf("text = %q, want the title and the arrow line", text)
 	}
-	if url, _ := out["url"].(string); !strings.Contains(url, "#c4/s/") {
-		t.Errorf("url = %q", url)
+	if url, _ := out["url"].(string); !strings.Contains(url, "#v/") {
+		t.Errorf("url should be a self-describing #v/ deep link, got %q", url)
 	}
 	if lvl, _ := out["level"].(string); lvl != "c2" {
 		t.Errorf("level = %q, want c2", lvl)
@@ -429,5 +198,65 @@ func TestDiagramBuild_UnknownPreset(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("unknown preset must be an error, got %v", res.Content)
+	}
+}
+
+// A custom selection (node_keys) is a ViewSpec too: scope.nodes, edges
+// discovered, unknown keys reported, mermaid/text rendered, #v/ URL.
+func TestDiagramBuild_NodeKeys_IsAView(t *testing.T) {
+	g := newLabTestGraph(t)
+	tomKey, jerryKey := seedTomJerry(t, g)
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title":     "Pair",
+		"node_keys": `["` + tomKey + `","` + jerryKey + `","service:service:test:nope"]`,
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	out := toolResultJSON(t, res)
+	if nc := int(out["node_count"].(float64)); nc != 2 {
+		t.Errorf("node_count = %d, want 2", nc)
+	}
+	if ec := int(out["edge_count"].(float64)); ec < 1 {
+		t.Errorf("edge_count = %d, want >= 1", ec)
+	}
+	missing, _ := out["missing"].([]any)
+	if len(missing) != 1 {
+		t.Errorf("missing = %v, want the unknown key", out["missing"])
+	}
+	if lvl, _ := out["level"].(string); lvl != "custom" {
+		t.Errorf("level = %q, want custom", lvl)
+	}
+	if m, _ := out["mermaid"].(string); !strings.Contains(m, "tom") || !strings.Contains(m, "jerry") {
+		t.Errorf("mermaid should draw both nodes:\n%s", m)
+	}
+	url, _ := out["url"].(string)
+	if !strings.Contains(url, "#v/") {
+		t.Fatalf("url = %q, want a #v/ deep link", url)
+	}
+	// The URL decodes back to the spec that built the view.
+	raw, err := base64.RawURLEncoding.DecodeString(url[strings.Index(url, "#v/")+3:])
+	if err != nil {
+		t.Fatalf("decode url: %v", err)
+	}
+	var spec viewmodel.ViewSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("spec json: %v", err)
+	}
+	if len(spec.Scope.Nodes) != 3 || spec.Layout.Preset != "custom" {
+		t.Errorf("decoded spec = %+v", spec)
+	}
+}
+
+func TestDiagramBuild_RequiresSomething(t *testing.T) {
+	g := newLabTestGraph(t)
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{"title": "x"}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("a request with no preset/view_spec/node_keys must error")
 	}
 }

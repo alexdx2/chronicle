@@ -131,7 +131,7 @@ verifies the result against the live db, then swaps the files.
 
 Carried over from the old db (not journaled by design):
   graph_revisions, graph_snapshots, knowledge_contexts, graph_changelog,
-  graph_discoveries, project_settings, diagram_sessions, mcp_request_log,
+  graph_discoveries, project_settings, mcp_request_log,
   scan_runs, scan_obligations, scan_extractions, evidence_verification_runs,
   journal_outbox (unflushed rows only), journal_state (lamport floor, MAX-merged).
 

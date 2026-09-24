@@ -17,7 +17,6 @@ import (
 	"sync"
 
 	dashboard "github.com/alexdx2/chronicle-core/admin"
-	"github.com/alexdx2/chronicle-core/diagrams"
 	"github.com/alexdx2/chronicle-core/freshness"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
@@ -50,68 +49,6 @@ func portFromPath(dir string) int {
 	h := fnv.New32a()
 	h.Write([]byte(abs))
 	return 4200 + int(h.Sum32()%800)
-}
-
-type DiagramNode struct {
-	Key       string            `json:"key"`
-	Label     string            `json:"label"`
-	Kind      string            `json:"kind"`
-	SourceKey string            `json:"source_key,omitempty"`
-	Domain    string            `json:"domain,omitempty"`
-	Layer     string            `json:"layer,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-}
-
-type DiagramEdge struct {
-	From  string `json:"from"`
-	To    string `json:"to"`
-	Label string `json:"label,omitempty"`
-	Kind  string `json:"kind,omitempty"`
-}
-
-type DiagramStep struct {
-	Title       string            `json:"title"`
-	Description string            `json:"description,omitempty"`
-	Highlights  map[string]string `json:"highlights"`
-	Notes       map[string]string `json:"notes,omitempty"`
-}
-
-type DiagramGroups struct {
-	Field string `json:"field"`
-}
-
-type HideEdgeRule struct {
-	From     string `json:"from"`
-	To       string `json:"to"`
-	EdgeType string `json:"edge_type,omitempty"`
-}
-
-type DiagramBuildRequest struct {
-	Title       string                 `json:"title"`
-	Nodes       []DiagramNode          `json:"nodes,omitempty"`
-	Edges       []DiagramEdge          `json:"edges,omitempty"`
-	NodeKeys    []string               `json:"node_keys,omitempty"`
-	Groups      *DiagramGroups         `json:"groups,omitempty"`
-	Steps       []DiagramStep          `json:"steps,omitempty"`
-	Annotations map[string]DiagramNote `json:"annotations,omitempty"`
-	HideEdges   []HideEdgeRule         `json:"hide_edges,omitempty"`
-}
-
-type DiagramSession struct {
-	ID          string                 `json:"id"`
-	Title       string                 `json:"title"`
-	Nodes       []DiagramNode          `json:"nodes"`
-	Edges       []DiagramEdge          `json:"edges"`
-	Groups      *DiagramGroups         `json:"groups,omitempty"`
-	Annotations map[string]DiagramNote `json:"annotations,omitempty"`
-	Steps       []DiagramStep          `json:"steps,omitempty"`
-	CreatedAt   string                 `json:"created_at"`
-	UpdatedAt   string                 `json:"updated_at"`
-}
-
-type DiagramNote struct {
-	Note      string `json:"note,omitempty"`
-	Highlight string `json:"highlight,omitempty"`
 }
 
 // EdgeCategory defines visual encoding for a group of edge types.
@@ -237,7 +174,6 @@ type Server struct {
 	devMode       bool
 	projectPath   string
 	originalPath  string
-	diagrams      map[string]*DiagramSession
 	dashboardHTML string // rendered dashboard HTML (from slots)
 }
 
@@ -257,7 +193,6 @@ func NewServerWithSlots(g *graph.Graph, s *store.Store, port int, manifestPath s
 		graph: g, store: s, hub: NewHub(), port: port,
 		manifestPath: manifestPath, devMode: devMode,
 		projectPath: projectDir, originalPath: projectDir,
-		diagrams:      make(map[string]*DiagramSession),
 		dashboardHTML: dashboard.RenderDashboard(slots),
 	}
 	g.SetEventEmitter(&hubEmitter{hub: srv.hub})
@@ -271,22 +206,6 @@ type hubEmitter struct {
 
 func (h *hubEmitter) Emit(event graph.ScanEvent) {
 	h.hub.Send("scan_event", event)
-}
-
-// HandleDiagramForTest exposes the diagram handler for use by e2e tests.
-func (s *Server) HandleDiagramForTest(w http.ResponseWriter, r *http.Request) {
-	s.handleDiagram(w, r)
-}
-
-// persistDiagramSession mirrors a session into the in-process registry.
-// Sessions are session-scoped by design: nothing is written to SQLite, so a
-// server restart starts with an empty Live Session tab.
-func (s *Server) persistDiagramSession(session *DiagramSession) {
-	data, err := json.Marshal(session)
-	if err != nil {
-		return
-	}
-	diagrams.Default.Save(session.ID, session.Title, string(data))
 }
 
 // switchTo swaps the server's backing store/graph to a different project.
@@ -402,12 +321,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWebSocket(s.hub, w, r)
 	})
-	mux.HandleFunc("/api/diagram/", s.handleDiagram)
-	mux.HandleFunc("/api/diagram", s.handleDiagram)
 	mux.HandleFunc("/api/evidence", s.handleEvidence)
-	mux.HandleFunc("/api/c4/c1", s.handleC1)
-	mux.HandleFunc("/api/c4/c2", s.handleC2)
-	mux.HandleFunc("/api/c4/c3", s.handleC3)
 	mux.HandleFunc("/api/view", s.handleView)
 }
 
@@ -458,6 +372,12 @@ func (s *Server) Start() error {
 			if err == nil {
 				f.Close()
 				if r.URL.Path != "/" && r.URL.Path != "/index.html" {
+					// Scripts change with every binary: make the browser
+					// revalidate instead of running last release's modules
+					// against this release's API.
+					if strings.HasSuffix(r.URL.Path, ".js") {
+						w.Header().Set("Cache-Control", "no-cache")
+					}
 					fileServer.ServeHTTP(w, r)
 					return
 				}
@@ -1939,267 +1859,6 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(405)
-}
-
-func (s *Server) handleDiagram(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/diagram")
-	path = strings.TrimPrefix(path, "/")
-	parts := strings.SplitN(path, "/", 2)
-	sessionID := parts[0]
-
-	switch {
-	case r.Method == "POST" && sessionID == "build":
-		s.handleDiagramBuild(w, r)
-	case r.Method == "GET" && sessionID == "latest":
-		s.handleDiagramLatest(w, r)
-	case r.Method == "GET" && sessionID == "list":
-		s.handleDiagramList(w, r)
-	case r.Method == "GET" && sessionID == "":
-		s.handleDiagramList(w, r)
-	case r.Method == "GET" && sessionID != "":
-		s.handleDiagramGet(w, r, sessionID)
-	case r.Method == "DELETE" && sessionID != "":
-		s.handleDiagramDelete(w, r, sessionID)
-	default:
-		http.Error(w, "not found", 404)
-	}
-}
-
-func (s *Server) handleDiagramBuild(w http.ResponseWriter, r *http.Request) {
-	var req DiagramBuildRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.Title == "" {
-		req.Title = "Diagram"
-	}
-	if len(req.Nodes) == 0 && len(req.NodeKeys) == 0 {
-		http.Error(w, "at least one of 'nodes' or 'node_keys' is required", http.StatusBadRequest)
-		return
-	}
-
-	// Start with explicit nodes/edges
-	diagramNodes := append([]DiagramNode{}, req.Nodes...)
-	diagramEdges := append([]DiagramEdge{}, req.Edges...)
-	var errors []string
-
-	// Resolve node_keys from graph DB
-	if len(req.NodeKeys) > 0 && s.getStore() != nil {
-		foundNodes, missingKeys, err := s.getStore().GetNodesByKeys(req.NodeKeys)
-		if err != nil {
-			http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		errors = missingKeys
-
-		existingKeys := make(map[string]bool, len(diagramNodes))
-		for _, n := range diagramNodes {
-			existingKeys[n.Key] = true
-		}
-
-		resolvedIDs := make([]int64, 0, len(foundNodes))
-		for _, gn := range foundNodes {
-			if existingKeys[gn.NodeKey] {
-				continue
-			}
-			diagramNodes = append(diagramNodes, DiagramNode{
-				Key:       gn.NodeKey,
-				Label:     gn.Name,
-				Kind:      gn.NodeType,
-				SourceKey: gn.NodeKey,
-				Domain:    gn.DomainKey,
-				Layer:     gn.Layer,
-			})
-			resolvedIDs = append(resolvedIDs, gn.NodeID)
-		}
-
-		// Auto-discover edges
-		if len(resolvedIDs) > 0 {
-			discoveredEdges, err := s.getStore().GetEdgesBetweenNodes(resolvedIDs)
-			if err == nil {
-				idToKey := make(map[int64]string, len(foundNodes))
-				for _, gn := range foundNodes {
-					idToKey[gn.NodeID] = gn.NodeKey
-				}
-				// Track existing edges for dedup (fromKey, toKey, edgeType).
-				type diagEdgeKey struct{ from, to, edgeType string }
-				existingEdgeKeys := make(map[diagEdgeKey]bool, len(diagramEdges))
-				for _, de := range diagramEdges {
-					existingEdgeKeys[diagEdgeKey{de.From, de.To, de.Label}] = true
-				}
-				for _, ge := range discoveredEdges {
-					fromKey := idToKey[ge.FromNodeID]
-					toKey := idToKey[ge.ToNodeID]
-					if fromKey == "" || toKey == "" {
-						continue
-					}
-					hidden := false
-					for _, h := range req.HideEdges {
-						if h.From == fromKey && h.To == toKey {
-							if h.EdgeType == "" || h.EdgeType == ge.EdgeType {
-								hidden = true
-								break
-							}
-						}
-					}
-					if hidden {
-						continue
-					}
-					dk := diagEdgeKey{fromKey, toKey, ge.EdgeType}
-					if existingEdgeKeys[dk] {
-						continue
-					}
-					existingEdgeKeys[dk] = true
-					diagramEdges = append(diagramEdges, DiagramEdge{
-						From:  fromKey,
-						To:    toKey,
-						Label: ge.EdgeType,
-						Kind:  edgeTypeToKind(ge.EdgeType),
-					})
-				}
-			}
-		}
-	}
-
-	// Create session
-	sessionID := fmt.Sprintf("%x", time.Now().UnixNano())
-	if len(sessionID) > 8 {
-		sessionID = sessionID[len(sessionID)-8:]
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	session := &DiagramSession{
-		ID:          sessionID,
-		Title:       req.Title,
-		Nodes:       diagramNodes,
-		Edges:       diagramEdges,
-		Groups:      req.Groups,
-		Annotations: req.Annotations,
-		Steps:       req.Steps,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-
-	s.mu.Lock()
-	s.diagrams[sessionID] = session
-	s.mu.Unlock()
-	s.persistDiagramSession(session)
-
-	sessionJSON, _ := json.Marshal(session)
-	s.hub.Send("diagram", map[string]any{"session": json.RawMessage(sessionJSON)})
-
-	port := s.port
-	if port == 0 {
-		port = 4200
-	}
-
-	resp := map[string]any{
-		"session_id": sessionID,
-		"url":        fmt.Sprintf("http://localhost:%d/diagram", port),
-		"node_count": len(diagramNodes),
-		"edge_count": len(diagramEdges),
-	}
-	if len(errors) > 0 {
-		resp["errors"] = errors
-	}
-	httpJSON(w, resp)
-}
-
-func edgeTypeToKind(edgeType string) string {
-	switch edgeType {
-	case "CALLS_ENDPOINT", "CALLS_SERVICE", "EXPOSES_ENDPOINT", "HANDLES_OPERATION":
-		return "http"
-	case "PUBLISHES_TOPIC", "CONSUMES_TOPIC", "CONSUMED_BY", "USES_QUEUE":
-		return "async"
-	case "USES_MODEL", "DEFINES_MODEL", "REFERENCES_MODEL", "READS_DB", "WRITES_DB", "STORED_IN", "HAS_FIELD":
-		return "data"
-	default:
-		return "structural"
-	}
-}
-
-// diagramSessionCounts extracts node/edge counts from a stored session blob.
-// Supports both legacy sessions (nodes/edges arrays) and viewmodel sessions
-// (selection.components / selection.internal_edges).
-func diagramSessionCounts(dataJSON string) (kind string, nodeCount, edgeCount int) {
-	var d struct {
-		Kind      string            `json:"kind"`
-		Nodes     []json.RawMessage `json:"nodes"`
-		Edges     []json.RawMessage `json:"edges"`
-		Selection *struct {
-			Components    []json.RawMessage `json:"components"`
-			InternalEdges []json.RawMessage `json:"internal_edges"`
-		} `json:"selection"`
-	}
-	if json.Unmarshal([]byte(dataJSON), &d) != nil {
-		return "", 0, 0
-	}
-	if d.Selection != nil {
-		return d.Kind, len(d.Selection.Components), len(d.Selection.InternalEdges)
-	}
-	return d.Kind, len(d.Nodes), len(d.Edges)
-}
-
-// handleDiagramList reads sessions from the in-process registry (source of
-// truth) so sessions saved by the MCP chronicle_diagram_build tool are
-// visible immediately. The registry is per-run: restart = empty list.
-func (s *Server) handleDiagramList(w http.ResponseWriter, r *http.Request) {
-	rows := diagrams.Default.List()
-	sessions := make([]map[string]any, 0, len(rows))
-	for _, row := range rows {
-		_, dataJSON, ok := diagrams.Default.Get(row.ID)
-		if !ok {
-			continue
-		}
-		kind, nodeCount, edgeCount := diagramSessionCounts(dataJSON)
-		sessions = append(sessions, map[string]any{
-			"id":         row.ID,
-			"title":      row.Title,
-			"kind":       kind,
-			"node_count": nodeCount,
-			"edge_count": edgeCount,
-			"created_at": row.CreatedAt.Format(time.RFC3339),
-		})
-	}
-	httpJSON(w, map[string]any{"sessions": sessions})
-}
-
-func (s *Server) handleDiagramDelete(w http.ResponseWriter, r *http.Request, id string) {
-	s.mu.Lock()
-	delete(s.diagrams, id)
-	s.mu.Unlock()
-	diagrams.Default.Delete(id)
-	httpJSON(w, map[string]any{"deleted": id})
-}
-
-func (s *Server) handleDiagramLatest(w http.ResponseWriter, r *http.Request) {
-	// The registry holds every session (admin-built ones are mirrored into it,
-	// MCP-built ones land there directly), so it is the single source here.
-	if dataJSON, ok := diagrams.Default.Latest(); ok && dataJSON != "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(dataJSON))
-		return
-	}
-	http.Error(w, "no diagrams", 404)
-}
-
-func (s *Server) handleDiagramGet(w http.ResponseWriter, r *http.Request, id string) {
-	s.mu.RLock()
-	session, ok := s.diagrams[id]
-	s.mu.RUnlock()
-	if ok {
-		httpJSON(w, session)
-		return
-	}
-	// Fall back to the registry: sessions saved by the MCP diagram tool
-	// (viewmodel sessions) are served raw.
-	if _, dataJSON, ok := diagrams.Default.Get(id); ok && dataJSON != "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(dataJSON))
-		return
-	}
-	http.Error(w, "session not found", 404)
 }
 
 func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {

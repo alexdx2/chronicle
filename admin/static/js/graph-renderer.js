@@ -58,6 +58,9 @@ export class GraphRenderer {
     showEdgeLabels = true,
     rankDir = LAYOUT.rankDir,
     groupMeta = {},
+    // compact: an inline figure (wiki page diagrams) — no pan/zoom, no
+    // 500px floor; the SVG fits its content to the container box.
+    compact = false,
   }) {
     if (!this._container) return;
     this._container.innerHTML = '';
@@ -190,8 +193,8 @@ export class GraphRenderer {
     const svg = d3.select(this._container).append('svg')
       .attr('class', 'graph-svg')
       .attr('width', '100%').attr('height', '100%')
-      .attr('viewBox', `0 0 ${width} ${height}`)
-      .style('min-height', '500px');
+      .attr('viewBox', `0 0 ${width} ${height}`);
+    if (!compact) svg.style('min-height', '500px');
 
     const defs = svg.append('defs');
     defs.append('marker')
@@ -206,11 +209,17 @@ export class GraphRenderer {
     const zoom = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
       g.attr('transform', event.transform);
     });
-    svg.call(zoom);
+    if (!compact) svg.call(zoom);
     this._zoom = zoom;
     this._viewport = { width, height };
 
-    if (simNodes.length > 0) {
+    if (compact && simNodes.length > 0) {
+      const xs = simNodes.map(n => n.x), ys = simNodes.map(n => n.y);
+      const pad = 70;
+      const bx = Math.min(...xs) - pad, by = Math.min(...ys) - pad;
+      const bw = Math.max(...xs) - bx + pad, bh = Math.max(...ys) - by + pad;
+      svg.attr('viewBox', `${bx} ${by} ${bw} ${bh}`).attr('preserveAspectRatio', 'xMidYMid meet');
+    } else if (simNodes.length > 0) {
       const xs = simNodes.map(n => n.x), ys = simNodes.map(n => n.y);
       const pad = 80;
       const bx = Math.min(...xs) - pad, by = Math.min(...ys) - pad;
@@ -251,14 +260,14 @@ export class GraphRenderer {
           .attr('y', gNode.y - gNode.height / 2 + 14);
         if (frameColor) label.attr('fill', frameColor);
         label.text(gk.toUpperCase() + (meta.kind && meta.kind !== 'service' && meta.kind !== 'domain' ? ' · ' + meta.kind : ''));
-        if (meta.inferred && meta.note) {
+        if (meta.note) {
           gg.append('text')
             .attr('class', 'domain-note')
             .attr('x', gNode.x - gNode.width / 2 + 10)
             .attr('y', gNode.y - gNode.height / 2 + 26)
             .attr('font-size', 8).attr('fill', 'var(--text-muted, #8a7355)')
             .attr('font-style', 'italic')
-            .text('inferred: ' + meta.note);
+            .text((meta.inferred ? 'inferred: ' : '') + meta.note);
         }
         // Group frames are drillable (e.g. C3-all service frame → that
         // service's focused C3). The handler decides what a group means.
@@ -417,6 +426,15 @@ export class GraphRenderer {
       .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : (d._tier === 'primary' ? 2 : 1.2))
       .attr('stroke-dasharray', d => (d.status === 'stale' || d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null);
 
+    // Repo tag (federation) in the card's top-right corner: "@analytics".
+    nodeG.filter(d => !!d._repo).append('text')
+      .attr('class', 'node-repo')
+      .attr('text-anchor', 'end')
+      .attr('x', nw / 2 - 5).attr('y', -nh / 2 + 10)
+      .attr('font-size', 8).attr('font-weight', 600)
+      .attr('fill', 'var(--text-muted, #8a7355)')
+      .text(d => '@' + d._repo);
+
     // Status tag (stale / contradicted) in the card's top-left corner.
     nodeG.filter(d => d.status === 'stale' || d.status === 'contradicted').append('text')
       .attr('class', 'node-status')
@@ -437,7 +455,7 @@ export class GraphRenderer {
       .attr('text-anchor', 'middle').attr('dy', 14)
       .attr('fill', d => self.layerColor(d.layer))
       .attr('font-size', 9).attr('opacity', 0.8)
-      .text(d => (d._subtitle || d.node_type || '') + (d._dissolvedGroup ? ' · ' + d._dissolvedGroup : ''));
+      .text(d => (d._subtitle || d.node_type || '') + (d._dissolvedGroup && d._dissolvedGroup !== d._repo ? ' · ' + d._dissolvedGroup : ''));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
     // bottom-right corner; click = callbacks.onDrill (same as dblclick).
@@ -612,7 +630,7 @@ export class GraphRenderer {
     const esc = t => String(t || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
     el.innerHTML =
       '<div class="nht-name">' + esc(d.name || d.node_key) + '</div>' +
-      '<div class="nht-type">' + esc(d.node_type || '') + (d.layer ? ' · ' + esc(d.layer) : '') + '</div>' +
+      '<div class="nht-type">' + esc(d.node_type || '') + (d.layer ? ' · ' + esc(d.layer) : '') + (d._repo ? ' · repo ' + esc(d._repo) : '') + '</div>' +
       (d.file_path ? '<div class="nht-type" style="font-family:var(--font-mono)">' + esc(d.file_path) + '</div>' : '') +
       (d._renderMode && d._renderMode !== 'box' ? '<div class="nht-type">' + esc(d._renderMode) + (d._salienceReason ? ' · ' + esc(d._salienceReason) : '') + '</div>' : '') +
       (typeof d.confidence === 'number' && !d._vgroup

@@ -9,22 +9,39 @@ import (
 
 // BuildC3 now selects components via salience (registry-driven) instead of a
 // hardcoded controller/provider list, and annotates each with render_mode/tier.
-func TestBuildC3_SalienceAnnotatesComponents(t *testing.T) {
-	st := openLiveDBCopy(t)
-	c3, err := BuildC3(st, "tom-and-jerry", "arena-api")
+// c3Comp is the shape the bucket tests assert on: a drawn card at C3.
+type c3Comp struct{ Key, Name, Type, Tier, RenderMode string }
+
+// c3Of builds the C3 preset for one service and splits its in-scope nodes
+// into drawn cards (render_mode box) and everything else (counted, not
+// drawn) — the component/hidden split the salience tests are about.
+func c3Of(t *testing.T, st *store.Store, domain, svc string) (comps []c3Comp, hidden int) {
+	t.Helper()
+	view, err := BuildPreset(st, "c3", domain, svc)
 	if err != nil {
-		t.Fatalf("BuildC3: %v", err)
+		t.Fatalf("BuildPreset(c3, %s): %v", svc, err)
 	}
-	if len(c3.Components) == 0 {
+	for _, n := range view.Nodes {
+		if n.Boundary {
+			continue
+		}
+		if n.RenderMode == "box" {
+			comps = append(comps, c3Comp{Key: n.Key, Name: n.Name, Type: n.Type, Tier: n.Tier, RenderMode: n.RenderMode})
+		} else {
+			hidden++
+		}
+	}
+	return comps, hidden
+}
+
+func TestC3_SalienceAnnotatesComponents(t *testing.T) {
+	st := openLiveDBCopy(t)
+	comps, _ := c3Of(t, st, "tom-and-jerry", "arena-api")
+	if len(comps) == 0 {
 		t.Fatal("expected components, got none")
 	}
-
 	sawProvider := false
-	for _, c := range c3.Components {
-		// Every component in the list is a box (the selection invariant).
-		if c.RenderMode != "box" {
-			t.Errorf("component %s: render_mode=%q want box", c.Key, c.RenderMode)
-		}
+	for _, c := range comps {
 		if c.Tier == "" {
 			t.Errorf("component %s: tier not annotated", c.Key)
 		}
@@ -38,23 +55,22 @@ func TestBuildC3_SalienceAnnotatesComponents(t *testing.T) {
 	}
 }
 
-// BuildC2 annotates service containers with salience (uniformly box/primary at c2).
-func TestBuildC2_SalienceAnnotatesServices(t *testing.T) {
+// At C2 services are the frames/cards themselves — every service of the
+// domain is a group, never hidden by salience.
+func TestC2_ServicesAreGroups(t *testing.T) {
 	st := openLiveDBCopy(t)
-	c2, err := BuildC2(st, "tom-and-jerry")
+	view, err := BuildPreset(st, "c2", "tom-and-jerry", "")
 	if err != nil {
-		t.Fatalf("BuildC2: %v", err)
+		t.Fatalf("BuildPreset(c2): %v", err)
 	}
-	if len(c2.Services) == 0 {
-		t.Fatal("expected services")
+	services := 0
+	for _, g := range view.Groups {
+		if g.Kind == "service" {
+			services++
+		}
 	}
-	for _, s := range c2.Services {
-		if s.RenderMode != "box" {
-			t.Errorf("service %s: render_mode=%q want box", s.Key, s.RenderMode)
-		}
-		if s.Tier != "primary" {
-			t.Errorf("service %s: tier=%q want primary", s.Key, s.Tier)
-		}
+	if services != 5 {
+		t.Errorf("service groups=%d want 5: %+v", services, view.Groups)
 	}
 }
 
@@ -62,7 +78,7 @@ func TestBuildC2_SalienceAnnotatesServices(t *testing.T) {
 // buckets. Demonstrates the marquee behavior (DTO/helper hidden, entity-role
 // promoted to a box) that the tom-and-jerry fixture cannot show (it has no
 // role-tagged nodes). C3 owns code-layer nodes, so the demo uses code nodes.
-func TestBuildC3_RolesDriveBuckets(t *testing.T) {
+func TestC3_RolesDriveBuckets(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/c.db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -86,13 +102,11 @@ func TestBuildC3_RolesDriveBuckets(t *testing.T) {
 	mk("code:symbol:d:dto", "code", "symbol", "CreateOrderDto", "app/create-order.dto.ts", `{"role":"request_dto"}`)
 	mk("code:symbol:d:util", "code", "symbol", "fmt", "app/util.ts", `{"role":"helper"}`)
 
-	c3, err := BuildC3(st, "d", "app")
-	if err != nil {
-		t.Fatalf("BuildC3: %v", err)
-	}
+	comps, hidden := c3Of(t, st, "d", "app")
+	_ = hidden
 
 	boxes := map[string]string{} // name -> render_mode
-	for _, c := range c3.Components {
+	for _, c := range comps {
 		boxes[c.Name] = c.RenderMode
 	}
 
@@ -108,15 +122,15 @@ func TestBuildC3_RolesDriveBuckets(t *testing.T) {
 		t.Errorf("request_dto must not be a box component")
 	}
 	// helper symbol + dto are hidden.
-	if c3.HiddenCount < 2 {
-		t.Errorf("HiddenCount=%d want >=2 (dto + helper)", c3.HiddenCount)
+	if hidden < 2 {
+		t.Errorf("HiddenCount=%d want >=2 (dto + helper)", hidden)
 	}
 }
 
 // The demote confidence gate must flow through the viewmodel: a low-confidence
 // LLM "helper" claim may not hide a controller the type policy shows as a box,
 // while a high-confidence claim may.
-func TestBuildC3_LowConfidenceRoleClaimCannotHide(t *testing.T) {
+func TestC3_LowConfidenceRoleClaimCannotHide(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/c.db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -136,12 +150,9 @@ func TestBuildC3_LowConfidenceRoleClaimCannotHide(t *testing.T) {
 	mk("code:controller:d:low", "code", "controller", "LowConfCtl", "app/low.ts", `{"role":"helper","role_confidence":0.4}`)
 	mk("code:controller:d:high", "code", "controller", "HighConfCtl", "app/high.ts", `{"role":"helper","role_confidence":0.9}`)
 
-	c3, err := BuildC3(st, "d", "app")
-	if err != nil {
-		t.Fatalf("BuildC3: %v", err)
-	}
+	comps, _ := c3Of(t, st, "d", "app")
 	boxes := map[string]bool{}
-	for _, c := range c3.Components {
+	for _, c := range comps {
 		boxes[c.Name] = true
 	}
 	if !boxes["LowConfCtl"] {
@@ -155,7 +166,7 @@ func TestBuildC3_LowConfidenceRoleClaimCannotHide(t *testing.T) {
 // Deterministic path-based noise: nodes whose file paths match noise_paths
 // patterns (generated/test/vendor) are demoted regardless of role claims —
 // no LLM involved, so no confidence gate.
-func TestBuildC3_PathNoiseDemotes(t *testing.T) {
+func TestC3_PathNoiseDemotes(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/c.db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -176,12 +187,10 @@ func TestBuildC3_PathNoiseDemotes(t *testing.T) {
 	mk("code:controller:d:gen", "code", "controller", "GenCtl", "app/generated/gen.controller.ts")
 	mk("code:controller:d:spec", "code", "controller", "SpecCtl", "app/app.controller.spec.ts")
 
-	c3, err := BuildC3(st, "d", "app")
-	if err != nil {
-		t.Fatalf("BuildC3: %v", err)
-	}
+	comps, hidden := c3Of(t, st, "d", "app")
+	_ = hidden
 	boxes := map[string]bool{}
-	for _, c := range c3.Components {
+	for _, c := range comps {
 		boxes[c.Name] = true
 	}
 	if !boxes["RealCtl"] {
@@ -199,7 +208,7 @@ func TestBuildC3_PathNoiseDemotes(t *testing.T) {
 // code owned by ANOTHER service crosses the boundary and surfaces as a box;
 // its twin without cross-service edges stays hidden. Resolves spec open
 // question #2 as degree-in-the-view-subgraph.
-func TestBuildC3_BoundaryCrossingPromotes(t *testing.T) {
+func TestC3_BoundaryCrossingPromotes(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/c.db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -233,12 +242,10 @@ func TestBuildC3_BoundaryCrossingPromotes(t *testing.T) {
 		t.Fatalf("edge: %v", err)
 	}
 
-	c3, err := BuildC3(st, "d", "app")
-	if err != nil {
-		t.Fatalf("BuildC3: %v", err)
-	}
+	comps, hidden := c3Of(t, st, "d", "app")
+	_ = hidden
 	boxes := map[string]bool{}
-	for _, c := range c3.Components {
+	for _, c := range comps {
 		boxes[c.Name] = true
 	}
 	if !boxes["SharedRepo"] {
@@ -252,7 +259,7 @@ func TestBuildC3_BoundaryCrossingPromotes(t *testing.T) {
 // No silent drops: an owned node that resolves to a mode C3 does not draw
 // (badge/attached_detail/...) must still be accounted for in HiddenCount —
 // under a custom policy a node must never vanish without a trace.
-func TestBuildC3_NonBoxModesAreCounted(t *testing.T) {
+func TestC3_NonBoxModesAreCounted(t *testing.T) {
 	dir := t.TempDir()
 	// Project policy: controllers render as badges at c3 (not boxes).
 	types := []byte(`
@@ -285,17 +292,15 @@ salience:
 	mk("service:service:d:app", "service", "service", "app", "app/main.ts")
 	mk("code:controller:d:ctl", "code", "controller", "BadgeCtl", "app/app.controller.ts")
 
-	c3, err := BuildC3(st, "d", "app")
-	if err != nil {
-		t.Fatalf("BuildC3: %v", err)
-	}
-	for _, c := range c3.Components {
+	comps, hidden := c3Of(t, st, "d", "app")
+	_ = hidden
+	for _, c := range comps {
 		if c.Name == "BadgeCtl" {
 			t.Fatalf("badge-mode node must not be a component")
 		}
 	}
-	if c3.HiddenCount != 1 {
-		t.Errorf("badge-mode node must be counted (HiddenCount=%d want 1)", c3.HiddenCount)
+	if hidden != 1 {
+		t.Errorf("badge-mode node must be counted (HiddenCount=%d want 1)", hidden)
 	}
 }
 
@@ -374,7 +379,7 @@ func TestBuildPresetC3_VNodesCarrySalience(t *testing.T) {
 // Role-as-evidence: conflicting role_classification evidence rows resolve to the
 // highest-confidence winner, which drives C3 salience — even with NO role in the
 // node's metadata. Proves the evidence-backed winning_role path end-to-end.
-func TestBuildC3_RoleEvidenceResolvesWinner(t *testing.T) {
+func TestC3_RoleEvidenceResolvesWinner(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/c.db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -411,18 +416,15 @@ func TestBuildC3_RoleEvidenceResolvesWinner(t *testing.T) {
 	addRole("helper", 0.6, "app/order.ts")
 	addRole("entity", 0.9, "app/order_alt.ts")
 
-	c3, err := BuildC3(st, "d", "app")
-	if err != nil {
-		t.Fatalf("BuildC3: %v", err)
-	}
+	comps, _ := c3Of(t, st, "d", "app")
 	var found string
-	for _, c := range c3.Components {
+	for _, c := range comps {
 		if c.Name == "OrderEntity" {
 			found = c.RenderMode
 		}
 	}
 	if found != "box" {
-		t.Fatalf("entity-role (evidence winner) symbol should be a box; got render_mode=%q, components=%v", found, c3.Components)
+		t.Fatalf("entity-role (evidence winner) symbol should be a box; got render_mode=%q, components=%v", found, comps)
 	}
 }
 

@@ -206,9 +206,11 @@ function adaptView(view, baseLookup) {
       _group: (boxServices && !isDomainBox && g.kind === 'service') ? (domain || null) : null,
       _vgroup: true,
       _stats: stats,
-      _subtitle: isDomainBox
+      // A card's note (e.g. a topology card's "domain tomandjerry" under
+      // the repo name) leads the subtitle, then the stats.
+      _subtitle: (g.note && !g.inferred ? g.note + ' · ' : '') + (isDomainBox
         ? (stats.services || 0) + ' services · ' + (stats.endpoints || 0) + ' endpoints'
-        : null,
+        : ''),
       // The C1 system box gets an explicit "→ drill" affordance (renderer
       // draws it; click = enter C2, same as dblclick).
       _drill: isDomainBox,
@@ -241,6 +243,8 @@ function adaptView(view, baseLookup) {
       _renderMode: n.render_mode || '',
       _tier: n.tier || '',
       _salienceReason: n.salience_reason || '',
+      // Federation: which repo the node was scanned from (tag on the card).
+      _repo: n.repo || '',
       // Provenance (from the graph row + evidence digest): the card can
       // say how sure it is and where its proof lives.
       confidence: n.confidence,

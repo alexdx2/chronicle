@@ -5,8 +5,7 @@ package admin
 //	GET  /api/view?spec=<base64url-json>  — spec encoded in the URL (shareable)
 //	POST /api/view                        — spec as JSON body
 //
-// Both evaluate viewmodel.BuildView. The legacy /api/c4/* endpoints stay
-// untouched as preset aliases.
+// Both evaluate viewmodel.BuildView — the only diagram endpoint.
 
 import (
 	"encoding/base64"

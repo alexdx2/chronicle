@@ -189,7 +189,7 @@ func NodeSalience(st *store.Store, nodes []store.NodeRow, level string) map[int6
 	if err != nil {
 		return map[int64]salience.Decision{}
 	}
-	crossing := boundaryCrossings(activeEdges(allEdges), ownershipMap(activeOnly(allNodes)))
+	crossing := boundaryCrossings(activeEdges(allEdges), ownershipMap(activeOnly(allNodes), activeEdges(allEdges)))
 
 	out := make(map[int64]salience.Decision, len(nodes))
 	for i := range nodes {
@@ -249,7 +249,7 @@ func ExplainSalience(st *store.Store, nodeKey, level string) (*SalienceExplanati
 	if err != nil {
 		return nil, err
 	}
-	crossing := boundaryCrossings(activeEdges(allEdges), ownershipMap(activeOnly(allNodes)))
+	crossing := boundaryCrossings(activeEdges(allEdges), ownershipMap(activeOnly(allNodes), activeEdges(allEdges)))
 
 	noise := salience.NoiseClassForPath(pol, n.FilePath)
 	d := salience.Resolve(pol, salience.Input{

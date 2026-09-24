@@ -33,7 +33,7 @@ func TestParseRoleClaim_Branches(t *testing.T) {
 
 func TestNotFoundError(t *testing.T) {
 	st := openLiveDBCopy(t)
-	_, err := BuildC3(st, "tom-and-jerry", "no-such-service-xyz")
+	_, err := BuildPreset(st, "c3", "tom-and-jerry", "no-such-service-xyz")
 	if err == nil {
 		t.Fatal("expected NotFoundError")
 	}
@@ -109,7 +109,7 @@ func TestBuildView_TransportAndEdgeKindFilter(t *testing.T) {
 	}
 }
 
-func TestBuildSelection_FromKeys(t *testing.T) {
+func TestBuildView_CustomSelection_FromKeys(t *testing.T) {
 	st := openLiveDBCopy(t)
 	const domain = "tom-and-jerry"
 	nodes, _ := st.ListNodes(store.NodeFilter{Domain: domain})
@@ -126,17 +126,18 @@ func TestBuildSelection_FromKeys(t *testing.T) {
 		t.Skip("no component nodes in fixture")
 	}
 	// Include a bogus key to exercise the Missing path.
-	sel, err := BuildSelection(st, domain, append(keys, "code:provider:tom-and-jerry:does/not/exist"), "My Selection")
+	view, err := BuildView(st, ViewSpec{
+		Scope:  ScopeSpec{Domain: domain, Nodes: append(keys, "code:provider:tom-and-jerry:does/not/exist")},
+		Group:  GroupSpec{By: "none"},
+		Layout: LayoutSpec{Preset: "custom"},
+	})
 	if err != nil {
-		t.Fatalf("BuildSelection: %v", err)
+		t.Fatalf("BuildView(scope.nodes): %v", err)
 	}
-	if sel.Level != "custom" || sel.Title != "My Selection" {
-		t.Errorf("selection meta: %+v", sel)
+	if len(view.Nodes) == 0 {
+		t.Error("expected resolved nodes")
 	}
-	if len(sel.Components) == 0 {
-		t.Error("expected resolved components")
-	}
-	if len(sel.Missing) == 0 {
+	if len(view.Missing) == 0 {
 		t.Error("expected the bogus key in Missing")
 	}
 }

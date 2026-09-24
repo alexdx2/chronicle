@@ -17,8 +17,7 @@ const DepthUnbounded = 99
 // deps/impact are the same algebra pointed at a single node (design §2,
 // "deps as views"):
 //
-//	c1     — scope:domain · group:domain · collapse (the legacy BuildC1 stays
-//	         for the artful /api/c4/c1 endpoint)
+//	c1     — scope:domain · group:domain · collapse
 //	c2     — scope:domain · filter:{edge_kinds:[sync,async], layers:[code,contract,service,infra]} · group:service · collapse
 //	c3     — scope:service · group:module · node-level edges + boundary
 //	         (empty target: scope:domain · group:service — components of
@@ -28,8 +27,7 @@ const DepthUnbounded = 99
 //	path   — scope:{nodes:[A,B]} · expand:{mode:path} · group:none (target "A,B")
 //	flow   — scope:{flow:target} · group:none (the flow's composition)
 //
-// Lens presets (the dashboard view bar, replacing the old client-side
-// graph-presets.js filtering):
+// Lens presets (the dashboard view bar):
 //
 //	data     — filter:{layers:[data]} · group:none
 //	api      — filter:{layers:[contract,service]} · group:service · no collapse

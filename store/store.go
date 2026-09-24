@@ -672,14 +672,6 @@ CREATE TABLE IF NOT EXISTS domain_language (
   UNIQUE(domain_key, term)
 );
 
-CREATE TABLE IF NOT EXISTS diagram_sessions (
-  session_id   TEXT PRIMARY KEY,
-  title        TEXT NOT NULL DEFAULT '',
-  data         TEXT NOT NULL DEFAULT '{}',
-  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
 CREATE TABLE IF NOT EXISTS knowledge_contexts (
     context_id        INTEGER PRIMARY KEY AUTOINCREMENT,
     domain_key        TEXT NOT NULL,
@@ -838,43 +830,3 @@ CREATE TABLE IF NOT EXISTS journal_applied_events (
 );
 `
 
-// SaveDiagramSession upserts a diagram session as a JSON blob.
-func (s *Store) SaveDiagramSession(sessionID, title, dataJSON string) error {
-	_, err := s.db.Exec(`
-		INSERT INTO diagram_sessions (session_id, title, data, updated_at)
-		VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-		ON CONFLICT(session_id) DO UPDATE SET
-			title = excluded.title,
-			data = excluded.data,
-			updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-	`, sessionID, title, dataJSON)
-	return err
-}
-
-// GetDiagramSession returns the JSON blob for a diagram session.
-func (s *Store) GetDiagramSession(sessionID string) (title, dataJSON string, err error) {
-	err = s.db.QueryRow(`SELECT title, data FROM diagram_sessions WHERE session_id = ?`, sessionID).Scan(&title, &dataJSON)
-	return
-}
-
-// DeleteDiagramSession removes a diagram session.
-func (s *Store) DeleteDiagramSession(sessionID string) error {
-	_, err := s.db.Exec(`DELETE FROM diagram_sessions WHERE session_id = ?`, sessionID)
-	return err
-}
-
-// ListDiagramSessions returns all session IDs and titles.
-func (s *Store) ListDiagramSessions() ([]map[string]string, error) {
-	rows, err := s.db.Query(`SELECT session_id, title, created_at, updated_at FROM diagram_sessions ORDER BY updated_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []map[string]string
-	for rows.Next() {
-		var id, title, created, updated string
-		rows.Scan(&id, &title, &created, &updated)
-		result = append(result, map[string]string{"session_id": id, "title": title, "created_at": created, "updated_at": updated})
-	}
-	return result, nil
-}

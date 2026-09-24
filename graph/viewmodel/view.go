@@ -90,6 +90,10 @@ type VNode struct {
 	// included so in-view components whose only edges cross the boundary
 	// don't render as orphans. Renderers draw boundary nodes dimmed.
 	Boundary bool `json:"boundary,omitempty"`
+	// Repo names the repository the node was scanned from. Empty in a
+	// single-repo view; set by federation views, where a card must say
+	// which repo it belongs to.
+	Repo string `json:"repo,omitempty"`
 	// Provenance, straight from the graph row and its evidence: a card
 	// that cannot say how sure it is and where its proof lives is a
 	// drawing, not memory. Status is omitted when active.
@@ -173,8 +177,27 @@ func nodeProvenance(v *VNode, n *store.NodeRow, sum store.EvidenceSummary) {
 	}
 }
 
-// VBoundary lists edges crossing the view boundary, reusing the C3
-// BoundaryIn/BoundaryOut semantics.
+// Endpoint is an endpoint pill on a component card.
+type Endpoint struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+// BoundaryOut is an outgoing dependency crossing the view boundary.
+type BoundaryOut struct {
+	ToName string `json:"to_name"`
+	ToKind string `json:"to_kind"`
+	Via    string `json:"via"`
+	Kind   string `json:"kind"`
+}
+
+// BoundaryIn is an incoming dependency crossing the view boundary.
+type BoundaryIn struct {
+	FromName string `json:"from_name"`
+	Kind     string `json:"kind"`
+}
+
+// VBoundary lists edges crossing the view boundary.
 type VBoundary struct {
 	In  []BoundaryIn  `json:"in"`
 	Out []BoundaryOut `json:"out"`
@@ -372,7 +395,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		domEdges = append(domEdges, e)
 	}
 
-	owned := ownershipMap(nodes)
+	owned := ownershipMap(nodes, active)
 
 	// Hierarchy indices: endpoint → exposing component, node → parent module.
 	exposerOf := make(map[int64]int64)
@@ -1385,13 +1408,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return a.Label < b.Label
 	})
 
-	// C1 context (group:domain + collapse): mirror /api/graph's manifest-infra
-	// synthesis. USES_INFRA edges exist only as /api/graph virtual edges (built
-	// from the manifest), never as store edges, so the domain-collapsed view
+	// C1 context (group:domain + collapse): USES_INFRA edges are not store
+	// edges (infra is declared in the manifest), so the domain-collapsed view
 	// connects the system box to each free-standing infra node here: kind
 	// "uses_infra", labelled by the infra role ("events" for the broker,
-	// "cache" for the cache — /api/graph renders the same edges with its
-	// USES_INFRA category label).
+	// "cache" for the cache).
 	if groupBy == "domain" && spec.Collapse && groupsByKey[domain] != nil {
 		var infraEdges []VEdge
 		for id := range inView {
@@ -1440,8 +1461,18 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	view.Hidden = hiddenSummary(view.Nodes)
 
 	if len(bIn) > 0 || len(bOut) > 0 {
-		sortIncoming(bIn)
-		sortOutgoing(bOut)
+		sort.Slice(bIn, func(i, j int) bool {
+			if bIn[i].FromName != bIn[j].FromName {
+				return bIn[i].FromName < bIn[j].FromName
+			}
+			return bIn[i].Kind < bIn[j].Kind
+		})
+		sort.Slice(bOut, func(i, j int) bool {
+			if bOut[i].ToName != bOut[j].ToName {
+				return bOut[i].ToName < bOut[j].ToName
+			}
+			return bOut[i].Kind < bOut[j].Kind
+		})
 		view.Boundary = &VBoundary{In: bIn, Out: bOut}
 	}
 

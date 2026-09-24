@@ -44,22 +44,6 @@ func openLiveDBCopy(t *testing.T) *store.Store {
 	return st
 }
 
-func TestBuildC1LiveTomAndJerry(t *testing.T) {
-	st := openLiveDBCopy(t)
-
-	c1, err := BuildC1(st, "tom-and-jerry")
-	if err != nil {
-		t.Fatalf("BuildC1: %v", err)
-	}
-
-	// Models: 7 — battleresult was reclassified model→enum in the graph
-	// oracle (commit aaad956), so the data layer is 7 models + 4 enums.
-	want := C1Stats{Services: 5, Endpoints: 19, Models: 7, Topics: 2, Flows: 19}
-	if c1.Stats != want {
-		t.Errorf("stats=%+v want %+v", c1.Stats, want)
-	}
-}
-
 // TestViewC1LiveTomAndJerry pins the C1 context view (view algebra) on the
 // live demo DB: ONE colored system box carrying service/endpoint stats,
 // external systems and shared infra (kafka, redis) as free nodes, and NO
@@ -420,69 +404,5 @@ func TestViewC3BoundaryMaterializedLive(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("missing notification.service → notifications CALLS_SERVICE edge; edges=%+v", view.Edges)
-	}
-}
-
-func TestBuildC2LiveTomAndJerry(t *testing.T) {
-	st := openLiveDBCopy(t)
-
-	c2, err := BuildC2(st, "tom-and-jerry")
-	if err != nil {
-		t.Fatalf("BuildC2: %v", err)
-	}
-
-	if len(c2.Services) != 5 {
-		names := make([]string, 0, len(c2.Services))
-		for _, s := range c2.Services {
-			names = append(names, s.Name)
-		}
-		t.Errorf("services=%d want 5 (%v)", len(c2.Services), names)
-	}
-}
-
-func TestBuildSelectionLiveProviders(t *testing.T) {
-	st := openLiveDBCopy(t)
-
-	// Two providers connected by an INJECTS edge in the tom-and-jerry graph.
-	gatewayKey := "code:provider:tom-and-jerry:fixtures/tom-and-jerry/arena-api/src/arena/battle.gateway"
-	serviceKey := "code:provider:tom-and-jerry:fixtures/tom-and-jerry/arena-api/src/arena/arena.service"
-
-	sel, err := BuildSelection(st, "tom-and-jerry", []string{gatewayKey, serviceKey}, "Arena pair")
-	if err != nil {
-		t.Fatalf("BuildSelection: %v", err)
-	}
-
-	if sel.Level != "custom" {
-		t.Errorf("level=%q want custom", sel.Level)
-	}
-	if sel.Title != "Arena pair" {
-		t.Errorf("title=%q", sel.Title)
-	}
-	if len(sel.Missing) != 0 {
-		t.Errorf("missing=%v want none", sel.Missing)
-	}
-
-	if len(sel.Components) != 2 {
-		t.Fatalf("components=%d want 2: %+v", len(sel.Components), sel.Components)
-	}
-	gotKeys := map[string]bool{}
-	for _, c := range sel.Components {
-		gotKeys[c.Key] = true
-		if c.Type != "provider" {
-			t.Errorf("component %s type=%q want provider", c.Key, c.Type)
-		}
-	}
-	if !gotKeys[gatewayKey] || !gotKeys[serviceKey] {
-		t.Errorf("components missing selected keys: %v", gotKeys)
-	}
-
-	foundInjects := false
-	for _, e := range sel.InternalEdges {
-		if e.From == gatewayKey && e.To == serviceKey && e.Kind == "injects" {
-			foundInjects = true
-		}
-	}
-	if !foundInjects {
-		t.Errorf("INJECTS internal edge missing; got %+v", sel.InternalEdges)
 	}
 }

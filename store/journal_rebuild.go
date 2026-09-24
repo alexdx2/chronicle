@@ -29,7 +29,6 @@ var localStateTables = []struct {
 	{"graph_changelog", ""}, // audit log; replay suppresses appendEvent so it is not rebuilt
 	{"graph_discoveries", ""},
 	{"project_settings", ""},
-	{"diagram_sessions", ""},
 	{"mcp_request_log", ""},
 	{"scan_runs", ""},
 	{"scan_obligations", ""},

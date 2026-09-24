@@ -343,6 +343,47 @@ salience:
     "type:ui.screen":            { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
     "type:ui.panel":             { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
     "type:ui.control":           { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
+    # --- the rest of the registry, so no type is ever hidden by omission ---
+    # code: structure folds (repository/package/file), resolvers are components.
+    "type:code.repository":      { default: { tier: secondary, render_mode: collapsed_group } }
+    "type:code.package":         { default: { tier: secondary, render_mode: collapsed_group } }
+    "type:code.file":            { default: { tier: detail, render_mode: hidden } }
+    "type:code.resolver":        { default: { tier: primary, render_mode: box } }
+    # service: every deployable unit is a container.
+    "type:service.worker":       { default: { tier: primary, render_mode: box } }
+    "type:service.job":          { default: { tier: primary, render_mode: box } }
+    "type:service.deployment":   { default: { tier: secondary, render_mode: collapsed_group } }
+    # contract: APIs/schemas as boxes at component altitude, badges at C2 like endpoints.
+    "type:contract.http_api":          { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
+    "type:contract.graphql_schema":    { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
+    "type:contract.graphql_operation": { default: { tier: primary, render_mode: box }, c2: { tier: secondary, render_mode: badge } }
+    "type:contract.graphql_type":      { default: { tier: detail, render_mode: hidden }, focus: { render_mode: expandable_detail } }
+    "type:contract.async_channel":     { default: { tier: primary, render_mode: box } }
+    "type:contract.schema_subject":    { default: { tier: secondary, render_mode: collapsed_group } }
+    "type:contract.schema_version":    { default: { tier: detail, render_mode: hidden } }
+    # data: relations are drawn as arrows, tables/databases as data boxes in the data lens.
+    "type:data.relation":        { default: { tier: detail, render_mode: hidden } }
+    "type:data.database":        { default: { tier: primary, render_mode: box } }
+    "type:data.table":           { default: { tier: secondary, render_mode: collapsed_group }, data: { tier: primary, render_mode: box } }
+    # flow: steps/transitions/invariants are detail of a flow, shown when a flow is in focus.
+    "type:flow.state_transition": { default: { tier: detail, render_mode: hidden }, flow: { render_mode: box } }
+    "type:flow.invariant":        { default: { tier: detail, render_mode: hidden }, flow: { render_mode: badge } }
+    "type:flow.trigger":          { default: { tier: secondary, render_mode: badge }, flow: { render_mode: box } }
+    "type:flow.outcome":          { default: { tier: secondary, render_mode: badge }, flow: { render_mode: box } }
+    # ownership: who owns what is a lens of its own, not a card on C2.
+    "type:ownership.domain":     { default: { tier: detail, render_mode: hidden } }
+    "type:ownership.team":       { default: { tier: detail, render_mode: hidden } }
+    "type:ownership.owner":      { default: { tier: detail, render_mode: hidden } }
+    # infra: declared runtime pieces are boxes; a topic recorded in the infra layer is a channel.
+    "type:infra.terraform_module": { default: { tier: secondary, render_mode: collapsed_group } }
+    "type:infra.k8s_object":       { default: { tier: detail, render_mode: hidden } }
+    "type:infra.k8s_service":      { default: { tier: primary, render_mode: box } }
+    "type:infra.k8s_deployment":   { default: { tier: secondary, render_mode: collapsed_group } }
+    "type:infra.topic":            { default: { tier: primary, render_mode: box } }
+    # ci: pipelines are not architecture at any C4 altitude; hidden with a reason.
+    "type:ci.workflow":          { default: { tier: detail, render_mode: hidden } }
+    "type:ci.pipeline":          { default: { tier: detail, render_mode: hidden } }
+    "type:ci.release":           { default: { tier: detail, render_mode: hidden } }
     # model: collapsed background in C2/C3, but the SUBJECT (primary box) in the data lens.
     "type:data.model":           { default: { tier: secondary, render_mode: collapsed_group }, data: { tier: primary, render_mode: box } }
     "type:data.entity":          { default: { tier: primary, render_mode: box } }

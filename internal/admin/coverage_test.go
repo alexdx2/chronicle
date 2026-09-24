@@ -27,8 +27,6 @@ func TestReadHandlers_SmokeOK(t *testing.T) {
 		{"registry", s.handleRegistry, "/api/registry"},
 		{"manifestGET", s.handleManifest, "/api/manifest"},
 		{"evidenceNoKey", s.handleEvidence, "/api/evidence"},
-		{"diagramList", s.handleDiagramList, "/api/diagram/list"},
-		{"diagramLatest", s.handleDiagramLatest, "/api/diagram/latest"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -95,11 +93,6 @@ func TestPureHelpers(t *testing.T) {
 	}
 	if findModuleRoot() == "" {
 		t.Error("findModuleRoot empty")
-	}
-	// diagramSessionCounts parses a diagram JSON payload into kind + counts.
-	kind, n, e := diagramSessionCounts(`{"kind":"c2","nodes":[{},{}],"edges":[{}]}`)
-	if kind != "c2" || n != 2 || e != 1 {
-		t.Errorf("diagramSessionCounts: kind=%q n=%d e=%d", kind, n, e)
 	}
 }
 

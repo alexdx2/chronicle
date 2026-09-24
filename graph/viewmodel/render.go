@@ -191,7 +191,11 @@ func RenderMermaid(v *View) string {
 		}
 	}
 	nodeLine := func(indent string, n VNode) {
-		line := indent + ids[n.Key] + mermaidShape(n.Type, n.Name)
+		label := n.Name
+		if n.Repo != "" {
+			label += "<br/>@" + n.Repo
+		}
+		line := indent + ids[n.Key] + mermaidShape(n.Type, label)
 		if n.Boundary {
 			line += ":::boundary"
 		} else if n.Status == "stale" {
@@ -207,6 +211,9 @@ func RenderMermaid(v *View) string {
 		ms := members[g.Key]
 		if len(ms) == 0 {
 			label := g.Name
+			if g.Note != "" && !g.Inferred {
+				label += "<br/>" + g.Note
+			}
 			if st := groupStats(g.Stats); st != "" {
 				label += "<br/>" + st
 			}
@@ -223,6 +230,8 @@ func RenderMermaid(v *View) string {
 				title += ": " + g.Note
 			}
 			title += ")"
+		} else if g.Note != "" {
+			title += " (" + g.Note + ")"
 		}
 		fmt.Fprintf(&b, "subgraph %s[\"%s\"]\n", ids[g.Key], mermaidEscape(title))
 		sort.Slice(ms, func(i, j int) bool { return ms[i].Key < ms[j].Key })
@@ -343,6 +352,9 @@ func RenderText(v *View) string {
 	}
 	nodeLine := func(n VNode) {
 		line := fmt.Sprintf("- %s [%s]", n.Name, n.Type)
+		if n.Repo != "" {
+			line += " @" + n.Repo
+		}
 		if n.Boundary {
 			line += " (outside scope)"
 		}
@@ -373,6 +385,8 @@ func RenderText(v *View) string {
 			if g.Note != "" {
 				head += ": " + g.Note
 			}
+		} else if g.Note != "" {
+			head += ", " + g.Note
 		}
 		head += ")"
 		if st := groupStats(g.Stats); st != "" {

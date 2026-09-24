@@ -84,9 +84,6 @@ button,input,select,textarea{font-family:inherit}
 .tab-btn{padding:6px 16px;border:none;background:transparent;color:var(--text-muted);font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--radius);transition:background .15s,color .15s;font-family:var(--font-serif)}
 .tab-btn.active{background:var(--card-alt);color:var(--text)}
 .tab-btn:hover:not(.active){background:var(--primary-light);color:var(--primary)}
-.tab-btn.live-session{background:linear-gradient(135deg,#3b2f20,#6b4423);color:#faf6ef;font-weight:600;position:relative;box-shadow:0 2px 8px rgba(59,47,32,0.3)}
-.tab-btn.live-session .pulse-dot{position:absolute;top:4px;right:4px;width:6px;height:6px;background:#4ade80;border-radius:50%;box-shadow:0 0 6px #4ade8088;animation:pulse-glow 2s ease-in-out infinite}
-@keyframes pulse-glow{0%,100%{box-shadow:0 0 4px #4ade8066}50%{box-shadow:0 0 10px #4ade80cc}}
 
 /* Layout */
 .container{max-width:1400px;margin:0 auto;padding:20px 24px}
@@ -175,9 +172,6 @@ button,input,select,textarea{font-family:inherit}
 
 /* Graph tab */
 .graph-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 110px)}
-.graph-container.diagram-main{height:100%;flex:1;border-radius:0;border:none;box-shadow:none;min-width:0}
-.diagram-main #diagram-canvas svg{display:block}
-.diagram-root{flex-direction:column;height:calc(100vh - 86px);width:100%;padding:0;overflow:hidden}
 #graph-canvas{flex:1;min-height:200px;overflow:auto}
 .resize-handle{height:6px;background:var(--border);cursor:ns-resize;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background .15s}
 .resize-handle:hover,.resize-handle.active{background:var(--primary);opacity:0.6}
@@ -239,19 +233,6 @@ button,input,select,textarea{font-family:inherit}
 .graph-svg .layer-label{font-size:12px;font-weight:600;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1px}
 .graph-svg .arrow-head{fill:#b8a898}
 /* Diagram session tabs — browser-style: shrink to fit, scroll when overflow */
-.diagram-tabs{display:flex;align-items:flex-end;gap:1px;background:linear-gradient(to bottom,#ede5d8,#e4dace);padding:3px 6px 0;overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;flex-shrink:0;min-height:34px}
-.diagram-tabs::-webkit-scrollbar{height:3px}
-.diagram-tabs::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-.diagram-tab{display:flex;align-items:center;gap:6px;padding:6px 10px 5px;font-size:12px;font-family:var(--font-serif);user-select:none;cursor:pointer;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;transition:background .15s,color .15s,border-color .15s;position:relative;top:1px;color:var(--text-muted);background:transparent;min-width:0;flex:0 1 200px;max-width:240px}
-.diagram-tab:hover{background:rgba(255,255,255,.6);color:var(--text-secondary)}
-.diagram-tab.active{background:var(--card);color:var(--primary);font-weight:600;border-color:var(--border);box-shadow:0 -1px 3px rgba(59,47,32,.04)}
-.diagram-tab .tab-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
-.diagram-tab .tab-meta{font-size:10px;font-family:var(--font-mono);opacity:.5;letter-spacing:-.3px;flex-shrink:0}
-.diagram-tab .tab-close{width:16px;height:16px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:13px;line-height:1;opacity:0;transition:opacity .12s,background .12s,color .12s;color:var(--text-muted);flex-shrink:0;background:none;border:none;cursor:pointer;padding:0}
-.diagram-tab:hover .tab-close,.diagram-tab .tab-close:focus-visible{opacity:.5}
-.diagram-tab .tab-close:hover{opacity:1;background:rgba(158,43,43,.1);color:var(--error)}
-.diagram-tab.active .tab-close{opacity:.4}
-.diagram-tab.active .tab-close:hover{opacity:1;background:rgba(158,43,43,.1);color:var(--error)}
 
 /* Filter sidebar */
 .filter-sidebar{width:200px;background:var(--card);border-left:1px solid var(--border);overflow-y:auto;flex-shrink:0;font-size:11px;padding:10px}
@@ -458,13 +439,6 @@ button,input,select,textarea{font-family:inherit}
     <!-- TAB_BTN:language:start --><button class="tab-btn" :class="{active: tab==='language'}" @click="tab='language';history.pushState(null,'','/language'); fetchGlossary(); fetchLanguageCheck()">Language</button><!-- TAB_BTN:language:end -->
     <!-- TAB_BTN:settings:start --><button class="tab-btn" :class="{active: tab==='settings'}" @click="tab='settings';history.pushState(null,'','/settings'); fetchManifest(); fetchPrompt()">Settings</button><!-- TAB_BTN:settings:end -->
     <!-- SLOT:EXTRA_TABS -->
-    <template x-if="diagramData">
-      <button class="tab-btn" :class="{'live-session': true, active: tab==='diagram'}" @click="showDiagram()" style="position:relative">
-        Live Session
-        <span class="pulse-dot"></span>
-        <span x-show="diagramFlash" x-transition style="position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:var(--warning);box-shadow:0 0 8px var(--warning)"></span>
-      </button>
-    </template>
   </div>
 </header>
 <!-- SLOT:AFTER_HEADER -->
@@ -1104,7 +1078,7 @@ button,input,select,textarea{font-family:inherit}
             </template>
             <hr class="legend-sep">
             <label>
-              <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;if(graphController)graphController.setShowEdgeLabels(showEdgeLabels);renderGraph()">
+              <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;renderGraph()">
               <span>Edge labels</span>
             </label>
           </div>
@@ -1477,12 +1451,6 @@ button,input,select,textarea{font-family:inherit}
                 :title="nodeTypeDescriptions[selectedNode.node_type] || selectedNode.node_type"
                 x-text="selectedNode.node_type"></span>
           <span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#f0e9dd;color:var(--text-secondary)" x-text="selectedNode.layer"></span>
-          <template x-if="selectedNode && !viewActive && ['service','module','container'].includes(selectedNode.node_type) && ['c1','c2'].includes(graphPreset)">
-            <button @click="zoomIntoNode(selectedNode)"
-                    class="btn-outline-xs">
-              Zoom in ↓
-            </button>
-          </template>
           <!-- Node pivots (view mode + Explore-All): push deps/impact/path
                specs onto the view stack — from All mode they enter view mode -->
           <template x-if="selectedNode && (viewActive || graphMode==='explore') && selectedNode.node_key && String(selectedNode.node_key).includes(':')">
@@ -1902,204 +1870,8 @@ button,input,select,textarea{font-family:inherit}
 </div>
 <!-- TAB_PANEL:settings:end -->
 
-<!-- Diagram Tab (completely separate from Graph) -->
-<div class="diagram-root" x-cloak :style="tab==='diagram' ? 'display:flex' : 'display:none'">
-  <!-- Session tabs — full width above everything -->
-  <div class="diagram-tabs" x-show="diagramSessions.length > 0">
-    <template x-for="sess in diagramSessions" :key="sess.id">
-      <div class="diagram-tab" :class="{active: diagramSessionId === sess.id}" @click="openSessionInC4(sess.id)">
-        <span class="tab-title" x-text="sess.title"></span>
-        <span class="tab-meta" x-text="sess.node_count + '·' + sess.edge_count"></span>
-        <button class="tab-close" @click.stop="closeDiagramSession(sess.id)" title="Close" aria-label="Close diagram tab">×</button>
-      </div>
-    </template>
-  </div>
-
-  <div style="display:flex;flex:1;gap:0;overflow:hidden;min-height:0">
-    <!-- Left: Entity palette -->
-    <div class="ws-palette" style="width:220px;height:100%;border-right:1px solid var(--border)">
-      <input type="text" placeholder="Search entities..." x-model="diagramSearch">
-      <div style="flex:1;overflow-y:auto">
-        <template x-if="!diagramGraphLoaded">
-          <div class="loader"><div class="spinner"></div> Loading...</div>
-        </template>
-        <template x-for="group in getDiagramPaletteGroups()" :key="group.type">
-          <div>
-            <div class="ws-group-label" @click="collapsedPaletteGroups[group.type] = !collapsedPaletteGroups[group.type]">
-              <span x-text="group.type + ' (' + group.nodes.length + ')'"></span>
-              <span class="chevron" x-text="collapsedPaletteGroups[group.type] ? '▼' : '▶'"></span>
-            </div>
-            <template x-if="collapsedPaletteGroups[group.type]">
-              <div>
-                <template x-for="n in group.nodes" :key="n.node_id">
-                  <div class="ws-item"
-                       :style="'border-left:3px solid '+layerColor(n.layer)"
-                       @click="addNodeToDiagram(n)"
-                       draggable="true"
-                       @dragstart="$event.dataTransfer.setData('text/plain', JSON.stringify(n)); $event.dataTransfer.effectAllowed='copy'"
-                       :class="{'opacity-50': (diagramData?.nodes||[]).some(d => (d.node_id || d.key) === n.node_id)}">
-                    <span style="color:var(--text-muted);font-size:9px;cursor:grab">⠿</span>
-                    <span x-text="n.name" :style="'color:'+layerColor(n.layer)"></span>
-                    <span style="font-size:9px;color:var(--text-muted)" x-text="n.node_type"></span>
-                  </div>
-                </template>
-              </div>
-            </template>
-          </div>
-        </template>
-      </div>
-    </div>
-
-    <!-- Main diagram area -->
-    <div class="graph-container diagram-main">
-      <!-- Diagram toolbar: step navigation + filter toggle -->
-      <div class="graph-toolbar" style="justify-content:space-between;gap:16px;padding:8px 16px">
-        <template x-if="diagramData?.title">
-          <span style="font-weight:700;font-size:15px;color:var(--primary)" x-text="diagramData.title"></span>
-        </template>
-        <template x-if="(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0) > 0">
-          <div style="display:flex;align-items:center;gap:10px;background:var(--bg);border-radius:var(--radius);padding:4px 12px">
-            <button class="mode-btn" @click="diagramStep=-1;updateDiagramAnnotations()" :class="{active:diagramStep<0}" style="padding:4px 8px;font-size:10px" title="Clear all highlights">Clear</button>
-            <button class="mode-btn" @click="diagramStep=Math.max(0,diagramStep-1);updateDiagramAnnotations()" :disabled="diagramStep<=0" style="padding:4px 10px;font-size:14px">◀</button>
-            <span style="font-size:13px;min-width:120px;text-align:center">
-              <template x-if="diagramStep >= 0">
-                <span>
-                  <strong x-text="'Step '+(diagramStep+1)+' / '+(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)" style="font-size:14px"></strong>
-                  <template x-if="Array.isArray(diagramData?.steps) && diagramData.steps[diagramStep]?.title">
-                    <span style="color:var(--text);font-weight:500;margin-left:4px" x-text="Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.title || '') : ''"></span>
-                  </template>
-                </span>
-              </template>
-              <template x-if="diagramStep < 0">
-                <span class="muted-12">No highlights</span>
-              </template>
-            </span>
-            <button class="mode-btn" @click="diagramStep=Math.min((Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)-1,diagramStep+1);updateDiagramAnnotations()" :disabled="diagramStep>=(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0)-1" style="padding:4px 10px;font-size:14px">▶</button>
-          </div>
-        </template>
-        <div class="row-4">
-          <div class="mode-toggle">
-            <button class="mode-btn" :class="{active:diagramMode==='strict'}" @click="diagramMode='strict';_diagramPositions={};renderDiagram()">Strict</button>
-            <button class="mode-btn" :class="{active:diagramMode==='free'}" @click="diagramMode='free';renderDiagram()">Free</button>
-          </div>
-          <template x-if="diagramMode==='free'">
-            <button class="mode-btn" @click="_diagramPositions={};renderDiagram()" style="padding:4px 10px" title="Re-run automatic layout">⟳ Layout</button>
-          </template>
-          <button class="mode-btn" @click="diagramSidebarOpen=!diagramSidebarOpen" :class="{active:diagramSidebarOpen}" style="padding:4px 10px">☰ Filters</button>
-        </div>
-      </div>
-
-      <!-- Diagram SVG canvas -->
-      <div id="diagram-canvas" style="flex:1;overflow:auto;position:relative"
-           @dragover.prevent="$event.dataTransfer.dropEffect='copy'"
-           @drop.prevent="handleDiagramDrop($event)">
-        <!-- Floating legend + display toggles -->
-        <div class="graph-legend">
-          <div class="legend-title">Legend</div>
-          <template x-for="[cat, def] in Object.entries(edgeCategories)" :key="cat">
-            <div class="legend-row">
-              <span class="legend-color" :style="'background:'+def.color"></span>
-              <span x-text="cat" style="text-transform:capitalize"></span>
-            </div>
-          </template>
-          <hr class="legend-sep">
-          <label>
-            <input type="checkbox" :checked="showEdgeLabels" @change="showEdgeLabels=!showEdgeLabels;renderDiagram()">
-            <span>Edge labels</span>
-          </label>
-          <label>
-            <input type="checkbox" :checked="diagramShowNeighbors" @change="diagramShowNeighbors=!diagramShowNeighbors;renderDiagram()">
-            <span>Show linked nodes</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- Resizable description panel -->
-      <template x-if="(Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0) > 0">
-        <div style="flex-shrink:0">
-          <div class="resize-handle" :class="{active: _resizing}"
-               @mousedown.prevent="_resizing=true;_resizeStart=$event.clientY;_resizeInitH=descPanelHeight"
-               @touchstart.prevent="_resizing=true;_resizeStart=$event.touches[0].clientY;_resizeInitH=descPanelHeight"></div>
-          <div class="step-description-panel" :style="'height:'+descPanelHeight+'px;padding:20px 28px'">
-            <template x-if="diagramStep >= 0 && (Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.description || '') : '')">
-              <div style="font-size:16px;color:var(--text);line-height:1.8;letter-spacing:0.01em">
-                <template x-if="Array.isArray(diagramData?.steps) && diagramData.steps[diagramStep]?.title">
-                  <div style="font-weight:700;font-size:18px;margin-bottom:8px;color:var(--primary)" x-text="Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.title || '') : ''"></div>
-                </template>
-                <span x-text="Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.description || '') : ''"></span>
-              </div>
-            </template>
-            <template x-if="diagramStep < 0 || !(Array.isArray(diagramData?.steps) ? (diagramData.steps[diagramStep]?.description || '') : '')">
-              <div style="font-size:14px;color:var(--text-muted);line-height:1.6">
-                <strong x-text="diagramData?.title || 'Diagram'"></strong>
-                <span x-text="' — ' + (Array.isArray(diagramData?.steps) ? diagramData.steps.length : 0) + ' steps'"></span>
-              </div>
-            </template>
-          </div>
-        </div>
-      </template>
-    </div>
-
-    <!-- Right sidebar: filters only -->
-    <template x-if="diagramSidebarOpen">
-      <div class="filter-sidebar" style="width:200px;height:100%;border-left:1px solid var(--border);overflow-y:auto">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <strong>Filters</strong>
-          <div class="row-4">
-            <button @click="hiddenNodeTypes=[];hiddenEdgeTypes=[];nodeTypeFilter={};_collapsibleTypes=[];renderDiagram()" style="border:none;background:none;cursor:pointer;color:var(--primary);font-size:10px;text-decoration:underline">Reset</button>
-            <button @click="diagramSidebarOpen=false" style="border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:14px">&times;</button>
-          </div>
-        </div>
-
-        <div class="group">
-          <h4 @click="collapsedFilterSections.diagNodeTypes = !collapsedFilterSections.diagNodeTypes">
-            <span>Node Types</span>
-            <span class="chevron" x-text="collapsedFilterSections.diagNodeTypes ? '▶' : '▼'"></span>
-          </h4>
-          <div x-show="!collapsedFilterSections.diagNodeTypes">
-            <template x-for="layer in getDiagramLayers()" :key="layer">
-              <div>
-                <div style="font-size:9px;color:var(--text-muted);margin-top:6px;text-transform:uppercase" x-text="layer"></div>
-                <template x-for="nt in getDiagramNodeTypesForLayer(layer)" :key="nt.type">
-                  <div class="filter-tri" @click="cycleNodeTypeFilter(nt.type);renderDiagram()">
-                    <span class="filter-tri-icon"
-                          :class="{'show': (nodeTypeFilter[nt.type]||'show')==='show', 'collapse': nodeTypeFilter[nt.type]==='collapse', 'hide': nodeTypeFilter[nt.type]==='hide'}"
-                          :title="(nodeTypeFilter[nt.type]||'show')==='show'?'Visible — click to collapse':'nodeTypeFilter[nt.type]==='collapse'?'Collapsed — edges bridge through. Click to hide':'Hidden — click to show'"
-                          x-text="(nodeTypeFilter[nt.type]||'show')==='show'?'●':nodeTypeFilter[nt.type]==='collapse'?'◐':'○'"></span>
-                    <span :style="'color:'+layerColor(layer)" x-text="nt.type"></span>
-                    <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="nt.count"></span>
-                  </div>
-                </template>
-              </div>
-            </template>
-          </div>
-        </div>
-
-        <div class="group">
-          <h4 @click="collapsedFilterSections.diagEdgeTypes = !collapsedFilterSections.diagEdgeTypes">
-            <span>Edge Types</span>
-            <span class="chevron" x-text="collapsedFilterSections.diagEdgeTypes ? '▶' : '▼'"></span>
-          </h4>
-          <div x-show="!collapsedFilterSections.diagEdgeTypes">
-            <template x-for="et in getDiagramEdgeTypes()" :key="et.type">
-              <label>
-                <input type="checkbox"
-                       :checked="!hiddenEdgeTypes.includes(et.type)"
-                       @change="toggleEdgeType(et.type);renderDiagram()">
-                <span x-text="et.type"></span>
-                <span style="font-size:9px;color:var(--text-muted);margin-left:auto" x-text="et.count"></span>
-              </label>
-            </template>
-          </div>
-        </div>
-
-      </div>
-    </template>
-  </div>
-</div>
 <!-- SLOT:EXTRA_CONTENT -->
 
-<!-- GraphController loaded via dynamic import() in init() -->
 <script>
 function dashboard() {
   return {
@@ -2153,9 +1925,7 @@ function dashboard() {
     projectName: '',
     graphData: { nodes: [], edges: [] },
     graphMode: 'explore',
-    graphController: null,
     modeController: null,
-    graphPreset: 'all',
     graphRepoFilter: '',
     allRepos: [],
     // View-engine state (Graph tab Level control: C1/C2/C3 presets + deps/impact/path pivots)
@@ -2168,16 +1938,13 @@ function dashboard() {
     viewSearch: '',         // name filter (Enter → spec.filter.name)
     viewDomain: '',         // resolved domain for view specs
     viewPathArmFrom: null,  // armed "Path to…" source node key
-    viewSessionId: null,    // diagram session id when opened via #c4/s/<id>
-    _viewRenderer: null,    // fallback GraphRenderer if graphController is unavailable
+    _viewRenderer: null,    // GraphRenderer for view mode
     selectedNode: null,
     evidenceExpanded: false,
     lensOpen: false,
     overflowOpen: false,
     expandedTypeLayers: {},
     nodeEvidence: null,
-    _focusNodeIds: null,
-    _focusPrimaryIds: null,
     manifestContent: '',
     manifestPath: '',
     manifestSaved: false,
@@ -2216,7 +1983,6 @@ function dashboard() {
     isScreenshot: new URLSearchParams(window.location.search).has('screenshot'),
     // Workspace
     groupByField: 'domain_key',
-    wsDataSource: 'graph', // 'graph' or 'diagram'
     // Filter sidebar state (use arrays, not Sets — Alpine can't observe Set mutations)
     // Default open on desktop widths (panels are Explore/view-gated in the markup);
     // the user's toggle choice then persists for the session via plain Alpine state.
@@ -2254,17 +2020,6 @@ function dashboard() {
     scanProgress: null,
     scanEvents: [],
     // Diagram (live from Claude — tabbed sessions)
-    diagramSessions: [],  // [{id, title, node_count, edge_count, created_at}]
-    diagramSessionId: null,
-    diagramData: null,  // {id, title, nodes, edges, annotations, steps: DiagramStep[], groups}
-    diagramStep: -1,    // -1 = clean (no highlights), 0+ = step index
-    diagramFlash: false,
-    diagramSidebarOpen: false,
-    diagramSearch: '',
-    diagramGraphLoaded: false,
-    diagramMode: 'strict', // 'strict' (dagre every render) or 'free' (cached positions + drag)
-    diagramShowNeighbors: false, // show grayed neighbor nodes in diagram
-    _diagramPositions: {},  // node_id|key → {x, y} — persists across re-renders in free mode
     descPanelHeight: 140,
     _resizing: false,
     _resizeStart: 0,
@@ -2287,14 +2042,7 @@ function dashboard() {
 
       // Path-based routing
       const path = window.location.pathname;
-      const diagramMatch = path.match(/^\/diagram(\/[a-zA-Z0-9_-]+)?$/);
-      if (diagramMatch) {
-        this.diagramSessionId = diagramMatch[1] ? diagramMatch[1].slice(1) : null;
-        this.tab = 'diagram';
-        this.graphMode = 'workspace';
-        this.wsDataSource = 'diagram';
-        this.filterSidebarOpen = true;
-      } else if (path === '/workspace' || path === '/graph/workspace' || path === '/graph/investigate') {
+      if (path === '/workspace' || path === '/graph/workspace' || path === '/graph/investigate' || path.startsWith('/diagram')) {
         // Legacy mode URLs — Workspace/Investigate collapsed into Explore
         this.tab = 'graph';
         this.graphMode = 'explore';
@@ -2326,7 +2074,7 @@ function dashboard() {
       } else if (path === '/settings') {
         this.tab = 'settings';
       }
-      // View deep links via hash (#v/<spec>, #c4/s/<id>) also boot straight
+      // View deep links via hash (#v/<spec>, #c4?level=) also boot straight
       // into a view — suppress the default render until it lands.
       if (location.hash.indexOf('#v/') === 0 || location.hash.indexOf('#c4') === 0) {
         this.tab = 'graph';
@@ -2344,29 +2092,13 @@ function dashboard() {
           this.graphMode = m;
         }
       }
-      if (urlParams.get('preset')) {
-        this._initPreset = urlParams.get('preset'); // applied after data loads
-        this.tab = 'graph';
-      }
 
-      if (this.tab === 'diagram') {
-        this.loading.graph = false;
-        this.loaded.graph = true;
-        this.fetchDiagram();
-        this.fetchGraphData().then(() => { this.diagramGraphLoaded = true; });
-      } else if (this.tab === 'graph') {
+      if (this.tab === 'graph') {
         // Graph tab on page load — fetch data
         this.loading.graph = true;
         this.fetchGraphData().then(async () => {
           this.loading.graph = false;
           this.loaded.graph = true;
-          // Apply preset from query param (legacy tree-mode presets).
-          // Explore-All has NO hidden auto-level: it renders the full graph.
-          if (this._initPreset) {
-            this.setPreset(this._initPreset);
-            const focusParam = new URLSearchParams(window.location.search).get('focus');
-            if (focusParam) this.applyFocus(focusParam);
-          }
           // Initialize graph controllers (shared method — also called from Graph tab click)
           await this.initGraphControllers();
 
@@ -2391,38 +2123,6 @@ function dashboard() {
           }, 100);
         });
       }
-
-      // Restore last diagram session from localStorage, fallback to latest
-      try {
-        const savedSession = localStorage.getItem('chronicle_diagram_session');
-        let loaded = false;
-        if (savedSession) {
-          try {
-            const sr = await fetch('/api/diagram/' + savedSession);
-            if (sr.ok) {
-              const sd = await sr.json();
-              this.diagramSessionId = sd.id;
-              this.diagramData = sd;
-              loaded = true;
-            }
-          } catch(e) {}
-        }
-        if (!loaded) {
-          const dr = await fetch('/api/diagram/latest');
-          if (dr.ok) {
-            const dd = await dr.json();
-            this.diagramSessionId = dd.id;
-            this.diagramData = dd;
-            localStorage.setItem('chronicle_diagram_session', dd.id);
-          }
-        }
-        if (this.diagramData) {
-          this.fetchDiagramSessions();
-          if (!this.diagramGraphLoaded) {
-            this.fetchGraphData().then(() => { this.diagramGraphLoaded = true; });
-          }
-        }
-      } catch(e) {}
 
       // Get the original project path (where the server was started)
       try {
@@ -2454,7 +2154,7 @@ function dashboard() {
       this.loading.stats = false;
       this.connectWS();
 
-      // View deep links: #v/<base64url(spec)>, #c4/s/<session_id>,
+      // View deep links: #v/<base64url(spec)>,
       // #c4?domain=&level=&service= — all open the Graph tab in view mode
       // (after fetchStats so this.domain is resolved for preset mode)
       window.addEventListener('hashchange', () => this.handleViewHash());
@@ -2697,10 +2397,6 @@ function dashboard() {
         this.showProjectSwitcher = false;
         // Clear URL focus/preset params from previous project
         history.replaceState(null, '', window.location.pathname);
-        if (this.graphController) {
-          this.graphController._focusNodeIds = null;
-          this.graphController.setPreset('all');
-        }
         this.loading = { stats: true, requests: true, graph: true, discoveries: true, scans: true, lowConf: true, validation: true };
         this.loaded = { requests: false, graph: false, discoveries: false, scans: false, lowConf: false, validation: false };
         this.requests = [];
@@ -2809,34 +2505,7 @@ function dashboard() {
     },
 
     async initGraphControllers() {
-      if (this.graphController && this.modeController) return; // already initialized
-      try {
-        if (!this.graphController) {
-          const { GraphController } = await import('/js/graph-controller.js');
-          this.graphController = new GraphController({
-            onStateChange: (state) => {
-              if ('preset' in state) this.graphPreset = state.preset;
-              if ('focus' in state) this.graphFocusName = state.focus;
-              if ('selectedNode' in state) {
-                this.selectedNode = state.selectedNode;
-                if (state.selectedNode) this.fetchNodeEvidence(state.selectedNode.node_key);
-                else this.nodeEvidence = null;
-              }
-              if ('zoomNode' in state) this.zoomIntoNode(state.zoomNode);
-            },
-          });
-          const graphCanvas = document.getElementById('graph-canvas');
-          await this.graphController.init(graphCanvas);
-          if (this.graphData && this.graphData.nodes) {
-            this.graphController.loadGraph(this.graphData);
-          }
-          this.graphController._projectPath = localStorage.getItem('chronicle_current_project') || this.originalProject || '';
-          this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
-          this.graphController.setShowEdgeLabels(this.showEdgeLabels);
-          this.graphController.restoreFromUrl();
-        }
-      } catch (e) { console.warn('GraphController module not available:', e); }
-
+      if (this.modeController) return; // already initialized
       try {
         if (!this.modeController) {
           const { ModeController } = await import('/js/mode-controller.js');
@@ -2885,11 +2554,6 @@ function dashboard() {
         if (this.graphData.edgeCategories) {
           this.edgeCategories = this.graphData.edgeCategories;
           this.buildEdgeCategoryLookup();
-        }
-        if (this.graphController) {
-          this.graphController.loadGraph(this.graphData);
-          this.graphController._projectPath = localStorage.getItem('chronicle_current_project') || this.originalProject || '';
-          this.graphController.setEdgeCategoryLookup(this.edgeCategoryLookup);
         }
         if (this.modeController) {
           this.modeController.loadGraph(this.graphData);
@@ -2974,30 +2638,6 @@ function dashboard() {
             if (this.scanEvents.length > 50) this.scanEvents.pop();
             this.fetchScanProgress();
           }
-          if (msg.type === 'diagram_update' || msg.type === 'diagram') {
-            const session = msg.data?.session || msg.data;
-            this.diagramSessionId = session?.id || session?.session_id || msg.data?.session_id;
-            this.diagramData = {
-              id: this.diagramSessionId,
-              title: session?.title || this.diagramData?.title || '',
-              nodes: session?.nodes || [],
-              edges: session?.edges || [],
-              annotations: session?.annotations || {},
-              steps: Array.isArray(session?.steps) ? session.steps : [],
-              groups: session?.groups || null,
-            };
-            // Refresh session list + persist
-            this.fetchDiagramSessions();
-            localStorage.setItem('chronicle_diagram_session', this.diagramSessionId);
-            // Auto-navigate to diagram tab
-            if (this.tab !== 'diagram') {
-              this.diagramFlash = true;
-              setTimeout(() => { this.diagramFlash = false; }, 3000);
-              this.showDiagram();
-            } else {
-              this.$nextTick(() => this.renderDiagram());
-            }
-          }
         } catch(e) {}
       };
     },
@@ -3051,213 +2691,15 @@ function dashboard() {
       return v || '#b8a898';
     },
 
-    diagramNodeStyle(kind) {
-      const styles = {
-        domain:         { width: 140, height: 50, fill: '#6b442318', stroke: '#6b4423', strokeWidth: 2, dash: 'none', fontWeight: 'bold', fontSize: 12 },
-        infrastructure: { width: 120, height: 50, fill: '#d4915e20', stroke: '#d4915e', strokeWidth: 2, dash: 'none', fontWeight: 'bold', fontSize: 12 },
-        external:       { width: 100, height: 40, fill: '#f5f5f5',   stroke: '#999',    strokeWidth: 1.5, dash: '6,3', fontWeight: 'normal', fontSize: 11 },
-        service:        { width: 100, height: 40, fill: null,        stroke: null,      strokeWidth: 1.5, dash: 'none', fontWeight: 'normal', fontSize: 10 },
-        endpoint:       { width: 100, height: 35, fill: '#10b98140', stroke: '#10b981', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
-        model:          { width: 100, height: 35, fill: '#8b5cf640', stroke: '#8b5cf6', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
-        topic:          { width: 110, height: 35, fill: '#d4915e30', stroke: '#d4915e', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
-        queue:          { width: 110, height: 35, fill: '#d4915e30', stroke: '#d4915e', strokeWidth: 1, dash: 'none', fontWeight: 'normal', fontSize: 10 },
-        database:       { width: 100, height: 45, fill: '#2e5f8a20', stroke: '#2e5f8a', strokeWidth: 1.5, dash: 'none', fontWeight: 'normal', fontSize: 10 },
-      };
-      return styles[kind] || styles.service;
-    },
-    diagramEdgeStyle(kind) {
-      const styles = {
-        http:       { color: '#6b9bd2', dash: 'none' },
-        async:      { color: '#d4915e', dash: '8,4' },
-        data:       { color: '#a87dc2', dash: 'none' },
-        structural: { color: '#b8a898', dash: '4,2' },
-      };
-      return styles[kind] || styles.structural;
-    },
 
     toggleLayer(l) {
-      this.graphPreset = 'custom';
       const idx = this.layerFilters.indexOf(l);
       if (idx >= 0) this.layerFilters.splice(idx, 1);
       else this.layerFilters.push(l);
     },
 
-    // Apply focus filter at the current preset level.
-    // C2 focus: filter to a domain's services/modules/topics/infra
-    // C3 focus: filter to a service/module's components + connected nodes
-    applyFocus(focusName) {
-      if (!focusName) return;
-      const allNodes = this.graphData.nodes || [];
-      const allEdges = this.graphData.edges || [];
-      const preset = this.graphPreset;
 
-      if (preset === 'c2') {
-        // Focus = domain name → store focused node IDs for getFilteredData to use
-        const c2Types = new Set(['service','topic','database','broker','cache','queue']);
-        const focusNodes = allNodes.filter(n => n.domain_key === focusName && c2Types.has(n.node_type));
-        const focusIds = new Set(focusNodes.map(n => n.node_id));
-        const extendedIds = new Set(focusIds);
-        allEdges.forEach(e => {
-          if (focusIds.has(e.from_node_id)) {
-            const t = allNodes.find(n => n.node_id === e.to_node_id);
-            if (t && c2Types.has(t.node_type)) extendedIds.add(e.to_node_id);
-          }
-          if (focusIds.has(e.to_node_id)) {
-            const s = allNodes.find(n => n.node_id === e.from_node_id);
-            if (s && c2Types.has(s.node_type)) extendedIds.add(e.from_node_id);
-          }
-        });
-        allNodes.forEach(n => { if (n.layer === 'infra') extendedIds.add(n.node_id); });
-        // _focusNodeIds = all visible (primary + context)
-        // _focusPrimaryIds = focused domain only (rendered fully opaque)
-        this._focusNodeIds = extendedIds;
-        this._focusPrimaryIds = focusIds;
-      } else if (preset === 'c3') {
-        // Focus = service or module name → show only its components
-        const svcPrefix = focusName.replace(/-api$/, '').replace(/\.module$/, '');
-        const mod = allNodes.find(n => n.node_type === 'module' && n.name === svcPrefix + '.module');
-        if (!mod) return;
-        const moduleId = mod.node_id;
-        // Contained nodes
-        const containedIds = new Set([moduleId]);
-        allEdges.forEach(e => {
-          if (e.edge_type === 'CONTAINS' && e.from_node_id === moduleId) containedIds.add(e.to_node_id);
-        });
-        // Extended: grab endpoints, topics, flows, models connected to contained nodes
-        // Only extend to: same-domain nodes OR contract/data/flow layer nodes (endpoints, topics, models)
-        // Never pull in providers from other domains
-        const nodeById = {};
-        allNodes.forEach(n => { nodeById[n.node_id] = n; });
-        const focusDomain = mod.domain_key;
-        const crossDomainAllowedLayers = new Set(['contract', 'data', 'flow']);
-        const skipTypes = new Set(['module', 'container', 'service', 'external_system']);
-        const extendedIds = new Set(containedIds);
-        allEdges.forEach(e => {
-          if (containedIds.has(e.from_node_id)) {
-            const target = nodeById[e.to_node_id];
-            if (!target || skipTypes.has(target.node_type)) return;
-            // Same domain: always include. Cross-domain: only contract/data/flow
-            if (target.domain_key === focusDomain || crossDomainAllowedLayers.has(target.layer)) {
-              extendedIds.add(e.to_node_id);
-            }
-          }
-          if (containedIds.has(e.to_node_id)) {
-            const source = nodeById[e.from_node_id];
-            if (!source || skipTypes.has(source.node_type)) return;
-            if (source.domain_key === focusDomain || crossDomainAllowedLayers.has(source.layer)) {
-              extendedIds.add(e.from_node_id);
-            }
-          }
-        });
-        this._focusNodeIds = extendedIds;
-        this._focusPrimaryIds = containedIds;
-      }
-    },
 
-    // Double-click a node → zoom to next C-level with focus on clicked node
-    zoomIntoNode(d) {
-      const currentPreset = this.graphPreset;
-      if (currentPreset === 'c3') return;
-
-      let nextPreset;
-      if (currentPreset === 'c1') {
-        nextPreset = 'c2';
-      } else if (currentPreset === 'c2') {
-        if (!['service', 'module'].includes(d.node_type)) return;
-        nextPreset = 'c3';
-      }
-
-      // Tree-mode legacy presets
-      this.setPreset(nextPreset);
-      const focusName = d.name || d.domain_key || '';
-      this.applyFocus(focusName);
-      this.renderGraph();
-    },
-
-    setPreset(preset) {
-      this.autoFilteredNotice = '';
-      this.graphPreset = preset;
-      // Clear ALL focus state — domain filters, focus ids
-      this.hiddenDomains = [];
-      this._focusNodeIds = null;
-      this._focusPrimaryIds = null;
-      this.selectedNode = null;
-      this.nodeEvidence = null;
-      // Update URL with preset for sharing/bookmarking
-      const url = new URL(window.location);
-      url.pathname = '/';
-      url.searchParams.set('preset', preset);
-      url.searchParams.set('mode', this.graphMode);
-      url.searchParams.delete('focus');
-      history.replaceState(null, '', url);
-      switch (preset) {
-        case 'c1': {
-          // C1 Context: containers + infra, flat layout, hide everything else
-          this.layerFilters = ['service', 'infra'];
-          this.hideStructural = false;
-          this.groupByField = '';
-          this.hiddenDomains = [];
-          this.nodeTypeFilter = {};
-          // Hide (not collapse) noise types — we have direct container→infra edges
-          const c1Show = ['container', 'database', 'broker', 'cache', 'queue'];
-          const c1Types = [...new Set((this.graphData.nodes || []).map(n => n.node_type))];
-          c1Types.forEach(t => { if (!c1Show.includes(t)) this.nodeTypeFilter[t] = 'hide'; });
-          break;
-        }
-        case 'c2': {
-          // C2 Container: containers + modules, collapse providers/controllers, hide noise
-          this.layerFilters = [...this.allLayers];
-          this.hideStructural = true;
-          this.groupByField = 'domain_key';
-          this.hiddenDomains = [];
-          this.nodeTypeFilter = {};
-          const c2Show = ['service', 'topic', 'database', 'broker', 'cache', 'queue'];
-          const c2Hide = ['external_system', 'middleware', 'config', 'generated'];
-          const c2Types = [...new Set((this.graphData.nodes || []).map(n => n.node_type))];
-          c2Types.forEach(t => {
-            if (c2Show.includes(t)) return; // visible
-            if (c2Hide.includes(t)) { this.nodeTypeFilter[t] = 'hide'; return; } // noise
-            this.nodeTypeFilter[t] = 'collapse'; // everything else collapsed for transitive edges
-          });
-          break;
-        }
-        case 'c3':
-          // C3 Component: code + contracts + data + flow, grouped by domain
-          this.layerFilters = ['code', 'contract', 'data', 'flow'];
-          this.hideStructural = true;
-          this.groupByField = 'domain_key';
-          this.nodeTypeFilter = {};
-          this.hiddenDomains = [];
-          break;
-        case 'all':
-          this.layerFilters = [...this.allLayers];
-          this.hideStructural = false;
-          this.nodeTypeFilter = {};
-          this.hiddenDomains = [];
-          break;
-        case 'data':
-          this.layerFilters = ['data'];
-          this.hideStructural = false;
-          this.groupByField = 'domain_key';
-          this.hiddenDomains = [];
-          this.nodeTypeFilter = {};
-          break;
-        case 'api':
-          this.layerFilters = ['contract', 'service'];
-          this.hideStructural = true;
-          break;
-        case 'services':
-          this.layerFilters = ['service', 'code'];
-          this.hideStructural = true;
-          break;
-        case 'flows':
-          this.layerFilters = ['flow'];
-          this.hideStructural = false;
-          break;
-      }
-      this._syncNodeTypeFilter();
-      // Don't auto-render here — caller (setPreset button click, zoomIntoNode) renders after applying focus
-    },
 
     getFilteredData() {
       const structuralTypes = ['CONTAINS','DEPLOYS_AS','SELECTS_PODS','OWNED_BY','MAINTAINED_BY','PART_OF_FLOW','BUILDS_ARTIFACT','DEPLOYS_RESOURCE','HAS_FIELD'];
@@ -3280,10 +2722,6 @@ function dashboard() {
       // Domain filter
       if (hiddenDomainsSet.size > 0) {
         nodes = nodes.filter(n => !hiddenDomainsSet.has(n.domain_key || '_unassigned'));
-      }
-      // Focus filter (from applyFocus — limits to specific node set)
-      if (this._focusNodeIds && this._focusNodeIds.size > 0) {
-        nodes = nodes.filter(n => this._focusNodeIds.has(n.node_id));
       }
       // Confidence filter — compares against derived trust_score (falls back
       // to raw confidence for payloads that predate trust_score)
@@ -3705,7 +3143,7 @@ function dashboard() {
       });
 
       let text = '# Graph Export (' + nodes.length + ' nodes, ' + edges.length + ' edges)\n';
-      text += '# Preset: ' + this.graphPreset + ' | Mode: ' + this.graphMode + '\n\n';
+      text += '# Mode: ' + this.graphMode + '\n\n';
 
       // Nodes by domain
       Object.keys(byDomain).sort().forEach(dk => {
@@ -3738,9 +3176,7 @@ function dashboard() {
 
     highlightNode(nodeId, edges) {
       const self = this;
-      // Scope to the active tab's SVG — diagram or graph
-      const containerId = this.tab === 'diagram' ? '#diagram-canvas' : '#graph-canvas';
-      const svg = d3.select(containerId + ' .graph-svg');
+      const svg = d3.select('#graph-canvas .graph-svg');
       if (svg.empty()) return;
       if (!nodeId) {
         // Clear highlight — restore out-of-focus on context nodes
@@ -3751,7 +3187,7 @@ function dashboard() {
           const el = d3.select(this);
           const d = el.datum?.();
           const nid = d ? (d.id || d.node_id || d.key) : null;
-          const shouldDim = self._focusPrimaryIds && nid && !self._focusPrimaryIds.has(nid);
+          const shouldDim = false;
           el.classed('out-of-focus', shouldDim);
         });
         svg.selectAll('.edge-short-label').classed('dimmed', false).classed('highlighted', false)
@@ -3851,11 +3287,6 @@ function dashboard() {
         } else {
           container.innerHTML = '<div class="empty-state">Loading...</div>';
         }
-        return;
-      }
-      if (this.graphMode === 'workspace') {
-        // Legacy mode — only the /diagram route still sets it
-        if (this.wsDataSource === 'diagram') this.renderDiagram();
         return;
       }
       // Tree mode
@@ -4069,112 +3500,12 @@ function dashboard() {
       container.appendChild(wrapper);
     },
 
-    getDiagramNodeTypes() {
-      if (!this.diagramData) return [];
-      const types = {};
-      (this.diagramData.nodes || []).forEach(n => {
-        const t = n.node_type || n.kind || '?';
-        if (!types[t]) types[t] = { type: t, layer: n.layer || n.kind || '', count: 0 };
-        types[t].count++;
-      });
-      return Object.values(types).sort((a, b) => a.type.localeCompare(b.type));
-    },
 
-    getDiagramLayers() {
-      if (!this.diagramData) return [];
-      const layers = new Set();
-      (this.diagramData.nodes || []).forEach(n => layers.add(n.layer || n.kind || ''));
-      return [...layers].sort();
-    },
 
-    getDiagramNodeTypesForLayer(layer) {
-      if (!this.diagramData) return [];
-      const types = {};
-      (this.diagramData.nodes || []).forEach(n => {
-        if ((n.layer || n.kind) === layer) {
-          const nt = n.node_type || n.kind || '';
-          types[nt] = (types[nt] || 0) + 1;
-        }
-      });
-      return Object.entries(types).sort((a, b) => a[0].localeCompare(b[0])).map(([type, count]) => ({ type, count }));
-    },
 
-    getDiagramSearchResults() {
-      if (!this.diagramSearch || this.diagramSearch.length < 2) return [];
-      const q = this.diagramSearch.toLowerCase();
-      const existing = new Set((this.diagramData?.nodes || []).map(n => n.node_key || n.key));
-      return (this.graphData?.nodes || [])
-        .filter(n => !existing.has(n.node_key) && (n.name.toLowerCase().includes(q) || n.node_key.toLowerCase().includes(q)))
-        .slice(0, 20);
-    },
 
-    getDiagramPaletteGroups() {
-      const search = (this.diagramSearch || '').toLowerCase();
-      const allNodes = this.graphData?.nodes || [];
-      const groups = {};
-      allNodes.forEach(n => {
-        if (search && !n.name.toLowerCase().includes(search) && !n.node_key.toLowerCase().includes(search)) return;
-        const key = n.layer + ':' + n.node_type;
-        if (!groups[key]) groups[key] = { type: n.layer + ' / ' + n.node_type, layer: n.layer, nodes: [] };
-        groups[key].nodes.push(n);
-      });
-      return Object.values(groups).sort((a, b) => a.type.localeCompare(b.type));
-    },
 
-    handleDiagramDrop(event) {
-      try {
-        const node = JSON.parse(event.dataTransfer.getData('text/plain'));
-        const nId = node?.node_id || node?.key;
-        if (!node || !nId) return;
-        // Convert drop coordinates to SVG coordinates (accounting for zoom/pan)
-        const container = document.getElementById('diagram-canvas');
-        const svg = container?.querySelector('svg');
-        const gRoot = svg?.querySelector('g');
-        if (svg && gRoot) {
-          const pt = svg.createSVGPoint();
-          pt.x = event.clientX;
-          pt.y = event.clientY;
-          const svgPt = pt.matrixTransform(gRoot.getScreenCTM().inverse());
-          this._diagramPositions[nId] = { x: svgPt.x, y: svgPt.y };
-        }
-        this.addNodeToDiagram(node);
-      } catch(e) {}
-    },
 
-    addNodeToDiagram(node) {
-      if (!this.diagramData) return;
-      const nId = node.node_id || node.key;
-      this.diagramData.nodes.push({
-        node_id: nId,
-        key: nId,
-        node_key: node.node_key || node.key || '',
-        name: node.name || node.label || '',
-        label: node.name || node.label || '',
-        layer: node.layer || node.kind || '',
-        node_type: node.node_type || node.kind || '',
-        kind: node.kind || node.node_type || '',
-      });
-      // Also add edges that connect to existing nodes
-      const nodeKeys = new Set(this.diagramData.nodes.map(n => n.node_id || n.key));
-      (this.graphData?.edges || []).forEach(e => {
-        if ((e.from_node_id === nId && nodeKeys.has(e.to_node_id)) ||
-            (e.to_node_id === nId && nodeKeys.has(e.from_node_id))) {
-          const exists = this.diagramData.edges.some(de =>
-            (de.from_node_id || de.from) === e.from_node_id && (de.to_node_id || de.to) === e.to_node_id);
-          if (!exists) {
-            this.diagramData.edges.push({
-              from_node_id: e.from_node_id,
-              from: e.from_node_id,
-              to_node_id: e.to_node_id,
-              to: e.to_node_id,
-              edge_type: e.edge_type
-            });
-          }
-        }
-      });
-      this.diagramSearch = '';
-      this.renderDiagram();
-    },
 
     async saveEdgeCategories() {
       await fetch('/api/settings/edge-categories', {
@@ -4183,14 +3514,14 @@ function dashboard() {
         body: JSON.stringify(this.edgeCategories),
       });
       this.buildEdgeCategoryLookup();
-      this.renderDiagram();
+      this.renderGraph();
     },
     async resetEdgeCategories() {
       await fetch('/api/settings/edge-categories', { method: 'DELETE' });
       const r = await fetch('/api/settings/edge-categories');
       this.edgeCategories = await r.json();
       this.buildEdgeCategoryLookup();
-      this.renderDiagram();
+      this.renderGraph();
     },
     startEditCategory(cat) {
       this.editingCategory = cat;
@@ -4226,575 +3557,12 @@ function dashboard() {
       window._edgeCategoryLookup = this.edgeCategoryLookup;
     },
 
-    getDiagramEdgeTypes() {
-      if (!this.diagramData) return [];
-      const types = {};
-      (this.diagramData.edges || []).forEach(e => {
-        const t = e.edge_type || e.label || e.kind || '?';
-        if (!types[t]) types[t] = { type: t, count: 0 };
-        types[t].count++;
-      });
-      return Object.values(types).sort((a, b) => a.type.localeCompare(b.type));
-    },
 
-    // Filter diagram nodes/edges with transitive collapsing (reuses existing engine)
-    _filterDiagramData() {
-      const nodes = this.diagramData.nodes || [];
-      const edges = this.diagramData.edges || [];
-      const hiddenTypes = new Set(this.hiddenNodeTypes);
-      const hiddenEdges = new Set(this.hiddenEdgeTypes);
 
-      if (hiddenTypes.size === 0 && hiddenEdges.size === 0) return { nodes, edges };
 
-      const visibleNodes = nodes.filter(n => !hiddenTypes.has(n.node_type || n.kind));
-      let filteredEdges = edges;
-      if (hiddenEdges.size > 0) {
-        filteredEdges = filteredEdges.filter(e => !hiddenEdges.has(e.edge_type || e.label || e.kind));
-      }
 
-      // Transitive collapsing for hidden collapsible types
-      const collapsibleSet = new Set((this._collapsibleTypes || []));
-      const hasCollapsible = this.hiddenNodeTypes.some(t => collapsibleSet.has(t));
-      if (hasCollapsible) {
-        return this.computeTransitiveEdges(visibleNodes, nodes, filteredEdges);
-      }
 
-      const visibleIds = new Set(visibleNodes.map(n => n.node_id || n.key));
-      return { nodes: visibleNodes, edges: filteredEdges.filter(e => visibleIds.has(e.from_node_id || e.from) && visibleIds.has(e.to_node_id || e.to)) };
-    },
 
-    _renderGraphSVG(config) {
-      // config: { container, nodes, edges, mode, positionCache, groups, features, callbacks }
-      // features: { annotations, investigation, neighborExpansion }
-      // callbacks: { onNodeClick, onBackgroundClick, onDrag, onExpandNeighbor }
-      const self = this;
-      const container = config.container;
-      const isStrict = config.mode === 'strict';
-      const posCache = config.positionCache || {};
-      const annotations = config.features?.annotations || {};
-      const isInvestigation = !!config.features?.investigation;
-      const groups = config.groups || { keys: [], map: {}, field: '' };
-
-      container.innerHTML = '';
-      if (config.nodes.length === 0) {
-        container.innerHTML = '<div class="empty-state">No nodes to display. Adjust filters or import data.</div>';
-        return null;
-      }
-
-      const width = Math.max(900, container.clientWidth || 900);
-      const height = Math.max(600, container.clientHeight || 600);
-
-      // --- Dagre layout ---
-      let simNodes = [], simNodeMap = {}, simEdges = [];
-      const dagreEdgePoints = {};
-
-      if (typeof dagre !== 'undefined') {
-        const useCompound = groups.keys.length > 0;
-        const gDag = new dagre.graphlib.Graph({ compound: useCompound });
-        gDag.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 20, marginx: 30, marginy: 30 });
-        gDag.setDefaultEdgeLabel(() => ({}));
-
-        if (useCompound) {
-          groups.keys.forEach(gk => {
-            gDag.setNode('group_' + gk, { label: gk, paddingTop: 30, paddingBottom: 15, paddingLeft: 15, paddingRight: 15 });
-          });
-        }
-
-        config.nodes.forEach(n => {
-          const nodeKey = String(n.node_id || n.key);
-          gDag.setNode(nodeKey, {
-            width: n.kind ? self.diagramNodeStyle(n.kind).width + 20 : 120,
-            height: n.kind ? self.diagramNodeStyle(n.kind).height + 10 : 50,
-            label: n.name || n.label || nodeKey,
-          });
-          if (useCompound && n._group && groups.keys.includes(n._group)) {
-            gDag.setParent(nodeKey, 'group_' + n._group);
-          }
-        });
-
-        config.edges.forEach(e => {
-          const from = String(e.from_node_id || e.from), to = String(e.to_node_id || e.to);
-          if (gDag.hasNode(from) && gDag.hasNode(to)) gDag.setEdge(from, to, { _edge: e });
-        });
-
-        dagre.layout(gDag);
-
-        config.nodes.forEach(n => {
-          const nId = n.node_id || n.key;
-          const pos = gDag.node(String(nId));
-          if (!pos) return;
-          let x, y;
-          if (isStrict) {
-            x = pos.x; y = pos.y;
-          } else {
-            const cached = posCache[nId];
-            x = cached ? cached.x : pos.x;
-            y = cached ? cached.y : pos.y;
-            posCache[nId] = { x, y };
-          }
-          const sn = { ...n, id: nId, x, y };
-          simNodes.push(sn);
-          simNodeMap[sn.id] = sn;
-        });
-
-        // In strict mode, use dagre's routed edge points
-        if (isStrict) {
-          gDag.edges().forEach(e => {
-            const ed = gDag.edge(e);
-            if (ed && ed.points) dagreEdgePoints[e.v + '->' + e.w] = ed.points;
-          });
-        }
-
-      }
-
-      // Build sim edges
-      simEdges = config.edges
-        .filter(e => simNodeMap[e.from_node_id || e.from] && simNodeMap[e.to_node_id || e.to])
-        .map(e => {
-          const eFrom = e.from_node_id || e.from, eTo = e.to_node_id || e.to;
-          return {
-            ...e,
-            source: simNodeMap[eFrom],
-            target: simNodeMap[eTo],
-            edge_type: e.edge_type || e.label || e.kind || '',
-            _points: dagreEdgePoints[eFrom + '->' + eTo] || null
-          };
-        });
-
-      // --- SVG setup ---
-      const svg = d3.select(container).append('svg')
-        .attr('class', 'graph-svg')
-        .style('width', '100%').style('height', '100%');
-      svg.classed('hide-edge-labels', !this.showEdgeLabels);
-
-      const defs = svg.append('defs');
-      // Default gray arrow
-      defs.append('marker').attr('id', 'g-arrow').attr('viewBox', '0 0 10 10')
-        .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
-        .attr('orient', 'auto')
-        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('class', 'arrow-head');
-      // Transitive/path arrow (amber)
-      defs.append('marker').attr('id', 'g-arrow-highlight').attr('viewBox', '0 0 10 10')
-        .attr('refX', 10).attr('refY', 5).attr('markerWidth', 8).attr('markerHeight', 8)
-        .attr('orient', 'auto')
-        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#b8963e');
-      // Per-category arrows
-      for (const [cat, catDef] of Object.entries(this.edgeCategories)) {
-        defs.append('marker').attr('id', 'g-arrow-' + cat)
-          .attr('viewBox', '0 0 10 10').attr('refX', 10).attr('refY', 5)
-          .attr('markerWidth', 8).attr('markerHeight', 8).attr('orient', 'auto')
-          .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', catDef.color);
-      }
-
-      const gRoot = svg.append('g');
-      const zoomBehavior = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
-        gRoot.attr('transform', event.transform);
-      });
-      svg.call(zoomBehavior);
-
-      // --- Group bounding boxes (behind everything, computed from node positions) ---
-      const boxGroup = gRoot.append('g').attr('class', 'domain-boxes');
-      function updateGroupBoxes() {
-        if (groups.keys.length === 0) return;
-        const padding = 25;
-        const labelH = 18;
-        const boxData = groups.keys.map(gk => {
-          const members = (groups.map[gk] || []).map(n => simNodeMap[n.node_id || n.key]).filter(Boolean);
-          if (members.length === 0) return null;
-          const minX = d3.min(members, d => d.x) - 50 - padding;
-          const maxX = d3.max(members, d => d.x) + 50 + padding;
-          const minY = d3.min(members, d => d.y) - 20 - padding - labelH;
-          const maxY = d3.max(members, d => d.y) + 20 + padding;
-          const color = groups.field === 'layer' ? self.layerColor(gk) : (groups.field === 'domain' ? '#6b4423' : '#6b4423');
-          return { gk, x: minX, y: minY, w: maxX - minX, h: maxY - minY, color };
-        }).filter(Boolean);
-
-        const boxes = boxGroup.selectAll('.domain-g').data(boxData, d => d.gk);
-        const enter = boxes.enter().append('g').attr('class', 'domain-g');
-        enter.append('rect').attr('class', 'domain-box');
-        enter.append('text').attr('class', 'domain-label');
-        const merged = enter.merge(boxes);
-        merged.select('.domain-box')
-          .attr('x', d => d.x).attr('y', d => d.y)
-          .attr('width', d => d.w).attr('height', d => d.h)
-          .attr('stroke', d => d.color);
-        merged.select('.domain-label')
-          .attr('x', d => d.x + 10).attr('y', d => d.y + 14)
-          .attr('fill', d => d.color)
-          .text(d => d.gk.toUpperCase());
-        boxes.exit().remove();
-      }
-      updateGroupBoxes();
-
-      // --- Edges ---
-      const link = gRoot.selectAll('.edge-line')
-        .data(simEdges).join('path')
-        .attr('fill', 'none')
-        .attr('class', d => {
-          let cls = 'edge-line';
-          if (d._isPath) cls += ' path-edge';
-          else if (d._transitive) cls += ' transitive';
-          else if (d.virtual) cls += ' dashed';
-          else if (d.derivation !== 'hard' && d.derivation !== 'linked') cls += ' dashed';
-          return cls;
-        })
-        .attr('opacity', d => d.virtual ? 0.7 : 1)
-        .attr('stroke', d => {
-          if (d.kind) return self.diagramEdgeStyle(d.kind).color;
-          if (d._isPath || d._transitive) return null;
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? info.color : null;
-        })
-        .attr('stroke-dasharray', d => {
-          if (d.kind) return self.diagramEdgeStyle(d.kind).dash;
-          return null;
-        })
-        .attr('marker-end', d => {
-          if (d._isPath || d._transitive) return 'url(#g-arrow-highlight)';
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? 'url(#g-arrow-' + info.category + ')' : 'url(#g-arrow)';
-        });
-
-      // Tooltip for transitive edges (suppressed in screenshot mode)
-      link.filter(d => d._transitive && !self.isScreenshot)
-        .style('cursor', 'help')
-        .on('mouseenter', function(event, d) {
-          const tooltip = document.createElement('div');
-          tooltip.className = 'edge-tooltip';
-          tooltip.innerHTML = '<div style="font-weight:600;margin-bottom:2px">Collapsed path</div>' + (d._viaLabel || 'via unknown');
-          tooltip.id = '__edge_tooltip';
-          tooltip.style.left = event.clientX + 8 + 'px';
-          tooltip.style.top = event.clientY - 20 + 'px';
-          document.body.appendChild(tooltip);
-        })
-        .on('mousemove', function(event) {
-          const t = document.getElementById('__edge_tooltip');
-          if (t) { t.style.left = event.clientX + 8 + 'px'; t.style.top = event.clientY - 20 + 'px'; }
-        })
-        .on('mouseleave', function() {
-          const t = document.getElementById('__edge_tooltip');
-          if (t) t.remove();
-        });
-
-      // --- Via labels (transitive edges) ---
-      const viaLabels = gRoot.selectAll('.via-label')
-        .data(simEdges.filter(e => e._transitive)).join('text')
-        .attr('class', 'via-label').attr('text-anchor', 'middle')
-        .text(d => d._viaLabel || '');
-
-      // --- Short labels (non-transitive edges) ---
-      const shortLabels = gRoot.selectAll('.edge-short-label')
-        .data(simEdges.filter(e => !e._transitive)).join('text')
-        .attr('class', 'edge-short-label')
-        .attr('fill', d => {
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? info.color : '#b8a898';
-        })
-        .text(d => {
-          const info = self.edgeCategoryLookup[d.edge_type];
-          return info ? info.shortLabel : '';
-        });
-
-      // --- Edge path function ---
-      const lineGen = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
-      function edgePath(d) {
-        if (d._points && d._points.length > 1) return lineGen(d._points);
-        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
-        const dr = Math.sqrt(dx * dx + dy * dy) * 1.5;
-        return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
-      }
-
-      // Position edges
-      link.attr('d', edgePath);
-      viaLabels.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2 - 6);
-
-      // Position short labels at path midpoints
-      shortLabels.each(function(d) {
-        const pathEl = link.filter(e => e === d).node();
-        if (pathEl) {
-          const len = pathEl.getTotalLength();
-          const mid = pathEl.getPointAtLength(len / 2);
-          d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
-        }
-      });
-
-      // --- Nodes ---
-      const node = gRoot.selectAll('.node-g')
-        .data(simNodes).join('g')
-        .attr('class', d => {
-          let cls = 'node-g';
-          if (d._neighbor) cls += ' neighbor-node';
-          if (self._focusPrimaryIds && !self._focusPrimaryIds.has(d.node_id)) cls += ' out-of-focus';
-          return cls;
-        })
-        .attr('data-testid', 'graph-node')
-        .attr('data-node-id', d => d.id || d.node_id || d.key)
-        .attr('data-node-kind', d => d.node_type || d.kind || '')
-        .attr('transform', d => `translate(${d.x},${d.y})`);
-
-      // White background for cleaner rounded corners
-      node.append('rect')
-        .attr('width', d => d.kind ? self.diagramNodeStyle(d.kind).width : 100)
-        .attr('height', d => d.kind ? self.diagramNodeStyle(d.kind).height : 40)
-        .attr('x', d => d.kind ? -self.diagramNodeStyle(d.kind).width/2 : -50)
-        .attr('y', d => d.kind ? -self.diagramNodeStyle(d.kind).height/2 : -20)
-        .attr('fill', '#fff').attr('rx', 6).attr('ry', 6);
-
-      // Colored node rect
-      node.append('rect')
-        .attr('class', 'node-rect')
-        .attr('width', d => d.kind ? self.diagramNodeStyle(d.kind).width : 100)
-        .attr('height', d => d.kind ? self.diagramNodeStyle(d.kind).height : 40)
-        .attr('x', d => d.kind ? -self.diagramNodeStyle(d.kind).width/2 : -50)
-        .attr('y', d => d.kind ? -self.diagramNodeStyle(d.kind).height/2 : -20)
-        .attr('fill', d => {
-          const ann = annotations[d.node_key || d.key];
-          if (ann?.highlight) return ann.highlight + '30';
-          if (d.kind) { const s = self.diagramNodeStyle(d.kind); if (s.fill) return s.fill; }
-          if (d.virtual) return '#f0f0f0';
-          return self.layerColor(d.layer || d.kind) + '40';
-        })
-        .attr('stroke', d => {
-          const ann = annotations[d.node_key || d.key];
-          if (ann?.highlight) return ann.highlight;
-          if (d.kind) { const s = self.diagramNodeStyle(d.kind); if (s.stroke) return s.stroke; }
-          if (d.virtual) return '#999';
-          return self.layerColor(d.layer || d.kind);
-        })
-        .attr('stroke-width', d => {
-          const ann = annotations[d.node_key || d.key];
-          if (ann?.highlight) return 3;
-          if (d.kind) return self.diagramNodeStyle(d.kind).strokeWidth;
-          return 1.5;
-        })
-        .attr('stroke-dasharray', d => {
-          if (d.kind) return self.diagramNodeStyle(d.kind).dash;
-          if (d.virtual) return '6,3';
-          return 'none';
-        })
-        .attr('rx', 6).attr('ry', 6)
-        .style('filter', d => {
-          const ann = annotations[d.node_key || d.key];
-          return ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none';
-        });
-
-      // Infrastructure double-stroke
-      node.filter(d => d.kind === 'infrastructure')
-        .append('rect')
-        .attr('class', 'infra-inner-stroke')
-        .attr('x', d => -self.diagramNodeStyle('infrastructure').width/2 + 3)
-        .attr('y', -self.diagramNodeStyle('infrastructure').height/2 + 3)
-        .attr('width', self.diagramNodeStyle('infrastructure').width - 6)
-        .attr('height', self.diagramNodeStyle('infrastructure').height - 6)
-        .attr('rx', 4).attr('ry', 4)
-        .attr('fill', 'none')
-        .attr('stroke', '#d4915e')
-        .attr('stroke-width', 1)
-        .attr('pointer-events', 'none');
-
-      // Tooltip (native SVG title — shows full name + key on hover)
-      node.append('title')
-        .text(d => {
-          const nm = d.name || d.label || '';
-          const key = d.node_key || d.key || '';
-          const ann = annotations[key]?.note || '';
-          return nm + (d.node_type ? ' (' + d.node_type + ')' : '') + (key && key !== nm ? '\n' + key : '') + (ann ? '\n' + ann : '');
-        });
-
-      // Node name
-      node.append('text')
-        .attr('text-anchor', 'middle').attr('dy', -2)
-        .attr('font-weight', d => d.kind ? self.diagramNodeStyle(d.kind).fontWeight : 'normal')
-        .attr('font-size', d => (d.kind ? self.diagramNodeStyle(d.kind).fontSize : 10) + 'px')
-        .text(d => { const nm = d.name || d.label || ''; return nm.length > 14 ? nm.slice(0, 13) + '\u2026' : nm; });
-
-      // Node type subtitle
-      node.append('text')
-        .attr('text-anchor', 'middle').attr('dy', 12).attr('font-size', '7px').attr('fill', 'var(--text-muted)')
-        .text(d => d.node_type || d.kind || '');
-
-      // Annotation notes (when annotations have notes)
-      node.filter(d => annotations[d.node_key || d.key]?.note).append('text')
-        .attr('class', 'ann-note')
-        .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
-        .attr('fill', d => annotations[d.node_key || d.key]?.highlight || 'var(--primary)')
-        .attr('font-style', 'italic')
-        .text(d => { const n = annotations[d.node_key || d.key].note; return n.length > 30 ? n.slice(0, 29) + '\u2026' : n; });
-
-      // --- Investigation badges (when investigation mode) ---
-      if (isInvestigation) {
-        node.filter(d => d._manual).append('circle')
-          .attr('class', 'manual-dot').attr('cx', 45).attr('cy', -15).attr('r', 4);
-        node.filter(d => d._path && !d._manual).each(function(d) {
-          const g2 = d3.select(this);
-          g2.append('rect').attr('class', 'auto-badge').attr('x', 30).attr('y', -19).attr('width', 24).attr('height', 13);
-          g2.append('text').attr('class', 'auto-badge-text').attr('x', 42).attr('y', -10).attr('text-anchor', 'middle').text('auto');
-        });
-        node.filter(d => d._neighbor).each(function(d) {
-          const g2 = d3.select(this);
-          g2.append('circle').attr('class', 'expand-badge').attr('cx', 55).attr('cy', 0).attr('r', 10)
-            .on('click', (event) => { event.stopPropagation(); if (config.callbacks?.onExpandNeighbor) config.callbacks.onExpandNeighbor(d.id); });
-          g2.append('text').attr('class', 'expand-text').attr('x', 55).attr('y', 4).attr('text-anchor', 'middle').text('+')
-            .on('click', (event) => { event.stopPropagation(); if (config.callbacks?.onExpandNeighbor) config.callbacks.onExpandNeighbor(d.id); });
-        });
-      }
-
-      // --- Zoom-in badge: small "+" on nodes that have CONTAINS children ---
-      if (self.graphPreset === 'c1' || self.graphPreset === 'c2') {
-        const parentIds = new Set();
-        (self.graphData.edges || []).forEach(e => {
-          if (e.edge_type === 'CONTAINS') {
-            parentIds.add(e.from_node_id);
-            parentIds.add(String(e.from_node_id));
-          }
-        });
-        node.filter(d => parentIds.has(d.id) || parentIds.has(d.node_id)).each(function(d) {
-          const g2 = d3.select(this);
-          g2.append('text')
-            .attr('x', 50).attr('y', -10).attr('text-anchor', 'middle')
-            .attr('font-size', '12px').attr('fill', 'var(--primary)').attr('cursor', 'pointer')
-            .attr('font-weight', 'bold').attr('font-family', 'sans-serif')
-            .text('+')
-            .on('click', (event) => { event.stopPropagation(); if (config.callbacks?.onNodeDblClick) config.callbacks.onNodeDblClick(d); });
-        });
-      }
-
-      // --- Drag (free mode only) ---
-      if (!isStrict) {
-      node.style('cursor', 'grab');
-      node.call(d3.drag()
-        .on('start', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grabbing'); })
-        .on('drag', (event, d) => {
-          d.x = event.x; d.y = event.y;
-          if (config.callbacks?.onDrag) config.callbacks.onDrag(d.id, d.x, d.y);
-          d3.select(event.sourceEvent.target.closest('.node-g')).attr('transform', `translate(${d.x},${d.y})`);
-          // Recalculate connected edges — clear stale dagre points, use arcs
-          link.filter(e => e.source.id === d.id || e.target.id === d.id)
-            .each(function(e) { e._points = null; })
-            .attr('d', edgePath);
-          viaLabels.filter(e => e.source.id === d.id || e.target.id === d.id)
-            .attr('x', e => (e.source.x + e.target.x) / 2).attr('y', e => (e.source.y + e.target.y) / 2 - 6);
-          shortLabels.filter(e => e.source.id === d.id || e.target.id === d.id).each(function(e) {
-            const pathEl = link.filter(p => p === e).node();
-            if (pathEl) {
-              const len = pathEl.getTotalLength();
-              const mid = pathEl.getPointAtLength(len / 2);
-              d3.select(this).attr('x', mid.x).attr('y', mid.y - 4);
-            }
-          });
-          updateGroupBoxes();
-        })
-        .on('end', (event) => { d3.select(event.sourceEvent.target.closest('.node-g')).style('cursor', 'grab'); })
-      );
-      }
-
-      // --- Click handlers (with click/dblclick disambiguation) ---
-      let _clickTimer = null;
-      node.on('click', (event, d) => {
-        event.stopPropagation();
-        if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; return; }
-        _clickTimer = setTimeout(() => {
-          _clickTimer = null;
-          if (config.callbacks?.onNodeClick) config.callbacks.onNodeClick(d, simEdges);
-        }, 250);
-      });
-      node.on('dblclick', (event, d) => {
-        event.stopPropagation();
-        if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
-        if (config.callbacks?.onNodeDblClick) config.callbacks.onNodeDblClick(d);
-      });
-      node.on('mouseenter', (event, d) => {
-        self.highlightNode(d.id || d.node_id || d.key, simEdges);
-        if (self.isScreenshot) return; // suppress tooltips in screenshot mode
-        // Hover tooltip
-        const existing = document.getElementById('__node_tooltip');
-        if (existing) existing.remove();
-        const tt = document.createElement('div');
-        tt.className = 'node-hover-tooltip';
-        tt.id = '__node_tooltip';
-        const desc = self.nodeTypeDescriptions[d.node_type] || d.node_type;
-        const canZoom = ['service','module','container'].includes(d.node_type) && ['c1','c2'].includes(self.graphPreset);
-        tt.innerHTML = '<div class="nht-name">' + (d.name || d.label || '') + '</div>'
-          + '<div class="nht-type">' + d.node_type + ' · ' + (d.layer || '') + (d.domain_key ? ' · ' + d.domain_key : '') + '</div>'
-          + '<div class="nht-type">' + desc + '</div>'
-          + (canZoom ? '<div class="nht-hint">Double-click to zoom in</div>' : '<div class="nht-hint">Click to inspect</div>');
-        tt.style.left = event.clientX + 12 + 'px';
-        tt.style.top = event.clientY - 30 + 'px';
-        document.body.appendChild(tt);
-      }).on('mousemove', (event) => {
-        const tt = document.getElementById('__node_tooltip');
-        if (tt) { tt.style.left = event.clientX + 12 + 'px'; tt.style.top = event.clientY - 30 + 'px'; }
-      }).on('mouseleave', () => {
-        self.highlightNode(null, simEdges);
-        if (self.diagramStep >= 0) self.updateDiagramAnnotations();
-        const tt = document.getElementById('__node_tooltip');
-        if (tt) tt.remove();
-      });
-      gRoot.on('click', () => {
-        if (config.callbacks?.onBackgroundClick) config.callbacks.onBackgroundClick(simEdges);
-      });
-
-      // No auto-fit — keep camera stable
-
-      return { svg, gRoot, link, node, shortLabels, viaLabels, simEdges, simNodes, simNodeMap };
-    },
-
-    async showDiagram() {
-      this.tab = 'diagram';
-      this.graphMode = 'workspace';
-      this.wsDataSource = 'diagram';
-      this.loading.graph = false;
-      this.loaded.graph = true;
-      await this.fetchDiagramSessions();
-      if (this.diagramStep < 0 && (Array.isArray(this.diagramData?.steps) ? this.diagramData.steps.length : 0) > 0) {
-        this.diagramStep = 0;
-      }
-      // Fetch full graph data for entity palette
-      if (!this.diagramGraphLoaded) {
-        await this.fetchGraphData();
-        this.diagramGraphLoaded = true;
-      }
-      history.pushState(null, '', '/diagram');
-      this.$nextTick(() => this.renderDiagram());
-    },
-
-    async fetchDiagram() {
-      if (!this.diagramSessionId) {
-        // Try to load the latest diagram session
-        try {
-          const r = await fetch('/api/diagram/latest');
-          if (r.ok) {
-            const data = await r.json();
-            this.diagramSessionId = data.id;
-            this.diagramData = data;
-            this.$nextTick(() => this.renderDiagram());
-            return;
-          }
-        } catch(e) {}
-        return;
-      }
-      try {
-        const r = await fetch('/api/diagram/' + this.diagramSessionId);
-        if (!r.ok) return;
-        this.diagramData = await r.json();
-        this.$nextTick(() => this.renderDiagram());
-      } catch(e) { console.error('diagram fetch:', e); }
-    },
-
-    async fetchDiagramSessions() {
-      try {
-        const r = await fetch('/api/diagram/list');
-        if (!r.ok) return;
-        const data = await r.json();
-        this.diagramSessions = (data.sessions || []).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
-      } catch(e) {}
-    },
-
-    // Open a diagram session in the Graph tab (view-engine render path).
-    // Name kept from the retired C4 tab — diagram session tabs call this.
-    openSessionInC4(id) {
-      this.openViewSession(id);
-    },
 
     /* ══════════ Graph tab view mode (view algebra) ══════════
        The old C4 tab is gone; its navigation concepts live here:
@@ -4867,7 +3635,6 @@ function dashboard() {
       this.viewActive = true;
       this.viewStack = [];           // level switch resets the spec stack
       this.viewPathArmFrom = null;
-      this.viewSessionId = null;
       this.viewSearch = '';
       // A selected service node/group carries into C3 as the drill target.
       const selName = (this.selectedNode && this.selectedNode.node_type === 'service')
@@ -4911,7 +3678,6 @@ function dashboard() {
       this.viewLevel = 'all';
       this.viewStack = [];
       this.viewPathArmFrom = null;
-      this.viewSessionId = null;
       this.viewError = '';
       this.viewSearch = '';
       this.selectedNode = null;
@@ -5011,8 +3777,6 @@ function dashboard() {
       if (!this.viewActive) return;
       const top = this.viewStack[this.viewStack.length - 1];
       if (!top) return;
-      // Session views keep the #c4/s/<id> hash while unpivoted
-      if (this.viewSessionId && this.viewStack.length <= 1) return;
       // Pristine preset at the stack root → pretty path (/graph/c2), no hash.
       // #v/<b64> is reserved for pivots and custom/mutated specs.
       if (this.viewStack.length === 1 && this._viewPresetLevels.includes(this.viewLevel) &&
@@ -5026,7 +3790,6 @@ function dashboard() {
     },
 
     async _getViewRenderer() {
-      if (this.graphController && this.graphController.renderer) return this.graphController.renderer;
       if (this.modeController && this.modeController.renderer) return this.modeController.renderer;
       if (!this._viewRenderer) {
         const { GraphRenderer } = await import('/js/graph-renderer.js');
@@ -5397,7 +4160,6 @@ function dashboard() {
       }
       this.viewActive = true;
       this.viewLevel = '';
-      this.viewSessionId = null;
       this.viewStack = [];
       this.viewPathArmFrom = null;
       this.selectedNode = null;
@@ -5515,7 +4277,6 @@ function dashboard() {
       }
       this.viewActive = true;
       this.viewLevel = '';
-      this.viewSessionId = null;
       this.viewStack = [];
       this.viewPathArmFrom = null;
       this.selectedNode = null;
@@ -5814,7 +4575,6 @@ function dashboard() {
         if (this.modeController) this.modeController._mode = 'explore';
       }
       this.viewActive = true;
-      this.viewSessionId = null;
       const preset = (spec.layout && spec.layout.preset) || '';
       this.viewLevel = this._viewPresetLevels.includes(preset) ? preset : '';
       if (preset === 'c3' && spec.scope && spec.scope.service) this.viewService = spec.scope.service;
@@ -5822,85 +4582,14 @@ function dashboard() {
       await this.pushViewSpec(spec, { pristine: true });
     },
 
-    async openViewSession(id) {
-      await this.ensureGraphReady();
-      this.viewActive = true;
-      this.viewSessionId = id;
-      this.viewLevel = '';
-      this.viewStack = [];
-      this.viewError = '';
-      this.selectedNode = null;
-      this.nodeEvidence = null;
-      const newHash = '#c4/s/' + encodeURIComponent(id);
-      if (location.hash !== newHash) history.replaceState(null, '', newHash);
 
-      let raw;
-      try {
-        const r = await fetch('/api/diagram/' + encodeURIComponent(id));
-        if (!r.ok) throw new Error('Diagram API returned ' + r.status);
-        raw = await r.json();
-      } catch (e) {
-        this.viewError = 'Failed to load diagram session: ' + e.message;
-        return;
-      }
-      // Session data may arrive nested ({data: {...}}) and/or as a JSON string
-      let data = (raw && raw.data !== undefined) ? raw.data : raw;
-      if (typeof data === 'string') {
-        try { data = JSON.parse(data); } catch (e) { data = null; }
-      }
-
-      if (data && data.kind === 'viewmodel' && data.view) {
-        // Full View payload → same adapter → same renderer
-        if (data.domain) this.viewDomain = this.viewDomain || data.domain;
-        const title = data.title || data.view.title || (raw && raw.title) || 'Custom view';
-        this.viewStack = [{
-          spec: data.view.spec || {},
-          view: data.view,
-          title,
-          pristineSpec: JSON.parse(JSON.stringify(data.view.spec || {})),
-        }];
-        await this.renderViewMode();
-        return;
-      }
-
-      // Legacy sessions (selection-only viewmodel, or old node/edge diagrams):
-      // the card renderer is gone — show a plain message + entity list.
-      this.renderLegacySessionFallback(raw, data);
-    },
-
-    renderLegacySessionFallback(raw, data) {
-      const c = document.getElementById('graph-canvas');
-      if (!c) return;
-      const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const title = (data && data.title) || (raw && raw.title) || 'Diagram session';
-      let items = [];
-      if (data && data.kind === 'viewmodel' && data.selection) {
-        items = (data.selection.components || []).map(x => ({ name: x.name, type: x.type }));
-      } else {
-        items = ((data && data.nodes) || (raw && raw.nodes) || []).map(x => ({ name: x.name || x.label || x.key, type: x.kind || x.node_type || '' }));
-      }
-      this.viewStack = [{ spec: {}, view: { nodes: [], edges: [], groups: [] }, title, pristineSpec: null }];
-      c.innerHTML =
-        '<div style="padding:40px;max-width:680px">' +
-        '<h3 style="margin-bottom:8px">' + esc(title) + '</h3>' +
-        '<p style="color:var(--text-muted);font-size:12px;margin-bottom:16px">' +
-        'This session predates the view engine (no view payload) — its entities are listed below. ' +
-        'Open it in the <a href="/diagram/' + esc(this.viewSessionId) + '" style="color:var(--primary)">diagram viewer</a> for the full canvas.</p>' +
-        (items.length
-          ? '<ul style="font-size:12px;line-height:1.9;list-style:none">' +
-            items.map(it => '<li><strong>' + esc(it.name) + '</strong>' + (it.type ? ' <span style="color:var(--text-muted);font-size:10px">' + esc(it.type) + '</span>' : '') + '</li>').join('') +
-            '</ul>'
-          : '<p class="muted-12">Session is empty.</p>') +
-        '</div>';
-    },
 
     handleViewHash() {
       const mv = location.hash.match(/^#v\/([A-Za-z0-9_-]+)$/);
       if (mv) { this.openViewFromHash(mv[1]); return true; }
-      const m = location.hash.match(/^#c4(?:\/s\/([^\/?]+))?(?:\?(.*))?$/);
+      const m = location.hash.match(/^#c4(?:\?(.*))?$/);
       if (!m) return false;
-      if (m[1]) { this.openViewSession(decodeURIComponent(m[1])); return true; }
-      const q = new URLSearchParams(m[2] || '');
+      const q = new URLSearchParams(m[1] || '');
       if (q.get('domain')) this.viewDomain = q.get('domain');
       if (q.get('service')) this.viewService = q.get('service');
       const level = (q.get('level') || 'c1').toLowerCase();
@@ -5909,197 +4598,10 @@ function dashboard() {
       return true;
     },
 
-    async switchDiagramSession(id) {
-      if (this.diagramSessionId === id) return;
-      this.diagramSessionId = id;
-      this.diagramStep = -1;
-      this._diagramPositions = {};
-      localStorage.setItem('chronicle_diagram_session', id);
-      await this.fetchDiagram();
-    },
 
-    async closeDiagramSession(id) {
-      try { await fetch('/api/diagram/' + id, { method: 'DELETE' }); } catch(e) {}
-      this.diagramSessions = this.diagramSessions.filter(s => s.id !== id);
-      if (this.diagramSessionId === id) {
-        const remaining = this.diagramSessions;
-        if (remaining.length > 0) {
-          await this.switchDiagramSession(remaining[remaining.length - 1].id);
-        } else {
-          this.diagramSessionId = null;
-          this.diagramData = null;
-          localStorage.removeItem('chronicle_diagram_session');
-        }
-      }
-    },
 
-    // Get merged annotations for current step
-    _getDiagramAnnotations() {
-      const data = this.diagramData;
-      if (!data) return {};
-      const globalAnn = data.annotations || {};
-      if (this.diagramStep >= 0 && Array.isArray(data.steps)) {
-        const step = data.steps[this.diagramStep];
-        if (step) {
-          const stepAnn = {};
-          if (step.highlights) {
-            Object.entries(step.highlights).forEach(([key, color]) => {
-              stepAnn[key] = { highlight: color, note: step.notes?.[key] || '' };
-            });
-          }
-          return { ...globalAnn, ...stepAnn };
-        }
-      }
-      return globalAnn;
-    },
 
-    // Update annotation visuals without re-rendering the entire diagram
-    updateDiagramAnnotations() {
-      const container = document.getElementById('diagram-canvas') || document.getElementById('graph-canvas');
-      if (!container) return;
-      const svg = d3.select(container).select('svg');
-      if (svg.empty()) return;
-      const self = this;
-      const annotations = this.diagramStep < 0 ? {} : this._getDiagramAnnotations();
-      const hasAny = Object.keys(annotations).length > 0;
 
-      // Update node groups
-      svg.selectAll('.node-g').each(function(d) {
-        const g = d3.select(this);
-        const ann = annotations[d.node_key || d.key];
-        const dimmed = hasAny && !ann;
-
-        const baseFill = d.kind
-          ? (self.diagramNodeStyle(d.kind).fill || (self.layerColor(d.layer || d.kind) + '40'))
-          : (self.layerColor(d.layer || d.kind) + '40');
-        const baseStroke = d.kind
-          ? (self.diagramNodeStyle(d.kind).stroke || self.layerColor(d.layer || d.kind))
-          : self.layerColor(d.layer || d.kind);
-
-        g.select('.node-rect')
-          .attr('stroke', ann?.highlight || baseStroke)
-          .attr('stroke-width', ann?.highlight ? 3 : (d.kind ? self.diagramNodeStyle(d.kind).strokeWidth : 1.5))
-          .style('filter', ann?.highlight ? 'drop-shadow(0 0 8px ' + ann.highlight + ')' : 'none')
-          .attr('fill', dimmed ? '#f0e9dd' : (ann?.highlight ? ann.highlight + '30' : baseFill))
-          .style('opacity', dimmed ? 0.3 : 1);
-
-        // Dim text too
-        g.selectAll('text:not(.ann-note)')
-          .style('opacity', dimmed ? 0.3 : 1);
-
-        // Remove old note, add new if exists
-        g.selectAll('.ann-note').remove();
-        if (ann?.note) {
-          g.append('text').attr('class', 'ann-note')
-            .attr('text-anchor', 'middle').attr('dy', 32).attr('font-size', '8px')
-            .attr('fill', ann.highlight || 'var(--primary)')
-            .attr('font-style', 'italic')
-            .text(ann.note.length > 30 ? ann.note.slice(0, 29) + '\u2026' : ann.note);
-        }
-      });
-
-      // Dim edges not connected to highlighted nodes
-      const highlightedIds = new Set();
-      svg.selectAll('.node-g').each(function(d) {
-        if (annotations[d.node_key || d.key]) highlightedIds.add(d.id);
-      });
-      svg.selectAll('.edge-line').style('opacity', function(d) {
-        if (!hasAny) return 0.6;
-        return (highlightedIds.has(d.source.id || d.source) || highlightedIds.has(d.target.id || d.target)) ? 0.8 : 0.1;
-      });
-      svg.selectAll('.edge-short-label').style('opacity', function(d) {
-        if (!hasAny) return 0.8;
-        return (highlightedIds.has(d.source?.id || d.source || d.from_node_id || d.from) ||
-                highlightedIds.has(d.target?.id || d.target || d.to_node_id || d.to)) ? 0.8 : 0.05;
-      });
-    },
-
-    renderDiagram() {
-      const container = document.getElementById('diagram-canvas') || document.getElementById('graph-canvas');
-      if (!container || !this.diagramData) return;
-
-      const filtered = this._filterDiagramData();
-
-      // Expand with linked neighbor nodes (grayed out)
-      // Diagram nodes use key, graph data nodes use node_id — we need to match across both
-      if (this.diagramShowNeighbors && this.graphData) {
-        const diagramNodeIds = new Set(filtered.nodes.map(n => n.node_id || n.key));
-        const allEdges = this.graphData.edges || [];
-        const allNodes = {};
-        (this.graphData.nodes || []).forEach(n => { allNodes[n.node_id] = n; });
-
-        const neighborNodes = [];
-        const addedIds = new Set();
-        allEdges.forEach(e => {
-          if (diagramNodeIds.has(e.from_node_id) && !diagramNodeIds.has(e.to_node_id) && allNodes[e.to_node_id] && !addedIds.has(e.to_node_id)) {
-            neighborNodes.push({ ...allNodes[e.to_node_id], _neighbor: true, _manual: false, _path: false });
-            addedIds.add(e.to_node_id);
-          }
-          if (diagramNodeIds.has(e.to_node_id) && !diagramNodeIds.has(e.from_node_id) && allNodes[e.from_node_id] && !addedIds.has(e.from_node_id)) {
-            neighborNodes.push({ ...allNodes[e.from_node_id], _neighbor: true, _manual: false, _path: false });
-            addedIds.add(e.from_node_id);
-          }
-        });
-
-        if (neighborNodes.length > 0) {
-          filtered.nodes = filtered.nodes.concat(neighborNodes);
-          // Include edges between the expanded node set
-          const expandedIds = new Set(filtered.nodes.map(n => n.node_id || n.key));
-          filtered.edges = allEdges.filter(e => expandedIds.has(e.from_node_id) && expandedIds.has(e.to_node_id));
-        }
-      }
-
-      if (filtered.nodes.length === 0) { container.innerHTML = ''; return; }
-
-      const annotations = this._getDiagramAnnotations();
-      const self = this;
-
-      // Build groups config from diagram data
-      let diagramGroups = { keys: [], map: {}, field: '' };
-      const dgConfig = this.diagramData?.groups;
-      if (dgConfig?.field) {
-        const field = dgConfig.field;
-        const groupMap = {};
-        filtered.nodes.forEach(n => {
-          const gk = n[field] || n['_' + field] || '';
-          if (gk) {
-            if (!groupMap[gk]) groupMap[gk] = [];
-            groupMap[gk].push(n);
-            n._group = gk;
-          }
-        });
-        diagramGroups = { keys: Object.keys(groupMap), map: groupMap, field };
-      }
-
-      const result = this._renderGraphSVG({
-        container,
-        nodes: filtered.nodes,
-        edges: filtered.edges,
-        mode: this.isDemoMode ? 'strict' : this.diagramMode,
-        positionCache: this._diagramPositions,
-        groups: diagramGroups,
-        features: { annotations },
-        callbacks: {
-          onNodeClick(d, simEdges) {
-            const isAlready = self.selectedNode && self.selectedNode.id === d.id;
-            self.selectedNode = isAlready ? null : d;
-            if (isAlready) { self.nodeEvidence = null; } else { self.fetchNodeEvidence(d.node_key); }
-            self.highlightNode(isAlready ? null : d.id, simEdges);
-          },
-          onBackgroundClick(simEdges) {
-            self.selectedNode = null;
-            self.nodeEvidence = null;
-            self.highlightNode(null, simEdges);
-          },
-          onDrag(id, x, y) {
-            self._diagramPositions[id] = { x, y };
-          },
-        }
-      });
-
-      // Re-apply step annotations after render
-      this.$nextTick(() => this.updateDiagramAnnotations());
-    },
   };
 }
 

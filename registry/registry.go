@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"sort"
 	"fmt"
 	"os"
 	"strings"
@@ -145,6 +146,16 @@ func (r *Registry) IsValidNodeType(layer, nodeType string) bool {
 		return false
 	}
 	return types[nodeType]
+}
+
+// Layers returns the registered layer names, sorted.
+func (r *Registry) Layers() []string {
+	out := make([]string, 0, len(r.layers))
+	for l := range r.layers {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ValidNodeTypes returns the valid node types for a layer.

@@ -373,3 +373,22 @@ func TestLoadDefaults_InfraAndUITypesHavePolicy(t *testing.T) {
 		}
 	}
 }
+
+// Every registered node type must have a render policy: Resolve hides a
+// type without one, and a silently hidden type is how whole layers went
+// missing from diagrams. A new type in node_types without a policy line is
+// a build failure here, not a blank spot on someone's diagram.
+func TestLoadDefaults_EveryNodeTypeHasRenderPolicy(t *testing.T) {
+	r, err := LoadDefaults()
+	if err != nil {
+		t.Fatalf("LoadDefaults: %v", err)
+	}
+	p := r.SaliencePolicy()
+	for _, layer := range r.Layers() {
+		for _, nt := range r.ValidNodeTypes(layer) {
+			if _, ok := p.Rule("type:"+layer+"."+nt, "default"); !ok {
+				t.Errorf("no render policy for type:%s.%s (it would be hidden everywhere)", layer, nt)
+			}
+		}
+	}
+}

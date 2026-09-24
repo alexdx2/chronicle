@@ -144,7 +144,7 @@ The MCP server runs a web dashboard on localhost. It opens automatically on firs
 ![Dashboard](assets/dashboard.png)
 
 - **Overview** — graph stats, low-confidence edges, request log, growth chart
-- **Graph** — interactive graph explorer with tree, explore, and workspace modes
+- **Graph** — C1/C2/C3 and lens views built by the view engine, plus the raw graph explorer
 - **Language** — domain glossary and naming violation checker
 - **Diagrams** — C1/C2/C3, lenses, deps/impact/path views built from the graph; every card and arrow carries its evidence
 - **Settings** — scan manifest, instruction packs, edge type config
