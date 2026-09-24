@@ -31,6 +31,10 @@ type Store struct {
 	// replayed — callers that construct a graph should recompute trust when
 	// this is > 0 (store cannot: graph imports store, not the reverse).
 	journalSyncApplied int
+
+	// live wakes in-process readers of live_events (see LiveWake); nil for
+	// transaction-scoped stores.
+	live *liveWaker
 }
 
 // JournalSyncApplied reports how many merged journal events the sync-on-open
@@ -72,7 +76,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
-	s := &Store{conn: db, db: db, dbPath: dbPath}
+	s := &Store{conn: db, db: db, dbPath: dbPath, live: newLiveWaker()}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrating database: %w", err)
@@ -471,7 +475,7 @@ func (s *Store) ResetDB() error {
 	// Auto-close any running scans — user explicitly asked for reset
 	s.db.Exec("UPDATE scan_runs SET status='failed' WHERE status='running'")
 
-	tables := []string{"scan_runs", "scan_extractions", "scan_obligations", "evidence_verification_runs", "node_aliases", "graph_changelog", "mcp_request_log", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts", "journal_outbox", "journal_state", "journal_applied_events"}
+	tables := []string{"scan_runs", "scan_extractions", "scan_obligations", "evidence_verification_runs", "node_aliases", "graph_changelog", "mcp_request_log", "live_events", "graph_discoveries", "domain_language", "project_settings", "graph_evidence", "graph_snapshots", "graph_edges", "graph_nodes", "graph_revisions", "knowledge_contexts", "journal_outbox", "journal_state", "journal_applied_events"}
 	for _, t := range tables {
 		s.db.Exec("DROP TABLE IF EXISTS " + t)
 	}
@@ -637,6 +641,17 @@ CREATE TABLE IF NOT EXISTS mcp_request_log (
 
 CREATE INDEX IF NOT EXISTS idx_mcp_request_log_timestamp
   ON mcp_request_log(timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS live_events (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  kind     TEXT NOT NULL,
+  source   TEXT NOT NULL DEFAULT '',
+  payload  TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_events_kind_id
+  ON live_events(kind, id);
 
 CREATE TABLE IF NOT EXISTS graph_discoveries (
   discovery_id   INTEGER PRIMARY KEY AUTOINCREMENT,
