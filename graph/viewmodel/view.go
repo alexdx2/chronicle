@@ -42,6 +42,8 @@ type View struct {
 	// view draws no arrows; Nodes stay for provenance and the hidden
 	// summary, renderers show the table.
 	Table *VTable `json:"table,omitempty"`
+	// Unplaced lists marked keys the graph has but this view does not draw.
+	Unplaced []string `json:"unplaced,omitempty"`
 }
 
 // VTable is the tabular answer of a list view. Rows are sorted; Keys holds
@@ -69,8 +71,9 @@ type VGroup struct {
 	// Inferred marks a frame whose membership is not backed by a graph
 	// edge (e.g. topics framed by the only declared broker); Note says on
 	// what basis, so the frame never passes for evidence.
-	Inferred bool   `json:"inferred,omitempty"`
-	Note     string `json:"note,omitempty"`
+	Inferred bool      `json:"inferred,omitempty"`
+	Note     string    `json:"note,omitempty"`
+	Marks    []MarkRef `json:"marks,omitempty"`
 }
 
 // VNode is a node card. Endpoint pills come from EXPOSES_ENDPOINT edges and
@@ -113,11 +116,12 @@ type VNode struct {
 	// drawing, not memory. Status is omitted when active.
 	// Confidence/Trust are never omitted: a zero is a real, alarming value
 	// (an edge the graph could not trust at all), not "unknown".
-	Confidence    float64 `json:"confidence"`
-	Trust         float64 `json:"trust"`
-	Status        string  `json:"status,omitempty"`
-	EvidenceCount int     `json:"evidence_count"`
-	EvidenceRef   string  `json:"evidence_ref,omitempty"`
+	Confidence    float64   `json:"confidence"`
+	Trust         float64   `json:"trust"`
+	Status        string    `json:"status,omitempty"`
+	EvidenceCount int       `json:"evidence_count"`
+	EvidenceRef   string    `json:"evidence_ref,omitempty"`
+	Marks         []MarkRef `json:"marks,omitempty"`
 }
 
 // VEdge is a rendered arrow. With collapse=true, From/To are group keys (or
@@ -140,10 +144,11 @@ type VEdge struct {
 	// trust and derivation (hard < linked < inferred < unknown), and the
 	// SUM of evidence rows behind all components. Synthesized arrows
 	// (uses_infra, "via" bypass) carry Derivation "synthesized".
-	Confidence    float64 `json:"confidence"`
-	Trust         float64 `json:"trust"`
-	Derivation    string  `json:"derivation,omitempty"`
-	EvidenceCount int     `json:"evidence_count"`
+	Confidence    float64   `json:"confidence"`
+	Trust         float64   `json:"trust"`
+	Derivation    string    `json:"derivation,omitempty"`
+	EvidenceCount int       `json:"evidence_count"`
+	Marks         []MarkRef `json:"marks,omitempty"`
 }
 
 // derivationRank orders derivation kinds from strongest to weakest.
@@ -324,6 +329,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	if err := validateSalienceOverrides(spec.SalienceOverrides); err != nil {
 		return nil, fmt.Errorf("view spec: %w", err)
 	}
+	normMarks, err := NormalizeMarks(spec.Marks)
+	if err != nil {
+		return nil, fmt.Errorf("view spec: %w", err)
+	}
+	spec.Marks = normMarks
 	pathMode := false
 	if spec.Expand != nil {
 		switch spec.Expand.Mode {
@@ -1670,6 +1680,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	if spec.Layout.Preset == "flows" {
 		view.Table = flowsTable(inView, nodeByID, domEdges, exposerOf, owned)
 		view.Edges = nil
+	}
+
+	// Agent marks annotate what this view draws; they never add to it.
+	if len(spec.Marks) > 0 {
+		PlaceMarks(view, spec.Marks, buildViewPlacer(st, nodeByKey, nodeByID, attached, memberGroup, active))
 	}
 
 	if len(bIn) > 0 || len(bOut) > 0 {

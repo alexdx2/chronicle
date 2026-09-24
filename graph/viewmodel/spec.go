@@ -20,6 +20,9 @@ type ViewSpec struct {
 	// user's last word in the resolve chain. Session/ViewSpec-scoped by
 	// design: user decisions do not pollute the graph.
 	SalienceOverrides map[string]SalienceOverrideSpec `json:"salience_overrides,omitempty"`
+	// Marks annotate what the view draws: node or edge key → kind and note
+	// (see PlaceMarks). They never add elements; BuildView normalizes them.
+	Marks map[string]Mark `json:"marks,omitempty"`
 }
 
 // SalienceOverrideSpec pins a node's tier and/or render_mode. Values follow
