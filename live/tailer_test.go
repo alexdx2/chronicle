@@ -25,8 +25,9 @@ func TestTailer_OwnInsertIsImmediate(t *testing.T) {
 	st := openStore(t)
 	got := make(chan store.LiveEvent, 8)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	NewTailer([]Source{{Repo: "r", Store: st}}, func(ev store.LiveEvent) { got <- ev }).Start(ctx)
+	tl := NewTailer([]Source{{Repo: "r", Store: st}}, func(ev store.LiveEvent) { got <- ev })
+	tl.Start(ctx)
+	defer func() { cancel(); tl.Wait() }()
 	if _, err := PublishDiagram(st, SourceMCP, Diagram{Title: "x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +69,8 @@ func TestTailer_NoLostWakeBetweenDrainAndWait(t *testing.T) {
 		mu.Unlock()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	tl.Start(ctx)
+	defer func() { cancel(); tl.Wait() }()
 	for i := 0; i < 200; i++ {
 		select {
 		case ev := <-got:
@@ -99,8 +100,9 @@ func TestTailer_OtherHandleWithinASecond(t *testing.T) {
 	defer b.Close()
 	got := make(chan store.LiveEvent, 8)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	NewTailer([]Source{{Store: a}}, func(ev store.LiveEvent) { got <- ev }).Start(ctx)
+	tl := NewTailer([]Source{{Store: a}}, func(ev store.LiveEvent) { got <- ev })
+	tl.Start(ctx)
+	defer func() { cancel(); tl.Wait() }()
 	if _, err := PublishDiagram(b, SourceMCP, Diagram{Title: "from another process"}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,8 +121,9 @@ func TestTailer_ForwardsOnlyNewDiagrams(t *testing.T) {
 	PublishDiagram(st, SourceMCP, Diagram{Title: "history"})
 	got := make(chan store.LiveEvent, 8)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	NewTailer([]Source{{Store: st}}, func(ev store.LiveEvent) { got <- ev }).Start(ctx)
+	tl := NewTailer([]Source{{Store: st}}, func(ev store.LiveEvent) { got <- ev })
+	tl.Start(ctx)
+	defer func() { cancel(); tl.Wait() }()
 	ReportScreen(st, Screen{ClientID: "a"})
 	PublishDiagram(st, SourceMCP, Diagram{Title: "new"})
 	select {
@@ -145,8 +148,10 @@ func TestTailer_FollowsAResetTable(t *testing.T) {
 	}
 	got := make(chan store.LiveEvent, 8)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	NewTailer([]Source{{Store: st}}, func(ev store.LiveEvent) { got <- ev }).Start(ctx)
+	tl := NewTailer([]Source{{Store: st}}, func(ev store.LiveEvent) { got <- ev })
+	tl.logf = t.Logf
+	tl.Start(ctx)
+	defer func() { cancel(); tl.Wait() }()
 	if err := st.ResetDB(); err != nil {
 		t.Fatal(err)
 	}
@@ -158,5 +163,23 @@ func TestTailer_FollowsAResetTable(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a reset table stalled the tail")
+	}
+}
+
+func TestTailer_WaitReturnsAfterCancel(t *testing.T) {
+	st := openStore(t)
+	tl := NewTailer([]Source{{Store: st}}, func(store.LiveEvent) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	tl.Start(ctx)
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		tl.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not return within a second of cancel")
 	}
 }

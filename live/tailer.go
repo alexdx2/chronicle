@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -21,6 +22,8 @@ const (
 type Tailer struct {
 	sources []Source
 	send    func(store.LiveEvent)
+	logf    func(format string, args ...any)
+	wg      sync.WaitGroup
 	// afterDrain runs between the drain and the wait; tests use it to land
 	// an insert exactly in the window a lost wake would hide.
 	afterDrain func()
@@ -29,7 +32,7 @@ type Tailer struct {
 // NewTailer tails sources into send (which must be safe for concurrent use:
 // every source runs in its own goroutine).
 func NewTailer(sources []Source, send func(store.LiveEvent)) *Tailer {
-	return &Tailer{sources: sources, send: send}
+	return &Tailer{sources: sources, send: send, logf: log.Printf}
 }
 
 // Start takes each source's starting point now — events already stored are
@@ -44,17 +47,25 @@ func (t *Tailer) Start(ctx context.Context) {
 		if err != nil {
 			last = -1 // resolved inside the loop
 		}
+		t.wg.Add(1)
 		go t.tail(ctx, src, last)
 	}
 }
 
+// Wait blocks until every tail goroutine has exited; cancel the Start
+// context first.
+func (t *Tailer) Wait() {
+	t.wg.Wait()
+}
+
 func (t *Tailer) tail(ctx context.Context, src Source, last int64) {
+	defer t.wg.Done()
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	var lastLog time.Time
 	logf := func(format string, args ...any) {
 		if time.Since(lastLog) >= time.Minute {
-			log.Printf("live tail %q: "+format, append([]any{src.Repo}, args...)...)
+			t.logf("live tail %q: "+format, append([]any{src.Repo}, args...)...)
 			lastLog = time.Now()
 		}
 	}
