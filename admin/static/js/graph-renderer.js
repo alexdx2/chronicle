@@ -101,7 +101,7 @@ export class GraphRenderer {
       if (!activeGroups.has(gk)) {
         // The frame is dissolved, the membership is not: the card keeps its
         // group as a tag ("topic · orders") so it never reads as unaffiliated.
-        members.forEach(n => { n._group = null; n._dissolvedGroup = gk; });
+        members.forEach(n => { n._group = null; n._dissolvedGroup = (groupMeta[gk] && groupMeta[gk].label) || gk; });
       }
     }
     const useCompound = groupKeys.length > 0;
@@ -259,7 +259,7 @@ export class GraphRenderer {
           .attr('x', gNode.x - gNode.width / 2 + 10)
           .attr('y', gNode.y - gNode.height / 2 + 14);
         if (frameColor) label.attr('fill', frameColor);
-        label.text(gk.toUpperCase() + (meta.kind && meta.kind !== 'service' && meta.kind !== 'domain' ? ' · ' + meta.kind : ''));
+        label.text(String(meta.label || gk).toUpperCase() + (meta.kind && meta.kind !== 'service' && meta.kind !== 'domain' ? ' · ' + meta.kind : ''));
         if (meta.note) {
           gg.append('text')
             .attr('class', 'domain-note')
@@ -275,7 +275,7 @@ export class GraphRenderer {
           gg.style('cursor', 'pointer')
             .on('dblclick', (event) => {
               event.stopPropagation();
-              callbacks.onGroupDblClick(gk);
+              callbacks.onGroupDblClick(gk, (groupMeta[gk] && groupMeta[gk].label) || gk);
             });
         }
       });

@@ -60,7 +60,7 @@ func arrowWeak(e *VEdge) bool {
 	if e.EvidenceCount == 0 {
 		return true
 	}
-	return e.Confidence > 0 && e.Confidence < 0.7
+	return e.Confidence < 0.7
 }
 
 // groupStats formats a group's stats in a fixed, meaningful order.
@@ -99,7 +99,17 @@ func slug(name string) string {
 	if s[0] >= '0' && s[0] <= '9' {
 		s = "n" + s
 	}
+	// A node named "end" (a flow outcome) would terminate the subgraph it
+	// sits in; reserved words get a suffix so no id is ever a keyword.
+	if mermaidReserved[s] {
+		s += "_n"
+	}
 	return s
+}
+
+var mermaidReserved = map[string]bool{
+	"end": true, "graph": true, "subgraph": true, "style": true, "classdef": true, "class": true,
+	"click": true, "linkstyle": true, "direction": true, "flowchart": true, "default": true,
 }
 
 // idTable assigns stable, unique mermaid ids to every group and node key:
@@ -128,8 +138,16 @@ func idTable(v *View) map[string]string {
 	return ids
 }
 
+// mermaidEscape makes a name safe inside a quoted mermaid label: quotes,
+// angle brackets (an agent pastes this into PRs and wikis — a name must not
+// become markup) and line breaks. The <br/> the renderer itself inserts
+// between name and repo/stats survives.
 func mermaidEscape(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, `"`, "#quot;"), "\n", " ")
+	const br = "\x00br\x00"
+	s = strings.ReplaceAll(s, "<br/>", br)
+	r := strings.NewReplacer(`"`, "#quot;", "<", "#lt;", ">", "#gt;", "\r", " ", "\n", " ")
+	s = r.Replace(s)
+	return strings.ReplaceAll(s, br, "<br/>")
 }
 
 // mermaidShape wraps a label in the shape that tells the node's kind at a
@@ -293,16 +311,16 @@ func nodeProvenanceText(n *VNode) string {
 	if n.Status != "" && n.Status != "active" {
 		parts = append(parts, n.Status)
 	}
-	if n.Trust > 0 || n.Confidence > 0 {
-		c := n.Trust
-		if c == 0 {
-			c = n.Confidence
-		}
-		parts = append(parts, "confidence "+pct(c))
+	// Every node comes from a graph row: its confidence is always a fact,
+	// including 0 — which is exactly the value a reader must see.
+	c := n.Trust
+	if c == 0 && n.Confidence > 0 {
+		c = n.Confidence
 	}
+	parts = append(parts, "confidence "+pct(c))
 	if n.EvidenceCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d evidence", n.EvidenceCount))
-	} else if n.Confidence > 0 {
+	} else {
 		parts = append(parts, "no evidence")
 	}
 	return strings.Join(parts, " · ")
@@ -323,15 +341,26 @@ func RenderText(v *View) string {
 		level = "custom"
 	}
 	visible, hidden := 0, 0
+	hiddenKeys := make(map[string]bool)
 	for _, n := range v.Nodes {
 		if n.RenderMode == "hidden" {
 			hidden++
+			hiddenKeys[n.Key] = true
 		} else {
 			visible++
 		}
 	}
+	// Arrows into hidden nodes are not drawn (mermaid, dashboard) — the text
+	// describes the same diagram, so it skips them too.
+	var drawn []VEdge
+	for _, e := range v.Edges {
+		if hiddenKeys[e.From] || hiddenKeys[e.To] {
+			continue
+		}
+		drawn = append(drawn, e)
+	}
 	fmt.Fprintf(&b, "level: %s · domain: %s · %d groups · %d nodes · %d arrows · %d hidden\n",
-		level, v.Spec.Scope.Domain, len(v.Groups), visible, len(v.Edges), hidden)
+		level, v.Spec.Scope.Domain, len(v.Groups), visible, len(drawn), hidden)
 
 	members := make(map[string][]VNode)
 	var free []VNode
@@ -406,9 +435,9 @@ func RenderText(v *View) string {
 			nodeLine(n)
 		}
 	}
-	if len(v.Edges) > 0 {
+	if len(drawn) > 0 {
 		b.WriteString("\n## Arrows\n")
-		edges := append([]VEdge(nil), v.Edges...)
+		edges := append([]VEdge(nil), drawn...)
 		sort.Slice(edges, func(i, j int) bool {
 			if edges[i].From != edges[j].From {
 				return edges[i].From < edges[j].From
@@ -434,9 +463,9 @@ func RenderText(v *View) string {
 			if e.Derivation != "" {
 				prov = append(prov, e.Derivation)
 			}
-			if e.Derivation != "synthesized" && (e.Trust > 0 || e.Confidence > 0) {
+			if e.Derivation != "" && e.Derivation != "synthesized" {
 				c := e.Trust
-				if c == 0 {
+				if c == 0 && e.Confidence > 0 {
 					c = e.Confidence
 				}
 				prov = append(prov, pct(c))

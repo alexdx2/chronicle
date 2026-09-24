@@ -260,3 +260,40 @@ func TestDiagramBuild_RequiresSomething(t *testing.T) {
 		t.Fatal("a request with no preset/view_spec/node_keys must error")
 	}
 }
+
+func TestLargestDomain(t *testing.T) {
+	g := newLabTestGraph(t)
+	st := g.Store()
+	if got := largestDomain(st); got != "" {
+		t.Errorf("empty store: got %q", got)
+	}
+	mk := func(key, domain string) {
+		if _, err := st.UpsertNode(store.NodeRow{NodeKey: key, Layer: "service", NodeType: "service", DomainKey: domain,
+			Name: key, Status: "active", Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("service:service:b:one", "b")
+	mk("service:service:a:one", "a")
+	if got := largestDomain(st); got != "a" {
+		t.Errorf("tie breaks alphabetically: got %q", got)
+	}
+	mk("service:service:b:two", "b")
+	if got := largestDomain(st); got != "b" {
+		t.Errorf("most active nodes wins: got %q", got)
+	}
+}
+
+func TestDiagramBuild_NodeKeysAcrossDomainsIsAnError(t *testing.T) {
+	g := newLabTestGraph(t)
+	h := diagramBuildHandler(g)
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title": "x", "node_keys": `["service:service:a:one","service:service:b:one"]`,
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("keys from two domains must be an explicit error, not silent missing")
+	}
+}

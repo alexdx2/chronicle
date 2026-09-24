@@ -165,14 +165,15 @@ function adaptView(view, baseLookup) {
   vnodes.forEach(n => { if (n.group) memberCount[n.group] = (memberCount[n.group] || 0) + 1; });
 
   const groupName = {};
-  // groupMeta (keyed by the rendered group NAME, which is what the renderer
-  // keys frames by): kind/layer for frame styling, inferred+note so an
-  // inferred frame (topics in the only declared broker) says so on canvas.
+  // groupMeta (keyed by the group KEY — two services may share a name, a
+  // federation routinely has an "api" per repo; the frame's label is the
+  // name): kind/layer for frame styling, inferred+note so an inferred frame
+  // (topics in the only declared broker) says so on canvas.
   const groupMeta = {};
   vgroups.forEach(g => {
     groupName[g.key] = g.name;
-    groupMeta[g.name] = {
-      key: g.key, kind: g.kind || '',
+    groupMeta[g.key] = {
+      key: g.key, label: g.name, kind: g.kind || '',
       layer: String(g.key).includes(':') ? String(g.key).split(':')[0] : 'service',
       inferred: !!g.inferred, note: g.note || '', stats: g.stats || {},
     };
@@ -225,8 +226,8 @@ function adaptView(view, baseLookup) {
       node_type: n.type,
       layer: n.layer,
       domain_key: domain,
-      // Renderer group boxes key off the group NAME (rendered as the box label).
-      _group: n.group ? (groupName[n.group] || n.group) : null,
+      // Renderer frames key off the group KEY; groupMeta carries the label.
+      _group: n.group || null,
       _endpoints: n.endpoints || [],
       _usesModels: n.uses_models || [],
       // Subtitle: a flow's trigger endpoint ("GET /api/score"), else what

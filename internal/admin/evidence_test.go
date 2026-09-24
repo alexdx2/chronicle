@@ -46,7 +46,7 @@ func TestEvidence_ByEdgeKeys(t *testing.T) {
 	}
 	var resp struct {
 		Edges []struct {
-			Edge     store.EdgeRow      `json:"edge"`
+			Edge     store.EdgeRow       `json:"edge"`
 			Evidence []store.EvidenceRow `json:"evidence"`
 		} `json:"edges"`
 		Missing []string `json:"missing"`

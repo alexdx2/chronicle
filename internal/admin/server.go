@@ -1867,11 +1867,24 @@ func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 	// missing. This is how a collapsed C2 arrow ("calls ×3") explains
 	// itself without going through a node.
 	if r.Method == http.MethodPost {
+		// Only a JSON request from our own page can reach this: a
+		// cross-origin "simple" form/text POST is refused, the body and the
+		// key list are bounded, and evidence loads in one query.
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			httpError(w, fmt.Errorf("content-type must be application/json"), 415)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var body struct {
 			EdgeKeys []string `json:"edge_keys"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			httpError(w, err, 400)
+			return
+		}
+		const maxKeys = 500
+		if len(body.EdgeKeys) > maxKeys {
+			httpError(w, fmt.Errorf("at most %d edge_keys per request (got %d)", maxKeys, len(body.EdgeKeys)), 400)
 			return
 		}
 		type edgeEvidence struct {
@@ -1880,17 +1893,30 @@ func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 		}
 		out := []edgeEvidence{}
 		missing := []string{}
+		var found []store.EdgeRow
 		for _, k := range body.EdgeKeys {
 			e, err := s.getStore().GetEdgeByKey(k)
 			if err != nil || e == nil {
 				missing = append(missing, k)
 				continue
 			}
-			ev, _ := s.getStore().ListEvidenceByEdge(e.EdgeID)
+			found = append(found, *e)
+		}
+		ids := make([]int64, 0, len(found))
+		for _, e := range found {
+			ids = append(ids, e.EdgeID)
+		}
+		byEdge, err := s.getStore().ListEvidenceByEdgeIDs(ids)
+		if err != nil {
+			httpError(w, err, 500)
+			return
+		}
+		for _, e := range found {
+			ev := byEdge[e.EdgeID]
 			if ev == nil {
 				ev = []store.EvidenceRow{}
 			}
-			out = append(out, edgeEvidence{Edge: *e, Evidence: ev})
+			out = append(out, edgeEvidence{Edge: e, Evidence: ev})
 		}
 		httpJSON(w, map[string]any{"edges": out, "missing": missing})
 		return
@@ -1906,12 +1932,18 @@ func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodeEvidence, _ := s.getStore().ListEvidenceByNode(node.NodeID)
-	edges, _ := s.getStore().ListEdges(store.EdgeFilter{})
+	// Edges touching the node, by the indexed from/to columns; their
+	// evidence in one query.
+	outE, _ := s.getStore().ListEdges(store.EdgeFilter{FromNodeID: node.NodeID})
+	inE, _ := s.getStore().ListEdges(store.EdgeFilter{ToNodeID: node.NodeID})
+	edgeIDs := make([]int64, 0, len(outE)+len(inE))
+	for _, e := range append(outE, inE...) {
+		edgeIDs = append(edgeIDs, e.EdgeID)
+	}
 	var edgeEvidence []store.EvidenceRow
-	for _, e := range edges {
-		if e.FromNodeID == node.NodeID || e.ToNodeID == node.NodeID {
-			ev, _ := s.getStore().ListEvidenceByEdge(e.EdgeID)
-			edgeEvidence = append(edgeEvidence, ev...)
+	if byEdge, err := s.getStore().ListEvidenceByEdgeIDs(edgeIDs); err == nil {
+		for _, id := range edgeIDs {
+			edgeEvidence = append(edgeEvidence, byEdge[id]...)
 		}
 	}
 	httpJSON(w, map[string]any{

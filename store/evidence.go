@@ -9,36 +9,36 @@ import (
 
 // EvidenceRow represents a row in graph_evidence.
 type EvidenceRow struct {
-	EvidenceID       int64   `json:"evidence_id"`
-	TargetKind       string  `json:"target_kind"`
-	NodeID           int64   `json:"node_id,omitempty"`
-	EdgeID           int64   `json:"edge_id,omitempty"`
-	SourceKind       string  `json:"source_kind"`
-	RepoName         string  `json:"repo_name,omitempty"`
-	FilePath         string  `json:"file_path,omitempty"`
-	LineStart        int     `json:"line_start,omitempty"`
-	LineEnd          int     `json:"line_end,omitempty"`
-	ColumnStart      int     `json:"column_start,omitempty"`
-	ColumnEnd        int     `json:"column_end,omitempty"`
-	Locator          string  `json:"locator,omitempty"`
-	ExtractorID      string  `json:"extractor_id"`
-	ExtractorVersion string  `json:"extractor_version"`
-	ASTRule          string  `json:"ast_rule,omitempty"`
-	SnippetHash      string  `json:"snippet_hash,omitempty"`
-	CommitSHA        string  `json:"commit_sha,omitempty"`
-	ObservedAt       string  `json:"observed_at"`
-	VerifiedAt       string  `json:"verified_at,omitempty"`
-	Confidence       float64 `json:"confidence"`
-	EvidenceStatus   string  `json:"evidence_status"`
-	EvidencePolarity string  `json:"evidence_polarity"`
-	EvidenceUID              string `json:"evidence_uid,omitempty"`
-	ContextID                int64  `json:"context_id,omitempty"`
-	ValidFromRevisionID      int64  `json:"valid_from_revision_id,omitempty"`
-	ValidToRevisionID        int64  `json:"valid_to_revision_id,omitempty"`
-	LastVerifiedRevisionID   int64  `json:"last_verified_revision_id,omitempty"`
-	InvalidatedByRevisionID  int64  `json:"invalidated_by_revision_id,omitempty"`
-	InvalidatedReason        string `json:"invalidated_reason,omitempty"`
-	Metadata         string  `json:"metadata"`
+	EvidenceID              int64   `json:"evidence_id"`
+	TargetKind              string  `json:"target_kind"`
+	NodeID                  int64   `json:"node_id,omitempty"`
+	EdgeID                  int64   `json:"edge_id,omitempty"`
+	SourceKind              string  `json:"source_kind"`
+	RepoName                string  `json:"repo_name,omitempty"`
+	FilePath                string  `json:"file_path,omitempty"`
+	LineStart               int     `json:"line_start,omitempty"`
+	LineEnd                 int     `json:"line_end,omitempty"`
+	ColumnStart             int     `json:"column_start,omitempty"`
+	ColumnEnd               int     `json:"column_end,omitempty"`
+	Locator                 string  `json:"locator,omitempty"`
+	ExtractorID             string  `json:"extractor_id"`
+	ExtractorVersion        string  `json:"extractor_version"`
+	ASTRule                 string  `json:"ast_rule,omitempty"`
+	SnippetHash             string  `json:"snippet_hash,omitempty"`
+	CommitSHA               string  `json:"commit_sha,omitempty"`
+	ObservedAt              string  `json:"observed_at"`
+	VerifiedAt              string  `json:"verified_at,omitempty"`
+	Confidence              float64 `json:"confidence"`
+	EvidenceStatus          string  `json:"evidence_status"`
+	EvidencePolarity        string  `json:"evidence_polarity"`
+	EvidenceUID             string  `json:"evidence_uid,omitempty"`
+	ContextID               int64   `json:"context_id,omitempty"`
+	ValidFromRevisionID     int64   `json:"valid_from_revision_id,omitempty"`
+	ValidToRevisionID       int64   `json:"valid_to_revision_id,omitempty"`
+	LastVerifiedRevisionID  int64   `json:"last_verified_revision_id,omitempty"`
+	InvalidatedByRevisionID int64   `json:"invalidated_by_revision_id,omitempty"`
+	InvalidatedReason       string  `json:"invalidated_reason,omitempty"`
+	Metadata                string  `json:"metadata"`
 	// Assertion-based verification fields
 	Assertion          string `json:"assertion,omitempty"`
 	AssertionKind      string `json:"assertion_kind,omitempty"`
@@ -1229,7 +1229,6 @@ func placeholderList(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
-
 // EvidenceIDsCreatedIn returns the evidence rows (filePath, extractorID)
 // asserted in revisionID — rows the revision inserted (valid_from) and rows it
 // re-asserted. Re-assertion goes through AddEvidence's dedup path, which
@@ -1495,19 +1494,32 @@ type EvidenceSummary struct {
 // invalidated/superseded/negative rows do not. Ref prefers valid rows,
 // then the lowest evidence_id, so it is stable across runs.
 func (s *Store) EvidenceSummaries() (nodes map[int64]EvidenceSummary, edges map[int64]EvidenceSummary, err error) {
+	// One index-backed scan in evidence_id order; the best ref per target
+	// (valid > revalidated > stale, then lowest id) is resolved in Go so
+	// SQLite never sorts the whole table.
 	rows, err := s.db.Query(`
 		SELECT target_kind, COALESCE(node_id,0), COALESCE(edge_id,0),
 		       COALESCE(file_path,''), COALESCE(line_start,0), evidence_status
 		FROM graph_evidence
 		WHERE evidence_polarity = 'positive'
 		  AND evidence_status IN ('valid','revalidated','stale')
-		ORDER BY CASE evidence_status WHEN 'valid' THEN 0 WHEN 'revalidated' THEN 1 ELSE 2 END, evidence_id`)
+		ORDER BY evidence_id`)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
+	rank := func(status string) int {
+		switch status {
+		case "valid":
+			return 0
+		case "revalidated":
+			return 1
+		}
+		return 2
+	}
 	nodes = make(map[int64]EvidenceSummary)
 	edges = make(map[int64]EvidenceSummary)
+	refRank := map[[2]int64]int{} // (kind 0/1, id) → rank of the current ref
 	for rows.Next() {
 		var kind, file, status string
 		var nid, eid int64
@@ -1515,20 +1527,54 @@ func (s *Store) EvidenceSummaries() (nodes map[int64]EvidenceSummary, edges map[
 		if err := rows.Scan(&kind, &nid, &eid, &file, &line, &status); err != nil {
 			return nil, nil, err
 		}
-		target := nodes
-		id := nid
+		target, id, k := nodes, nid, [2]int64{0, nid}
 		if kind == "edge" {
-			target, id = edges, eid
+			target, id, k = edges, eid, [2]int64{1, eid}
 		}
 		sum := target[id]
 		sum.Count++
-		if sum.Ref == "" && file != "" {
-			sum.Ref = file
-			if line > 0 {
-				sum.Ref = fmt.Sprintf("%s:%d", file, line)
+		if file != "" {
+			r := rank(status)
+			if cur, ok := refRank[k]; !ok || r < cur {
+				sum.Ref = file
+				if line > 0 {
+					sum.Ref = fmt.Sprintf("%s:%d", file, line)
+				}
+				refRank[k] = r
 			}
 		}
 		target[id] = sum
 	}
 	return nodes, edges, rows.Err()
+}
+
+// ListEvidenceByEdgeIDs loads evidence rows for many edges in one query,
+// keyed by edge id (an arrow's component edges resolve in one round trip).
+func (s *Store) ListEvidenceByEdgeIDs(ids []int64) (map[int64][]EvidenceRow, error) {
+	out := make(map[int64][]EvidenceRow, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	const chunk = 500
+	for start := 0; start < len(ids); start += chunk {
+		end := start + chunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		part := ids[start:end]
+		placeholders := strings.Repeat("?,", len(part))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]any, len(part))
+		for i, id := range part {
+			args[i] = id
+		}
+		rows, err := s.queryEvidenceArgs("edge_id IN ("+placeholders+")", args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			out[r.EdgeID] = append(out[r.EdgeID], r)
+		}
+	}
+	return out, nil
 }

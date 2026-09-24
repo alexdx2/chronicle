@@ -227,8 +227,6 @@ button,input,select,textarea{font-family:inherit}
 .graph-svg .node-g.out-of-focus .node-rect{stroke-dasharray:4,3}
 .graph-svg.has-highlight .edge-line.dimmed{opacity:.06}
 .graph-svg.has-highlight .edge-line.highlighted{stroke:var(--primary);stroke-width:2.5;opacity:1}
-.graph-svg .edge-label{font-size:9px;fill:var(--primary);font-weight:600;display:none}
-.graph-svg.has-highlight .edge-label.highlighted{display:block}
 .graph-svg .layer-band{fill:#f5f0e8;stroke:var(--border);stroke-dasharray:4,2}
 .graph-svg .layer-label{font-size:12px;font-weight:600;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1px}
 .graph-svg .arrow-head{fill:#b8a898}
@@ -1134,6 +1132,7 @@ button,input,select,textarea{font-family:inherit}
               <input type="checkbox" data-testid="show-hidden-salience" :checked="showHiddenSalience"
                      @change="showHiddenSalience = $event.target.checked; renderViewMode()">
               <span>Show hidden<span x-show="!showHiddenSalience && _salienceHiddenCount" x-text="' (+' + _salienceHiddenCount + ')'" style="color:var(--text-muted)"></span></span>
+              <span x-show="!_salienceHiddenCount && _hiddenSummary.length" style="font-size:9px;color:var(--text-muted);margin-left:4px">(nothing to reveal here — the entries below left by filters)</span>
             </label>
             <!-- Why hidden: the engine's summary, one line per (type, reason). -->
             <div data-testid="hidden-summary" x-show="_hiddenSummary.length" style="margin:4px 0 0 18px;font-size:9px;color:var(--text-muted);line-height:1.5">
@@ -2100,7 +2099,7 @@ function dashboard() {
           this.loading.graph = false;
           this.loaded.graph = true;
           // Initialize graph controllers (shared method — also called from Graph tab click)
-          await this.initGraphControllers();
+          await this.initModeController();
 
           // Pretty view-preset URL (/graph/c1 …) — enter the view level.
           // A #v/ or #c4 hash wins over the path preset (handleViewHash
@@ -2504,7 +2503,7 @@ function dashboard() {
       } catch(e) { console.error('discoveries:', e); }
     },
 
-    async initGraphControllers() {
+    async initModeController() {
       if (this.modeController) return; // already initialized
       try {
         if (!this.modeController) {
@@ -2663,7 +2662,7 @@ function dashboard() {
         await this.fetchGraphData();
         this.loading.graph = false;
         this.loaded.graph = true;
-        await this.initGraphControllers();
+        await this.initModeController();
         if (firstVisit) { await this.enterViewLevel('c2'); return; }
       }
       this.$nextTick(() => this.renderGraph());
@@ -3174,96 +3173,6 @@ function dashboard() {
       });
     },
 
-    highlightNode(nodeId, edges) {
-      const self = this;
-      const svg = d3.select('#graph-canvas .graph-svg');
-      if (svg.empty()) return;
-      if (!nodeId) {
-        // Clear highlight — restore out-of-focus on context nodes
-        svg.classed('has-highlight', false);
-        svg.selectAll('.dimmed').classed('dimmed', false);
-        svg.selectAll('.highlighted').classed('highlighted', false);
-        svg.selectAll('.node-g').each(function() {
-          const el = d3.select(this);
-          const d = el.datum?.();
-          const nid = d ? (d.id || d.node_id || d.key) : null;
-          const shouldDim = false;
-          el.classed('out-of-focus', shouldDim);
-        });
-        svg.selectAll('.edge-short-label').classed('dimmed', false).classed('highlighted', false)
-          .each(function() {
-            const d = d3.select(this).datum?.();
-            const info = d ? (window._edgeCategoryLookup || {})[d.edge_type] : null;
-            d3.select(this).text(info ? info.shortLabel : '');
-          });
-        return;
-      }
-
-      // Find connected node IDs (both directions)
-      const connectedNodes = new Set([nodeId]);
-      const connectedEdgeKeys = new Set();
-      (edges || this.graphData.edges || []).forEach(e => {
-        const eFrom = e.source?.id || e.from_node_id || e.from;
-        const eTo = e.target?.id || e.to_node_id || e.to;
-        if (eFrom === nodeId) {
-          connectedNodes.add(eTo);
-          connectedEdgeKeys.add(eFrom + '->' + eTo);
-        }
-        if (eTo === nodeId) {
-          connectedNodes.add(eFrom);
-          connectedEdgeKeys.add(eFrom + '->' + eTo);
-        }
-      });
-
-      svg.classed('has-highlight', true);
-
-      // Dim/highlight nodes
-      svg.selectAll('.node-g, g[transform]').each(function() {
-        const el = d3.select(this);
-        const rect = el.select('.node-rect, .node-circle');
-        const nid = el.datum?.()?.id || el.datum?.()?.node_id || el.datum?.()?.key;
-        // For layered graph, we stored node in closure — check via position matching
-      });
-
-      // Dim/highlight nodes — works for both force graph (d3 data) and layered (data-node-id attr)
-      svg.selectAll('.node-g').each(function() {
-        const el = d3.select(this);
-        const d = el.datum?.();
-        const nid = d ? (d.id || d.node_id || d.key) : parseInt(el.attr('data-node-id'));
-        const isConnected = connectedNodes.has(nid);
-        el.classed('dimmed', !isConnected);
-        // Lift out-of-focus dimming for connected context nodes
-        if (isConnected) el.classed('out-of-focus', false);
-        el.select('.node-rect, .node-circle').classed('dimmed', !isConnected);
-      });
-
-      // Dim/highlight edges
-      svg.selectAll('.edge-line').each(function() {
-        const el = d3.select(this);
-        const d = el.datum?.();
-        const fromId = d ? (d.source?.id || d.source || d.from_node_id || d.from) : null;
-        const toId = d ? (d.target?.id || d.target || d.to_node_id || d.to) : null;
-        const key = fromId + '->' + toId;
-        el.classed('dimmed', !connectedEdgeKeys.has(key));
-        el.classed('highlighted', connectedEdgeKeys.has(key));
-      });
-
-      // Update short labels: dim non-connected, highlight+expand connected
-      svg.selectAll('.edge-short-label').each(function() {
-        const el = d3.select(this);
-        const d = el.datum?.();
-        const fromId = d ? (d.source?.id || d.source || d.from_node_id || d.from) : null;
-        const toId   = d ? (d.target?.id || d.target || d.to_node_id || d.to)   : null;
-        const key = fromId + '->' + toId;
-        const connected = connectedEdgeKeys.has(key);
-        el.classed('dimmed', !connected);
-        el.classed('highlighted', connected);
-        if (connected && d) {
-          // Show full edge type instead of short label
-          el.text(d.edge_type ? d.edge_type.toLowerCase().replace(/_/g, ' ') : '');
-        }
-      });
-    },
 
     renderGraph() {
       const container = document.getElementById('graph-canvas');
@@ -3580,7 +3489,7 @@ function dashboard() {
         this.loading.graph = false;
         this.loaded.graph = true;
       }
-      await this.initGraphControllers();
+      await this.initModeController();
     },
 
     // /api/view requires scope.domain — resolve it once.
@@ -3780,7 +3689,8 @@ function dashboard() {
       // Pristine preset at the stack root → pretty path (/graph/c2), no hash.
       // #v/<b64> is reserved for pivots and custom/mutated specs.
       if (this.viewStack.length === 1 && this._viewPresetLevels.includes(this.viewLevel) &&
-          top.pristineSpec && JSON.stringify(top.spec) === JSON.stringify(top.pristineSpec)) {
+          top.pristineSpec && JSON.stringify(top.spec) === JSON.stringify(top.pristineSpec) &&
+          !(top.spec.scope && top.spec.scope.service)) {
         const want = '/graph/' + this.viewLevel;
         if (location.pathname !== want || location.hash) history.replaceState(null, '', want);
         return;
@@ -3837,7 +3747,7 @@ function dashboard() {
             html += '<div style="font-size:12px;margin-top:6px">Domains in this graph: ' + knownDomains.map(esc).join(', ') + '</div>';
           }
           if (missing.length) html += '<div style="font-size:11px;margin-top:6px">⚠ unresolved pins: <span style="font-family:var(--font-mono)">' + missing.map(esc).join(', ') + '</span></div>';
-          html += '<div style="font-size:11px;margin-top:12px">Pick a level above (System · Services · Components) to rebuild this view for the current graph, or <button class="btn-outline-xs" style="vertical-align:baseline" onclick="document.querySelector(\'[x-data]\').__x.$data.exitViewMode()">show everything</button></div>';
+          html += '<div style="font-size:11px;margin-top:12px">Pick a level above (System · Services · Components) to rebuild this view for the current graph, or <button class="btn-outline-xs" style="vertical-align:baseline" onclick="Alpine.$data(document.querySelector(\'[x-data]\')).exitViewMode()">show everything</button></div>';
           html += '</div>';
           container.innerHTML = html;
         }
@@ -3880,7 +3790,7 @@ function dashboard() {
           onClick: (d) => self.onViewNodeClick(d),
           onDblClick: (d) => self.onViewNodeDblClick(d),
           onDrill: (d) => self.onViewNodeDblClick(d),
-          onGroupDblClick: (name) => self.onViewGroupDblClick(name),
+          onGroupDblClick: (key, label) => self.onViewGroupDblClick(key, label),
           onBackgroundClick: () => { self.selectedNode = null; self.nodeEvidence = null; self.selectedEdge = null; self.edgeEvidence = null; },
           onEdgeClick: (e) => self.onViewEdgeClick(e),
         },
@@ -4082,7 +3992,9 @@ function dashboard() {
     // Dblclick on a rendered group FRAME (renderer compound box). A service
     // frame (C3-all and any group-by-service view) drills into that
     // service's focused C3; other frames (modules, layers) are inert.
-    onViewGroupDblClick(name) {
+    onViewGroupDblClick(key, label) {
+      // key is the group key (service node key); label its display name.
+      const name = label || key;
       if (this.getViewServices().includes(name)) this.drillViewService(name);
     },
 
@@ -4092,6 +4004,11 @@ function dashboard() {
       if (reason === 'isolated') return 'nothing touches it in this view';
       if (reason === 'no_policy') return 'type has no render policy';
       if (reason === 'user_override') return 'hidden by you';
+      if (reason === 'filter:layers') return 'layer not in this view (change Layers & types)';
+      if (reason === 'filter:exclude_types') return 'type excluded by this view';
+      if (reason === 'filter:bypass') return 'kept as “via” connection only';
+      if (reason === 'filter:name') return 'does not match the name filter';
+      if (reason === 'filter:min_confidence') return 'below the confidence bar';
       if (reason.indexOf('noise:') === 0) return reason.slice(6) + ' code';
       if (reason.indexOf('type:') === 0) return 'render policy for ' + reason.slice(5);
       if (reason.indexOf('role:') === 0) return 'role ' + reason.slice(5);
@@ -4587,6 +4504,13 @@ function dashboard() {
     handleViewHash() {
       const mv = location.hash.match(/^#v\/([A-Za-z0-9_-]+)$/);
       if (mv) { this.openViewFromHash(mv[1]); return true; }
+      // Diagram sessions are gone: a #c4/s/<id> link from an earlier
+      // conversation gets a plain explanation instead of a blank canvas.
+      if (/^#c4\/s\//.test(location.hash)) {
+        this.viewError = 'This link pointed at a diagram session; sessions were replaced by self-describing #v/ links — rebuild the diagram with chronicle_diagram_build.';
+        this.enterViewLevel('c2');
+        return true;
+      }
       const m = location.hash.match(/^#c4(?:\?(.*))?$/);
       if (!m) return false;
       const q = new URLSearchParams(m[1] || '');

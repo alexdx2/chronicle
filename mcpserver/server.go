@@ -1325,6 +1325,15 @@ func viewSpecURL(spec viewmodel.ViewSpec) string {
 	return fmt.Sprintf("%s/#v/%s", adminBaseURL(), base64.RawURLEncoding.EncodeToString(data))
 }
 
+// depthSpec bounds a preset's expansion to the depth the caller asked for,
+// so the diagram link shows the same neighbourhood as the answer.
+func depthSpec(spec viewmodel.ViewSpec, depth int) viewmodel.ViewSpec {
+	if depth > 0 && spec.Expand != nil {
+		spec.Expand.Depth = depth
+	}
+	return spec
+}
+
 // withViewURL re-shapes a struct result into a generic map and appends
 // view_url — the equivalent diagram of the query result. The original
 // fields are untouched.
@@ -1381,7 +1390,7 @@ func queryDepsHandler(g *graph.Graph) server.ToolHandlerFunc {
 		}
 		return jsonResult(map[string]any{
 			"nodes":    nodes,
-			"view_url": viewSpecURL(viewmodel.PresetSpec("deps", keyDomain(nodeKey), nodeKey)),
+			"view_url": viewSpecURL(depthSpec(viewmodel.PresetSpec("deps", keyDomain(nodeKey), nodeKey), depth)),
 		}), nil
 	}
 }
@@ -1744,7 +1753,7 @@ func impactHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		return jsonResult(withViewURL(result, viewmodel.PresetSpec("impact", keyDomain(nodeKey), nodeKey))), nil
+		return jsonResult(withViewURL(result, depthSpec(viewmodel.PresetSpec("impact", keyDomain(nodeKey), nodeKey), depth))), nil
 	}
 }
 
@@ -2672,6 +2681,22 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 				spec.Scope.Domain = largestDomain(g.Store())
 			}
 		default:
+			// A view is single-domain: keys from several domains cannot
+			// share one diagram here (Chronicle Pro's federation views can).
+			domains := map[string]bool{}
+			for _, k := range nodeKeys {
+				if d := keyDomain(k); d != "" {
+					domains[d] = true
+				}
+			}
+			if len(domains) > 1 {
+				var list []string
+				for d := range domains {
+					list = append(list, d)
+				}
+				sort.Strings(list)
+				return errorResult(fmt.Errorf("node_keys span %d domains (%s); a view is single-domain — pass one domain's keys, or use the Pro federation presets", len(list), strings.Join(list, ", "))), nil
+			}
 			if domain == "" {
 				domain = keyDomain(nodeKeys[0])
 			}

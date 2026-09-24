@@ -253,9 +253,8 @@ func renderRank(m RenderMode) int {
 	}
 }
 
-// applyKey merges the "default" rule then the level-specific rule for a policy
-// key into d (per-field, last-writer-wins for tier/render_mode).
-// applyKey merges the key's default rule then its level rule. Returns
+// applyKey merges the key's default rule then its level rule into d
+// (per-field, last-writer-wins for tier/render_mode). Returns
 // whether any rule existed for the key; a matched key becomes the
 // Decision's Reason.
 func applyKey(p *registry.SaliencePolicy, d *Decision, key, level string) bool {

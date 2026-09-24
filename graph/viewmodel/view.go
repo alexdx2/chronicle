@@ -97,10 +97,12 @@ type VNode struct {
 	// Provenance, straight from the graph row and its evidence: a card
 	// that cannot say how sure it is and where its proof lives is a
 	// drawing, not memory. Status is omitted when active.
-	Confidence    float64 `json:"confidence,omitempty"`
-	Trust         float64 `json:"trust,omitempty"`
+	// Confidence/Trust are never omitted: a zero is a real, alarming value
+	// (an edge the graph could not trust at all), not "unknown".
+	Confidence    float64 `json:"confidence"`
+	Trust         float64 `json:"trust"`
 	Status        string  `json:"status,omitempty"`
-	EvidenceCount int     `json:"evidence_count,omitempty"`
+	EvidenceCount int     `json:"evidence_count"`
 	EvidenceRef   string  `json:"evidence_ref,omitempty"`
 }
 
@@ -124,10 +126,10 @@ type VEdge struct {
 	// trust and derivation (hard < linked < inferred < unknown), and the
 	// SUM of evidence rows behind all components. Synthesized arrows
 	// (uses_infra, "via" bypass) carry Derivation "synthesized".
-	Confidence    float64 `json:"confidence,omitempty"`
-	Trust         float64 `json:"trust,omitempty"`
+	Confidence    float64 `json:"confidence"`
+	Trust         float64 `json:"trust"`
 	Derivation    string  `json:"derivation,omitempty"`
-	EvidenceCount int     `json:"evidence_count,omitempty"`
+	EvidenceCount int     `json:"evidence_count"`
 }
 
 // derivationRank orders derivation kinds from strongest to weakest.
@@ -367,7 +369,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// Provenance digest (one query): evidence counts + best ref per target.
 	nodeSum, edgeSum, err := st.EvidenceSummaries()
 	if err != nil {
-		nodeSum, edgeSum = map[int64]store.EvidenceSummary{}, map[int64]store.EvidenceSummary{}
+		// A view that silently reports "no evidence" on every element is
+		// worse than no view: the reader would trust the wrong picture.
+		return nil, fmt.Errorf("evidence digest: %w", err)
 	}
 
 	nodeByID := make(map[int64]*store.NodeRow, len(nodes))
@@ -533,6 +537,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// pathPairs holds the unordered consecutive node-id pairs of the found
 	// path: in path mode only edges along the path are rendered.
 	var pathPairs map[[2]int64]bool
+	// pathServiceOf frames a path's end node with the service the caller
+	// named (see the path block below).
+	pathServiceOf := make(map[int64]string)
 	if pathMode {
 		var allow map[string]bool
 		if spec.Expand != nil {
@@ -541,12 +548,44 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		a := nodeByKey[spec.Scope.Nodes[0]]
 		b := nodeByKey[spec.Scope.Nodes[1]]
 		if a != nil && b != nil {
-			order, pairs := shortestPath(a.NodeID, b.NodeID, domEdges, nodeByID, allow)
+			// A service named as a path endpoint means "anything that
+			// service owns": services have no dependency edges of their own,
+			// their components do. The path lands on a component and the
+			// service frames it, so the reader still sees where it ended.
+			endpointSet := func(n *store.NodeRow) map[int64]bool {
+				set := map[int64]bool{n.NodeID: true}
+				if n.Layer == "service" && n.NodeType == "service" {
+					for id, svc := range owned {
+						if svc.NodeID == n.NodeID && nodeByID[id] != nil {
+							set[id] = true
+						}
+					}
+				}
+				return set
+			}
+			order, pairs := shortestPathSets(endpointSet(a), endpointSet(b), domEdges, nodeByID, allow)
 			for _, id := range order {
 				inView[id] = true
 				view.Trace = append(view.Trace, nodeByID[id].NodeKey)
 			}
 			pathPairs = pairs
+			if len(order) > 0 {
+				for _, svc := range []*store.NodeRow{a, b} {
+					if svc.Layer != "service" || svc.NodeType != "service" {
+						continue
+					}
+					landed := false
+					for _, id := range order {
+						if id != svc.NodeID && owned[id] != nil && owned[id].NodeID == svc.NodeID {
+							pathServiceOf[id] = svc.NodeKey
+							landed = true
+						}
+					}
+					if landed {
+						delete(inView, svc.NodeID) // the service is the frame, not a card
+					}
+				}
+			}
 		}
 		// No path (or unresolved seed): the view holds just the seeds with an
 		// empty Trace — deliberately not an error.
@@ -629,17 +668,37 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// removedBypass: nodes cut by the bypass selectors. Nodes cut by the
 	// plain filters (nodePasses) are simply dropped — they sever paths.
 	removedBypass := make(map[int64]bool)
+	// filteredOut accounts for what the view's own filters removed (layers,
+	// exclude_types, name, min_confidence, bypass): those nodes are not
+	// VNodes, so the hidden summary is the only place they are named.
+	type filteredKey struct{ layer, typ, reason string }
+	filteredCounts := make(map[filteredKey]int)
 	for id := range inView {
 		n := nodeByID[id]
 		if bypassTypes[n.NodeType] || bypassLayers[n.Layer] {
 			removedBypass[id] = true
 			delete(inView, id)
+			filteredCounts[filteredKey{n.Layer, n.NodeType, "filter:bypass"}]++
 			continue
 		}
 		if !nodePasses(n) {
 			delete(inView, id)
+			filteredCounts[filteredKey{n.Layer, n.NodeType, "filter:" + filterReason(f, n)}]++
 		}
 	}
+	var filteredOut []HiddenEntry
+	for k, c := range filteredCounts {
+		filteredOut = append(filteredOut, HiddenEntry{Layer: k.layer, Type: k.typ, Reason: k.reason, Count: c})
+	}
+	sort.Slice(filteredOut, func(i, j int) bool {
+		if filteredOut[i].Count != filteredOut[j].Count {
+			return filteredOut[i].Count > filteredOut[j].Count
+		}
+		if filteredOut[i].Layer != filteredOut[j].Layer {
+			return filteredOut[i].Layer < filteredOut[j].Layer
+		}
+		return filteredOut[i].Type < filteredOut[j].Type
+	})
 
 	// Pinned keys (palette drops onto an existing view) join the view
 	// unconditionally: they bypass node filters and endpoint absorption and
@@ -749,13 +808,19 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			}
 			for _, id := range topicIDs {
 				n := nodeByID[id]
-				tr := strings.ToLower(topicTransport(*n))
-				for _, b := range brokers {
-					bn := strings.ToLower(b.Name)
-					if (tr != "" && strings.Contains(bn, tr)) || (tr == "queue" && b.NodeType == "queue") {
-						brokerOf[id] = b.NodeID
-						setBasis(b.NodeID, "transport matches broker")
-						break
+				// Only a DECLARED transport (metadata) can claim a match;
+				// topicTransport's "kafka" default is a guess and must not
+				// pass for one — with two brokers it would file every
+				// unannotated topic under Kafka and call it evidence.
+				if tr, declared := declaredTransport(*n); declared {
+					tr = strings.ToLower(tr)
+					for _, b := range brokers {
+						bn := strings.ToLower(b.Name)
+						if strings.Contains(bn, tr) || (tr == "queue" && b.NodeType == "queue") {
+							brokerOf[id] = b.NodeID
+							setBasis(b.NodeID, "transport matches broker")
+							break
+						}
 					}
 				}
 				if brokerOf[id] == 0 && len(brokers) == 1 {
@@ -859,6 +924,17 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			focusFree[id] = true
 		}
 	}
+	// The subject's own service is a FRAME in collapsed expand views
+	// (deps): its components stay visible around the subject — "arena.service
+	// depends on jerry.client and tom.client", not "arena.service depends on
+	// arena-api" — while other services still collapse to cards.
+	if spec.Collapse && groupBy == "service" {
+		for id := range focusFree {
+			if svc := owned[id]; svc != nil {
+				frameGroups[svc.NodeKey] = true
+			}
+		}
+	}
 
 	memberGroup := make(map[int64]string) // regular in-view nodes → group key ("" = free-standing)
 	for id := range inView {
@@ -867,10 +943,16 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			continue
 		}
 		g := groupOf(n)
+		if g == "" {
+			if sk, ok := pathServiceOf[id]; ok {
+				g = sk
+			}
+		}
 		// Pinned members stay free-standing in collapsed views: their group
 		// renders as a collapsed card, so nesting the pin inside would turn
-		// the card into a frame and dangle the group-keyed edges.
-		if (pinned[id] || focusFree[id]) && spec.Collapse {
+		// the card into a frame and dangle the group-keyed edges. Members of
+		// a frame group stay inside it.
+		if (pinned[id] || focusFree[id]) && spec.Collapse && !frameGroups[g] {
 			g = ""
 		}
 		memberGroup[id] = g
@@ -1458,7 +1540,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		n.RenderMode = string(salience.RenderHidden)
 		n.SalienceReason = "isolated"
 	}
-	view.Hidden = hiddenSummary(view.Nodes)
+	view.Hidden = append(hiddenSummary(view.Nodes), filteredOut...)
 
 	if len(bIn) > 0 || len(bOut) > 0 {
 		sort.Slice(bIn, func(i, j int) bool {
@@ -1494,6 +1576,37 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 	}
 	return view, nil
+}
+
+// filterReason names which filter predicate removed a node.
+func filterReason(f *FilterSpec, n *store.NodeRow) string {
+	if f == nil {
+		return "policy"
+	}
+	if len(f.Layers) > 0 {
+		ok := false
+		for _, l := range f.Layers {
+			if n.Layer == l {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return "layers"
+		}
+	}
+	for _, t := range f.ExcludeTypes {
+		if n.NodeType == t {
+			return "exclude_types"
+		}
+	}
+	if f.MinConfidence > 0 && n.Confidence < f.MinConfidence {
+		return "min_confidence"
+	}
+	if f.Name != "" && !globMatch(f.Name, n.Name) {
+		return "name"
+	}
+	return "policy"
 }
 
 // hiddenSummary aggregates hidden VNodes by (layer, type, reason), sorted
@@ -1544,8 +1657,17 @@ func hiddenSummary(nodes []VNode) []HiddenEntry {
 // node ids and the set of unordered consecutive pairs, or (nil, nil) when no
 // path exists.
 func shortestPath(from, to int64, edges []store.EdgeRow, nodeByID map[int64]*store.NodeRow, allow map[string]bool) ([]int64, map[[2]int64]bool) {
-	if from == to {
-		return []int64{from}, map[[2]int64]bool{}
+	return shortestPathSets(map[int64]bool{from: true}, map[int64]bool{to: true}, edges, nodeByID, allow)
+}
+
+// shortestPathSets is shortestPath between SETS: the shortest path from any
+// source to any target (multi-source BFS). Sources are seeded in sorted
+// node-key order so ties resolve deterministically.
+func shortestPathSets(from, to map[int64]bool, edges []store.EdgeRow, nodeByID map[int64]*store.NodeRow, allow map[string]bool) ([]int64, map[[2]int64]bool) {
+	for id := range from {
+		if to[id] {
+			return []int64{id}, map[[2]int64]bool{}
+		}
 	}
 
 	adj := make(map[int64][]int64)
@@ -1565,9 +1687,20 @@ func shortestPath(from, to int64, edges []store.EdgeRow, nodeByID map[int64]*sto
 		sort.Slice(ns, func(i, j int) bool { return nodeByID[ns[i]].NodeKey < nodeByID[ns[j]].NodeKey })
 	}
 
-	parent := map[int64]int64{from: from}
-	queue := []int64{from}
+	sources := make([]int64, 0, len(from))
+	for id := range from {
+		if nodeByID[id] != nil {
+			sources = append(sources, id)
+		}
+	}
+	sort.Slice(sources, func(i, j int) bool { return nodeByID[sources[i]].NodeKey < nodeByID[sources[j]].NodeKey })
+	parent := map[int64]int64{}
+	for _, id := range sources {
+		parent[id] = id
+	}
+	queue := append([]int64(nil), sources...)
 	found := false
+	var hit int64
 	for len(queue) > 0 && !found {
 		cur := queue[0]
 		queue = queue[1:]
@@ -1576,8 +1709,8 @@ func shortestPath(from, to int64, edges []store.EdgeRow, nodeByID map[int64]*sto
 				continue
 			}
 			parent[nb] = cur
-			if nb == to {
-				found = true
+			if to[nb] {
+				found, hit = true, nb
 				break
 			}
 			queue = append(queue, nb)
@@ -1588,9 +1721,9 @@ func shortestPath(from, to int64, edges []store.EdgeRow, nodeByID map[int64]*sto
 	}
 
 	var rev []int64
-	for id := to; ; id = parent[id] {
+	for id := hit; ; id = parent[id] {
 		rev = append(rev, id)
-		if id == from {
+		if parent[id] == id {
 			break
 		}
 	}

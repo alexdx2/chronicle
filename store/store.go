@@ -276,6 +276,7 @@ func (s *Store) migrate() error {
 
 	// Ensure indexes exist (idempotent).
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_status ON graph_evidence(evidence_status)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_polarity_status ON graph_evidence(evidence_polarity, evidence_status)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_graph_evidence_file_status ON graph_evidence(file_path, evidence_status)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_valid_to ON graph_nodes(valid_to_revision_id)`)
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_valid_to ON graph_edges(valid_to_revision_id)`)
@@ -829,4 +830,3 @@ CREATE TABLE IF NOT EXISTS journal_applied_events (
   applied_at TEXT NOT NULL
 );
 `
-

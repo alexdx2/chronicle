@@ -242,4 +242,3 @@ func mergeSalience(base, user *SaliencePolicy) *SaliencePolicy {
 	}
 	return out
 }
-

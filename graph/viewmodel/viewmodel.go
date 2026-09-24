@@ -34,8 +34,8 @@ func notFoundf(format string, args ...any) error {
 
 // ---------- shared helpers ----------
 
-// ownershipMap builds a map from code-node nodeID → owning service NodeRow.
-// ownershipMap attributes every code node to a service, in order of evidence:
+// ownershipMap attributes every code node (and every exposed endpoint) to a
+// service, in order of evidence:
 //
 //  1. containment — the CONTAINS chain above the node reaches a service
 //     node, or a code:repository named like a service (the graph said so);
@@ -169,6 +169,22 @@ func ownershipMap(nodes []store.NodeRow, edges []store.EdgeRow) map[int64]*store
 			out[n.NodeID] = bestSvc
 		}
 	}
+	// Endpoints belong to the service whose component exposes them: the
+	// API lens frames them by service, and a call to another service's
+	// endpoint counts as a boundary crossing.
+	for i := range edges {
+		e := &edges[i]
+		if e.EdgeType != "EXPOSES_ENDPOINT" || !e.Active {
+			continue
+		}
+		if ep := nodeByID[e.ToNodeID]; ep != nil && ep.NodeType == "endpoint" {
+			if svc, ok := out[e.FromNodeID]; ok {
+				if _, taken := out[ep.NodeID]; !taken {
+					out[ep.NodeID] = svc
+				}
+			}
+		}
+	}
 	return out
 }
 
@@ -192,6 +208,21 @@ func activeEdges(edges []store.EdgeRow) []store.EdgeRow {
 		}
 	}
 	return out
+}
+
+// declaredTransport returns a topic's transport ONLY when its metadata
+// declares one; the (name, false) case means "unknown" — callers that need
+// evidence (broker framing) must not treat topicTransport's default as such.
+func declaredTransport(n store.NodeRow) (string, bool) {
+	if n.Metadata == "" || n.Metadata == "{}" {
+		return "", false
+	}
+	var meta map[string]any
+	if json.Unmarshal([]byte(n.Metadata), &meta) != nil {
+		return "", false
+	}
+	t, ok := meta["transport"].(string)
+	return t, ok && t != ""
 }
 
 // topicTransport returns the transport string for a topic node.

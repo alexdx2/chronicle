@@ -1,9 +1,9 @@
 package registry
 
 import (
-	"sort"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -265,8 +265,8 @@ type SchemaJSON struct {
 
 // EdgeSuggestion is a suggested edge type with intent label.
 type EdgeSuggestion struct {
-	EdgeType   string `json:"edge_type"`
-	Intent     string `json:"intent"`
+	EdgeType   string   `json:"edge_type"`
+	Intent     string   `json:"intent"`
 	FromLayers []string `json:"from_layers"`
 	ToLayers   []string `json:"to_layers"`
 }

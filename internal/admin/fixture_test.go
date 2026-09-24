@@ -178,7 +178,7 @@ func setupC4Graph(t *testing.T) (*Server, map[string]store.NodeRow) {
 	edge(spectatorsModule, notifService, "CONTAINS", true)
 	edge(statsCtrl, epLeaderboard, "EXPOSES_ENDPOINT", true)
 	edge(battleConsumer, battleResults, "CONSUMES_TOPIC", true)
-	edge(battleConsumer, svcA, "CALLS_SERVICE", true)       // cross-service HTTP (lifting test)
+	edge(battleConsumer, svcA, "CALLS_SERVICE", true)        // cross-service HTTP (lifting test)
 	edge(notifService, notifications, "CALLS_SERVICE", true) // external
 
 	// Inactive edge (active=false) between two active nodes — must be excluded by activeEdges().
