@@ -54,6 +54,8 @@ func TestParseScreen_Refuses(t *testing.T) {
 		"too many keys":   `{"client_id":"a","selected":{"kind":"edge","keys":` + keys + `}}`,
 		"long key":        `{"client_id":"a","selected":{"kind":"node","key":"` + strings.Repeat("k", 513) + `"}}`,
 		"bad mark":        `{"client_id":"a","spec":{"marks":{"k":{"kind":"explode"}}}}`,
+		"trailing bytes":  `{"client_id":"a"}TRAILING`,
+		"long key cyrillic": `{"client_id":"a","selected":{"kind":"node","key":"` + strings.Repeat("ж", 513) + `"}}`,
 	} {
 		if _, err := ParseScreen([]byte(raw)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -62,6 +64,11 @@ func TestParseScreen_Refuses(t *testing.T) {
 	big := bytes.Repeat([]byte("x"), MaxScreenBytes+1)
 	if _, err := ParseScreen(big); err == nil {
 		t.Error("oversized report accepted")
+	}
+	// 512 Cyrillic characters should be accepted
+	ok := `{"client_id":"a","selected":{"kind":"node","key":"` + strings.Repeat("ж", 512) + `"}}`
+	if s, err := ParseScreen([]byte(ok)); err != nil || s.Selected.Key == "" {
+		t.Errorf("512 Cyrillic characters accepted: %v", err)
 	}
 }
 

@@ -1,10 +1,10 @@
 package live
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"unicode/utf8"
 
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 )
@@ -30,7 +30,7 @@ func ParseScreen(raw []byte) (Screen, error) {
 		return Screen{}, fmt.Errorf("screen report: larger than %d bytes", MaxScreenBytes)
 	}
 	var s Screen
-	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&s); err != nil {
+	if err := json.Unmarshal(raw, &s); err != nil {
 		return Screen{}, fmt.Errorf("screen report: %w", err)
 	}
 	if !clientIDPattern.MatchString(s.ClientID) {
@@ -52,8 +52,8 @@ func ParseScreen(raw []byte) (Screen, error) {
 			return Screen{}, fmt.Errorf("screen report: at most %d selected keys", maxKeys)
 		}
 		for _, k := range append([]string{sel.Key}, sel.Keys...) {
-			if len(k) > maxKeyLen {
-				return Screen{}, fmt.Errorf("screen report: selected key longer than %d", maxKeyLen)
+			if utf8.RuneCountInString(k) > maxKeyLen {
+				return Screen{}, fmt.Errorf("screen report: selected key longer than 512 characters")
 			}
 		}
 	}
