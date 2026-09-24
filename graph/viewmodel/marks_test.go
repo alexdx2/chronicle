@@ -85,6 +85,11 @@ func TestNormalizeMarks(t *testing.T) {
 	if _, err := NormalizeMarks(map[string]Mark{"k": {Kind: "note", Note: cyr + "ж"}}); err == nil {
 		t.Fatal("201 characters must be refused")
 	}
+	// Two distinct keys that trim to the same string must error, not
+	// silently pick one by map iteration order (which Go randomizes).
+	if _, err := NormalizeMarks(map[string]Mark{"k": {Kind: "note"}, "k ": {Kind: "breaks"}}); err == nil || !strings.Contains(err.Error(), "same key") {
+		t.Fatalf("post-trim key collision error = %v", err)
+	}
 }
 
 func TestPlaceMarks_C2(t *testing.T) {

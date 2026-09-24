@@ -85,7 +85,11 @@ func CleanText(s string) string {
 
 // NormalizeMarks validates a marks map and returns a cleaned copy: kinds
 // from MarkKinds (case-insensitive), at most MaxMarks entries, notes through
-// CleanText and at most MaxMarkNote characters. Nil when empty.
+// CleanText and at most MaxMarkNote characters. Nil when empty. Keys are
+// processed in sorted order (not map iteration order, which Go randomizes)
+// so that when two distinct keys trim to the same string, the collision
+// error is deterministic instead of silently picking whichever key
+// iteration happened to visit last.
 func NormalizeMarks(in map[string]Mark) (map[string]Mark, error) {
 	if len(in) == 0 {
 		return nil, nil
@@ -93,12 +97,25 @@ func NormalizeMarks(in map[string]Mark) (map[string]Mark, error) {
 	if len(in) > MaxMarks {
 		return nil, fmt.Errorf("marks: at most %d per view (got %d)", MaxMarks, len(in))
 	}
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	out := make(map[string]Mark, len(in))
-	for key, m := range in {
+	firstKey := make(map[string]string, len(in)) // trimmed key -> first original key that produced it
+	for _, key := range keys {
+		m := in[key]
 		k := strings.TrimSpace(key)
 		if k == "" {
 			return nil, fmt.Errorf("marks: empty key")
 		}
+		// keys is sorted ascending, so prev (seen earlier in this loop) is
+		// always < key; the message names them in that same sorted order.
+		if prev, collide := firstKey[k]; collide {
+			return nil, fmt.Errorf("marks: keys %q and %q are the same key after trimming", prev, key)
+		}
+		firstKey[k] = key
 		kind := strings.ToLower(strings.TrimSpace(m.Kind))
 		if MarkRank(kind) == 0 {
 			return nil, fmt.Errorf("marks[%s]: kind %q is not one of %s", k, m.Kind, strings.Join(MarkKinds, "|"))
