@@ -15,6 +15,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
+	"github.com/alexdx2/chronicle-core/live"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
@@ -2606,13 +2607,16 @@ PRIMARY: preset (+ target). Presets are the questions:
 - services — services and how they talk, collapsed
 - flows    — a LIST, not a picture: "table" (service → endpoint → handler → flow) in "markdown" and "text"; mermaid is empty
 Alternative: view_spec — a full ViewSpec {"scope":{"domain","service"|"nodes"|"flow"},"expand":{"direction","depth","edges","mode":"neighbors|path"},"filter":{"layers","edge_kinds","exclude_types","name","min_confidence"},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset"}}.
-Or node_keys — a custom selection of real nodes (edges discovered). Everything drawn comes from the graph; there is no hand-authored diagram.`),
+Or node_keys — a custom selection of real nodes (edges discovered). Everything drawn comes from the graph; there is no hand-authored diagram.
+
+The diagram is also announced to the human's open dashboard as a card they can open; "live.dashboard_open" says whether a dashboard reported in the last 90 s — when false, hand the human the "url". Mark what matters with "marks": the named elements are coloured and captioned in the dashboard, the mermaid and the text.`),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
 		mcp.WithString("preset", mcp.Description("Named question: c1|c2|c3|deps|impact|path|flow|data|api|services|flows")),
 		mcp.WithString("target", mcp.Description("Subject for c3 (service key or name), deps/impact/flow (node key), path (\"A,B\")")),
 		mcp.WithString("domain", mcp.Description("Domain key (defaults to the graph's largest domain)")),
 		mcp.WithString("view_spec", mcp.Description("Full ViewSpec JSON (view algebra: scope/expand/filter/group/collapse/layout). Used when preset is empty; takes priority over node_keys.")),
 		mcp.WithString("node_keys", mcp.Description("JSON array of graph node keys — a custom selection; edges between them are discovered from the graph")),
+		mcp.WithString("marks", mcp.Description(`JSON object {"<node or edge key>": {"kind": "breaks|changed|focus|note", "note": "≤200 characters"}} — annotate real elements of the answer: what breaks, what changes, where to look. Marks never add elements: keys this view does not draw come back in "unplaced" (add view_spec.pin or pick deps/impact), keys the graph lacks in "missing". view_spec.marks is accepted too; this parameter wins on the same key; at most 50 after merging.`)),
 	)
 }
 
@@ -2713,6 +2717,14 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 			}
 		}
 
+		if raw := strParam(args, "marks"); raw != "" {
+			var extra map[string]viewmodel.Mark
+			if err := json.Unmarshal([]byte(raw), &extra); err != nil {
+				return errorResult(fmt.Errorf("invalid marks JSON: %w", err)), nil
+			}
+			spec.Marks = mergeMarks(spec.Marks, extra)
+		}
+
 		view, err := viewmodel.BuildView(g.Store(), spec)
 		if err != nil {
 			return errorResult(fmt.Errorf("build view: %w", err)), nil
@@ -2723,19 +2735,28 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 			level = "custom"
 		}
 
+		url := viewSpecURL(view.Spec)
+		placed := view.PlacedMarks()
+		missing := view.Missing
+		if missing == nil {
+			missing = []string{}
+		}
+		unplaced := view.Unplaced
+		if unplaced == nil {
+			unplaced = []string{}
+		}
 		out := map[string]any{
 			"title":       title,
 			"level":       level,
-			"url":         viewSpecURL(spec),
+			"url":         url,
 			"mermaid":     viewmodel.RenderMermaid(view),
 			"text":        viewmodel.RenderText(view),
 			"node_count":  len(view.Nodes),
 			"group_count": len(view.Groups),
 			"edge_count":  len(view.Edges),
-			"missing":     view.Missing,
-		}
-		if out["missing"] == nil {
-			out["missing"] = []string{}
+			"missing":     missing,
+			"unplaced":    unplaced,
+			"marks":       placed,
 		}
 		if len(view.Hidden) > 0 {
 			out["hidden"] = view.Hidden
@@ -2744,6 +2765,11 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 			out["table"] = view.Table
 			out["markdown"] = viewmodel.RenderMarkdown(view)
 		}
+		out["live"] = publishLiveDiagram(g.Store(), live.SourceMCP, live.Diagram{
+			Title: title, Level: level, Target: target, Domain: view.Spec.Scope.Domain, URL: url, Spec: view.Spec,
+			Counts: live.Counts{Nodes: len(view.Nodes), Groups: len(view.Groups), Edges: len(view.Edges), Hidden: hiddenCount(view.Hidden)},
+			Marks:  len(placed),
+		})
 		return jsonResult(out), nil
 	}
 }
