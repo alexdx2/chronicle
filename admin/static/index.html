@@ -2400,6 +2400,8 @@ function dashboard() {
     },
 
     async fetchUpkeep() {
+      // Upkeep is per repo; a federation dashboard has none to show.
+      if (this.federationApi) { this.upkeep = null; return; }
       try {
         const r = await fetch('/api/upkeep?domain=' + encodeURIComponent(this.domain || ''));
         if (!r.ok) { this.upkeep = null; return; }
@@ -2694,6 +2696,8 @@ function dashboard() {
     },
 
     async fetchScanProgress() {
+      // Scans run per repo; a federation dashboard has no scan progress.
+      if (this.federationApi) { this.scanProgress = null; return; }
       try {
         const res = await fetch(`/api/scan-progress?domain=${this.domain}`);
         // A server without scan progress (Chronicle Pro) answers 404.
