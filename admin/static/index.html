@@ -2221,7 +2221,7 @@ function dashboard() {
       this.connectWS();
       // Live channel (agent diagrams in, screen reports out) — absent in the
       // read-only playground, which hides its markup.
-      if (document.querySelector("[data-testid='agent-cards']")) this.startLive();
+      if (document.querySelector('.agent-cards')) this.startLive();
 
       // View deep links: #v/<base64url(spec)>,
       // #c4?domain=&level=&service= — all open the Graph tab in view mode
@@ -3731,9 +3731,9 @@ function dashboard() {
       }
       if (o.replace && top) {
         // Filter mutations keep the entry's identity (title, pristine spec)
-        entry.title = top.title;
+        entry.title = o.title || top.title;
         entry.pristineSpec = top.pristineSpec;
-        entry.origin = top.origin || '';
+        entry.origin = o.origin || top.origin || '';
         this.viewStack.splice(this.viewStack.length - 1, 1, entry);
       } else {
         this.viewStack.push(entry);
@@ -4656,7 +4656,7 @@ function dashboard() {
       this._agentKey = LiveFeed.key;
       let seen = [];
       try { seen = JSON.parse(sessionStorage.getItem('chronicle.agentSeen') || '[]'); } catch (e) {}
-      this._agentSeen = new Set(seen);
+      this._agentSeen = new Set(Array.isArray(seen) ? seen : []);
       const self = this;
       this._live = new LiveClient({
         fetch: (u, o) => fetch(u, o), crypto: window.crypto, document, window,
