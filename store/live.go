@@ -13,13 +13,13 @@ import (
 // ever need "recent".
 const liveKeepPerKind = 200
 
-// livePruneKeepAge protects a row from pruning while it is younger than
+// LivePruneKeepAge protects a row from pruning while it is younger than
 // this, no matter how many rows of its kind accumulate: a tab reporting
 // rapidly (e.g. a busy screen every 300ms) must never push another tab's
 // still-alive heartbeat out of the table. Must stay longer than
 // live.OpenWindow (90s; see live/live.go) so every alive client's latest
 // report is always still here when live.State reads it.
-const livePruneKeepAge = 120 * time.Second
+const LivePruneKeepAge = 120 * time.Second
 
 // LiveEvent is one row of the agent ↔ dashboard channel; package live gives
 // it meaning. Payload is the kind's JSON document.
@@ -86,9 +86,9 @@ func (s *Store) InsertLiveEvent(kind, source string, payload []byte) (LiveEvent,
 		return LiveEvent{}, fmt.Errorf("InsertLiveEvent: %w", err)
 	}
 	// Keep the newest liveKeepPerKind rows of the kind, UNION every row
-	// younger than livePruneKeepAge: only a row that is BOTH beyond the
+	// younger than LivePruneKeepAge: only a row that is BOTH beyond the
 	// count boundary AND older than the age boundary is deleted.
-	ageCutoff := fmt.Sprintf("-%d seconds", int64(livePruneKeepAge/time.Second))
+	ageCutoff := fmt.Sprintf("-%d seconds", int64(LivePruneKeepAge/time.Second))
 	if _, err := s.db.Exec(`DELETE FROM live_events WHERE kind = ? AND id <= (
 		SELECT id FROM live_events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)
 		AND at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)`,

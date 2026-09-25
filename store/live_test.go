@@ -54,7 +54,7 @@ func TestLiveEvents_KeepNewestPerKind(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// F1: rows younger than livePruneKeepAge survive pruning no matter how
+	// F1: rows younger than LivePruneKeepAge survive pruning no matter how
 	// many accumulate (see TestLiveEvents_PruneNeverDropsRowsWithinKeepAge),
 	// so this batch must be backdated to exercise the newest-liveKeepPerKind
 	// boundary on its own.
