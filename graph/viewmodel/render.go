@@ -13,13 +13,21 @@ import (
 // same provenance; deterministic output (sorted, stable ids).
 
 // arrowLabel is the human label of an arrow. Rev3 fix F9: BuildView is now
-// the single label source — it fills VEdge.Label for every drawn arrow
-// (defaultArrowLabel in view.go), so both renderers (and the JSON payload,
-// and the dashboard) just read the field here. The " · kind" mark suffix
-// (StrongestMark) stays renderer-side, added by each caller after this
-// call, since it is presentation about marks, not the arrow's own label.
+// the single label source for a View IT built — it fills VEdge.Label for
+// every drawn arrow (defaultArrowLabel in view.go, run once BuildView's
+// own Weight accounting is final), so both renderers (and the JSON
+// payload, and the dashboard) read the same string. RenderText/
+// RenderMermaid draw ANY *View, though (the package doc above), not only
+// ones BuildView produced — chronicle-pro's federation view code builds
+// VEdge directly and calls these renderers on the result, same as a
+// hand-built View in this package's own tests; neither sets Label. The
+// fallback below computes the identical default for those, so this stays
+// a safe, general-purpose renderer rather than a BuildView-only one.
 func arrowLabel(e *VEdge) string {
-	return e.Label
+	if e.Label != "" {
+		return e.Label
+	}
+	return defaultArrowLabel(e)
 }
 
 // hiddenReasonText is one hidden-summary line's reason, with names when the

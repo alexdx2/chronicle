@@ -23,15 +23,16 @@ func sampleView() *View {
 			{Key: "data:dto:shop:orderdto", Name: "OrderDto", Type: "dto", Layer: "data", Tier: "detail", RenderMode: "hidden", SalienceReason: "type:data.dto"},
 			{Key: "service:external_system:shop:stripe", Name: "stripe", Type: "external_system", Layer: "service", Tier: "primary", RenderMode: "box", Confidence: 1, Trust: 1, EvidenceCount: 1},
 		},
-		// rev3 fix F9: Label is normally filled by BuildView's final pass
-		// (defaultArrowLabel) — this View is hand-built (no BuildView call
-		// in these renderer-only tests), so it sets Label itself, exactly
-		// as BuildView would have computed it, same as it already does for
-		// Tier/RenderMode/salience below.
+		// Edges deliberately leave Label unset: BuildView fills it
+		// (defaultArrowLabel, rev3 fix F9), but this View is hand-built —
+		// no BuildView call in these renderer-only tests — so this also
+		// exercises arrowLabel's fallback for a View from outside
+		// BuildView's own pipeline (chronicle-pro's federation views build
+		// VEdge the same way; see arrowLabel's doc comment).
 		Edges: []VEdge{
-			{From: "service:service:shop:orders", To: "contract:topic:shop:order-created", Kind: "PUBLISHES_TOPIC", Transport: "kafka", Label: "pub", Weight: 1, Confidence: 0.9, Trust: 0.9, Derivation: "hard", EvidenceCount: 1},
-			{From: "service:service:shop:orders", To: "service:service:shop:payments", Kind: "CALLS_SERVICE", Transport: "http", Label: "HTTP ×3", Weight: 3, Confidence: 0.6, Trust: 0.6, Derivation: "inferred", EvidenceCount: 0},
-			{From: "service:service:shop:payments", To: "service:external_system:shop:stripe", Kind: "CALLS_SERVICE", Transport: "http", Label: "HTTP", Weight: 1, Confidence: 1, Trust: 1, Derivation: "hard", EvidenceCount: 4},
+			{From: "service:service:shop:orders", To: "contract:topic:shop:order-created", Kind: "PUBLISHES_TOPIC", Transport: "kafka", Weight: 1, Confidence: 0.9, Trust: 0.9, Derivation: "hard", EvidenceCount: 1},
+			{From: "service:service:shop:orders", To: "service:service:shop:payments", Kind: "CALLS_SERVICE", Transport: "http", Weight: 3, Confidence: 0.6, Trust: 0.6, Derivation: "inferred", EvidenceCount: 0},
+			{From: "service:service:shop:payments", To: "service:external_system:shop:stripe", Kind: "CALLS_SERVICE", Transport: "http", Weight: 1, Confidence: 1, Trust: 1, Derivation: "hard", EvidenceCount: 4},
 		},
 		Hidden: []HiddenEntry{{Layer: "data", Type: "dto", Reason: "type:data.dto", Count: 1}},
 	}
@@ -243,5 +244,44 @@ func TestBuildView_LabelSetForEveryEdge(t *testing.T) {
 		if e.Label != arrowLabel(e) {
 			t.Errorf("edge %s -> %s (%s): Label=%q != arrowLabel()=%q", e.From, e.To, e.Kind, e.Label, arrowLabel(e))
 		}
+	}
+}
+
+// TestArrowLabel_FallsBackWhenLabelUnset: rev3 fix F9 compatibility guard.
+// BuildView fills VEdge.Label for every edge it creates, but arrowLabel is
+// a general-purpose renderer helper — chronicle-pro's federation view code
+// (internal/federation/views.go) constructs VEdge directly (never through
+// core's BuildView) and calls RenderText/RenderMermaid on the result, same
+// as a hand-built View anywhere else. An edge with Label unset must still
+// get a sensible default label, computed the same way BuildView's own
+// defaultArrowLabel would, or every arrow on those views renders blank.
+func TestArrowLabel_FallsBackWhenLabelUnset(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		e    VEdge
+		want string
+	}{
+		{"kind default, weight 1", VEdge{Kind: "CALLS_SERVICE", Weight: 1}, "HTTP"},
+		{"kind default, weight >1 gets suffix", VEdge{Kind: "PUBLISHES_TOPIC", Weight: 2}, "pub ×2"},
+		{"unknown kind falls back to a lowercased, spaced default", VEdge{Kind: "SOME_NEW_KIND", Weight: 1}, "some new kind"},
+	} {
+		if got := arrowLabel(&tc.e); got != tc.want {
+			t.Errorf("%s: arrowLabel = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// A View built entirely by hand (no Label anywhere, like a federation
+	// view) still renders real arrow labels, not blanks.
+	v := &View{
+		Nodes: []VNode{
+			{Key: "a", Name: "a", Type: "service", Layer: "service", RenderMode: "box"},
+			{Key: "b", Name: "b", Type: "service", Layer: "service", RenderMode: "box"},
+		},
+		Edges: []VEdge{{From: "a", To: "b", Kind: "CALLS_SERVICE", Weight: 2}},
+	}
+	if !strings.Contains(RenderText(v), "a → b: HTTP ×2") {
+		t.Errorf("RenderText should compute a fallback label for an edge Label never set:\n%s", RenderText(v))
+	}
+	if !strings.Contains(RenderMermaid(v), `a -->|"HTTP ×2"| b`) {
+		t.Errorf("RenderMermaid should compute a fallback label for an edge Label never set:\n%s", RenderMermaid(v))
 	}
 }
