@@ -242,6 +242,14 @@ function adaptView(view, baseLookup) {
     // view's own system box — g.key is the OTHER domain's key, not `domain`.
     const isDomainBox = g.kind === 'domain' || !String(g.key).includes(':');
     const isOwnSystemBox = isDomainBox && g.key === domain;
+    // C1 draws each other domain it touches as its own collapsed card
+    // (view.go's c1ForeignAgg block), keyed by the OTHER domain and
+    // marked Note "other domain" — the one literal signal that tells it
+    // apart from this view's own system box, which shares the same Kind
+    // "domain" shape but carries no such note. Styled as external (rev3
+    // V2): muted fill, dashed border, dimmed, no drill — graph-renderer.js
+    // keys all of that off this one flag, same as a foreign VNode below.
+    const isForeignDomainCard = isDomainBox && g.note === 'other domain';
     const stats = g.stats || {};
     nodes.push({
       node_id: g.key,
@@ -270,6 +278,7 @@ function adaptView(view, baseLookup) {
       // card is not this view's own box, so it gets none (this store has
       // no C2 of the other domain to drill into).
       _drill: isOwnSystemBox,
+      _foreign: isForeignDomainCard,
     });
   });
 
@@ -297,6 +306,11 @@ function adaptView(view, baseLookup) {
       // via the renderer's existing ref pattern (_isRef → opacity 0.4).
       _isRef: !!n.boundary,
       _boundary: !!n.boundary,
+      // A foreign neighbour (rev3 task 8a: VNode.domain set when the node
+      // belongs to another domain than this view's) is styled as external
+      // (rev3 V2) — muted fill, dashed border, dimmed, no drill — the same
+      // signal cardSubtitle() above already reads to print "domain X".
+      _foreign: !!n.domain,
       // View-specific salience (registry-driven). _renderMode is the UI source
       // of truth; _tier is diagnostic. Used to hide/dim low-salience nodes.
       _renderMode: n.render_mode || '',
@@ -314,30 +328,37 @@ function adaptView(view, baseLookup) {
     });
   });
 
-  // Edges: kind → existing edge-category styling. weight>1 gets a
-  // synthetic edge_type + overlay entry so the label reads "… ×N"
-  // while stroke color stays the category color. Edges carrying an explicit
-  // label (e.g. C1 uses_infra: "events"/"cache") get an overlay entry keyed
-  // by kind|label so the label renders verbatim.
+  // Edges: kind → existing edge-category styling. Rev3 V3: core (BuildView,
+  // fix F9) now fills VEdge.Label with the arrow's BASE label for every
+  // edge it draws — the same text render.go's RenderText/RenderMermaid
+  // print ("HTTP", "pub", "sub", "handled by", "events: battle-results",
+  // …) — so when it's present it wins over the category table, with the
+  // "×N" weight suffix appended here exactly as render.go's arrowLabel
+  // appends it: computed fresh, never folded into the stored label, so it
+  // can never double up. Old servers (pre rev3 F9) never populate `label`;
+  // the weight-only branch below is the previous category-table fallback,
+  // unchanged, for them. Either way the overlay entry is keyed by
+  // kind|shortLabel so the label renders verbatim.
   const lookupOverlay = {};
   const nameOf = {};
   nodes.forEach(n => { nameOf[n.node_key] = n.name; });
   const edges = (view.edges || []).map(e => {
     let edgeType = e.kind;
     const base = baseLookup[e.kind] || baseLookup[String(e.kind).toUpperCase()];
-    if (e.weight > 1) {
+    if (e.label) {
+      const shortLabel = e.label + (e.weight > 1 ? ' ×' + e.weight : '');
+      edgeType = e.kind + '|' + shortLabel;
+      lookupOverlay[edgeType] = {
+        category: base ? base.category : 'view',
+        color: base ? base.color : '#b8a898',
+        shortLabel,
+      };
+    } else if (e.weight > 1) {
       edgeType = e.kind + '×' + e.weight;
       lookupOverlay[edgeType] = {
         category: base ? base.category : 'view',
         color: base ? base.color : '#666',
         shortLabel: ((base && base.shortLabel) || String(e.kind).toLowerCase()) + ' ×' + e.weight,
-      };
-    } else if (e.label) {
-      edgeType = e.kind + '|' + e.label;
-      lookupOverlay[edgeType] = {
-        category: base ? base.category : 'view',
-        color: base ? base.color : '#b8a898',
-        shortLabel: e.label,
       };
     }
     return {

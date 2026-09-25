@@ -9,11 +9,19 @@ import { MARK_COLORS, strongestMark, markLine, markDetail } from './live-client.
 // const declared later in the method is in its temporal dead zone here.
 function clip(t, max) { t = String(t || ''); return t.length > max ? t.slice(0, max - 1) + '…' : t; }
 
-// MARK_CAPTION_CHAR_WIDTH: average px/char at the mark-caption font sizes
-// (8.5-9px), used to turn an available pixel width into a character budget
-// for clip(). Shared by the node mark caption and the frame mark caption so
-// the two captions truncate by the same rule.
-const MARK_CAPTION_CHAR_WIDTH = 5.4;
+// charBudget: how many characters of `fontPx`-sized text fit inside
+// `widthPx` of card/frame (~0.6×fontPx average glyph width, minus 10px of
+// padding). Rev3 fix V1: card text (title, both subtitle lines, the node
+// mark caption, the frame mark caption) used to truncate at counts tuned
+// for one width/size — or, for the title, not at all — so a subtitle like
+// "provider · scoreboard-api" clipped at a flat 26 chars overflowed a
+// 120px card (26 chars at 9px is ~140px). One pixel-aware budget, applied
+// at every call site with that line's own width and font size, so every
+// line — a node's fixed nodeWidth or a dagre-sized group frame's own
+// width — fits the card that draws it. Exported for admin/jstest.
+export function charBudget(widthPx, fontPx) {
+  return Math.floor((widthPx - 10) / (0.6 * fontPx));
+}
 
 const LAYOUT = {
   rankDir: 'TB',
@@ -303,10 +311,11 @@ export class GraphRenderer {
           rect.style('stroke', MARK_COLORS[frameMark]).style('stroke-width', '3px');
           // A long note easily overruns a small frame and collides with the
           // domain label on the same baseline — clip to a budget derived
-          // from the frame's own width (half the frame, MARK_CAPTION_CHAR_WIDTH
-          // px/char); the full line still reads on hover via <title>.
+          // from the frame's own width (half the frame, since the label
+          // shares the row) via the same charBudget() every card line
+          // uses; the full line still reads on hover via <title>.
           const line = markLine(meta.marks, gk);
-          const budget = Math.max(10, Math.floor((gNode.width / 2 - 16) / MARK_CAPTION_CHAR_WIDTH));
+          const budget = Math.max(10, charBudget(gNode.width / 2, 9));
           gg.append('text').attr('class', 'domain-mark')
             .attr('text-anchor', 'end')
             .attr('x', gNode.x + gNode.width / 2 - 10).attr('y', gNode.y - gNode.height / 2 + 14)
@@ -458,8 +467,10 @@ export class GraphRenderer {
     // hiding anything. (Undefined tier — Explore/raw graph — reads as primary.)
     const tierOpacity = d => d._tier === 'secondary' ? 0.85 : (d._tier === 'detail' ? 0.6 : 1);
     nodeG.attr('opacity', d => {
-      // Ref nodes (external references in Explore) are always dimmed
-      if (d._isRef) return 0.4;
+      // Ref nodes (external references in Explore) and foreign cards
+      // (another domain's node, or C1's other-domain box — rev3 V2) are
+      // always dimmed: both sit outside this view's own scope.
+      if (d._isRef || d._foreign) return 0.4;
       if (!marks.manual || marks.manual.size === 0) return tierOpacity(d);
       if (marks.manual.has(d.id)) return 1;
       if (marks.path && marks.path.has(d.id)) return 0.9;
@@ -480,14 +491,16 @@ export class GraphRenderer {
       .attr('x', -nw / 2).attr('y', -nh / 2)
       .attr('width', nw).attr('height', nh)
       .attr('rx', 6).attr('ry', 6)
-      // Stale cards grey out (awaiting re-verification); contradicted
-      // cards keep their layer fill but get a red border.
-      .attr('fill', d => d.status === 'stale' ? '#e8e2d8' : self.layerColor(d.layer) + '40')
-      .attr('stroke', d => d.status === 'stale' ? '#9a8f7f' : (d.status === 'contradicted' ? '#c25757' : self.layerColor(d.layer)))
-      // Primary salience gets a heavier border; collapsed/badge nodes get a
-      // dashed border to read as "folded / secondary form".
+      // Stale cards grey out (awaiting re-verification); a foreign card —
+      // another domain's node (VNode.domain) or C1's other-domain box —
+      // reads the same muted grey so it never passes for our own (rev3
+      // V2); contradicted cards keep their layer fill but get a red border.
+      .attr('fill', d => (d.status === 'stale' || d._foreign) ? '#e8e2d8' : self.layerColor(d.layer) + '40')
+      .attr('stroke', d => (d.status === 'stale' || d._foreign) ? '#9a8f7f' : (d.status === 'contradicted' ? '#c25757' : self.layerColor(d.layer)))
+      // Primary salience gets a heavier border; collapsed/badge/foreign
+      // nodes get a dashed border to read as "folded / secondary / external".
       .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : (d._tier === 'primary' ? 2 : 1.2))
-      .attr('stroke-dasharray', d => (d.status === 'stale' || d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null)
+      .attr('stroke-dasharray', d => (d.status === 'stale' || d._renderMode === 'collapsed_group' || d._renderMode === 'badge' || d._foreign) ? '4,2' : null)
       .style('stroke', d => { const k = strongestMark(d._marks); return k ? MARK_COLORS[k] : null; })
       .style('stroke-width', d => strongestMark(d._marks) ? '3px' : null);
 
@@ -508,36 +521,40 @@ export class GraphRenderer {
       .attr('fill', d => d.status === 'stale' ? '#9a8f7f' : '#c25757')
       .text(d => d.status);
 
+    // Text budgets: every node card shares nw (LAYOUT.nodeWidth), so each
+    // line's budget is computed once per render, not per datum.
+    const titleBudget = charBudget(nw, 11);
+    const subtitle1Budget = charBudget(nw, 9);
+    const subtitle2Budget = charBudget(nw, 8);
+
     nodeG.append('text')
       .attr('text-anchor', 'middle').attr('dy', d => d._subtitle2 ? -6 : -2)
       .attr('fill', 'var(--text, #333)').attr('font-size', 11)
-      .text(d => {
-        const name = d.name || d.node_key || d.id;
-        return name.length > 18 ? name.slice(0, 16) + '...' : name;
-      });
+      .text(d => clip(d.name || d.node_key || d.id, titleBudget));
 
     nodeG.append('text')
       .attr('text-anchor', 'middle').attr('dy', d => d._subtitle2 ? 8 : 14)
       .attr('fill', d => self.layerColor(d.layer))
       .attr('font-size', 9).attr('opacity', 0.8)
-      .text(d => clip((d._subtitle || d.node_type || '') + (d._dissolvedGroup && d._dissolvedGroup !== d._repo ? ' · ' + d._dissolvedGroup : ''), 26));
+      .text(d => clip((d._subtitle || d.node_type || '') + (d._dissolvedGroup && d._dissolvedGroup !== d._repo ? ' · ' + d._dissolvedGroup : ''), subtitle1Budget));
     // Second subtitle line: endpoint pills ("GET /x, +3 more") or the
     // rest of a frame's stats; the tooltip carries the full text.
     nodeG.filter(d => !!d._subtitle2).append('text')
       .attr('text-anchor', 'middle').attr('dy', 19)
       .attr('fill', 'var(--text-muted, #8a7355)')
       .attr('font-size', 8).attr('opacity', 0.9)
-      .text(d => clip(d._subtitle2, 28));
+      .text(d => clip(d._subtitle2, subtitle2Budget));
 
     // Agent marks: a caption under the card in the mark's color; clipped to
     // the card's own width (not a fixed char count) so left-edge cards don't
     // get cut by the viewport — the tooltip carries every mark in full.
+    const markCaptionBudget = Math.max(8, charBudget(nw, 8.5));
     nodeG.filter(d => (d._marks || []).length > 0).append('text')
       .attr('class', 'node-mark')
       .attr('text-anchor', 'middle').attr('y', nh / 2 + 11)
       .attr('font-size', 8.5).attr('font-weight', 600)
       .attr('fill', d => MARK_COLORS[strongestMark(d._marks)])
-      .text(d => clip(markLine(d._marks, d.node_key), Math.max(8, Math.floor((nw - 10) / MARK_CAPTION_CHAR_WIDTH))))
+      .text(d => clip(markLine(d._marks, d.node_key), markCaptionBudget))
       .append('title').text(d => markLine(d._marks, d.node_key));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
@@ -630,8 +647,10 @@ export class GraphRenderer {
 
   clearHighlight() {
     if (!this._svg) return;
-    // Boundary/ref nodes keep their dim — only highlight overrides reset.
-    this._nodeG.attr('opacity', d => (d._isRef ? 0.4 : 1));
+    // Boundary/ref and foreign nodes keep their dim — only highlight
+    // overrides reset (rev3 V2: foreign cards dim the same way boundary
+    // nodes already did).
+    this._nodeG.attr('opacity', d => (d._isRef || d._foreign ? 0.4 : 1));
     this._edgeG.attr('opacity', 0.7);
   }
 
