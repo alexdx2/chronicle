@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // liveKeepPerKind bounds live_events: every insert keeps the newest rows of
@@ -11,6 +12,14 @@ import (
 // journal rebuild, cleared by ResetDB — the dashboard and the agent only
 // ever need "recent".
 const liveKeepPerKind = 200
+
+// livePruneKeepAge protects a row from pruning while it is younger than
+// this, no matter how many rows of its kind accumulate: a tab reporting
+// rapidly (e.g. a busy screen every 300ms) must never push another tab's
+// still-alive heartbeat out of the table. Must stay longer than
+// live.OpenWindow (90s; see live/live.go) so every alive client's latest
+// report is always still here when live.State reads it.
+const livePruneKeepAge = 120 * time.Second
 
 // LiveEvent is one row of the agent ↔ dashboard channel; package live gives
 // it meaning. Payload is the kind's JSON document.
@@ -76,9 +85,14 @@ func (s *Store) InsertLiveEvent(kind, source string, payload []byte) (LiveEvent,
 	if err != nil {
 		return LiveEvent{}, fmt.Errorf("InsertLiveEvent: %w", err)
 	}
+	// Keep the newest liveKeepPerKind rows of the kind, UNION every row
+	// younger than livePruneKeepAge: only a row that is BOTH beyond the
+	// count boundary AND older than the age boundary is deleted.
+	ageCutoff := fmt.Sprintf("-%d seconds", int64(livePruneKeepAge/time.Second))
 	if _, err := s.db.Exec(`DELETE FROM live_events WHERE kind = ? AND id <= (
-		SELECT id FROM live_events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`,
-		kind, kind, liveKeepPerKind); err != nil {
+		SELECT id FROM live_events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)
+		AND at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)`,
+		kind, kind, liveKeepPerKind, ageCutoff); err != nil {
 		return LiveEvent{}, fmt.Errorf("InsertLiveEvent prune: %w", err)
 	}
 	ev := LiveEvent{ID: id, Kind: kind, Source: source}
@@ -120,6 +134,16 @@ func (s *Store) RecentLiveEvents(kind string, limit int) ([]LiveEvent, error) {
 		SELECT id, at, kind, source, payload FROM live_events
 		WHERE (? = '' OR kind = ?) ORDER BY id DESC LIMIT ?
 	) ORDER BY id ASC`, kind, kind, limit)
+}
+
+// LiveEventsSince returns events of kind with at >= since, ascending by id.
+// since is formatted to match the sortable ISO-8601 form the at column is
+// written in (millisecond precision, UTC, trailing literal "Z"): used by
+// live.State to gather every alive-candidate report within OpenWindow
+// without the liveKeepPerKind cap dropping a quiet client (F1).
+func (s *Store) LiveEventsSince(kind string, since time.Time) ([]LiveEvent, error) {
+	return s.queryLiveEvents(`SELECT id, at, kind, source, payload FROM live_events
+		WHERE kind = ? AND at >= ? ORDER BY id ASC`, kind, since.UTC().Format("2006-01-02T15:04:05.000Z"))
 }
 
 // MaxLiveEventID is the newest event id (0 for an empty table).

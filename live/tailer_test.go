@@ -166,6 +166,53 @@ func TestTailer_FollowsAResetTable(t *testing.T) {
 	}
 }
 
+// F2: the inner drain loop must check ctx before each query, so cancelling
+// mid-backlog stops after the query already in flight, not after draining
+// the rest of a large backlog. A single event's worth of blocking would not
+// tell fixed and unfixed code apart (nothing else slows either down), so
+// this seeds a backlog spanning several tailBatch-sized queries and cancels
+// as soon as the first event of the first query is sent — the fix must stop
+// before the second query, the bug drains everything before Wait returns.
+func TestTailer_DrainLoopChecksContextMidBacklog(t *testing.T) {
+	st := openStore(t)
+	const backlog = tailBatch*2 + 50 // 3 queries to fully drain: 100, 100, 50
+	var seeded bool
+	var sent int
+	ctx, cancel := context.WithCancel(context.Background())
+	tl := NewTailer([]Source{{Store: st}}, func(ev store.LiveEvent) {
+		sent++
+		if sent == 1 {
+			cancel() // as if Stop() fired while most of the backlog is still unsent
+		}
+	})
+	tl.afterDrain = func() {
+		if seeded {
+			return
+		}
+		seeded = true
+		for i := 0; i < backlog; i++ {
+			if _, err := PublishDiagram(st, SourceMCP, Diagram{Title: fmt.Sprint(i)}); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}
+	tl.Start(ctx)
+	done := make(chan struct{})
+	go func() { tl.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait did not return; the drain loop ignored cancellation mid-backlog")
+	}
+	if sent == 0 {
+		t.Fatal("nothing was drained before cancel; the test setup is wrong")
+	}
+	if sent >= backlog {
+		t.Fatalf("drained the whole backlog (%d of %d) after cancel instead of stopping mid-backlog", sent, backlog)
+	}
+}
+
 func TestTailer_WaitReturnsAfterCancel(t *testing.T) {
 	st := openStore(t)
 	tl := NewTailer([]Source{{Store: st}}, func(store.LiveEvent) {})

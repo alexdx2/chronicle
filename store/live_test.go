@@ -54,8 +54,20 @@ func TestLiveEvents_KeepNewestPerKind(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// F1: rows younger than livePruneKeepAge survive pruning no matter how
+	// many accumulate (see TestLiveEvents_PruneNeverDropsRowsWithinKeepAge),
+	// so this batch must be backdated to exercise the newest-liveKeepPerKind
+	// boundary on its own.
+	if _, err := s.db.Exec(`UPDATE live_events SET at = '2020-01-01T00:00:00.000Z' WHERE kind = 'screen'`); err != nil {
+		t.Fatal(err)
+	}
 	d, err := s.InsertLiveEvent("diagram", "mcp", nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// One more (fresh) screen insert triggers the prune that now finds the
+	// backdated batch eligible for removal beyond the newest liveKeepPerKind.
+	if _, err := s.InsertLiveEvent("screen", "dashboard", []byte(fmt.Sprintf(`{"n":%d}`, liveKeepPerKind+5))); err != nil {
 		t.Fatal(err)
 	}
 	screens, _ := s.ListLiveEvents(0, "screen", 1000)
@@ -67,12 +79,63 @@ func TestLiveEvents_KeepNewestPerKind(t *testing.T) {
 	}
 	json.Unmarshal(screens[0].Payload, &first)
 	json.Unmarshal(screens[len(screens)-1].Payload, &last)
-	if first.N != 5 || last.N != liveKeepPerKind+4 {
-		t.Fatalf("kept n=%d..%d, want the newest 5..%d", first.N, last.N, liveKeepPerKind+4)
+	if first.N != 6 || last.N != liveKeepPerKind+5 {
+		t.Fatalf("kept n=%d..%d, want the newest 6..%d", first.N, last.N, liveKeepPerKind+5)
 	}
 	diagrams, _ := s.ListLiveEvents(0, "diagram", 10)
 	if len(diagrams) != 1 || diagrams[0].ID != d.ID {
 		t.Fatalf("pruning screens touched diagrams: %+v", diagrams)
+	}
+}
+
+// F1: a busy tab inserting rapidly must never push a quiet tab's
+// still-alive heartbeat out of the table. Rows younger than the keep-age
+// window survive pruning no matter how many accumulate; only once a row
+// ages past it does the newest-liveKeepPerKind boundary apply to it.
+func TestLiveEvents_PruneNeverDropsRowsWithinKeepAge(t *testing.T) {
+	s := openTestStore(t)
+	for i := 0; i < 250; i++ {
+		if _, err := s.InsertLiveEvent("screen", "dashboard", []byte(fmt.Sprintf(`{"n":%d}`, i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := s.ListLiveEvents(0, "screen", 1000)
+	if err != nil || len(all) != 250 {
+		t.Fatalf("250 inserts within the keep-age window must all survive pruning: got %d rows, err %v", len(all), err)
+	}
+
+	if _, err := s.db.Exec(`UPDATE live_events SET at = '2026-01-01T00:00:00.000Z' WHERE id <= 100`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertLiveEvent("screen", "dashboard", []byte(`{"n":250}`)); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.ListLiveEvents(0, "screen", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != liveKeepPerKind {
+		t.Fatalf("251 total, 100 backdated: exactly the newest %d must survive, got %d", liveKeepPerKind, len(after))
+	}
+	// ids 1..51 are backdated AND outside the newest liveKeepPerKind (251-200);
+	// they must be gone. ids 101..251 were never backdated (young) and must
+	// all survive regardless of position.
+	for _, ev := range after {
+		if ev.ID <= 51 {
+			t.Fatalf("backdated row id=%d is outside the newest %d and must be pruned", ev.ID, liveKeepPerKind)
+		}
+	}
+	for id := int64(101); id <= 251; id++ {
+		found := false
+		for _, ev := range after {
+			if ev.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("young row id=%d must survive pruning regardless of count", id)
+		}
 	}
 }
 

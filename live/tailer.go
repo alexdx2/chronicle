@@ -85,6 +85,9 @@ func (t *Tailer) tail(ctx context.Context, src Source, last int64) {
 	for {
 		wake := src.Store.LiveWake() // 1. capture BEFORE reading
 		for {                        // 2. drain what is already stored
+			if ctx.Err() != nil {
+				return // Stop/Wait must not wait out a large backlog (F2)
+			}
 			evs, err := src.Store.ListLiveEvents(last, KindDiagram, tailBatch)
 			if err != nil {
 				logf("%v", err)

@@ -78,7 +78,24 @@ func State(sources []Source, now time.Time) DashboardState {
 		if src.Store == nil {
 			continue
 		}
-		evs, err := src.Store.RecentLiveEvents(KindScreen, 200)
+		// The newest report of any client, even one older than OpenWindow, so
+		// SeenSecondsAgo still reflects it once every client has gone quiet.
+		// Read separately from the alive-candidate loop below (F1): a busy
+		// client's volume must not be able to push this out of the table's
+		// newest-per-kind window, and RecentLiveEvents(kind, 1) never can —
+		// it always returns the single newest row regardless of age or count.
+		if recent, err := src.Store.RecentLiveEvents(KindScreen, 1); err == nil {
+			for _, ev := range recent {
+				if at, err := time.Parse(time.RFC3339Nano, ev.At); err == nil && at.After(lastSeen) {
+					lastSeen = at
+				}
+			}
+		}
+		// Alive candidates: every report within OpenWindow, not just the
+		// newest liveKeepPerKind rows of the kind — a busy client's volume
+		// must not push a quiet client's still-alive report out of this read
+		// (F1; store/live.go's prune keeps such rows for the same reason).
+		evs, err := src.Store.LiveEventsSince(KindScreen, now.Add(-OpenWindow))
 		if err != nil {
 			continue
 		}
@@ -90,9 +107,6 @@ func State(sources []Source, now time.Time) DashboardState {
 			at, err := time.Parse(time.RFC3339Nano, ev.At)
 			if err != nil {
 				continue
-			}
-			if at.After(lastSeen) {
-				lastSeen = at
 			}
 			cur, ok := latest[sc.ClientID]
 			if !ok || at.After(cur.at) || (at.Equal(cur.at) && ev.ID > cur.id) {

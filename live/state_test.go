@@ -88,6 +88,25 @@ func TestState_PrefersTheVisibleTab(t *testing.T) {
 	}
 }
 
+// F1: a busy hidden client reporting hundreds of times must not push a
+// quiet visible client's single heartbeat out of the alive window — neither
+// out of the table (store/live.go prune) nor out of live.State's read.
+func TestState_BusyHiddenClientDoesNotEvictQuietVisibleClient(t *testing.T) {
+	st := openStore(t)
+	if _, err := ReportScreen(st, Screen{ClientID: "quiet", Tab: "graph", Title: "Quiet", Visible: true}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 250; i++ {
+		if _, err := ReportScreen(st, Screen{ClientID: "busy", Tab: "overview", Visible: false}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := State([]Source{{Store: st}}, time.Now())
+	if s.Clients != 2 || !s.Visible || s.Tab != "graph" || s.Title != "Quiet" {
+		t.Fatalf("state = %+v", s)
+	}
+}
+
 func TestState_ResolvesEdgesAndReportsUnknownKeys(t *testing.T) {
 	st := openStore(t)
 	_, _, ek := seedPair(t, st)
