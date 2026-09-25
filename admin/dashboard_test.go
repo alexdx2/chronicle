@@ -94,3 +94,18 @@ func TestRemoveAllBetweenMarkers(t *testing.T) {
 		t.Fatalf("an unterminated region must be left alone: %q", got)
 	}
 }
+
+func TestRenderDashboard_AgentLiveSections(t *testing.T) {
+	full := RenderDashboard(DashboardSlots{})
+	for _, want := range []string{`data-testid="agent-menu"`, `data-testid="agent-cards"`, `import('/js/live-client.js')`} {
+		if !strings.Contains(full, want) {
+			t.Fatalf("dashboard lacks %s", want)
+		}
+	}
+	hidden := RenderDashboard(DashboardSlots{HideSections: []string{"agent_live"}})
+	for _, gone := range []string{`data-testid="agent-menu"`, `data-testid="agent-cards"`, "SECTION:agent_live"} {
+		if strings.Contains(hidden, gone) {
+			t.Errorf("agent_live hidden but %s remains", gone)
+		}
+	}
+}

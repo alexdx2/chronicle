@@ -223,6 +223,15 @@ button,input,select,textarea{font-family:inherit}
 .view-table tr.row:hover td{background:var(--card-alt,#f6f2ea)}
 .view-table td.mono{font-family:var(--font-mono);font-size:11px}
 .view-table .hint{font-size:10px;color:var(--text-muted);margin-top:14px}
+.agent-cards{position:fixed;top:72px;right:16px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:340px}
+.agent-card{background:var(--card,#fff);border:1px solid var(--border,#e4dccf);border-left:3px solid var(--primary);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);padding:10px 12px;font-size:12px;color:var(--text)}
+.agent-card-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-right:6px}
+.agent-card-meta{font-size:10px;color:var(--text-muted);margin-top:4px}
+.agent-card-actions{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+.agent-card-x{border:none;background:none;cursor:pointer;color:var(--text-muted);font-size:16px;line-height:1}
+.agent-badge{display:inline-block;min-width:14px;padding:0 4px;margin-left:4px;border-radius:7px;background:var(--primary);color:#fff;font-size:9px;line-height:14px;text-align:center}
+.tb-menu button.agent-unseen{font-weight:600}
+.crumb-agent{background:#e8eefc;color:#3b6fd4}
 .node-hover-tooltip .nht-hint{font-size:9px;color:#b8963e;margin-top:4px;border-top:1px solid #3a3528;padding-top:4px}
 .bottom-panel{position:fixed;bottom:0;left:0;right:0;background:#faf6ef;border-top:2px solid var(--border);box-shadow:0 -4px 20px rgba(0,0,0,0.08);z-index:100;max-height:45vh;overflow-y:auto;transition:transform 0.2s}
 .bottom-panel-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#faf6ef;z-index:1}
@@ -450,6 +459,23 @@ button,input,select,textarea{font-family:inherit}
   </div>
 </header>
 <!-- SLOT:AFTER_HEADER -->
+<!-- SECTION:agent_live:start -->
+<div class="agent-cards" data-testid="agent-cards">
+  <template x-for="card in agentCards" :key="card.id">
+    <div class="agent-card" data-testid="agent-card">
+      <div>
+        <span class="agent-card-kicker">Agent built</span>
+        <span x-text="card.summary ? card.text : ((card.ev.payload && card.ev.payload.title) || 'diagram')"></span>
+      </div>
+      <div class="agent-card-meta" x-text="agentCardMeta(card.ev)"></div>
+      <div class="agent-card-actions">
+        <button class="btn-outline-xs" @click="openAgentDiagram(card.ev); dismissAgentCard(card)">Open</button>
+        <button class="agent-card-x" @click="dismissAgentCard(card)" aria-label="Dismiss">×</button>
+      </div>
+    </div>
+  </template>
+</div>
+<!-- SECTION:agent_live:end -->
 
 <!-- Overview Tab -->
 <!-- TAB_PANEL:overview:start -->
@@ -919,6 +945,24 @@ button,input,select,textarea{font-family:inherit}
         </div>
       </div>
 
+      <!-- SECTION:agent_live:start -->
+      <div style="position:relative" @click.outside="agentOpen=false" x-show="agentDiagrams.length" x-cloak>
+        <div class="mode-toggle">
+          <button class="mode-btn" data-testid="agent-menu" @click="agentOpen=!agentOpen">
+            Agent<template x-if="agentUnseen"><span class="agent-badge" x-text="agentUnseen"></span></template> ▾
+          </button>
+        </div>
+        <div class="tb-menu" x-show="agentOpen" x-cloak data-testid="agent-menu-list">
+          <template x-for="ev in agentDiagrams" :key="agentKey(ev)">
+            <button @click="agentOpen=false;openAgentDiagram(ev)" :class="{'agent-unseen': !agentSeen(ev)}">
+              <span x-text="(ev.payload && ev.payload.title) || 'diagram'"></span>
+              <span class="tbm-hint" x-text="agentMenuHint(ev)"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+      <!-- SECTION:agent_live:end -->
+
       <!-- SLOT:VIEW_BAR -->
 
       <!-- Overflow: rarely-needed views -->
@@ -978,6 +1022,9 @@ button,input,select,textarea{font-family:inherit}
             <span class="crumb-sep">›</span>
             <button class="crumb" :class="{active: i === viewStack.length - 1}" @click="popViewTo(i)">
               <span x-text="entry.title"></span>
+              <template x-if="entry.origin === 'agent'">
+                <span class="crumb-badge crumb-agent" title="opened from the agent's diagram">agent</span>
+              </template>
               <template x-if="entry.spec && entry.spec.pin && entry.spec.pin.length">
                 <span class="crumb-badge" :title="entry.spec.pin.length + ' pinned'" x-text="'+' + entry.spec.pin.length"></span>
               </template>
@@ -2025,6 +2072,16 @@ function dashboard() {
     paletteSearch: '',
     paletteCollapsed: {},     // group key → true when collapsed
     collapsedFilterSections: {},
+    // Live channel (spec 2026-09-24-live-diagrams-v2): the agent's recent
+    // diagrams (menu, newest first), cards on screen, the unseen badge.
+    agentDiagrams: [],
+    agentCards: [],
+    agentUnseen: 0,
+    agentOpen: false,
+    _live: null,
+    _agentSeen: null,
+    _agentKey: null,
+    _wsWasOpen: false,
     // SLOT:EXTRA_STATE
     scanProgress: null,
     scanEvents: [],
@@ -2162,6 +2219,9 @@ function dashboard() {
       await this.fetchStats();
       this.loading.stats = false;
       this.connectWS();
+      // Live channel (agent diagrams in, screen reports out) — absent in the
+      // read-only playground, which hides its markup.
+      if (document.querySelector("[data-testid='agent-cards']")) this.startLive();
 
       // View deep links: #v/<base64url(spec)>,
       // #c4?domain=&level=&service= — all open the Graph tab in view mode
@@ -2624,7 +2684,12 @@ function dashboard() {
     connectWS() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       this.ws = new WebSocket(proto + '//' + location.host + '/ws');
-      this.ws.onopen = () => { this.wsConnected = true; };
+      this.ws.onopen = () => {
+        this.wsConnected = true;
+        // A reconnect missed whatever the agent built meanwhile.
+        if (this._wsWasOpen && this._live) this._live.resync();
+        this._wsWasOpen = true;
+      };
       this.ws.onclose = () => {
         this.wsConnected = false;
         setTimeout(() => this.connectWS(), 3000);
@@ -2647,6 +2712,7 @@ function dashboard() {
             if (this.scanEvents.length > 50) this.scanEvents.pop();
             this.fetchScanProgress();
           }
+          if (msg.type === 'live' && this._live) this._live.onSocketEvent(msg.data);
         } catch(e) {}
       };
     },
@@ -3609,6 +3675,7 @@ function dashboard() {
         const modePath = this.graphMode === 'tree' ? '/graph/tree' : '/graph/explore';
         history.replaceState(null, '', modePath + location.search);
       }
+      if (this._live) this._live.reportSoon();
     },
 
     // "All" level: back to today's /api/graph rendering
@@ -3655,6 +3722,7 @@ function dashboard() {
         spec, view,
         title: o.title || ViewAdapter.presetTitle(spec, view),
         pristineSpec: o.pristine ? JSON.parse(JSON.stringify(spec)) : null,
+        origin: o.origin || '',
       };
       const top = this.viewStack[this.viewStack.length - 1];
       // Dedupe: identical spec replaces the top instead of growing the stack
@@ -3665,6 +3733,7 @@ function dashboard() {
         // Filter mutations keep the entry's identity (title, pristine spec)
         entry.title = top.title;
         entry.pristineSpec = top.pristineSpec;
+        entry.origin = top.origin || '';
         this.viewStack.splice(this.viewStack.length - 1, 1, entry);
       } else {
         this.viewStack.push(entry);
@@ -3732,6 +3801,7 @@ function dashboard() {
     async renderViewMode() {
       const top = this.viewStack[this.viewStack.length - 1];
       if (!top) return;
+      if (this._live) this._live.reportSoon();
       // First view render after boot-into-view: release the default-render gate.
       if (this._bootViewPending) {
         this._bootViewPending = false;
@@ -3807,7 +3877,7 @@ function dashboard() {
           onDblClick: (d) => self.onViewNodeDblClick(d),
           onDrill: (d) => self.onViewNodeDblClick(d),
           onGroupDblClick: (key, label) => self.onViewGroupDblClick(key, label),
-          onBackgroundClick: () => { self.selectedNode = null; self.nodeEvidence = null; self.selectedEdge = null; self.edgeEvidence = null; },
+          onBackgroundClick: () => { self.selectedNode = null; self.nodeEvidence = null; self.selectedEdge = null; self.edgeEvidence = null; if (self._live) self._live.reportSoon(); },
           onEdgeClick: (e) => self.onViewEdgeClick(e),
         },
         edgeCategoryLookup: lookup,
@@ -3875,6 +3945,7 @@ function dashboard() {
         evidence_count: e._evidenceCount || 0, keys: e.collapsed_from || [],
       };
       this.edgeEvidence = null;
+      if (this._live) this._live.reportSoon();
       if (!this.selectedEdge.keys.length) { this.edgeEvidence = { edges: [], missing: [] }; return; }
       try {
         const r = await fetch('/api/evidence', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3918,6 +3989,7 @@ function dashboard() {
       this.nodeEvidence = null;
       // Synthesized group keys (e.g. the C1 domain box) are not node keys
       if (sel.node_key && String(sel.node_key).includes(':')) this.fetchNodeEvidence(sel.node_key);
+      if (this._live) this._live.reportSoon();
     },
 
     onViewNodeDblClick(d) {
@@ -4556,6 +4628,14 @@ function dashboard() {
         this.viewError = 'Bad view link: ' + e.message;
         return;
       }
+      await this.openViewSpec(spec, {});
+    },
+
+    // Open a spec as a view: from a #v/ link (a fresh stack) or from an
+    // agent diagram (keepStack: the human can step back to what they were
+    // doing).
+    async openViewSpec(spec, o) {
+      o = o || {};
       await this.ensureGraphReady();
       if (spec.scope && spec.scope.domain) this.viewDomain = spec.scope.domain;
       await this.ensureViewDomain();
@@ -4567,8 +4647,112 @@ function dashboard() {
       const preset = (spec.layout && spec.layout.preset) || '';
       this.viewLevel = this._viewPresetLevels.includes(preset) ? preset : '';
       if (preset === 'c3' && spec.scope && spec.scope.service) this.viewService = spec.scope.service;
-      this.viewStack = [];
-      await this.pushViewSpec(spec, { pristine: true });
+      if (!o.keepStack) this.viewStack = [];
+      await this.pushViewSpec(spec, { pristine: true, title: o.title, origin: o.origin });
+    },
+
+    async startLive() {
+      const { LiveClient, LiveFeed } = await import('/js/live-client.js');
+      this._agentKey = LiveFeed.key;
+      let seen = [];
+      try { seen = JSON.parse(sessionStorage.getItem('chronicle.agentSeen') || '[]'); } catch (e) {}
+      this._agentSeen = new Set(seen);
+      const self = this;
+      this._live = new LiveClient({
+        fetch: (u, o) => fetch(u, o), crypto: window.crypto, document, window,
+        setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h),
+        setInterval: (f, ms) => setInterval(f, ms),
+        sendBeacon: (u, b) => navigator.sendBeacon(u, b),
+        getScreen: () => self.screenState(),
+        onFeedChange: (items) => {
+          self.agentDiagrams = items;
+          self.agentUnseen = items.filter(ev => !self.agentSeen(ev)).length;
+        },
+        onDiagrams: (fresh, o) => self.showAgentCards(fresh, o || {}),
+      });
+      await this._live.start();
+      this.$watch('tab', () => { if (this._live) this._live.reportSoon(); });
+    },
+
+    // What this tab shows, for chronicle_dashboard_state.
+    screenState() {
+      const top = this.viewStack[this.viewStack.length - 1];
+      let selected = null;
+      if (this.selectedEdge && (this.selectedEdge.keys || []).length) {
+        selected = { kind: 'edge', keys: this.selectedEdge.keys.slice(0, 50) };
+      } else if (this.selectedNode && this.selectedNode.node_key) {
+        selected = { kind: 'node', key: this.selectedNode.node_key };
+      }
+      return {
+        tab: this.tab,
+        title: this.viewActive && top ? top.title : '',
+        spec: this.viewActive && top ? top.spec : null,
+        selected,
+        breadcrumbs: this.viewActive ? this.viewStack.map(v => v.title || '') : [],
+      };
+    },
+
+    showAgentCards(fresh, o) {
+      if (!fresh.length) return;
+      const last = fresh[fresh.length - 1];
+      if (fresh.length > 1) {
+        this.pushAgentCard({ id: 'sum' + this.agentKey(last), summary: true, text: fresh.length + ' diagrams', ev: last });
+      } else {
+        this.pushAgentCard({ id: this.agentKey(last), summary: false, ev: last });
+      }
+    },
+
+    pushAgentCard(card) {
+      this.agentCards = [card].concat(this.agentCards.filter(c => c.id !== card.id)).slice(0, 3);
+      setTimeout(() => this.dismissAgentCard(card), 8000);
+    },
+
+    dismissAgentCard(card) {
+      this.agentCards = this.agentCards.filter(c => c.id !== card.id);
+    },
+
+    agentCardMeta(ev) {
+      const p = (ev && ev.payload) || {};
+      const c = p.counts || {};
+      return [
+        c.nodes ? c.nodes + ' nodes' : '',
+        p.marks ? p.marks + ' marked' : '',
+        ev && ev.repo ? '@' + ev.repo : '',
+      ].filter(Boolean).join(' · ');
+    },
+
+    agentMenuHint(ev) {
+      const at = Date.parse((ev && ev.at) || '');
+      let when = '';
+      if (!isNaN(at)) {
+        const min = Math.max(0, Math.round((Date.now() - at) / 60000));
+        when = min < 1 ? 'just now' : (min < 60 ? min + ' min ago' : Math.round(min / 60) + ' h ago');
+      }
+      return [when, this.agentCardMeta(ev)].filter(Boolean).join(' · ');
+    },
+
+    agentKey(ev) { return this._agentKey && ev ? this._agentKey(ev) : ''; },
+
+    agentSeen(ev) {
+      return !!(this._agentSeen && ev && this._agentSeen.has(this.agentKey(ev)));
+    },
+
+    markAgentSeen(ev) {
+      if (!this._agentSeen || !ev) return;
+      this._agentSeen.add(this.agentKey(ev));
+      try { sessionStorage.setItem('chronicle.agentSeen', JSON.stringify(Array.from(this._agentSeen).slice(-200))); } catch (e) {}
+      this.agentUnseen = this.agentDiagrams.filter(x => !this.agentSeen(x)).length;
+    },
+
+    async openAgentDiagram(ev) {
+      const p = (ev && ev.payload) || {};
+      if (!p.spec) return;
+      this.markAgentSeen(ev);
+      if (this.tab !== 'graph') {
+        this.tab = 'graph';
+        history.pushState(null, '', '/graph');
+      }
+      await this.openViewSpec(p.spec, { title: p.title, origin: 'agent', keepStack: true });
     },
 
 
