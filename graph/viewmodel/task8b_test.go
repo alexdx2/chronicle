@@ -127,8 +127,15 @@ func TestBuildViewC1_ForeignDomainCards(t *testing.T) {
 	}
 
 	txt := RenderText(v)
-	if !strings.Contains(txt, "## B (domain, other domain)") {
-		t.Errorf("text should frame domain B's card:\n%s", txt)
+	// rev3 fix F6: Kind "domain" and Note "other domain" used to print
+	// both ("## B (domain, other domain)"), repeating the word "domain" —
+	// the same shape task 7 already fixed once, for a different label.
+	// The note alone says everything the kind would.
+	if !strings.Contains(txt, "## B (other domain)") {
+		t.Errorf("text should frame domain B's card without repeating \"domain\":\n%s", txt)
+	}
+	if strings.Contains(txt, "## B (domain, other domain)") {
+		t.Errorf("text must not repeat the word \"domain\":\n%s", txt)
 	}
 	if !strings.Contains(txt, "A → B: HTTP ×2") {
 		t.Errorf("text should draw the calls arrow:\n%s", txt)

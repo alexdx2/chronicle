@@ -738,14 +738,24 @@ func RenderText(v *View) string {
 	groups := append([]VGroup(nil), v.Groups...)
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Key < groups[j].Key })
 	for _, g := range groups {
-		head := fmt.Sprintf("\n## %s (%s", g.Name, g.Kind)
+		kind, note := g.Kind, g.Note
+		if !g.Inferred && kind == "domain" && note == "other domain" {
+			// rev3 fix F6: task 8b's C1 foreign-domain cards set Kind
+			// "domain", Note "other domain" — printing both repeats the
+			// word ("tomandjerry (domain, other domain)"). The note alone
+			// already says everything the kind would; mermaid is
+			// unaffected (it reads g.Kind/g.Note directly, not these
+			// locals).
+			kind, note = "other domain", ""
+		}
+		head := fmt.Sprintf("\n## %s (%s", g.Name, kind)
 		if g.Inferred {
 			head += ", inferred"
-			if g.Note != "" {
-				head += ": " + g.Note
+			if note != "" {
+				head += ": " + note
 			}
-		} else if g.Note != "" {
-			head += ", " + g.Note
+		} else if note != "" {
+			head += ", " + note
 		}
 		head += ")"
 		if st := groupStats(g.Stats); st != "" {
