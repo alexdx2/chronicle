@@ -141,16 +141,25 @@ func TestBuildViewFlow_HandlerAndTransitiveReduction(t *testing.T) {
 		t.Errorf("A -> B injects (the reduction basis) should still draw: %+v", v.Edges)
 	}
 
-	// The skipped requires arrow is named once in the text, not silently
-	// dropped — and kept out of mermaid on purpose.
-	if len(v.AlsoRequires) != 1 || v.AlsoRequires[0] != "payment.client" {
-		t.Errorf("AlsoRequires = %v, want [payment.client]", v.AlsoRequires)
+	// rev3 fix F1: the skipped requires arrow is named once, as a
+	// View.Notes entry — Notes already reach every surface (text,
+	// markdown, mermaid, the MCP answer, the dashboard), so nothing
+	// disappears on any of them the way a RenderText-only field did.
+	wantNote := "also requires (reached via injects): payment.client"
+	foundNote := false
+	for _, n := range v.Notes {
+		if n == wantNote {
+			foundNote = true
+		}
+	}
+	if !foundNote {
+		t.Errorf("Notes = %v, want to contain %q", v.Notes, wantNote)
 	}
 	txt := RenderText(v)
-	if !strings.Contains(txt, "also requires (reached via injects): payment.client") {
-		t.Errorf("RenderText should list the reduced requirement under Arrows:\n%s", txt)
+	if !strings.Contains(txt, wantNote) {
+		t.Errorf("RenderText should print the note:\n%s", txt)
 	}
-	if strings.Contains(RenderMermaid(v), "reached via injects") {
-		t.Errorf("the 'also requires' sentence must stay out of mermaid:\n%s", RenderMermaid(v))
+	if !strings.Contains(RenderMermaid(v), wantNote) {
+		t.Errorf("RenderMermaid should carry the note too (Notes reach every surface):\n%s", RenderMermaid(v))
 	}
 }

@@ -40,22 +40,17 @@ type View struct {
 	// Notes are sentences explaining an empty or partial answer (rev3 task
 	// 2): a path with no route, an impact/deps subject with nothing on the
 	// other end, a service's C3 with no components, an API lens call left
-	// unresolved. Decided from the view's own content once it is built, or
-	// from the domain edges a preset structurally excludes (the API lens) —
-	// never a guess. Renderers surface them the same way: RenderText right
-	// after the header, RenderMarkdown before the table, RenderMermaid as
-	// "%% note: …" comments, the dashboard as a line above the canvas.
-	Notes []string `json:"notes,omitempty"`
-	// AlsoRequires names the flow's REQUIRES targets skipped by the
-	// transitive-reduction rule (rev3 task 6): a use case's "requires"
-	// arrow to X is not drawn when X is reachable from another of its own
-	// REQUIRES targets by a drawn INJECTS chain. Sorted, deduped names —
-	// RenderText prints them as one line under the Arrows section so
-	// nothing disappears silently; RenderMermaid and RenderMarkdown leave
-	// this out on purpose (it is prose about missing arrows, not a note
-	// about the view's own completeness like Notes above).
-	AlsoRequires []string `json:"also_requires,omitempty"`
-	Missing      []string `json:"missing,omitempty"`
+	// unresolved, a flow's requires arrows skipped by transitive reduction
+	// (rev3 fix F1 — folded in here rather than kept as a RenderText-only
+	// field, so it reaches markdown/mermaid/the MCP answer/the dashboard
+	// the same way every other note does). Decided from the view's own
+	// content once it is built, or from the domain edges a preset
+	// structurally excludes (the API lens) — never a guess. Renderers
+	// surface them the same way: RenderText right after the header,
+	// RenderMarkdown before the table, RenderMermaid as "%% note: …"
+	// comments, the dashboard as a line above the canvas.
+	Notes   []string `json:"notes,omitempty"`
+	Missing []string `json:"missing,omitempty"`
 	// Hidden accounts for every node the view carries with
 	// render_mode=hidden, grouped by (layer, type, reason) — nothing leaves
 	// a diagram silently. Reasons are salience Decision.Reason tokens
@@ -1363,9 +1358,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// chain, so the direct arrow would just repeat it (transitive
 	// reduction). Computed once over every flow node in domEdges, not just
 	// a single scope.flow, so it behaves the same under any flow-visible
-	// view. Skipped arrows are not silently dropped: view.AlsoRequires
-	// collects their names (sorted, deduped) for RenderText to print under
-	// the Arrows section — kept out of mermaid on purpose.
+	// view. Skipped arrows are not silently dropped: their names (sorted,
+	// deduped) become a View.Notes entry below (rev3 fix F1) so every
+	// surface — not just RenderText — says so.
 	requiresReduced := make(map[[2]int64]bool) // (use case id, target id)
 	if flowVisible {
 		reqTargets := make(map[int64][]int64) // use case id -> its REQUIRES targets
@@ -1416,10 +1411,14 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				}
 			}
 		}
-		for name := range reducedNames {
-			view.AlsoRequires = append(view.AlsoRequires, name)
+		if len(reducedNames) > 0 {
+			names := make([]string, 0, len(reducedNames))
+			for name := range reducedNames {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			view.Notes = append(view.Notes, fmt.Sprintf("also requires (reached via injects): %s", strings.Join(names, ", ")))
 		}
-		sort.Strings(view.AlsoRequires)
 	}
 
 	// ---- f. edges (+ collapse) and g. boundary ----

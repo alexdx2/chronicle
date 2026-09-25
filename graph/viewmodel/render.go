@@ -787,13 +787,6 @@ func RenderText(v *View) string {
 			b.WriteString(line + "\n")
 		}
 	}
-	if len(v.AlsoRequires) > 0 {
-		// rev3 task 6: requires arrows the transitive-reduction rule
-		// skipped, named here so nothing disappears silently. Deliberately
-		// not a View.Notes entry: it is specific to the Arrows section and
-		// stays out of mermaid (see the AlsoRequires doc comment).
-		fmt.Fprintf(&b, "also requires (reached via injects): %s\n", strings.Join(v.AlsoRequires, ", "))
-	}
 	if v.Boundary != nil && (len(v.Boundary.In) > 0 || len(v.Boundary.Out) > 0) {
 		b.WriteString("\n## Boundary\n")
 		for _, in := range v.Boundary.In {

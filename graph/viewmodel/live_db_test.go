@@ -3,6 +3,7 @@ package viewmodel
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -215,13 +216,22 @@ func TestViewFlowScopedComposition(t *testing.T) {
 	// INJECTS already reach the other two (ScoreService -> ScoreHub,
 	// ScoreService -> ScoreboardDbContext) — transitive reduction leaves
 	// only the one non-redundant "requires" arrow (-> ScoreService); the
-	// other two are said once in RenderText's "also requires" line
-	// instead (view.AlsoRequires), not as a second, repeated arrow.
+	// other two are said once as a View.Notes entry instead (rev3 fix
+	// F1), not as a second, repeated arrow.
 	if requires != 1 {
 		t.Errorf("REQUIRES edges=%d want 1 (transitive reduction via ScoreService's injects); edges=%+v", requires, view.Edges)
 	}
-	if len(view.AlsoRequires) != 2 {
-		t.Errorf("AlsoRequires=%v want the 2 reduced targets (ScoreboardDbContext, ScoreHub)", view.AlsoRequires)
+	var alsoRequiresNote string
+	for _, n := range view.Notes {
+		if strings.HasPrefix(n, "also requires (reached via injects): ") {
+			alsoRequiresNote = n
+		}
+	}
+	if alsoRequiresNote == "" {
+		t.Fatalf("Notes=%v want an \"also requires\" entry for the 2 reduced targets (ScoreboardDbContext, ScoreHub)", view.Notes)
+	}
+	if !strings.Contains(alsoRequiresNote, "ScoreboardDbContext") || !strings.Contains(alsoRequiresNote, "ScoreHub") {
+		t.Errorf("also-requires note = %q, want both ScoreboardDbContext and ScoreHub", alsoRequiresNote)
 	}
 	// Breadcrumb title: the flow NAME, not the raw key.
 	if view.Title == "" || view.Title == flowKey {
