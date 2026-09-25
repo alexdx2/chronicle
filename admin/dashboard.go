@@ -111,7 +111,7 @@ func RenderDashboard(slots DashboardSlots) string {
 	for _, id := range slots.HideSections {
 		start := "<!-- SECTION:" + id + ":start -->"
 		end := "<!-- SECTION:" + id + ":end -->"
-		html = removeBetweenMarkers(html, start, end)
+		html = removeAllBetweenMarkers(html, start, end)
 	}
 
 	return html
@@ -127,6 +127,18 @@ func removeBetweenMarkers(html, startMarker, endMarker string) string {
 		return html
 	}
 	return html[:start] + html[start+end+len(endMarker):]
+}
+
+// removeAllBetweenMarkers removes every region between the markers: a
+// section may appear in several places (the agent_live menu and cards).
+func removeAllBetweenMarkers(html, startMarker, endMarker string) string {
+	for {
+		next := removeBetweenMarkers(html, startMarker, endMarker)
+		if next == html {
+			return html
+		}
+		html = next
+	}
 }
 
 // StaticFile returns the content of a static asset (favicon, logos).

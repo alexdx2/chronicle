@@ -84,3 +84,13 @@ func TestRemoveBetweenMarkers(t *testing.T) {
 		t.Error("should not modify when start marker missing")
 	}
 }
+
+func TestRemoveAllBetweenMarkers(t *testing.T) {
+	html := "a<!-- S -->1<!-- E -->b<!-- S -->2<!-- E -->c"
+	if got := removeAllBetweenMarkers(html, "<!-- S -->", "<!-- E -->"); got != "abc" {
+		t.Fatalf("got %q, want every region removed", got)
+	}
+	if got := removeAllBetweenMarkers("a<!-- S -->x", "<!-- S -->", "<!-- E -->"); got != "a<!-- S -->x" {
+		t.Fatalf("an unterminated region must be left alone: %q", got)
+	}
+}

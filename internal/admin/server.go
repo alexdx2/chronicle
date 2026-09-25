@@ -175,6 +175,7 @@ type Server struct {
 	projectPath   string
 	originalPath  string
 	dashboardHTML string // rendered dashboard HTML (from slots)
+	live          liveTail
 }
 
 // NewServer creates a new admin Server.
@@ -246,6 +247,7 @@ func (s *Server) switchTo(projectPath string) error {
 	s.manifestPath = manifestPath
 	s.mu.Unlock()
 
+	s.restartLiveTail()
 	oldStore.Close()
 	return nil
 }
@@ -323,6 +325,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/evidence", s.handleEvidence)
 	mux.HandleFunc("/api/view", s.handleView)
+	mux.HandleFunc("/api/live", s.handleLive)
+	mux.HandleFunc("/api/live/screen", s.handleLiveScreen)
 }
 
 // ServeHTTP implements http.Handler for testing.
@@ -390,6 +394,7 @@ func (s *Server) Start() error {
 
 	go s.hub.Run()
 	go s.pollRequests()
+	s.startLiveTail()
 
 	addr := fmt.Sprintf("127.0.0.1:%d", s.port)
 	fmt.Fprintf(os.Stderr, "Chronicle Admin: http://%s\n", addr)

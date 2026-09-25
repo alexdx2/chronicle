@@ -7,11 +7,13 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+
+	dashboard "github.com/alexdx2/chronicle-core/admin"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
+// Only our own page (or a non-browser client) may subscribe: the socket
+// carries MCP requests and the agent's diagrams.
+var upgrader = websocket.Upgrader{CheckOrigin: dashboard.SameOrigin}
 
 type Hub struct {
 	clients   map[*websocket.Conn]bool
