@@ -106,6 +106,24 @@ func TestRenderText_Structure(t *testing.T) {
 	}
 }
 
+// TestRenderText_HeaderHiddenCountSumsViewHidden (rev3 fix F4): the header's
+// "N hidden" must equal the sum of View.Hidden's counts — the same total
+// the "## Hidden" section lists below it — not just how many VNodes carry
+// render_mode=hidden. A bulk filter reason (filteredOut) or a removed
+// empty-service group (rev3 fix F3's emptyServiceHidden) contributes a
+// HiddenEntry with no VNode behind it at all, so counting VNodes alone
+// undercounts.
+func TestRenderText_HeaderHiddenCountSumsViewHidden(t *testing.T) {
+	v := sampleView()
+	// A second Hidden entry with no corresponding VNode — the shape a bulk
+	// filter or a removed empty-service group produces.
+	v.Hidden = append(v.Hidden, HiddenEntry{Layer: "code", Type: "field", Reason: "filter:layers", Count: 33})
+	txt := RenderText(v)
+	if !strings.Contains(txt, "level: c2 · domain: shop · 3 groups · 2 nodes · 3 arrows · 34 hidden") {
+		t.Errorf("header hidden count should be the SUM of View.Hidden (1 + 33 = 34), not just render_mode=hidden VNodes:\n%s", txt)
+	}
+}
+
 // TestRenderText_Notes (rev3 task 2): each note prints as "note: <text>"
 // right after the header line, in order, before any section.
 func TestRenderText_Notes(t *testing.T) {

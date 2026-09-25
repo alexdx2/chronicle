@@ -614,11 +614,10 @@ func RenderText(v *View) string {
 	if level == "" {
 		level = "custom"
 	}
-	visible, hidden := 0, 0
+	visible := 0
 	hiddenKeys := make(map[string]bool)
 	for _, n := range v.Nodes {
 		if n.RenderMode == "hidden" {
-			hidden++
 			hiddenKeys[n.Key] = true
 		} else {
 			visible++
@@ -632,6 +631,15 @@ func RenderText(v *View) string {
 			continue
 		}
 		drawn = append(drawn, e)
+	}
+	// rev3 fix F4: the header's count must agree with the "## Hidden"
+	// section below it — the sum of View.Hidden, not just how many VNodes
+	// carry render_mode=hidden. A bulk filter reason or a removed
+	// empty-service group (rev3 fix F3) contributes a HiddenEntry with no
+	// VNode behind it at all, so counting VNodes alone undercounts.
+	hidden := 0
+	for _, h := range v.Hidden {
+		hidden += h.Count
 	}
 	fmt.Fprintf(&b, "level: %s · domain: %s · %d groups · %d nodes · %d arrows · %d hidden\n",
 		level, v.Spec.Scope.Domain, len(v.Groups), visible, len(drawn), hidden)
