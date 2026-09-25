@@ -1954,6 +1954,18 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		PlaceMarks(view, spec.Marks, buildViewPlacer(st, nodeByKey, nodeByID, attached, memberGroup, active))
 	}
 
+	// The boundary answers the view's own question (rev3 task 5): deps asks
+	// "what does X depend on" — only crossings OUT are relevant, an
+	// incoming caller is impact's question, not deps'. impact asks "what
+	// depends on X" — only crossings IN. Every other preset (c1/c2/c3/api/
+	// data/services/…) keeps both sides; path/flow never populate either
+	// (guarded above, per edge kind).
+	switch spec.Layout.Preset {
+	case "deps":
+		bIn = nil
+	case "impact":
+		bOut = nil
+	}
 	if len(bIn) > 0 || len(bOut) > 0 {
 		sort.Slice(bIn, func(i, j int) bool {
 			if bIn[i].FromName != bIn[j].FromName {
