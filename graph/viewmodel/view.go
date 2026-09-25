@@ -1351,6 +1351,55 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return e.EdgeType == "CALLS_SERVICE" && twinnedCall[[2]int64{e.FromNodeID, e.ToNodeID}]
 	}
 
+	// isPrivateTopic (rev3 task 3, tightened by task 8a; shared by the
+	// boundary pass below — fix F2 — and the c2 node-hiding pass further
+	// down, which used to compute this inline just for itself): a topic
+	// whose every publisher AND every consumer (PUBLISHES_TOPIC/
+	// CONSUMES_TOPIC source, checked over the WHOLE graph via domEdges,
+	// not just this view) resolves to one same service is that service
+	// talking to itself, not a real conversation. Requires at least one
+	// publisher AND at least one consumer — a topic with only one side
+	// known is a one-sided event, not a self-conversation. A foreign
+	// topic (task 8a) is never private: this domain only ever sees ONE
+	// crossing edge for it, never its other side.
+	isPrivateTopic := func(topicID int64) bool {
+		if isForeign(topicID) {
+			return false
+		}
+		var only *store.NodeRow
+		hasPub, hasSub, consistent := false, false, true
+		for j := range domEdges {
+			e := &domEdges[j]
+			if e.ToNodeID != topicID || (e.EdgeType != "PUBLISHES_TOPIC" && e.EdgeType != "CONSUMES_TOPIC") {
+				continue
+			}
+			if e.EdgeType == "PUBLISHES_TOPIC" {
+				hasPub = true
+			} else {
+				hasSub = true
+			}
+			if !consistent {
+				continue // already know; keep scanning only to finish hasPub/hasSub
+			}
+			svc := owned[e.FromNodeID]
+			if svc == nil {
+				if fn := nodeByID[e.FromNodeID]; fn != nil && fn.Layer == "service" && fn.NodeType == "service" {
+					svc = fn
+				}
+			}
+			if svc == nil {
+				consistent = false
+				continue
+			}
+			if only == nil {
+				only = svc
+			} else if svc.NodeID != only.NodeID {
+				consistent = false
+			}
+		}
+		return hasPub && hasSub && consistent && only != nil
+	}
+
 	// requiresReduced (rev3 task 6): a flow's "requires" arrow from the use
 	// case to X is redundant when X is reachable from another of that same
 	// use case's REQUIRES targets by one or more DRAWN INJECTS hops (both
@@ -1658,6 +1707,16 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			if pathMode {
 				continue // a path view has no boundary entries
 			}
+			if (spec.Layout.Preset == "c2" || spec.Layout.Preset == "services") &&
+				(e.EdgeType == "PUBLISHES_TOPIC" || e.EdgeType == "CONSUMES_TOPIC") &&
+				isPrivateTopic(e.ToNodeID) {
+				// rev3 fix F2: on c2 this never fires (the topic is drawn
+				// in-view, so both sides are fIn&&tIn, not a boundary
+				// crossing at all) — on services (which never draws topic
+				// nodes) it does, and without this check a service's own
+				// private topic would read as a real crossing.
+				continue
+			}
 			// Outgoing boundary (same semantics as legacy C3 / Selection).
 			fromNode := nodeByID[fid]
 			toNode := nodeByID[e.ToNodeID]
@@ -1724,6 +1783,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		case !fIn && tIn:
 			if pathMode {
 				continue // a path view has no boundary entries
+			}
+			if (spec.Layout.Preset == "c2" || spec.Layout.Preset == "services") &&
+				(e.EdgeType == "PUBLISHES_TOPIC" || e.EdgeType == "CONSUMES_TOPIC") &&
+				isPrivateTopic(e.ToNodeID) {
+				continue // rev3 fix F2: same self-conversation guard as the outgoing case above
 			}
 			// Incoming boundary.
 			fromNode := nodeByID[e.FromNodeID]
@@ -2446,56 +2510,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			if topicNode == nil {
 				continue
 			}
-			if isForeign(topicNode.NodeID) {
-				// rev3 task 8a: "private" means EVERY publisher and
-				// consumer belongs to one same service — a claim this
-				// domain can only make honestly about a topic it fully
-				// owns (it loaded every edge touching it). A foreign
-				// topic is known ONLY through the one crossing edge that
-				// made it a boundary neighbour; the topic's other
-				// publishers/consumers, if any, live in a store this
-				// domain never read. Calling it "private" off a single
-				// edge would assert something the graph does not back.
-				continue
-			}
-			var only *store.NodeRow
-			hasPub, hasSub, consistent := false, false, true
-			for j := range domEdges {
-				e := &domEdges[j]
-				if e.ToNodeID != topicNode.NodeID || (e.EdgeType != "PUBLISHES_TOPIC" && e.EdgeType != "CONSUMES_TOPIC") {
-					continue
-				}
-				if e.EdgeType == "PUBLISHES_TOPIC" {
-					hasPub = true
-				} else {
-					hasSub = true
-				}
-				if !consistent {
-					continue // already know; keep scanning only to finish hasPub/hasSub
-				}
-				svc := owned[e.FromNodeID]
-				if svc == nil {
-					if fn := nodeByID[e.FromNodeID]; fn != nil && fn.Layer == "service" && fn.NodeType == "service" {
-						svc = fn
-					}
-				}
-				if svc == nil {
-					consistent = false
-					continue
-				}
-				if only == nil {
-					only = svc
-				} else if svc.NodeID != only.NodeID {
-					consistent = false
-				}
-			}
-			// Private means a self-conversation IS the whole conversation:
-			// at least one publisher, at least one consumer, and every one
-			// of them the same service. A publisher with no consumer (or a
-			// consumer with no publisher) never reaches this — it stays
-			// visible as the one-sided event the graph actually shows.
-			private := hasPub && hasSub && consistent && only != nil
-			if private {
+			// isPrivateTopic (defined above, shared with the boundary
+			// pass — fix F2) already excludes a foreign topic (task 8a):
+			// this domain only ever sees ONE crossing edge for it, never
+			// enough to call it private honestly.
+			if isPrivateTopic(topicNode.NodeID) {
 				n.Tier = string(salience.TierDetail)
 				n.RenderMode = string(salience.RenderHidden)
 				n.SalienceReason = "private"

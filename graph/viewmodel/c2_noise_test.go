@@ -196,6 +196,79 @@ func TestBuildViewC2_PrivateTopicHiddenSharedTopicFramed(t *testing.T) {
 	}
 }
 
+// TestBuildViewServices_PrivateTopicNoBoundaryEntry: rev3 fix F2. The
+// "services" preset never materializes topic nodes at all (unlike c2), so
+// the private-topic hiding above — which operates on topic VNodes — never
+// gets a chance to run against it; the topic's own PUBLISHES_TOPIC/
+// CONSUMES_TOPIC crossing edges still reach View.Boundary unconditionally,
+// presenting svc-a's self-conversation as if it were a real cross-service
+// dependency. A private topic must produce no boundary entry on c2 OR
+// services; a genuinely shared topic (published by one service, consumed
+// by another) must keep crossing normally on both.
+func TestBuildViewServices_PrivateTopicNoBoundaryEntry(t *testing.T) {
+	st, _, privateTopicKey, sharedTopicKey := synthPrivateTopicStore(t)
+
+	v, err := BuildPreset(st, "services", "d", "")
+	if err != nil {
+		t.Fatalf("BuildPreset(services): %v", err)
+	}
+	if v.Boundary != nil {
+		for _, in := range v.Boundary.In {
+			if in.FromName == "private-topic" {
+				t.Errorf("private topic must not produce a boundary 'in' entry on services: %+v", v.Boundary.In)
+			}
+		}
+		for _, out := range v.Boundary.Out {
+			if out.ToName == "private-topic" {
+				t.Errorf("private topic must not produce a boundary 'out' entry on services: %+v", v.Boundary.Out)
+			}
+		}
+	}
+	foundShared := false
+	if v.Boundary != nil {
+		for _, out := range v.Boundary.Out {
+			if out.ToName == "shared-topic" {
+				foundShared = true
+			}
+		}
+		for _, in := range v.Boundary.In {
+			if in.FromName == "shared-topic" {
+				foundShared = true
+			}
+		}
+	}
+	if !foundShared {
+		t.Errorf("shared-topic (a real cross-service topic) should still cross the boundary normally: boundary=%+v", v.Boundary)
+	}
+	txt := RenderText(v)
+	if strings.Contains(txt, "private-topic") {
+		t.Errorf("private topic must not appear anywhere in services' rendered text:\n%s", txt)
+	}
+
+	// Same guarantee restated directly on c2 (already correct today,
+	// since the private topic's VNode+edges are hidden before it could
+	// cross — this pins that behavior so a future change cannot regress
+	// it silently).
+	vc2, err := BuildPreset(st, "c2", "d", "")
+	if err != nil {
+		t.Fatalf("BuildPreset(c2): %v", err)
+	}
+	if vc2.Boundary != nil {
+		for _, in := range vc2.Boundary.In {
+			if in.FromName == "private-topic" {
+				t.Errorf("private topic must not produce a boundary 'in' entry on c2: %+v", vc2.Boundary.In)
+			}
+		}
+		for _, out := range vc2.Boundary.Out {
+			if out.ToName == "private-topic" {
+				t.Errorf("private topic must not produce a boundary 'out' entry on c2: %+v", vc2.Boundary.Out)
+			}
+		}
+	}
+	_ = privateTopicKey
+	_ = sharedTopicKey
+}
+
 func TestBuildViewC3_PrivateTopicStaysVisible(t *testing.T) {
 	st, svcAKey, privateTopicKey, _ := synthPrivateTopicStore(t)
 	v, err := BuildPreset(st, "c3", "d", svcAKey)
