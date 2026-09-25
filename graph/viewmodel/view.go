@@ -2107,6 +2107,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	salLevel := spec.Layout.Preset
 	roleByNode := resolveRolesByNode(st)
 	crossing := boundaryCrossings(domEdges, owned)
+	// rev3 fix F8: a path or flow view already draws the one endpoint
+	// that matters as its own node (the path/trigger endpoint) — a
+	// handler's other EXPOSES_ENDPOINT pills would just distract (and can
+	// lead with an unrelated endpoint). Every other preset keeps pills.
+	suppressPills := spec.Layout.Preset == "path" || spec.Layout.Preset == "flow"
 	for id, g := range memberGroup {
 		if spec.Collapse && g != "" && !frameGroups[g] {
 			continue // grouped members fold into their VGroup
@@ -2127,6 +2132,10 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			BoundaryCrossing: crossing[n.NodeID],
 			UserOverride:     userOv,
 		})
+		eps := endpointPills[id]
+		if suppressPills {
+			eps = nil
+		}
 		vn := VNode{
 			Key:        n.NodeKey,
 			Name:       n.Name,
@@ -2134,7 +2143,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			Layer:      n.Layer,
 			Group:      g,
 			Domain:     domOf(n),
-			Endpoints:  endpointPills[id],
+			Endpoints:  eps,
 			UsesModels: modelPills[id],
 			Detail:     flowTrigger[id],
 			Tier:       string(sal.Tier),

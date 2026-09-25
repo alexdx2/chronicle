@@ -163,3 +163,67 @@ func TestBuildViewFlow_HandlerAndTransitiveReduction(t *testing.T) {
 		t.Errorf("RenderMermaid should carry the note too (Notes reach every surface):\n%s", RenderMermaid(v))
 	}
 }
+
+// TestBuildViewPathAndFlow_HandlerPillsSuppressed: rev3 fix F8. A handler
+// card on a path or flow view lists its EXPOSES_ENDPOINT pills same as
+// anywhere else, but the view already draws the one endpoint that matters
+// as its own node (the trigger/path endpoint) — the pill list distracts
+// (and can lead with an unrelated endpoint on a busier handler). Path and
+// flow must not fill VNode.Endpoints; every other preset is unaffected.
+func TestBuildViewPathAndFlow_HandlerPillsSuppressed(t *testing.T) {
+	st, flowKey, handlerKey, epKey, _, _, _ := synthFlowReductionStore(t)
+
+	// flow: the handler (checkout.controller) exposes POST /checkout.
+	flowView, err := BuildView(st, ViewSpec{
+		Scope:  ScopeSpec{Domain: "d", Flow: flowKey},
+		Group:  GroupSpec{By: "none"},
+		Layout: LayoutSpec{Preset: "flow"},
+	})
+	if err != nil {
+		t.Fatalf("flow: %v", err)
+	}
+	handler := findNode(flowView, handlerKey)
+	if handler == nil {
+		t.Fatalf("handler missing from flow view; nodes=%+v", flowView.Nodes)
+	}
+	if len(handler.Endpoints) != 0 {
+		t.Errorf("flow: handler's endpoint pills should be suppressed, got %+v", handler.Endpoints)
+	}
+	if strings.Contains(RenderText(flowView), "exposes") {
+		t.Errorf("flow: text must not print an \"exposes\" pill list:\n%s", RenderText(flowView))
+	}
+
+	// path: epKey -> handlerKey (endpoint<->handler) -> aKey (injects) is
+	// the only route (TRIGGERS_FLOW/REQUIRES are excluded from path
+	// search), so the handler is drawn on the path too.
+	pathView, err := BuildView(st, ViewSpec{
+		Scope:  ScopeSpec{Domain: "d", Nodes: []string{epKey, "code:provider:d:checkout-svc/src/checkout.service"}},
+		Expand: &ExpandSpec{Mode: "path"},
+		Group:  GroupSpec{By: "none"},
+		Layout: LayoutSpec{Preset: "path"},
+	})
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	pathHandler := findNode(pathView, handlerKey)
+	if pathHandler == nil {
+		t.Fatalf("handler missing from path view; nodes=%+v", pathView.Nodes)
+	}
+	if len(pathHandler.Endpoints) != 0 {
+		t.Errorf("path: handler's endpoint pills should be suppressed, got %+v", pathHandler.Endpoints)
+	}
+
+	// Negative control: the SAME handler, same store, a preset that is
+	// neither path nor flow — the pill must still be there.
+	otherView, err := BuildView(st, ViewSpec{
+		Scope: ScopeSpec{Domain: "d", Flow: flowKey},
+		Group: GroupSpec{By: "none"},
+	})
+	if err != nil {
+		t.Fatalf("no-preset: %v", err)
+	}
+	otherHandler := findNode(otherView, handlerKey)
+	if otherHandler == nil || len(otherHandler.Endpoints) != 1 || otherHandler.Endpoints[0].Key != epKey {
+		t.Errorf("other presets must be unaffected: handler=%+v", otherHandler)
+	}
+}
