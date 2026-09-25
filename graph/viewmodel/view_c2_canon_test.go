@@ -158,8 +158,12 @@ func TestViewC2_EndpointCallsMergeIntoServiceCalls(t *testing.T) {
 	if calls == nil {
 		t.Fatalf("no arena→jerry CALLS_SERVICE edge; edges=%+v", view.Edges)
 	}
-	if calls.Weight != 3 || len(calls.CollapsedFrom) != 3 {
-		t.Errorf("arena→jerry should carry 1 CALLS_SERVICE + 2 CALLS_ENDPOINT = weight 3 (collapsed_from 3), got weight=%d from=%v", calls.Weight, calls.CollapsedFrom)
+	// jerry.client's direct CALLS_SERVICE to jerry-api twins its own two
+	// resolved CALLS_ENDPOINT calls (fix round 1, rev3 task 2): it still
+	// merges into this one arrow (collapsed_from keeps all 3 edges as
+	// evidence), but weight counts the two real calls, not a third.
+	if calls.Weight != 2 || len(calls.CollapsedFrom) != 3 {
+		t.Errorf("arena→jerry should count 2 resolved endpoint calls (collapsed_from still 3), got weight=%d from=%v", calls.Weight, calls.CollapsedFrom)
 	}
 }
 

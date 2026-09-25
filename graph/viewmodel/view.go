@@ -1121,6 +1121,31 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return n.NodeKey
 	}
 
+	// twinnedCall records, for every active CALLS_ENDPOINT edge, the
+	// (caller node id, callee service id) pair its resolution already
+	// covers — the caller's component-level CALLS_SERVICE edge to that
+	// SAME service (if the graph also has one) is the coarse half of this
+	// already-resolved conversation, not a second, unresolved call (rev3
+	// task 2, fix round 1). Endpoint ownership reuses `owned`, the same
+	// map the rest of BuildView uses to frame endpoints by their exposing
+	// service.
+	twinnedCall := make(map[[2]int64]bool) // (caller node id, callee service id)
+	for i := range domEdges {
+		e := &domEdges[i]
+		if e.EdgeType != "CALLS_ENDPOINT" {
+			continue
+		}
+		if svc := owned[e.ToNodeID]; svc != nil {
+			twinnedCall[[2]int64{e.FromNodeID, svc.NodeID}] = true
+		}
+	}
+	// callsServiceCovered reports whether a CALLS_SERVICE edge is that
+	// coarse twin: CALLS_SERVICE always targets a service node directly,
+	// so e.ToNodeID IS the callee service's id already.
+	callsServiceCovered := func(e *store.EdgeRow) bool {
+		return e.EdgeType == "CALLS_SERVICE" && twinnedCall[[2]int64{e.FromNodeID, e.ToNodeID}]
+	}
+
 	// ---- f. edges (+ collapse) and g. boundary ----
 	type edgeKeyT struct{ from, to, kind, transport string }
 	edgeAcc := make(map[edgeKeyT]*VEdge)
@@ -1204,7 +1229,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			edgeAcc[k] = ve
 			edgeOrder = append(edgeOrder, k)
 		}
-		ve.Weight++
+		// A covered CALLS_SERVICE (fix round 1) still counts as evidence
+		// for this boundary arrow, it just does not inflate the call count
+		// a resolved CALLS_ENDPOINT boundary entry already carries.
+		if !callsServiceCovered(e) {
+			ve.Weight++
+		}
 		addEdgeProvenance(ve, e, edgeSum[e.EdgeID].Count)
 		ve.CollapsedFrom = append(ve.CollapsedFrom, e.EdgeKey)
 	}
@@ -1311,7 +1341,14 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				edgeAcc[k] = ve
 				edgeOrder = append(edgeOrder, k)
 			}
-			ve.Weight++
+			// A CALLS_SERVICE edge that twins a resolved CALLS_ENDPOINT
+			// call by the SAME caller node (fix round 1) is the coarse
+			// half of that one call, already counted when the lifted
+			// CALLS_ENDPOINT edge merged into this same arrow above — it
+			// still rides along as evidence, just not as a second call.
+			if !callsServiceCovered(e) {
+				ve.Weight++
+			}
 			addEdgeProvenance(ve, e, edgeSum[e.EdgeID].Count)
 			// Component edge keys ride along in every view (not only
 			// collapsed ones): an arrow is inspectable — "why does this
@@ -1828,19 +1865,25 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	case "api":
 		// The api lens draws only CALLS_ENDPOINT arrows (filter.edge_kinds);
 		// a CALLS_SERVICE edge between two services the lens DOES draw
-		// (both own visible content here) never becomes an arrow at all —
-		// by construction it can have no "parallel" resolved-endpoint
-		// representation (different edge type, different to-node), so
-		// every one of these is a call the lens leaves unmentioned unless a
-		// note says so. Counted per (caller, callee) service pair from the
-		// raw domain edges, since the collapsed C2-style merge that would
-		// otherwise fold them into an aggregate arrow does not run here.
+		// (both own visible content here) never becomes an arrow at all.
+		// Most of these are not missing information, though: a caller that
+		// already has a resolved CALLS_ENDPOINT to one of the callee's
+		// endpoints typically ALSO carries a coarser CALLS_SERVICE edge to
+		// the same service for the same conversation (callsServiceCovered,
+		// fix round 1) — that edge is a twin, not a second, unresolved
+		// call, and skipping it here is what keeps this note from lying.
+		// Only an UNCOVERED CALLS_SERVICE edge — a caller with no resolved
+		// endpoint call to that service at all — is left unmentioned by
+		// the lens's arrows and worth a note. Counted per (caller, callee)
+		// service pair from the raw domain edges, since the collapsed
+		// C2-style merge that would otherwise fold them into one aggregate
+		// arrow does not run in this (uncollapsed) preset.
 		type svcPair struct{ caller, callee string }
 		counts := make(map[svcPair]int)
 		names := make(map[string]string)
 		for i := range domEdges {
 			e := &domEdges[i]
-			if e.EdgeType != "CALLS_SERVICE" {
+			if e.EdgeType != "CALLS_SERVICE" || callsServiceCovered(e) {
 				continue
 			}
 			calleeSvc := nodeByID[e.ToNodeID]

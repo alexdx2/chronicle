@@ -20,7 +20,10 @@ func TestRenderMermaid_LiveC2(t *testing.T) {
 		`subgraph kafka["kafka · broker (inferred: only declared broker)"]`,
 		`battle_results(["battle-results<br/>confidence 60%"])`, // below the bar: the card says so
 		`arena_api -`, // arrows leave the arena-api card
-		`|"HTTP ×3"| jerry_api`,
+		// jerry.client's direct CALLS_SERVICE to jerry-api twins its own
+		// two resolved CALLS_ENDPOINT calls (fix round 1, rev3 task 2):
+		// weight counts the two real calls, not a third.
+		`|"HTTP ×2"| jerry_api`,
 		`battle_results -`, // consumption drawn topic → consumer
 		`%% hidden: 1 cache (isolated)`,
 	} {
