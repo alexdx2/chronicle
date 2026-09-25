@@ -9,6 +9,12 @@ import { MARK_COLORS, strongestMark, markLine, markDetail } from './live-client.
 // const declared later in the method is in its temporal dead zone here.
 function clip(t, max) { t = String(t || ''); return t.length > max ? t.slice(0, max - 1) + '…' : t; }
 
+// MARK_CAPTION_CHAR_WIDTH: average px/char at the mark-caption font sizes
+// (8.5-9px), used to turn an available pixel width into a character budget
+// for clip(). Shared by the node mark caption and the frame mark caption so
+// the two captions truncate by the same rule.
+const MARK_CAPTION_CHAR_WIDTH = 5.4;
+
 const LAYOUT = {
   rankDir: 'TB',
   rankSep: 60,
@@ -297,10 +303,10 @@ export class GraphRenderer {
           rect.style('stroke', MARK_COLORS[frameMark]).style('stroke-width', '3px');
           // A long note easily overruns a small frame and collides with the
           // domain label on the same baseline — clip to a budget derived
-          // from the frame's own width (half the frame, ~5.5px/char at this
-          // font-size); the full line still reads on hover via <title>.
+          // from the frame's own width (half the frame, MARK_CAPTION_CHAR_WIDTH
+          // px/char); the full line still reads on hover via <title>.
           const line = markLine(meta.marks, gk);
-          const budget = Math.max(10, Math.floor((gNode.width / 2 - 16) / 5.5));
+          const budget = Math.max(10, Math.floor((gNode.width / 2 - 16) / MARK_CAPTION_CHAR_WIDTH));
           gg.append('text').attr('class', 'domain-mark')
             .attr('text-anchor', 'end')
             .attr('x', gNode.x + gNode.width / 2 - 10).attr('y', gNode.y - gNode.height / 2 + 14)
@@ -531,7 +537,7 @@ export class GraphRenderer {
       .attr('text-anchor', 'middle').attr('y', nh / 2 + 11)
       .attr('font-size', 8.5).attr('font-weight', 600)
       .attr('fill', d => MARK_COLORS[strongestMark(d._marks)])
-      .text(d => clip(markLine(d._marks, d.node_key), Math.max(8, Math.floor((nw - 10) / 5.4))))
+      .text(d => clip(markLine(d._marks, d.node_key), Math.max(8, Math.floor((nw - 10) / MARK_CAPTION_CHAR_WIDTH))))
       .append('title').text(d => markLine(d._marks, d.node_key));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the

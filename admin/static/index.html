@@ -4750,7 +4750,12 @@ function dashboard() {
     },
 
     pushAgentCard(card) {
-      this.agentCards = [card].concat(this.agentCards.filter(c => c.id !== card.id)).slice(0, 3);
+      const merged = [card].concat(this.agentCards.filter(c => c.id !== card.id));
+      // slice(0, 3) can drop a card the concat still carries (the cap is 3);
+      // a dropped card's timer must go with it, or it outlives the card and
+      // fires a pointless dismissAgentCard later.
+      merged.slice(3).forEach(c => this.clearAgentCardTimer(c.id));
+      this.agentCards = merged.slice(0, 3);
       this.armAgentCardTimer(card, 12000);
     },
 
@@ -4769,9 +4774,16 @@ function dashboard() {
       this.armAgentCardTimer(card, 4000);
     },
 
+    // Cancels a card's dismiss timer and forgets it — used whenever a card
+    // leaves agentCards, whatever the reason (dismissed, or dropped by
+    // pushAgentCard's slice(0, 3) cap).
+    clearAgentCardTimer(id) {
+      clearTimeout(this._agentCardTimers[id]);
+      delete this._agentCardTimers[id];
+    },
+
     dismissAgentCard(card) {
-      clearTimeout(this._agentCardTimers[card.id]);
-      delete this._agentCardTimers[card.id];
+      this.clearAgentCardTimer(card.id);
       this.agentCards = this.agentCards.filter(c => c.id !== card.id);
     },
 
