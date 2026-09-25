@@ -2057,6 +2057,7 @@ function dashboard() {
     edgeEvidence: null,        // POST /api/evidence result for selectedEdge.keys
     _salienceHiddenCount: 0,   // count of nodes hidden by salience in the last view render
     _hiddenSummary: [],        // [{layer,type,reason,count}] from the view engine
+    _tableRenderGen: 0,        // bumped per renderViewTable() call; a stale continuation (post-await) checks and bails
     hiddenDomains: [],        // string[] of domain_key values
     minConfidence: 0,
     // Three-state filter per node_type: 'show' | 'collapse' | 'hide'
@@ -4029,6 +4030,11 @@ function dashboard() {
     // Rows of a list view (View.table), grouped by the first column: the
     // flows lens reads "arena-api" then its endpoints → handlers → flows.
     async renderViewTable(top, adapted) {
+      // Re-entrancy guard: the marks decoration below awaits a dynamic
+      // import, so a second render (a fast click while this one is still
+      // suspended) must not let this call's stale continuation decorate the
+      // newer rows or clobber window.__chronicleViewState with old data.
+      const gen = (this._tableRenderGen = (this._tableRenderGen || 0) + 1);
       const container = document.getElementById('graph-canvas');
       if (!container) return;
       const esc = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -4067,6 +4073,7 @@ function dashboard() {
         });
       });
       const { MARK_COLORS, strongestMark } = await import('/js/live-client.js');
+      if (gen !== this._tableRenderGen) return; // a newer render started while this one awaited
       const marksByKey = {};
       ((top.view && top.view.nodes) || []).forEach(n => { if ((n.marks || []).length) marksByKey[n.key] = n.marks; });
       container.querySelectorAll('tr.row').forEach(el => {

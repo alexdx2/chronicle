@@ -3,6 +3,12 @@
 
 import { MARK_COLORS, strongestMark, markLine, markDetail } from './live-client.js';
 
+// clip: truncate to `max` chars with an ellipsis. Module scope so both the
+// node caption (inside the render method) and the frame-mark caption
+// (which runs before the node section, same method) can use it — a local
+// const declared later in the method is in its temporal dead zone here.
+function clip(t, max) { t = String(t || ''); return t.length > max ? t.slice(0, max - 1) + '…' : t; }
+
 const LAYOUT = {
   rankDir: 'TB',
   rankSep: 60,
@@ -289,11 +295,18 @@ export class GraphRenderer {
         const frameMark = strongestMark(meta.marks);
         if (frameMark) {
           rect.style('stroke', MARK_COLORS[frameMark]).style('stroke-width', '3px');
+          // A long note easily overruns a small frame and collides with the
+          // domain label on the same baseline — clip to a budget derived
+          // from the frame's own width (half the frame, ~5.5px/char at this
+          // font-size); the full line still reads on hover via <title>.
+          const line = markLine(meta.marks, gk);
+          const budget = Math.max(10, Math.floor((gNode.width / 2 - 16) / 5.5));
           gg.append('text').attr('class', 'domain-mark')
             .attr('text-anchor', 'end')
             .attr('x', gNode.x + gNode.width / 2 - 10).attr('y', gNode.y - gNode.height / 2 + 14)
             .attr('font-size', 9).attr('font-weight', 600).attr('fill', MARK_COLORS[frameMark])
-            .text(markLine(meta.marks, gk));
+            .text(clip(line, budget))
+            .append('title').text(line);
         }
         const label = gg.append('text')
           .attr('class', 'domain-label')
@@ -497,7 +510,6 @@ export class GraphRenderer {
         return name.length > 18 ? name.slice(0, 16) + '...' : name;
       });
 
-    const clip = (t, max) => { t = String(t || ''); return t.length > max ? t.slice(0, max - 1) + '…' : t; };
     nodeG.append('text')
       .attr('text-anchor', 'middle').attr('dy', d => d._subtitle2 ? 8 : 14)
       .attr('fill', d => self.layerColor(d.layer))
