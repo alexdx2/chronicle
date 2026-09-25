@@ -7,7 +7,10 @@ import (
 
 // The C2 canon survives the trip to mermaid on the real fixture: the broker
 // frames its topics, one HTTP arrow per service pair, flow direction for
-// consumption, hidden infra accounted for.
+// consumption, hidden infra accounted for. battle-queue is arena-api's own
+// private queue (rev3 task 3) — hidden along with its pub/sub arrows, same
+// as isolated infra; battle-results has three distinct services on it and
+// stays a drawn box in the kafka frame.
 func TestRenderMermaid_LiveC2(t *testing.T) {
 	st := openLiveDBCopy(t)
 	view, err := BuildPreset(st, "c2", "tom-and-jerry", "")
@@ -25,7 +28,11 @@ func TestRenderMermaid_LiveC2(t *testing.T) {
 		// weight counts the two real calls, not a third.
 		`|"HTTP ×2"| jerry_api`,
 		`battle_results -`, // consumption drawn topic → consumer
-		`%% hidden: 1 cache (isolated)`,
+		// The full hidden comment is one line (all reasons, biggest count
+		// first); check each reason's presence rather than the line's
+		// start, since which reason sorts first depends on their counts.
+		`1 cache (isolated)`,
+		`1 topic (private)`,
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("mermaid missing %q", want)
@@ -33,6 +40,9 @@ func TestRenderMermaid_LiveC2(t *testing.T) {
 	}
 	if strings.Contains(m, "redis") {
 		t.Errorf("isolated redis must not be drawn at C2")
+	}
+	if strings.Contains(m, "battle_queue") {
+		t.Errorf("arena-api's private battle-queue must not be drawn at C2")
 	}
 }
 

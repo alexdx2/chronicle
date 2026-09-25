@@ -8,7 +8,11 @@ import (
 // C2 canon: a topic lives inside its broker. With one declared broker and no
 // BELONGS_TO evidence, topics are framed by that broker (inferred, and the
 // group says so). The broker is a frame, not a card: topics stay VNodes and
-// edges keep pointing at the topics.
+// edges keep pointing at the topics. battle-queue is arena-api's own private
+// queue (every publisher and consumer is arena-api's battle.queue provider)
+// — c2 hides it with reason "private" (rev3 task 3), but it stays framed by
+// the broker (Group is still set); battle-results has three distinct
+// services on it and stays a drawn box.
 func TestViewC2_TopicsFramedByBroker(t *testing.T) {
 	st := openLiveDBCopy(t)
 	view, err := BuildPreset(st, "c2", "tom-and-jerry", "")
@@ -38,8 +42,15 @@ func TestViewC2_TopicsFramedByBroker(t *testing.T) {
 			if n.Group != kafka {
 				t.Errorf("topic %s group=%q want %q", n.Name, n.Group, kafka)
 			}
-			if n.RenderMode != "box" {
-				t.Errorf("topic %s render_mode=%q want box", n.Name, n.RenderMode)
+			switch n.Name {
+			case "battle-queue":
+				if n.RenderMode != "hidden" || n.SalienceReason != "private" {
+					t.Errorf("private topic %s render_mode=%q reason=%q want hidden/private", n.Name, n.RenderMode, n.SalienceReason)
+				}
+			default:
+				if n.RenderMode != "box" {
+					t.Errorf("topic %s render_mode=%q want box", n.Name, n.RenderMode)
+				}
 			}
 		}
 	}

@@ -1434,7 +1434,13 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			edgeAcc[k] = ve
 			edgeOrder = append(edgeOrder, k)
 		}
-		ve.Weight++
+		// A covered CALLS_SERVICE (fix round 1, rev3 task 2) still counts as
+		// evidence here too — same helper as the main edge-folding loop and
+		// addBoundaryEdge — it just does not inflate the call count a
+		// resolved CALLS_ENDPOINT pin edge already carries.
+		if e == nil || !callsServiceCovered(e) {
+			ve.Weight++
+		}
 		if e != nil {
 			addEdgeProvenance(ve, e, edgeSum[e.EdgeID].Count)
 			ve.CollapsedFrom = append(ve.CollapsedFrom, e.EdgeKey)
@@ -1778,7 +1784,120 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		n.RenderMode = string(salience.RenderHidden)
 		n.SalienceReason = "isolated"
 	}
+
+	// Private topics (rev3 task 3): C2's broker frame draws every topic it
+	// carries as a conversation between services — a topic whose every
+	// publisher AND every consumer (PUBLISHES_TOPIC/CONSUMES_TOPIC sources)
+	// belong to the one same service is not a conversation, it is that
+	// service talking to itself (arena-api's own battle-queue). Checked
+	// over the WHOLE graph (domEdges), not just this view: privacy is a
+	// fact about the graph, not about what happened to expand here. Hidden
+	// the same way isolated infra is, right above — a VNode stays
+	// (revealable) but render_mode flips. The renderers already skip an
+	// arrow whose endpoint is a hidden VNode, but only inside RenderText/
+	// RenderMermaid; View.Edges itself is the API/dashboard data too, so
+	// the topic's pub/sub edges are removed from it directly, below —
+	// unlike isolated infra (untouched by construction: "no edges" IS its
+	// hiding criterion), a private topic starts with live edges, so hiding
+	// it needs this extra step. Its owning service's own publishes/
+	// consumes stat is untouched (groupStatsFor already ran, off the raw
+	// edges, before any of this). C3 of that service never runs this block
+	// (preset-gated).
+	if spec.Layout.Preset == "c2" {
+		hiddenTopics := make(map[string]bool)
+		for i := range view.Nodes {
+			n := &view.Nodes[i]
+			if n.Type != "topic" || n.RenderMode == string(salience.RenderHidden) {
+				continue
+			}
+			topicNode := nodeByKey[n.Key]
+			if topicNode == nil {
+				continue
+			}
+			var only *store.NodeRow
+			private := false
+			for j := range domEdges {
+				e := &domEdges[j]
+				if e.ToNodeID != topicNode.NodeID || (e.EdgeType != "PUBLISHES_TOPIC" && e.EdgeType != "CONSUMES_TOPIC") {
+					continue
+				}
+				svc := owned[e.FromNodeID]
+				if svc == nil {
+					if fn := nodeByID[e.FromNodeID]; fn != nil && fn.Layer == "service" && fn.NodeType == "service" {
+						svc = fn
+					}
+				}
+				if svc == nil {
+					private = false
+					break
+				}
+				if only == nil {
+					only, private = svc, true
+				} else if svc.NodeID != only.NodeID {
+					private = false
+					break
+				}
+			}
+			if private && only != nil {
+				n.Tier = string(salience.TierDetail)
+				n.RenderMode = string(salience.RenderHidden)
+				n.SalienceReason = "private"
+				hiddenTopics[n.Key] = true
+			}
+		}
+		if len(hiddenTopics) > 0 {
+			keptEdges := view.Edges[:0]
+			for _, e := range view.Edges {
+				if hiddenTopics[e.From] || hiddenTopics[e.To] {
+					continue
+				}
+				keptEdges = append(keptEdges, e)
+			}
+			view.Edges = keptEdges
+		}
+	}
+
+	// Empty services (rev3 task 3): on c2/services, a service that owns
+	// nothing drawable in this view and has no arrow either answers
+	// nothing about "how do the containers talk" — the same question C2's
+	// isolated-infra rule above already asks of infrastructure. Unlike an
+	// infra node, though, a service is never a free-standing VNode
+	// (grouping always turns it into a VGroup, never a hidden card), so
+	// there is no salience render_mode to flip: the group itself is
+	// removed and accounted for directly, in the same (layer, type,
+	// reason) shape hiddenSummary produces for nodes.
+	var emptyServiceHidden []HiddenEntry
+	if spec.Layout.Preset == "c2" || spec.Layout.Preset == "services" {
+		kept := view.Groups[:0]
+		for _, g := range view.Groups {
+			if g.Kind == "service" && len(g.Stats) == 0 && !touched[g.Key] {
+				emptyServiceHidden = append(emptyServiceHidden, HiddenEntry{Layer: "service", Type: "service", Reason: "empty", Count: 1})
+				continue
+			}
+			kept = append(kept, g)
+		}
+		view.Groups = kept
+	}
+
 	view.Hidden = append(hiddenSummary(view.Nodes), filteredOut...)
+	view.Hidden = append(view.Hidden, emptyServiceHidden...)
+	// One global order across all three sources above (salience-hidden
+	// nodes, filtered-out nodes, emptied service groups): each was sorted
+	// on its own, but concatenation does not interleave them — the biggest
+	// silence belongs first regardless of which mechanism produced it.
+	sort.Slice(view.Hidden, func(i, j int) bool {
+		a, b := view.Hidden[i], view.Hidden[j]
+		if a.Count != b.Count {
+			return a.Count > b.Count
+		}
+		if a.Layer != b.Layer {
+			return a.Layer < b.Layer
+		}
+		if a.Type != b.Type {
+			return a.Type < b.Type
+		}
+		return a.Reason < b.Reason
+	})
 
 	// The flows lens is a list, not a picture: every flow as a row —
 	// which service it enters through, at which endpoint, who handles it.
