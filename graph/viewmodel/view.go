@@ -357,6 +357,48 @@ func globMatch(pattern, name string) bool {
 	return err == nil && ok
 }
 
+// defaultArrowLabel computes an arrow's full label — the explicit label
+// when the engine already set one at edge-creation time (uses_infra
+// "events", "handled by", …), else the protocol/relationship for its Kind,
+// plus "×N" when the arrow folds several graph edges. Rev3 fix F9: this
+// is the single label source, called exactly once per edge, at the end of
+// BuildView (below) once Weight is final for every edge — calling it a
+// second time on an already-labeled edge would double the "×N" suffix, so
+// nothing outside that one final pass may call it. Both renderers, the
+// JSON payload and the dashboard all read the result off VEdge.Label
+// instead (see arrowLabel in render.go).
+func defaultArrowLabel(e *VEdge) string {
+	label := e.Label
+	if label == "" {
+		switch e.Kind {
+		case "CALLS_SERVICE", "CALLS_ENDPOINT":
+			label = "HTTP"
+		case "PUBLISHES_TOPIC":
+			label = "pub"
+		case "CONSUMES_TOPIC":
+			label = "sub"
+		case "INJECTS":
+			label = "injects"
+		case "USES_MODEL":
+			label = "uses"
+		case "REFERENCES_MODEL":
+			label = "refs"
+		case "TRIGGERS_FLOW":
+			label = "triggers"
+		case "REQUIRES":
+			label = "requires"
+		case "EXPOSES_ENDPOINT":
+			label = "exposes"
+		default:
+			label = strings.ToLower(strings.ReplaceAll(e.Kind, "_", " "))
+		}
+	}
+	if e.Weight > 1 {
+		label += fmt.Sprintf(" ×%d", e.Weight)
+	}
+	return label
+}
+
 // ---------- BuildView ----------
 
 // BuildView evaluates a ViewSpec over one domain's active nodes and edges.
@@ -2829,6 +2871,20 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		for _, k := range pairs {
 			view.Notes = append(view.Notes, fmt.Sprintf("%s also calls %s ×%d without a resolved endpoint.", names[k.caller], names[k.callee], counts[k]))
 		}
+	}
+
+	// rev3 fix F9: one arrow label for every renderer AND the JSON. Edge
+	// creation above already sets VEdge.Label for the few kinds that need
+	// an engine-computed label no generic kind-switch could produce
+	// ("handled by", "events: <topic>", a uses_infra label) — everything
+	// else still reads e.Label == "" at this point. Fill it now, from the
+	// SAME defaultArrowLabel logic RenderText/RenderMermaid used to each
+	// compute for themselves, so the JSON carries `label` for every drawn
+	// arrow and both renderers can just read the field (see arrowLabel in
+	// render.go). Run once, here, after Weight is final for every edge —
+	// defaultArrowLabel's "×N" suffix must never be applied twice.
+	for i := range view.Edges {
+		view.Edges[i].Label = defaultArrowLabel(&view.Edges[i])
 	}
 
 	// rev3 fix F7: resolve the deferred pin-foreign Missing decision now

@@ -12,39 +12,14 @@ import (
 // a PR description, a wiki page. Same nodes, same arrows, same salience,
 // same provenance; deterministic output (sorted, stable ids).
 
-// arrowLabel is the human label of an arrow: the explicit label when the
-// engine set one (uses_infra "events"), else the protocol/relationship,
-// plus "×N" when the arrow folds several graph edges.
+// arrowLabel is the human label of an arrow. Rev3 fix F9: BuildView is now
+// the single label source — it fills VEdge.Label for every drawn arrow
+// (defaultArrowLabel in view.go), so both renderers (and the JSON payload,
+// and the dashboard) just read the field here. The " · kind" mark suffix
+// (StrongestMark) stays renderer-side, added by each caller after this
+// call, since it is presentation about marks, not the arrow's own label.
 func arrowLabel(e *VEdge) string {
-	label := e.Label
-	if label == "" {
-		switch e.Kind {
-		case "CALLS_SERVICE", "CALLS_ENDPOINT":
-			label = "HTTP"
-		case "PUBLISHES_TOPIC":
-			label = "pub"
-		case "CONSUMES_TOPIC":
-			label = "sub"
-		case "INJECTS":
-			label = "injects"
-		case "USES_MODEL":
-			label = "uses"
-		case "REFERENCES_MODEL":
-			label = "refs"
-		case "TRIGGERS_FLOW":
-			label = "triggers"
-		case "REQUIRES":
-			label = "requires"
-		case "EXPOSES_ENDPOINT":
-			label = "exposes"
-		default:
-			label = strings.ToLower(strings.ReplaceAll(e.Kind, "_", " "))
-		}
-	}
-	if e.Weight > 1 {
-		label += fmt.Sprintf(" ×%d", e.Weight)
-	}
-	return label
+	return e.Label
 }
 
 // hiddenReasonText is one hidden-summary line's reason, with names when the

@@ -23,10 +23,15 @@ func sampleView() *View {
 			{Key: "data:dto:shop:orderdto", Name: "OrderDto", Type: "dto", Layer: "data", Tier: "detail", RenderMode: "hidden", SalienceReason: "type:data.dto"},
 			{Key: "service:external_system:shop:stripe", Name: "stripe", Type: "external_system", Layer: "service", Tier: "primary", RenderMode: "box", Confidence: 1, Trust: 1, EvidenceCount: 1},
 		},
+		// rev3 fix F9: Label is normally filled by BuildView's final pass
+		// (defaultArrowLabel) — this View is hand-built (no BuildView call
+		// in these renderer-only tests), so it sets Label itself, exactly
+		// as BuildView would have computed it, same as it already does for
+		// Tier/RenderMode/salience below.
 		Edges: []VEdge{
-			{From: "service:service:shop:orders", To: "contract:topic:shop:order-created", Kind: "PUBLISHES_TOPIC", Transport: "kafka", Weight: 1, Confidence: 0.9, Trust: 0.9, Derivation: "hard", EvidenceCount: 1},
-			{From: "service:service:shop:orders", To: "service:service:shop:payments", Kind: "CALLS_SERVICE", Transport: "http", Weight: 3, Confidence: 0.6, Trust: 0.6, Derivation: "inferred", EvidenceCount: 0},
-			{From: "service:service:shop:payments", To: "service:external_system:shop:stripe", Kind: "CALLS_SERVICE", Transport: "http", Weight: 1, Confidence: 1, Trust: 1, Derivation: "hard", EvidenceCount: 4},
+			{From: "service:service:shop:orders", To: "contract:topic:shop:order-created", Kind: "PUBLISHES_TOPIC", Transport: "kafka", Label: "pub", Weight: 1, Confidence: 0.9, Trust: 0.9, Derivation: "hard", EvidenceCount: 1},
+			{From: "service:service:shop:orders", To: "service:service:shop:payments", Kind: "CALLS_SERVICE", Transport: "http", Label: "HTTP ×3", Weight: 3, Confidence: 0.6, Trust: 0.6, Derivation: "inferred", EvidenceCount: 0},
+			{From: "service:service:shop:payments", To: "service:external_system:shop:stripe", Kind: "CALLS_SERVICE", Transport: "http", Label: "HTTP", Weight: 1, Confidence: 1, Trust: 1, Derivation: "hard", EvidenceCount: 4},
 		},
 		Hidden: []HiddenEntry{{Layer: "data", Type: "dto", Reason: "type:data.dto", Count: 1}},
 	}
@@ -212,5 +217,31 @@ func TestRenderMarkdown_NotesBeforeTable(t *testing.T) {
 	tableIdx := strings.Index(md, "| service | endpoint |")
 	if noteIdx < 0 || tableIdx < 0 || noteIdx > tableIdx {
 		t.Fatalf("note should render before the table:\n%s", md)
+	}
+}
+
+// TestBuildView_LabelSetForEveryEdge: rev3 fix F9. VEdge.Label is filled by
+// BuildView for EVERY drawn arrow — not just the few kinds that already set
+// an explicit custom label (events, "handled by", uses_infra) — so the JSON
+// payload always carries `label`, and it is exactly the string RenderText/
+// RenderMermaid print (the " · kind" mark suffix stays renderer-side, added
+// after arrowLabel/Label, so it is deliberately excluded from this check).
+func TestBuildView_LabelSetForEveryEdge(t *testing.T) {
+	st := synthStore(t)
+	v, err := BuildPreset(st, "c2", "d", "")
+	if err != nil {
+		t.Fatalf("c2: %v", err)
+	}
+	if len(v.Edges) == 0 {
+		t.Fatal("fixture should have drawn edges")
+	}
+	for i := range v.Edges {
+		e := &v.Edges[i]
+		if e.Label == "" {
+			t.Errorf("edge %s -> %s (%s) has no Label", e.From, e.To, e.Kind)
+		}
+		if e.Label != arrowLabel(e) {
+			t.Errorf("edge %s -> %s (%s): Label=%q != arrowLabel()=%q", e.From, e.To, e.Kind, e.Label, arrowLabel(e))
+		}
 	}
 }
