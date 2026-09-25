@@ -22,7 +22,17 @@ const unownedGroupKey = "unowned"
 // "publishes"/"consumes" count distinct topics the frame's members touch;
 // "calls" counts distinct services (or external systems) they call,
 // endpoint calls lifted to the endpoint's owner. The counts describe the
-// graph, not the view: a filtered-out edge kind still counts.
+// graph, not the view: a filtered-out edge kind still counts — except a
+// hidden MEMBER (rev3 task 6c, the hidden param): a frame's own membership
+// count (e.g. a broker's "N topics", and who publishes/subscribes THROUGH
+// it) must match what this view actually draws, so a member with
+// render_mode=hidden (private, isolated, …) and any edge touching it (post
+// retarget) are excluded from the member-derived stats below. A frame
+// member's OWN publishes/consumes/calls stat (bump(fromG, …) — what that
+// member DOES, not what some other frame carries) is intentionally NOT
+// gated on hidden: that is graph truth about the member itself (rev3 task
+// 3 decision), independent of whether some other node it talks to is
+// individually drawn.
 func groupStatsFor(
 	groups map[string]*VGroup,
 	memberGroup map[int64]string,
@@ -33,6 +43,7 @@ func groupStatsFor(
 	endpointPills map[int64][]Endpoint,
 	modelPills map[int64][]string,
 	retarget func(int64) int64,
+	hidden map[int64]bool,
 ) {
 	type set = map[string]bool
 	distinct := make(map[string]map[string]set) // group → stat → keys
@@ -51,6 +62,9 @@ func groupStatsFor(
 	for id, g := range memberGroup {
 		if g == "" {
 			continue
+		}
+		if hidden[id] {
+			continue // rev3 task 6c: not drawn, does not count as a member
 		}
 		vg := groups[g]
 		n := nodeByID[id]
@@ -97,7 +111,10 @@ func groupStatsFor(
 			if fromG != "" && groups[fromG] != nil && groups[fromG].Kind == "service" {
 				bump(fromG, "publishes", tn.NodeKey)
 			}
-			if bid, ok := brokerOf[tid]; ok {
+			// The broker-side "publishers" count is about who talks
+			// through THIS topic (a member of the broker frame): a hidden
+			// topic (rev3 task 6c) is not a conversation this view shows.
+			if bid, ok := brokerOf[tid]; ok && !hidden[tid] {
 				if bg := groups[nodeByID[bid].NodeKey]; bg != nil {
 					if svc := svcGroupOf(fid); svc != "" {
 						bump(bg.Key, "publishers", svc)
@@ -108,7 +125,10 @@ func groupStatsFor(
 			if fromG != "" && groups[fromG] != nil && groups[fromG].Kind == "service" {
 				bump(fromG, "consumes", tn.NodeKey)
 			}
-			if bid, ok := brokerOf[tid]; ok {
+			// Same reasoning as "publishers" above: a hidden topic is not
+			// a conversation this view shows, so it does not make its
+			// consumer a counted "subscriber" of the broker frame either.
+			if bid, ok := brokerOf[tid]; ok && !hidden[tid] {
 				if bg := groups[nodeByID[bid].NodeKey]; bg != nil {
 					if svc := svcGroupOf(fid); svc != "" {
 						bump(bg.Key, "subscribers", svc)

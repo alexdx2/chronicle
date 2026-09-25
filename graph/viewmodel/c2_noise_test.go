@@ -216,6 +216,50 @@ func TestBuildViewC3_PrivateTopicStaysVisible(t *testing.T) {
 	}
 }
 
+// TestBuildViewC2_BrokerFrameStatsExcludeHiddenMember (rev3 task 6c): a
+// frame's stats must count only members THIS view draws. private-topic is
+// hidden (task 3, above); the broker "bus" frame's own topics/publishers/
+// subscribers counts must not include it — 1 topic (shared-topic), 1
+// publisher (svc-a, via shared-topic), 1 subscriber (svc-b, via
+// shared-topic; svc-a's own subscription is only through the now-hidden
+// private-topic, so it must not count either). svc-a's OWN publishes/
+// consumes stat is untouched (rev3 task 3 decision, unchanged): it still
+// shows both topics it actually touches, hidden or not.
+func TestBuildViewC2_BrokerFrameStatsExcludeHiddenMember(t *testing.T) {
+	st, svcAKey, _, _ := synthPrivateTopicStore(t)
+	v, err := BuildPreset(st, "c2", "d", "")
+	if err != nil {
+		t.Fatalf("c2: %v", err)
+	}
+	var broker, svcA *VGroup
+	for i := range v.Groups {
+		switch v.Groups[i].Key {
+		case "infra:broker:d:bus":
+			broker = &v.Groups[i]
+		case svcAKey:
+			svcA = &v.Groups[i]
+		}
+	}
+	if broker == nil {
+		t.Fatalf("broker frame missing: %+v", v.Groups)
+	}
+	if broker.Stats["topics"] != 1 {
+		t.Errorf("broker topics = %d, want 1 (the hidden private topic must not count as a member): %+v", broker.Stats["topics"], broker.Stats)
+	}
+	if broker.Stats["publishers"] != 1 {
+		t.Errorf("broker publishers = %d, want 1: %+v", broker.Stats["publishers"], broker.Stats)
+	}
+	if broker.Stats["subscribers"] != 1 {
+		t.Errorf("broker subscribers = %d, want 1 (svc-a's self-subscription is only through the hidden private topic): %+v", broker.Stats["subscribers"], broker.Stats)
+	}
+	if svcA == nil {
+		t.Fatalf("svc-a group missing: %+v", v.Groups)
+	}
+	if svcA.Stats["publishes"] != 2 || svcA.Stats["consumes"] != 1 {
+		t.Errorf("svc-a's own publishes/consumes must stay graph-truth, unaffected by hiding the broker's member (rev3 task 3 decision): %+v", svcA.Stats)
+	}
+}
+
 // TestAddPinEdge_CoveredCallsServiceNoWeight (rev3 task 3, extra): the
 // coordinator's twin rule (a CALLS_SERVICE edge covered by the SAME caller's
 // resolved CALLS_ENDPOINT to that service adds provenance/collapsed_from but

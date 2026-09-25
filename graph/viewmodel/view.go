@@ -1141,10 +1141,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return filteredOut[i].Type < filteredOut[j].Type
 	})
 
-	// Frame stats speak the container's language — what it exposes,
-	// publishes, consumes and calls; what a broker carries and who talks
-	// to it; how many services a system box holds. Never "N nodes".
-	groupStatsFor(groupsByKey, memberGroup, nodeByID, domEdges, owned, brokerOf, endpointPills, modelPills, retarget)
+	// Frame stats (groupStatsFor) run later, right before the "empty
+	// services" check (rev3 task 6c) — after isolated-infra/private-topic
+	// hiding below decide which members this view actually draws, so a
+	// broker's "N topics" counts only the topics this view shows, not
+	// every topic the graph still knows about.
 
 	// repKey: the rendered endpoint of a collapsed edge — group key for
 	// grouped members and for group nodes themselves, node key otherwise.
@@ -1992,6 +1993,28 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			view.Edges = keptEdges
 		}
 	}
+
+	// Frame stats speak the container's language — what it exposes,
+	// publishes, consumes and calls; what a broker carries and who talks
+	// to it; how many services a system box holds. Never "N nodes". Run
+	// here rather than right after grouping (rev3 task 6c): isolated infra
+	// and private topics, both above, have already flipped
+	// render_mode=hidden by now, so hiddenMembers excludes them from every
+	// member-derived count — a broker's own "N topics"/"publishers"/
+	// "subscribers" among them, so a frame's stats describe what it draws.
+	// A service's own publishes/consumes stat is deliberately NOT gated
+	// the same way (rev3 task 3 decision, unchanged): it says what the
+	// service does in the graph, not what this diagram still happens to
+	// be showing of some OTHER frame (the broker) that topic sits in.
+	hiddenMembers := make(map[int64]bool)
+	for i := range view.Nodes {
+		if view.Nodes[i].RenderMode == string(salience.RenderHidden) {
+			if nn := nodeByKey[view.Nodes[i].Key]; nn != nil {
+				hiddenMembers[nn.NodeID] = true
+			}
+		}
+	}
+	groupStatsFor(groupsByKey, memberGroup, nodeByID, domEdges, owned, brokerOf, endpointPills, modelPills, retarget, hiddenMembers)
 
 	// Empty services (rev3 task 3): on c2/services, a service that owns
 	// nothing drawable in this view and has no arrow either answers

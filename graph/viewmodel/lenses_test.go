@@ -160,8 +160,15 @@ func TestC2_StatsAreViewSpecific(t *testing.T) {
 				t.Errorf("'nodes' is engine jargon, not a container stat: %v", g.Stats)
 			}
 		case "infra:broker:kafka:9092":
-			if g.Stats["topics"] != 2 || g.Stats["publishers"] != 1 || g.Stats["subscribers"] != 3 {
-				t.Errorf("kafka stats=%v want topics 2, publishers 1, subscribers 3", g.Stats)
+			// rev3 task 6c: battle-queue (arena-api publishes AND consumes
+			// its own private queue) is hidden on c2 (rev3 task 3) — a
+			// frame's stats now count only members this view draws, so it
+			// no longer inflates the broker to 2 topics / 3 subscribers.
+			// Only battle-results (published by arena-api, subscribed by
+			// scoreboard-api and spectators-api) remains: 1 topic, 1
+			// publisher, 2 subscribers.
+			if g.Stats["topics"] != 1 || g.Stats["publishers"] != 1 || g.Stats["subscribers"] != 2 {
+				t.Errorf("kafka stats=%v want topics 1, publishers 1, subscribers 2", g.Stats)
 			}
 		}
 	}
