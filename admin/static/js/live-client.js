@@ -8,6 +8,7 @@ const MARK_ORDER = ['breaks', 'changed', 'focus', 'note'];
 
 export const MENU_SIZE = 20;
 export const PAGE_SIZE = 200;
+export const RESYNC_MAX_PAGES = 10;
 export const HEARTBEAT_MS = 60000;
 export const DEBOUNCE_MS = 300;
 
@@ -67,7 +68,9 @@ export class LiveFeed {
     this.items = [];
   }
 
-  static key(ev) { return (ev.repo || '') + '|' + ev.id + '|' + (ev.at || ''); }
+  // key must not collide when repo or at happen to contain '|' — join with
+  // JSON.stringify on the tuple instead of a delimiter.
+  static key(ev) { return JSON.stringify([ev.repo || '', ev.id, ev.at || '']); }
 
   // add keeps what is new to this page and returns it, oldest first.
   add(events) {
@@ -95,13 +98,21 @@ export class LiveFeed {
   repos() { return Array.from(this.cursor.keys()); }
 }
 
+// clipChars clips by Unicode code points, not UTF-16 code units — matching
+// the server's rune count (live/screen.go). A plain .slice(0, n) can cut an
+// astral character's surrogate pair in half and send a lone surrogate,
+// which the browser then encodes as U+FFFD.
+function clipChars(s, n) {
+  return Array.from(String(s)).slice(0, n).join('');
+}
+
 // screenPayload shapes what the page reports (live.Screen on the server).
 export function screenPayload(s) {
   const p = { client_id: s.clientId, tab: s.tab || '', visible: !!s.visible };
-  if (s.title) p.title = String(s.title).slice(0, 120);
+  if (s.title) p.title = clipChars(s.title, 120);
   if (s.spec) p.spec = s.spec;
   if (s.selected) p.selected = s.selected;
-  if (s.breadcrumbs && s.breadcrumbs.length) p.breadcrumbs = s.breadcrumbs.slice(-20).map(x => String(x).slice(0, 120));
+  if (s.breadcrumbs && s.breadcrumbs.length) p.breadcrumbs = s.breadcrumbs.slice(-20).map(x => clipChars(x, 120));
   if (s.closed) p.closed = true;
   return p;
 }
@@ -141,17 +152,22 @@ export class LiveClient {
 
   // resync after a reconnect: page every known repo from its cursor (taken
   // before anything moves), then restore the menu — it also brings repos
-  // first seen while the socket was down.
+  // first seen while the socket was down. Bounded at RESYNC_MAX_PAGES pages
+  // per repo, and stops a repo early once a page makes no progress (a last
+  // id no greater than "after", e.g. the same page again) — either way the
+  // other repos and the trailing menu reload still run.
   async resync() {
     const fresh = [];
     for (const [repo, from] of new Map(this.feed.cursor)) {
       let after = from;
-      for (;;) {
+      for (let i = 0; i < RESYNC_MAX_PAGES; i++) {
         const page = await this._events('/api/live?kind=diagram&limit=' + PAGE_SIZE + '&after=' + after +
           (repo ? '&repo=' + encodeURIComponent(repo) : ''));
         fresh.push(...this.feed.add(page));
         if (page.length < PAGE_SIZE) break;
-        after = page[page.length - 1].id;
+        const last = page[page.length - 1].id;
+        if (last <= after) break; // no progress — stop this repo, not the others
+        after = last;
       }
     }
     fresh.push(...this.feed.add(await this._events('/api/live?kind=diagram&limit=' + MENU_SIZE)));
@@ -160,7 +176,7 @@ export class LiveClient {
   }
 
   reportSoon() {
-    if (this._debounce) this.d.clearTimeout(this._debounce);
+    if (this._debounce !== null) this.d.clearTimeout(this._debounce);
     this._debounce = this.d.setTimeout(() => { this._debounce = null; this.reportNow(); }, DEBOUNCE_MS);
   }
 
@@ -171,7 +187,29 @@ export class LiveClient {
       .catch(() => {}); // the next change or heartbeat repeats it
   }
 
-  beaconClosed() { this.d.sendBeacon('/api/live/screen', beaconBody(this._payload(true))); }
+  // beaconClosed must not throw and must not silently drop the closing
+  // report: sendBeacon is best-effort (missing on some embedders, and the
+  // browser may refuse it under queued-bytes pressure), so a missing
+  // function, a thrown error or a false return all fall back to a keepalive
+  // fetch — the one request allowed to outlive an unloading page.
+  beaconClosed() {
+    const payload = this._payload(true);
+    let ok = false;
+    try {
+      ok = !!(this.d.sendBeacon && this.d.sendBeacon('/api/live/screen', beaconBody(payload)));
+    } catch (e) {
+      ok = false;
+    }
+    if (ok) return;
+    Promise.resolve()
+      .then(() => this.d.fetch('/api/live/screen', {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }))
+      .catch(() => {});
+  }
 
   _payload(closed) {
     const s = Object.assign({}, this.d.getScreen() || {});
