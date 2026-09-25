@@ -1879,6 +1879,49 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		view.Groups = kept
 	}
 
+	// Empty synthetic frames (rev3 task 4): every OTHER group names a real
+	// entity — a service, a broker, a module, the domain box — so even
+	// fully collapsed, with none of its members drawn individually, its
+	// stats still say something true ("2 endpoints"); that is a legitimate
+	// collapsed card, left alone (Task 3 above is the one place a real
+	// service's own emptiness gets accounted for, and only on c2/
+	// services). unownedGroupKey names nothing on its own: it exists only
+	// because some member's owner could not be found. When every member
+	// folded into it (typically fields, which groupStatsFor has no case
+	// for) ends up with no visible card, the frame has zero informative
+	// content — drawing an empty box, or an arrow that quietly folds into
+	// it (e.g. HAS_FIELD from a model to its fields), would invent
+	// structure the graph does not back. This is silent — no Hidden entry,
+	// unlike the two cases above: an empty box says nothing, so removing
+	// it loses nothing worth accounting for, and the arrow disappears
+	// together with the node it could not reach, exactly like an arrow
+	// into any other hidden node already does.
+	{
+		hasVisible := false
+		for i := range view.Nodes {
+			if view.Nodes[i].Group == unownedGroupKey && view.Nodes[i].RenderMode != string(salience.RenderHidden) {
+				hasVisible = true
+				break
+			}
+		}
+		if !hasVisible {
+			kept := view.Groups[:0]
+			for _, g := range view.Groups {
+				if g.Key != unownedGroupKey {
+					kept = append(kept, g)
+				}
+			}
+			view.Groups = kept
+			keptEdges := view.Edges[:0]
+			for _, e := range view.Edges {
+				if e.From != unownedGroupKey && e.To != unownedGroupKey {
+					keptEdges = append(keptEdges, e)
+				}
+			}
+			view.Edges = keptEdges
+		}
+	}
+
 	view.Hidden = append(hiddenSummary(view.Nodes), filteredOut...)
 	view.Hidden = append(view.Hidden, emptyServiceHidden...)
 	// One global order across all three sources above (salience-hidden
