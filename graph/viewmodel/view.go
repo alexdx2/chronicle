@@ -910,13 +910,25 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// unconditionally: they bypass node filters and endpoint absorption and
 	// always render as VNodes.
 	pinned := make(map[int64]bool)
+	// rev3 fix F7: a pinned key that resolves to a foreign node (below)
+	// is never promoted into scope membership, but it may already be
+	// drawn elsewhere in this same view (a c1/c2/c3 boundary-neighbour
+	// card, task 8a) — that is a harmless no-op, not an unresolved key.
+	// Foreign-neighbour drawing happens well after this loop, so the
+	// Missing decision for these is deferred to the end, once view.Nodes
+	// is final.
+	var pinForeignCandidates []string
 	for _, k := range spec.Pin {
 		// rev3 task 8a: pinning a foreign neighbour's key must not promote
 		// it into a full scope member either (localByKey, same as a path
-		// endpoint above) — it reports Missing, same as before this store
-		// ever loaded that stub for the boundary.
+		// endpoint above) — a foreign neighbour never becomes pinned/
+		// inView through this loop.
 		n := localByKey(k)
 		if n == nil {
+			if fn := nodeByKey[k]; fn != nil && isForeign(fn.NodeID) {
+				pinForeignCandidates = append(pinForeignCandidates, k)
+				continue
+			}
 			view.Missing = append(view.Missing, k)
 			continue
 		}
@@ -2807,6 +2819,21 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		})
 		for _, k := range pairs {
 			view.Notes = append(view.Notes, fmt.Sprintf("%s also calls %s ×%d without a resolved endpoint.", names[k.caller], names[k.callee], counts[k]))
+		}
+	}
+
+	// rev3 fix F7: resolve the deferred pin-foreign Missing decision now
+	// that view.Nodes is final — drawn (by whatever mechanism put it
+	// there) means not Missing.
+	if len(pinForeignCandidates) > 0 {
+		drawn := make(map[string]bool, len(view.Nodes))
+		for i := range view.Nodes {
+			drawn[view.Nodes[i].Key] = true
+		}
+		for _, k := range pinForeignCandidates {
+			if !drawn[k] {
+				view.Missing = append(view.Missing, k)
+			}
 		}
 	}
 

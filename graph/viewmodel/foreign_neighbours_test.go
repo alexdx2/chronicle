@@ -351,3 +351,54 @@ func TestForeignNeighbours_ImpactOfForeignNode_IsolatedFromA(t *testing.T) {
 		t.Errorf("B's impact view changed after building A's views (should be a pure read):\nbefore:\n%s\nafter:\n%s", beforeTxt, afterTxt)
 	}
 }
+
+// TestForeignNeighbours_PinDrawnForeignNode_NotMissing: rev3 fix F7.
+// Pinning a foreign neighbour's key always misses localByKey by design
+// (task 8a — it must never be promoted into a full scope member), but a
+// harmless no-op is not the same thing as an unresolved key: when that
+// same foreign node is ALREADY drawn elsewhere in this view (here, c2's
+// own boundary-card mechanism draws b-svc automatically, independent of
+// the pin), reporting it in View.Missing tells a reader/dashboard "this
+// key doesn't exist" about a node they can see on screen. A pinned key
+// that resolves to nothing this store or any neighbour mechanism ever
+// draws must still be reported Missing, same as any unknown key.
+func TestForeignNeighbours_PinDrawnForeignNode_NotMissing(t *testing.T) {
+	st, _, _, bSvcKey, _, _, _, _ := synthForeignStore(t)
+
+	const unknownKey = "service:service:nonexistent:ghost"
+	spec := PresetSpec("c2", "A", "")
+	spec.Pin = []string{bSvcKey, unknownKey}
+
+	v, err := BuildView(st, spec)
+	if err != nil {
+		t.Fatalf("BuildView: %v", err)
+	}
+
+	// b-svc is drawn (c2's own boundary-card mechanism, unrelated to the
+	// pin) — pinning it must not add it to Missing.
+	if findNode(v, bSvcKey) == nil {
+		t.Fatalf("b-svc should still be drawn as c2's boundary card; nodes=%+v", v.Nodes)
+	}
+	for _, m := range v.Missing {
+		if m == bSvcKey {
+			t.Errorf("b-svc is drawn in this view; pinning it must not report it Missing: missing=%+v", v.Missing)
+		}
+	}
+	// b-svc must still never become a scope member/VGroup of its own —
+	// the pin itself stays a no-op, only the Missing bookkeeping changes.
+	for _, g := range v.Groups {
+		if g.Key == bSvcKey {
+			t.Errorf("b-svc must never become a VGroup (scope member) via pin: %+v", g)
+		}
+	}
+	// The genuinely unknown key must still be reported Missing.
+	foundUnknown := false
+	for _, m := range v.Missing {
+		if m == unknownKey {
+			foundUnknown = true
+		}
+	}
+	if !foundUnknown {
+		t.Errorf("an unresolvable pinned key must still be reported Missing: missing=%+v", v.Missing)
+	}
+}

@@ -15,6 +15,14 @@ type ViewSpec struct {
 	// and endpoint absorption, always render as VNodes, and bring their
 	// connections (edges to in-view nodes plus 1-hop out-of-view neighbors
 	// materialized as dimmed Boundary nodes).
+	//
+	// Exception (rev3 task 8a): a key that resolves to another domain's
+	// node is never promoted into scope membership this way — federation
+	// boundary crossings are the only path a foreign node draws through.
+	// Such a key reports in View.Missing UNLESS that same foreign node is
+	// already drawn elsewhere in this view (a c1/c2/c3 boundary-neighbour
+	// card) — rev3 fix F7: pinning a node you can already see on screen is
+	// a harmless no-op, not an unresolved key.
 	Pin []string `json:"pin,omitempty"`
 	// SalienceOverrides pins per-node salience (keyed by node key) — the
 	// user's last word in the resolve chain. Session/ViewSpec-scoped by
