@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -224,26 +225,40 @@ func TestRenderMarkdown_NotesBeforeTable(t *testing.T) {
 // TestBuildView_LabelSetForEveryEdge: rev3 fix F9. VEdge.Label is filled by
 // BuildView for EVERY drawn arrow — not just the few kinds that already set
 // an explicit custom label (events, "handled by", uses_infra) — so the JSON
-// payload always carries `label`, and it is exactly the string RenderText/
-// RenderMermaid print (the " · kind" mark suffix stays renderer-side, added
-// after arrowLabel/Label, so it is deliberately excluded from this check).
+// payload always carries `label`. It is the BASE label (arrowLabel adds the
+// "×N" weight suffix on top, computed fresh — see arrowLabel's doc comment
+// for why that is not also stored in Label); the " · kind" mark suffix
+// stays renderer-side on top of that, so it is excluded from this check too.
 func TestBuildView_LabelSetForEveryEdge(t *testing.T) {
-	st := synthStore(t)
-	v, err := BuildPreset(st, "c2", "d", "")
+	// synthForeignStore (foreign_neighbours_test.go): a-svc's collapsed
+	// call into b-svc folds two resolved CALLS_ENDPOINT calls plus a
+	// twin-covered CALLS_SERVICE into one "HTTP ×2" arrow — a reliable
+	// weight>1 edge (unlike synthStore's c2, which never folds one).
+	st, _, _, _, _, _, _, _ := synthForeignStore(t)
+	v, err := BuildPreset(st, "c2", "A", "")
 	if err != nil {
 		t.Fatalf("c2: %v", err)
 	}
 	if len(v.Edges) == 0 {
 		t.Fatal("fixture should have drawn edges")
 	}
+	sawWeighted := false
 	for i := range v.Edges {
 		e := &v.Edges[i]
 		if e.Label == "" {
 			t.Errorf("edge %s -> %s (%s) has no Label", e.From, e.To, e.Kind)
 		}
-		if e.Label != arrowLabel(e) {
-			t.Errorf("edge %s -> %s (%s): Label=%q != arrowLabel()=%q", e.From, e.To, e.Kind, e.Label, arrowLabel(e))
+		want := e.Label
+		if e.Weight > 1 {
+			sawWeighted = true
+			want += fmt.Sprintf(" ×%d", e.Weight)
 		}
+		if got := arrowLabel(e); got != want {
+			t.Errorf("edge %s -> %s (%s): arrowLabel=%q, want %q (Label %q + weight %d)", e.From, e.To, e.Kind, got, want, e.Label, e.Weight)
+		}
+	}
+	if !sawWeighted {
+		t.Fatal("fixture should include at least one weight>1 edge to exercise the suffix path")
 	}
 }
 

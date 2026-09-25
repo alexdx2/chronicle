@@ -12,22 +12,26 @@ import (
 // a PR description, a wiki page. Same nodes, same arrows, same salience,
 // same provenance; deterministic output (sorted, stable ids).
 
-// arrowLabel is the human label of an arrow. Rev3 fix F9: BuildView is now
-// the single label source for a View IT built — it fills VEdge.Label for
-// every drawn arrow (defaultArrowLabel in view.go, run once BuildView's
-// own Weight accounting is final), so both renderers (and the JSON
-// payload, and the dashboard) read the same string. RenderText/
-// RenderMermaid draw ANY *View, though (the package doc above), not only
-// ones BuildView produced — chronicle-pro's federation view code builds
-// VEdge directly and calls these renderers on the result, same as a
-// hand-built View in this package's own tests; neither sets Label. The
-// fallback below computes the identical default for those, so this stays
-// a safe, general-purpose renderer rather than a BuildView-only one.
+// arrowLabel is the human label of an arrow: its BASE label (VEdge.Label —
+// rev3 fix F9, filled by BuildView for every edge it draws via
+// defaultArrowLabel in view.go, same fallback computed here when a View
+// came from outside BuildView's own pipeline — chronicle-pro's federation
+// views and a hand-built View in this package's own tests both build
+// VEdge directly and never set Label), plus "×N" when the arrow folds
+// several graph edges. The suffix is deliberately computed fresh on every
+// call rather than stored in Label: Weight already has its own JSON
+// field, and a value combining two fields is exactly the kind of second,
+// independently-computed thing F9 exists to avoid — this way there is
+// only ever one place that turns (Label, Weight) into display text,
+// callable as many times as needed with no risk of double-applying the
+// suffix. The " · kind" mark suffix stays renderer-side too, added by
+// each caller after this call.
 func arrowLabel(e *VEdge) string {
-	if e.Label != "" {
-		return e.Label
+	label := defaultArrowLabel(e)
+	if e.Weight > 1 {
+		label += fmt.Sprintf(" ×%d", e.Weight)
 	}
-	return defaultArrowLabel(e)
+	return label
 }
 
 // hiddenReasonText is one hidden-summary line's reason, with names when the

@@ -185,14 +185,12 @@ func TestBuildViewC1_SeveralTopicsFoldIntoEventsCount(t *testing.T) {
 	if sub == nil {
 		t.Fatalf("expected B -> A CONSUMES_TOPIC arrow; edges=%+v", v.Edges)
 	}
-	// rev3 fix F9: VEdge.Label is now BuildView's final, full computed
-	// string — defaultArrowLabel runs once, at the very end of BuildView,
-	// after the eventsLabel closure (view.go) has already set Weight=2 and
-	// the base "events" — so it already carries the "×N" suffix, the same
-	// "events ×2" arrowLabel/RenderText/RenderMermaid all show; nothing
-	// downstream may append it again.
-	if sub.Label != "events ×2" {
-		t.Errorf("label = %q, want %q", sub.Label, "events ×2")
+	// rev3 fix F9: VEdge.Label holds the BASE label only (the eventsLabel
+	// closure in view.go set it directly to "events", and BuildView's
+	// final pass trusts a pre-set Label as-is) — arrowLabel appends the
+	// "×N" weight suffix fresh, on every call, rather than storing it.
+	if sub.Label != "events" {
+		t.Errorf("label = %q, want plain %q (arrowLabel appends the ×N suffix)", sub.Label, "events")
 	}
 	if sub.Weight != 2 {
 		t.Errorf("weight = %d, want 2 (two DISTINCT topics)", sub.Weight)

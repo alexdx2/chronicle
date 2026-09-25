@@ -357,46 +357,46 @@ func globMatch(pattern, name string) bool {
 	return err == nil && ok
 }
 
-// defaultArrowLabel computes an arrow's full label — the explicit label
+// defaultArrowLabel computes an arrow's BASE label — the explicit label
 // when the engine already set one at edge-creation time (uses_infra
-// "events", "handled by", …), else the protocol/relationship for its Kind,
-// plus "×N" when the arrow folds several graph edges. Rev3 fix F9: this
-// is the single label source, called exactly once per edge, at the end of
-// BuildView (below) once Weight is final for every edge — calling it a
-// second time on an already-labeled edge would double the "×N" suffix, so
-// nothing outside that one final pass may call it. Both renderers, the
-// JSON payload and the dashboard all read the result off VEdge.Label
-// instead (see arrowLabel in render.go).
+// "events", "handled by", …), else the protocol/relationship for its
+// Kind. Deliberately excludes the "×N" weight suffix: that is folded-edge
+// COUNT, already its own JSON field (VEdge.Weight), and arrowLabel
+// (render.go) computes it fresh on every call rather than having it baked
+// into a stored string — baking it in here would mean calling this twice
+// on the same edge (BuildView once to fill Label, then again anywhere
+// else that also wants a label) doubles the suffix. Rev3 fix F9: BuildView
+// (below) calls this once per edge, at the end, so VEdge.Label — and so
+// the JSON payload — carries a real label for every drawn arrow; nothing
+// outside BuildView's own pipeline (chronicle-pro's federation views,
+// hand-built Views in tests) is required to call this at all, since
+// arrowLabel falls back to it automatically when Label is still empty.
 func defaultArrowLabel(e *VEdge) string {
-	label := e.Label
-	if label == "" {
-		switch e.Kind {
-		case "CALLS_SERVICE", "CALLS_ENDPOINT":
-			label = "HTTP"
-		case "PUBLISHES_TOPIC":
-			label = "pub"
-		case "CONSUMES_TOPIC":
-			label = "sub"
-		case "INJECTS":
-			label = "injects"
-		case "USES_MODEL":
-			label = "uses"
-		case "REFERENCES_MODEL":
-			label = "refs"
-		case "TRIGGERS_FLOW":
-			label = "triggers"
-		case "REQUIRES":
-			label = "requires"
-		case "EXPOSES_ENDPOINT":
-			label = "exposes"
-		default:
-			label = strings.ToLower(strings.ReplaceAll(e.Kind, "_", " "))
-		}
+	if e.Label != "" {
+		return e.Label
 	}
-	if e.Weight > 1 {
-		label += fmt.Sprintf(" ×%d", e.Weight)
+	switch e.Kind {
+	case "CALLS_SERVICE", "CALLS_ENDPOINT":
+		return "HTTP"
+	case "PUBLISHES_TOPIC":
+		return "pub"
+	case "CONSUMES_TOPIC":
+		return "sub"
+	case "INJECTS":
+		return "injects"
+	case "USES_MODEL":
+		return "uses"
+	case "REFERENCES_MODEL":
+		return "refs"
+	case "TRIGGERS_FLOW":
+		return "triggers"
+	case "REQUIRES":
+		return "requires"
+	case "EXPOSES_ENDPOINT":
+		return "exposes"
+	default:
+		return strings.ToLower(strings.ReplaceAll(e.Kind, "_", " "))
 	}
-	return label
 }
 
 // ---------- BuildView ----------
@@ -2873,16 +2873,15 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 	}
 
-	// rev3 fix F9: one arrow label for every renderer AND the JSON. Edge
-	// creation above already sets VEdge.Label for the few kinds that need
-	// an engine-computed label no generic kind-switch could produce
+	// rev3 fix F9: one arrow label SOURCE for every renderer AND the JSON.
+	// Edge creation above already sets VEdge.Label for the few kinds that
+	// need an engine-computed label no generic kind-switch could produce
 	// ("handled by", "events: <topic>", a uses_infra label) — everything
-	// else still reads e.Label == "" at this point. Fill it now, from the
-	// SAME defaultArrowLabel logic RenderText/RenderMermaid used to each
-	// compute for themselves, so the JSON carries `label` for every drawn
-	// arrow and both renderers can just read the field (see arrowLabel in
-	// render.go). Run once, here, after Weight is final for every edge —
-	// defaultArrowLabel's "×N" suffix must never be applied twice.
+	// else still reads e.Label == "" at this point. Fill it now with its
+	// BASE label (defaultArrowLabel; deliberately no "×N" weight suffix —
+	// see that function's doc comment), so the JSON carries a real `label`
+	// for every drawn arrow. Both renderers read it through arrowLabel
+	// (render.go), which adds the weight suffix on top, fresh, every call.
 	for i := range view.Edges {
 		view.Edges[i].Label = defaultArrowLabel(&view.Edges[i])
 	}
