@@ -324,6 +324,11 @@ func RenderMermaid(v *View) string {
 	}
 	nodeLine := func(indent string, n VNode) {
 		label := n.Name
+		if n.Domain != "" {
+			// rev3 task 8a: a foreign neighbour's own domain, right after
+			// the name — same ordering as RenderText's " (domain …)" tag.
+			label += "<br/>domain " + n.Domain
+		}
 		if n.Repo != "" {
 			label += "<br/>@" + n.Repo
 		}
@@ -671,6 +676,12 @@ func RenderText(v *View) string {
 	}
 	nodeLine := func(n VNode) {
 		line := fmt.Sprintf("- %s [%s]", n.Name, n.Type)
+		if n.Domain != "" {
+			// rev3 task 8a: a foreign neighbour names its own domain right
+			// after the type, before repo/marks/boundary — "what it is,
+			// then where it actually lives".
+			line += fmt.Sprintf(" (domain %s)", n.Domain)
+		}
 		if n.Repo != "" {
 			line += " @" + n.Repo
 		}
@@ -775,10 +786,19 @@ func RenderText(v *View) string {
 	if v.Boundary != nil && (len(v.Boundary.In) > 0 || len(v.Boundary.Out) > 0) {
 		b.WriteString("\n## Boundary\n")
 		for _, in := range v.Boundary.In {
-			fmt.Fprintf(&b, "- in: %s (%s)\n", in.FromName, in.Kind)
+			line := fmt.Sprintf("- in: %s (%s)", in.FromName, in.Kind)
+			if in.Domain != "" {
+				// rev3 task 8a: right after the kind, same placement as a
+				// node card's own " (domain …)" tag above.
+				line += fmt.Sprintf(" (domain %s)", in.Domain)
+			}
+			b.WriteString(line + "\n")
 		}
 		for _, out := range v.Boundary.Out {
 			line := fmt.Sprintf("- out: %s [%s] (%s)", out.ToName, out.ToKind, out.Kind)
+			if out.Domain != "" {
+				line += fmt.Sprintf(" (domain %s)", out.Domain)
+			}
 			if out.Via != "" {
 				line += " via " + out.Via
 			}

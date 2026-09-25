@@ -147,9 +147,12 @@ function pillsLabel(eps, max) {
 }
 
 // A component card's two subtitle lines: what it is (and, for a boundary
-// card, that it sits outside the scope), then what it exposes or uses.
+// card, that it sits outside the scope, and its own domain when it is a
+// foreign neighbour from another domain — rev3 task 8a), then what it
+// exposes or uses.
 function cardSubtitle(n) {
-  const first = (n.boundary ? 'outside · ' : '') + (n.type || '');
+  const first = (n.boundary ? 'outside · ' : '') + (n.type || '') +
+    (n.domain ? ' · domain ' + n.domain : '');
   let second = pillsLabel(n.endpoints || [], 1);
   if (!second) {
     const models = n.uses_models || [];

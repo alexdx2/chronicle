@@ -137,6 +137,11 @@ type VNode struct {
 	// single-repo view; set by federation views, where a card must say
 	// which repo it belongs to.
 	Repo string `json:"repo,omitempty"`
+	// Domain names the node's own domain when it differs from the view's
+	// scope domain (rev3 task 8a: a foreign neighbour drawn on the
+	// boundary). Empty for every ordinary in-scope node, since those are
+	// loaded FROM the view's domain by construction.
+	Domain string `json:"domain,omitempty"`
 	// Provenance, straight from the graph row and its evidence: a card
 	// that cannot say how sure it is and where its proof lives is a
 	// drawing, not memory. Status is omitted when active.
@@ -236,12 +241,18 @@ type BoundaryOut struct {
 	ToKind string `json:"to_kind"`
 	Via    string `json:"via"`
 	Kind   string `json:"kind"`
+	// Domain names the other end's own domain when it is a foreign
+	// neighbour (rev3 task 8a) — empty for a same-domain boundary entry.
+	Domain string `json:"domain,omitempty"`
 }
 
 // BoundaryIn is an incoming dependency crossing the view boundary.
 type BoundaryIn struct {
 	FromName string `json:"from_name"`
 	Kind     string `json:"kind"`
+	// Domain names the other end's own domain when it is a foreign
+	// neighbour (rev3 task 8a) — empty for a same-domain boundary entry.
+	Domain string `json:"domain,omitempty"`
 }
 
 // VBoundary lists edges crossing the view boundary.
@@ -439,6 +450,88 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		nodeByKey[n.NodeKey] = n
 	}
 
+	// ---- foreign neighbours (rev3 task 8a) ----
+	// A node of ANOTHER domain that shares an active CALLS_SERVICE,
+	// CALLS_ENDPOINT, PUBLISHES_TOPIC or CONSUMES_TOPIC edge with a node of
+	// this view's domain is a foreign neighbour: the same four kinds the
+	// boundary switch below classifies as calls/publishes/consumes (task
+	// 1's parenthetical). A broader "any non-hierarchy edge" reading would
+	// also pull in cross-domain USES_MODEL/INJECTS targets that nothing
+	// downstream knows how to draw as boundary material (they are not
+	// boundary entries even within one domain today) — the narrower,
+	// classifier-matched set is the honest one: only what actually gets
+	// drawn decides who is "in". Deleted/rejected nodes never count;
+	// external, active and stale do — same statuses this view already
+	// keeps for its own domain, above. Foreign neighbours never join
+	// inView/seeds: every entry point that could turn a node into a scope
+	// member (seeds, BFS expand, pin, path endpoints) is separately
+	// guarded below to skip foreignByID ids. This store holds only a stub
+	// for a foreign node, not its own neighbourhood, so letting it become
+	// a full scope member would draw a card that LOOKS complete but
+	// silently is not — boundary material only, per the task's rule.
+	foreignByID := make(map[int64]*store.NodeRow)
+	{
+		foreignCrossingKinds := map[string]bool{
+			"CALLS_SERVICE": true, "CALLS_ENDPOINT": true,
+			"PUBLISHES_TOPIC": true, "CONSUMES_TOPIC": true,
+		}
+		checked := make(map[int64]bool)
+		for i := range active {
+			e := &active[i]
+			if !foreignCrossingKinds[e.EdgeType] {
+				continue
+			}
+			fromDom := nodeByID[e.FromNodeID] != nil
+			toDom := nodeByID[e.ToNodeID] != nil
+			if fromDom == toDom {
+				continue // both in this domain, or neither — not a crossing
+			}
+			otherID := e.ToNodeID
+			if toDom {
+				otherID = e.FromNodeID
+			}
+			if checked[otherID] {
+				continue
+			}
+			checked[otherID] = true
+			n, err := st.GetNodeByID(otherID)
+			if err != nil || n == nil {
+				continue // dangling edge target; nothing to load or draw
+			}
+			if n.DomainKey == domain {
+				continue // same domain after all (filtered upstream by status) — not foreign
+			}
+			switch n.Status {
+			case "active", "stale", "external":
+			default:
+				continue // deleted/rejected never count
+			}
+			foreignByID[otherID] = n
+		}
+		// Merge so the crossing edges resolve both ends below and reach
+		// the boundary computation the SAME way same-domain out-of-scope
+		// neighbours already do (domEdges' "both ends resolve" filter,
+		// then the fIn&&!tIn / !fIn&&tIn boundary switch) — never the
+		// scope itself, since inView/seeds construction is guarded
+		// separately wherever it could reach a foreignByID id.
+		for id, n := range foreignByID {
+			nodeByID[id] = n
+			nodeByKey[n.NodeKey] = n
+		}
+	}
+	isForeign := func(id int64) bool { return foreignByID[id] != nil }
+	// localByKey resolves a key to a node the same way nodeByKey does, EXCEPT
+	// a foreign stub always misses — every caller of this helper is deciding
+	// scope membership (a path endpoint, a pin), where a foreign neighbour
+	// must read as "not found" (rev3 task 8a), never as a real hit.
+	localByKey := func(k string) *store.NodeRow {
+		n := nodeByKey[k]
+		if n != nil && isForeign(n.NodeID) {
+			return nil
+		}
+		return n
+	}
+
 	// Domain edges: both endpoints must resolve to loaded domain nodes
 	// (equivalent to from_node_key containing ":"+domain+":" for V1
 	// single-domain stores). Flow edges skipped unless flow-scoped.
@@ -524,6 +617,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	case flowScoped:
 		var flowNode *store.NodeRow
 		for _, n := range nodeByID {
+			if isForeign(n.NodeID) {
+				continue // rev3 task 8a: a foreign stub is never a flow to scope on
+			}
 			if n.Layer == "flow" && (n.NodeKey == spec.Scope.Flow || n.Name == spec.Scope.Flow || n.QualifiedName == spec.Scope.Flow) {
 				flowNode = n
 				break
@@ -561,7 +657,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		// dashboard "New canvas" Custom view): render an empty view instead
 		// of falling back to the whole domain.
 		for _, k := range spec.Scope.Nodes {
-			if n := nodeByKey[k]; n != nil {
+			// rev3 task 8a: a foreign stub resolves by key (nodeByKey now
+			// carries it, for the boundary computation) but must not become
+			// a scope seed — this store holds none of its own edges, so a
+			// direct selection reports it Missing, exactly as if this store
+			// had never heard of it at all.
+			if n := nodeByKey[k]; n != nil && !isForeign(n.NodeID) {
 				seeds[n.NodeID] = true
 			} else {
 				view.Missing = append(view.Missing, k)
@@ -584,6 +685,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		want := flattenIdent(spec.Scope.Service)
 		var svc *store.NodeRow
 		for _, n := range nodeByID {
+			if isForeign(n.NodeID) {
+				continue // rev3 task 8a: a foreign stub's own components were never loaded
+			}
 			if n.Layer != "service" || n.NodeType != "service" {
 				continue
 			}
@@ -605,6 +709,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 	default: // whole domain
 		for id := range nodeByID {
+			if isForeign(id) {
+				continue // rev3 task 8a: boundary material only, never a scope member
+			}
 			seeds[id] = true
 		}
 	}
@@ -632,8 +739,8 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		if spec.Expand != nil {
 			allow = expandEdgeKinds(spec.Expand.Edges)
 		}
-		a := nodeByKey[spec.Scope.Nodes[0]]
-		b := nodeByKey[spec.Scope.Nodes[1]]
+		a := localByKey(spec.Scope.Nodes[0])
+		b := localByKey(spec.Scope.Nodes[1])
 		if a != nil && b != nil {
 			// A service named as a path endpoint means "anything that
 			// service owns": services have no dependency edges of their own,
@@ -694,10 +801,13 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				if allow != nil && !allow[e.EdgeType] {
 					continue
 				}
-				if (dir == "out" || dir == "both") && frontier[e.FromNodeID] && !inView[e.ToNodeID] {
+				// rev3 task 8a: deps/impact BFS must not step INTO a foreign
+				// neighbour — it stays boundary material (an "out"/"in"
+				// entry below), never a node the expansion continues from.
+				if (dir == "out" || dir == "both") && frontier[e.FromNodeID] && !inView[e.ToNodeID] && !isForeign(e.ToNodeID) {
 					next[e.ToNodeID] = true
 				}
-				if (dir == "in" || dir == "both") && frontier[e.ToNodeID] && !inView[e.FromNodeID] {
+				if (dir == "in" || dir == "both") && frontier[e.ToNodeID] && !inView[e.FromNodeID] && !isForeign(e.FromNodeID) {
 					next[e.FromNodeID] = true
 				}
 			}
@@ -801,7 +911,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// always render as VNodes.
 	pinned := make(map[int64]bool)
 	for _, k := range spec.Pin {
-		n := nodeByKey[k]
+		// rev3 task 8a: pinning a foreign neighbour's key must not promote
+		// it into a full scope member either (localByKey, same as a path
+		// endpoint above) — it reports Missing, same as before this store
+		// ever loaded that stub for the boundary.
+		n := localByKey(k)
 		if n == nil {
 			view.Missing = append(view.Missing, k)
 			continue
@@ -1163,6 +1277,53 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return n.NodeKey
 	}
 
+	// foreignTwinService (rev3 task 8a): the twin rule's cross-domain
+	// counterpart. A same-domain endpoint's owning service comes from
+	// exposerOf/owned; a foreign endpoint carries neither (this store
+	// never scanned its owner's EXPOSES_ENDPOINT edge) — the substitute
+	// signal is the SAME caller's own CALLS_SERVICE into the endpoint's
+	// OWN domain. Recorded only when exactly one such foreign service
+	// exists for that (caller, domain) pair: two candidates mean the
+	// graph does not say which one owns the endpoint, and guessing would
+	// draw a lift the graph does not back — the honest fallback (used
+	// below, and in the boundary switch) is to leave the endpoint its own
+	// dimmed card instead.
+	callerForeignSvc := make(map[int64]map[string]int64)   // caller id -> domain -> service id
+	foreignSvcAmbiguous := make(map[int64]map[string]bool) // caller id -> domain -> too many candidates
+	for i := range domEdges {
+		e := &domEdges[i]
+		if e.EdgeType != "CALLS_SERVICE" {
+			continue
+		}
+		fn, ok := foreignByID[e.ToNodeID]
+		if !ok || fn.Layer != "service" || fn.NodeType != "service" {
+			continue
+		}
+		if foreignSvcAmbiguous[e.FromNodeID][fn.DomainKey] {
+			continue
+		}
+		byDomain := callerForeignSvc[e.FromNodeID]
+		if byDomain == nil {
+			byDomain = make(map[string]int64)
+			callerForeignSvc[e.FromNodeID] = byDomain
+		}
+		if existing, seen := byDomain[fn.DomainKey]; seen {
+			if existing != e.ToNodeID {
+				delete(byDomain, fn.DomainKey)
+				if foreignSvcAmbiguous[e.FromNodeID] == nil {
+					foreignSvcAmbiguous[e.FromNodeID] = make(map[string]bool)
+				}
+				foreignSvcAmbiguous[e.FromNodeID][fn.DomainKey] = true
+			}
+			continue
+		}
+		byDomain[fn.DomainKey] = e.ToNodeID
+	}
+	foreignTwinService := func(callerID int64, domainKey string) (int64, bool) {
+		id, ok := callerForeignSvc[callerID][domainKey]
+		return id, ok
+	}
+
 	// twinnedCall records, for every active CALLS_ENDPOINT edge, the
 	// (caller node id, callee service id) pair its resolution already
 	// covers — the caller's component-level CALLS_SERVICE edge to that
@@ -1179,6 +1340,13 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 		if svc := owned[e.ToNodeID]; svc != nil {
 			twinnedCall[[2]int64{e.FromNodeID, svc.NodeID}] = true
+			continue
+		}
+		// rev3 task 8a: same idea, cross-domain — see foreignTwinService.
+		if fn, ok := foreignByID[e.ToNodeID]; ok {
+			if svcID, ok := foreignTwinService(e.FromNodeID, fn.DomainKey); ok {
+				twinnedCall[[2]int64{e.FromNodeID, svcID}] = true
+			}
 		}
 	}
 	// callsServiceCovered reports whether a CALLS_SERVICE edge is that
@@ -1259,28 +1427,43 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	edgeAcc := make(map[edgeKeyT]*VEdge)
 	var edgeOrder []edgeKeyT
 
-	type outKeyT struct{ toName, kind string }
-	type inKeyT struct{ fromName, kind string }
+	type outKeyT struct{ toName, kind, dom string }
+	type inKeyT struct{ fromName, kind, dom string }
 	outSeen := make(map[outKeyT]bool)
 	inSeen := make(map[inKeyT]bool)
 	var bOut []BoundaryOut
 	var bIn []BoundaryIn
 
-	addOut := func(toName, toKind, via, kind string) {
-		k := outKeyT{toName, kind}
+	// addOut/addIn take the boundary entity's own domain (rev3 task 8a):
+	// "" for an ordinary same-domain crossing, the foreign neighbour's
+	// DomainKey when the other end is one (domOf below resolves it). The
+	// domain rides along in the dedupe key too, so a same-named entity in
+	// two different foreign domains is never folded into one entry.
+	addOut := func(toName, toKind, via, kind, dom string) {
+		k := outKeyT{toName, kind, dom}
 		if outSeen[k] {
 			return
 		}
 		outSeen[k] = true
-		bOut = append(bOut, BoundaryOut{ToName: toName, ToKind: toKind, Via: via, Kind: kind})
+		bOut = append(bOut, BoundaryOut{ToName: toName, ToKind: toKind, Via: via, Kind: kind, Domain: dom})
 	}
-	addIn := func(fromName, kind string) {
-		k := inKeyT{fromName, kind}
+	addIn := func(fromName, kind, dom string) {
+		k := inKeyT{fromName, kind, dom}
 		if inSeen[k] {
 			return
 		}
 		inSeen[k] = true
-		bIn = append(bIn, BoundaryIn{FromName: fromName, Kind: kind})
+		bIn = append(bIn, BoundaryIn{FromName: fromName, Kind: kind, Domain: dom})
+	}
+	// domOf reports a node's own domain when it is a foreign neighbour
+	// (rev3 task 8a), else "" — the argument to every addOut/addIn call
+	// below is domOf of whichever side is the BOUNDARY entity (never the
+	// in-view side, which is always this view's own domain).
+	domOf := func(n *store.NodeRow) string {
+		if n != nil && isForeign(n.NodeID) {
+			return n.DomainKey
+		}
+		return ""
 	}
 
 	// explicitlyRemoved: the user explicitly removed this node type via
@@ -1485,10 +1668,10 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			switch e.EdgeType {
 			case "CALLS_SERVICE":
 				if toNode.NodeType == "external_system" {
-					addOut(toNode.Name, "external_system", fromNode.Name, "http")
+					addOut(toNode.Name, "external_system", fromNode.Name, "http", domOf(toNode))
 					addBoundaryEdge(fid, toNode, e, e.EdgeType, false)
 				} else if toNode.Layer == "service" && toNode.NodeType == "service" {
-					addOut(toNode.Name, "service", fromNode.Name, "http")
+					addOut(toNode.Name, "service", fromNode.Name, "http", domOf(toNode))
 					addBoundaryEdge(fid, toNode, e, e.EdgeType, false)
 				}
 			case "CALLS_ENDPOINT":
@@ -1496,17 +1679,35 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				// boundary entry dedupes with the parallel CALLS_SERVICE.
 				if exID, ok := exposerOf[e.ToNodeID]; ok {
 					if svc := owned[exID]; svc != nil {
-						addOut(svc.Name, "service", fromNode.Name, "http")
+						addOut(svc.Name, "service", fromNode.Name, "http", domOf(svc))
 						addBoundaryEdge(fid, svc, e, "CALLS_SERVICE", false)
+					}
+				} else if fn := foreignByID[e.ToNodeID]; fn != nil {
+					// rev3 task 8a: a foreign endpoint has no local
+					// EXPOSES_ENDPOINT to resolve its owner through
+					// exposerOf — lift it to its twin service when the SAME
+					// caller also calls that service directly (the twin
+					// rule, cross-domain: foreignTwinService); otherwise it
+					// stays its own dimmed card rather than a silent drop —
+					// unlike an unresolved same-domain endpoint (a genuine
+					// gap left alone above), a foreign one IS what the
+					// graph holds, so the honest read draws it.
+					if svcID, ok := foreignTwinService(e.FromNodeID, fn.DomainKey); ok {
+						svc := foreignByID[svcID]
+						addOut(svc.Name, "service", fromNode.Name, "http", domOf(svc))
+						addBoundaryEdge(fid, svc, e, "CALLS_SERVICE", false)
+					} else {
+						addOut(fn.Name, "endpoint", fromNode.Name, "http", domOf(fn))
+						addBoundaryEdge(fid, fn, e, "CALLS_ENDPOINT", false)
 					}
 				}
 			case "PUBLISHES_TOPIC":
-				addOut(toNode.Name, "topic", fromNode.Name, "async")
+				addOut(toNode.Name, "topic", fromNode.Name, "async", domOf(toNode))
 				addBoundaryEdge(fid, toNode, e, e.EdgeType, false)
 			case "CONSUMES_TOPIC":
 				if flowDirection {
 					// Consumption flows from the channel to the consumer.
-					addIn(toNode.Name, "async")
+					addIn(toNode.Name, "async", domOf(toNode))
 					addBoundaryEdge(fid, toNode, e, e.EdgeType, true)
 				} else {
 					// Dependency questions (rev3 task 6b): every arrow
@@ -1514,7 +1715,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 					// outside topic depends on it, an out entry, and the
 					// materialized edge follows the raw consumer -> topic
 					// direction instead of the message-flow reversal.
-					addOut(toNode.Name, "topic", fromNode.Name, "async")
+					addOut(toNode.Name, "topic", fromNode.Name, "async", domOf(toNode))
 					addBoundaryEdge(fid, toNode, e, e.EdgeType, false)
 				}
 			}
@@ -1537,12 +1738,12 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 					callerSvc = fromNode
 				}
 				if callerSvc != nil {
-					addIn(callerSvc.Name, "http")
+					addIn(callerSvc.Name, "http", domOf(callerSvc))
 					addBoundaryEdge(tid, callerSvc, e, "CALLS_SERVICE", true)
 				}
 			case "PUBLISHES_TOPIC":
 				if pubSvc := owned[e.FromNodeID]; pubSvc != nil {
-					addIn(pubSvc.Name, "async")
+					addIn(pubSvc.Name, "async", domOf(pubSvc))
 					addBoundaryEdge(tid, pubSvc, e, e.EdgeType, true)
 				}
 			case "CONSUMES_TOPIC":
@@ -1552,7 +1753,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 					// question ("what depends on X") — an in entry, with
 					// the materialized edge following the raw consumer ->
 					// topic direction (bn -> in-view, incoming=true).
-					addIn(fromNode.Name, "async")
+					addIn(fromNode.Name, "async", domOf(fromNode))
 					addBoundaryEdge(tid, fromNode, e, e.EdgeType, true)
 				}
 			}
@@ -1726,6 +1927,92 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		}
 	}
 
+	// ---- c2/services: foreign neighbours as dimmed boundary cards (rev3
+	// task 8a) ----
+	// c2 and services are domain-scoped collapsed container views
+	// (scope.Service is always "" for them), so matBoundary above is
+	// false and addBoundaryEdge never materializes a card — the crossing
+	// itself still reached View.Boundary (the main edge loop calls
+	// addOut/addIn unconditionally), but nothing DREW it. This block is
+	// that drawing, at the SAME altitude the rest of a collapsed view
+	// already draws at: arrows start at the caller's collapsed service
+	// card (repKey), matching "arrows start at the caller's collapsed
+	// service card on c2/services" — c3 needs no equivalent block since
+	// matBoundary is already true there (the merge above is enough).
+	if spec.Layout.Preset == "c2" || spec.Layout.Preset == "services" {
+		addForeignEdge := func(fromKey, toKey, kind string, e *store.EdgeRow) {
+			k := edgeKeyT{fromKey, toKey, kind, edgeTransport(e, nodeByID)}
+			ve := edgeAcc[k]
+			if ve == nil {
+				ve = &VEdge{From: fromKey, To: toKey, Kind: kind, Transport: k.transport}
+				edgeAcc[k] = ve
+				edgeOrder = append(edgeOrder, k)
+			}
+			// Same twin rule as everywhere else: a covered CALLS_SERVICE
+			// adds provenance but no weight, so two twinned endpoint calls
+			// plus their coarse service call still read "HTTP ×2".
+			if !callsServiceCovered(e) {
+				ve.Weight++
+			}
+			addEdgeProvenance(ve, e, edgeSum[e.EdgeID].Count)
+			ve.CollapsedFrom = append(ve.CollapsedFrom, e.EdgeKey)
+		}
+		for i := range domEdges {
+			e := &domEdges[i]
+			did := e.FromNodeID
+			fn := foreignByID[e.ToNodeID]
+			// Only the "domain calls out" shape: did is a real, in-scope
+			// domain node (never itself foreign — a foreign-to-foreign
+			// edge belongs to neither domain's view) and fn is its foreign
+			// target. All four kinds store their caller/publisher/consumer
+			// as FromNodeID (the same convention the rest of BuildView
+			// relies on), so this covers every fixture case; an incoming
+			// foreign caller stays text-only in View.Boundary (still
+			// correct — just not drawn as a card here, matching how a
+			// same-domain incoming call without a resolvable caller
+			// service also stays text-only above).
+			if fn == nil || nodeByID[did] == nil || isForeign(did) || !inView[did] {
+				continue
+			}
+			if explicitlyRemoved(fn) || !edgePasses(e) {
+				continue
+			}
+			callerKey := repKey(did)
+			switch e.EdgeType {
+			case "CALLS_SERVICE":
+				if fn.Layer != "service" || fn.NodeType != "service" {
+					continue
+				}
+				boundaryIDs[fn.NodeID] = true
+				addForeignEdge(callerKey, fn.NodeKey, "CALLS_SERVICE", e)
+			case "CALLS_ENDPOINT":
+				// The twin rule, cross-domain: lift to the caller's own
+				// foreign CALLS_SERVICE target in the SAME domain when
+				// unambiguous; otherwise the endpoint stays its own
+				// dimmed card rather than a silent drop.
+				if svcID, ok := foreignTwinService(did, fn.DomainKey); ok {
+					svc := foreignByID[svcID]
+					boundaryIDs[svc.NodeID] = true
+					addForeignEdge(callerKey, svc.NodeKey, "CALLS_SERVICE", e)
+				} else {
+					boundaryIDs[fn.NodeID] = true
+					addForeignEdge(callerKey, fn.NodeKey, "CALLS_ENDPOINT", e)
+				}
+			case "PUBLISHES_TOPIC":
+				boundaryIDs[fn.NodeID] = true
+				addForeignEdge(callerKey, fn.NodeKey, "PUBLISHES_TOPIC", e)
+			case "CONSUMES_TOPIC":
+				boundaryIDs[fn.NodeID] = true
+				if flowDirection {
+					// Flow direction, as on c2 today: topic -> consumer.
+					addForeignEdge(fn.NodeKey, callerKey, "CONSUMES_TOPIC", e)
+				} else {
+					addForeignEdge(callerKey, fn.NodeKey, "CONSUMES_TOPIC", e)
+				}
+			}
+		}
+	}
+
 	// ---- assemble (deterministic order) ----
 	for key, vg := range groupsByKey {
 		_ = key
@@ -1763,6 +2050,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			Type:       n.NodeType,
 			Layer:      n.Layer,
 			Group:      g,
+			Domain:     domOf(n),
 			Endpoints:  endpointPills[id],
 			UsesModels: modelPills[id],
 			Detail:     flowTrigger[id],
@@ -1787,6 +2075,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			Type:     n.NodeType,
 			Layer:    n.Layer,
 			Boundary: true,
+			Domain:   domOf(n),
 		}
 		nodeProvenance(&vn, n, nodeSum[id])
 		view.Nodes = append(view.Nodes, vn)
@@ -1949,6 +2238,18 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			}
 			topicNode := nodeByKey[n.Key]
 			if topicNode == nil {
+				continue
+			}
+			if isForeign(topicNode.NodeID) {
+				// rev3 task 8a: "private" means EVERY publisher and
+				// consumer belongs to one same service — a claim this
+				// domain can only make honestly about a topic it fully
+				// owns (it loaded every edge touching it). A foreign
+				// topic is known ONLY through the one crossing edge that
+				// made it a boundary neighbour; the topic's other
+				// publishers/consumers, if any, live in a store this
+				// domain never read. Calling it "private" off a single
+				// edge would assert something the graph does not back.
 				continue
 			}
 			var only *store.NodeRow
