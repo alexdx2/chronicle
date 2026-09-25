@@ -28,8 +28,16 @@ type View struct {
 	// (expand.mode="path"): scope.nodes[0] … scope.nodes[1]. Empty when no
 	// path exists (the view then holds just the two seeds) or for non-path
 	// views.
-	Trace   []string `json:"trace,omitempty"`
-	Missing []string `json:"missing,omitempty"`
+	Trace []string `json:"trace,omitempty"`
+	// PathBackward reports, for a path view (expand.mode="path"), whether
+	// some edge on the path is drawn against the direction of travel from
+	// scope.nodes[0] to scope.nodes[1] — after the CONSUMES_TOPIC and
+	// EXPOSES_ENDPOINT direction reorientations (task 1, rev 2 follow-up).
+	// Renderers use it for direction honesty: the default title reads
+	// "A ↔ B" instead of "A → B", and RenderText adds a note. Always false
+	// for non-path views.
+	PathBackward bool     `json:"path_backward,omitempty"`
+	Missing      []string `json:"missing,omitempty"`
 	// Hidden accounts for every node the view carries with
 	// render_mode=hidden, grouped by (layer, type, reason) — nothing leaves
 	// a diagram silently. Reasons are salience Decision.Reason tokens
@@ -236,7 +244,11 @@ var edgeClasses = map[string][]string{
 }
 
 // hierarchyKinds are never traversed or rendered as dependency arrows: they
-// feed grouping (CONTAINS) and endpoint pills (EXPOSES_ENDPOINT).
+// feed grouping (CONTAINS) and endpoint pills (EXPOSES_ENDPOINT). One
+// exception: path search (shortestPathSets) walks EXPOSES_ENDPOINT too, and
+// a path view draws the on-path hop — an endpoint is otherwise an island no
+// "how does a request reach X" question can cross (task 1). CONTAINS stays
+// out everywhere, including path search.
 var hierarchyKinds = map[string]bool{"CONTAINS": true, "EXPOSES_ENDPOINT": true}
 
 // flowKinds are skipped unless the flow layer is visible: a flow-scoped view
@@ -564,6 +576,13 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	// pathServiceOf frames a path's end node with the service the caller
 	// named (see the path block below).
 	pathServiceOf := make(map[int64]string)
+	// pathPos maps a path node id to its position in request order
+	// (scope.nodes[0]=0 … scope.nodes[1]=len-1). pathBackward flags a
+	// rendered path edge whose final direction (after the CONSUMES_TOPIC/
+	// EXPOSES_ENDPOINT reorientations below) points from a later position
+	// back to an earlier one — direction honesty (task 1, rev 2 follow-up).
+	pathPos := make(map[int64]int)
+	pathBackward := false
 	if pathMode {
 		var allow map[string]bool
 		if spec.Expand != nil {
@@ -588,9 +607,10 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				return set
 			}
 			order, pairs := shortestPathSets(endpointSet(a), endpointSet(b), domEdges, nodeByID, allow)
-			for _, id := range order {
+			for i, id := range order {
 				inView[id] = true
 				view.Trace = append(view.Trace, nodeByID[id].NodeKey)
+				pathPos[id] = i
 			}
 			pathPairs = pairs
 			if len(order) > 0 {
@@ -1177,7 +1197,14 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	for i := range domEdges {
 		e := &domEdges[i]
 		if hierarchyKinds[e.EdgeType] {
-			continue // hierarchy is decoration (groups + pills), never an arrow
+			// EXPOSES_ENDPOINT is decoration (an endpoint pill) everywhere
+			// except a path view, where the hop lying ON the found path is
+			// how a request reaches its handler (task 1); the pathPairs
+			// check in the fIn&&tIn case below still limits it to that one
+			// hop. CONTAINS has no such exception.
+			if !pathMode || e.EdgeType != "EXPOSES_ENDPOINT" {
+				continue // hierarchy is decoration (groups + pills), never an arrow
+			}
 		}
 		if flowKinds[e.EdgeType] && !flowVisible {
 			continue
@@ -1227,19 +1254,45 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 					kind = "CALLS_SERVICE"
 				}
 			}
-			// Message flow direction: the graph stores CONSUMES_TOPIC as
-			// consumer → topic (a dependency); the diagram draws messages
-			// going topic → consumer, so publisher → topic → consumer reads
-			// in one direction. Dependency questions (deps/impact) keep the
-			// dependency direction: every arrow there means "depends on",
-			// and the subject stays where the layout puts it.
-			if kind == "CONSUMES_TOPIC" && flowDirection {
+			// Message/request direction: the graph stores CONSUMES_TOPIC as
+			// consumer → topic (a dependency) and EXPOSES_ENDPOINT as
+			// handler → endpoint (a hierarchy/pill edge); the diagram draws
+			// both the way they actually travel instead — topic →
+			// consumer, endpoint → handler, "handled by" (task 1) — so
+			// publisher → topic → consumer, and endpoint → handler → …,
+			// each read in one direction. Dependency questions (deps/
+			// impact) keep the CONSUMES_TOPIC dependency direction: every
+			// arrow there means "depends on", and the subject stays where
+			// the layout puts it. EXPOSES_ENDPOINT only ever reaches here
+			// on a path view (the hierarchy check above), so it always
+			// flips. dirFrom/dirTo track the same flip in id space so
+			// direction honesty (below) can compare against request order.
+			dirFrom, dirTo := fid, tid
+			var label string
+			switch {
+			case kind == "CONSUMES_TOPIC" && flowDirection:
 				fromKey, toKey = toKey, fromKey
+				dirFrom, dirTo = dirTo, dirFrom
+			case kind == "EXPOSES_ENDPOINT":
+				fromKey, toKey = toKey, fromKey
+				dirFrom, dirTo = dirTo, dirFrom
+				label = "handled by"
+			}
+			// Direction honesty (task 1, rev 2 follow-up): a path edge
+			// whose final direction points from a later request-order
+			// position back to an earlier one means the diagram cannot
+			// draw this path as one honest A → B arrow.
+			if pathMode {
+				if p1, ok1 := pathPos[dirFrom]; ok1 {
+					if p2, ok2 := pathPos[dirTo]; ok2 && p1 > p2 {
+						pathBackward = true
+					}
+				}
 			}
 			k := edgeKeyT{fromKey, toKey, kind, edgeTransport(e, nodeByID)}
 			ve := edgeAcc[k]
 			if ve == nil {
-				ve = &VEdge{From: fromKey, To: toKey, Kind: kind, Transport: k.transport, Weight: 0}
+				ve = &VEdge{From: fromKey, To: toKey, Kind: kind, Label: label, Transport: k.transport, Weight: 0}
 				edgeAcc[k] = ve
 				edgeOrder = append(edgeOrder, k)
 			}
@@ -1703,6 +1756,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		view.Boundary = &VBoundary{In: bIn, Out: bOut}
 	}
 
+	view.PathBackward = pathBackward
 	if view.Title == "" {
 		switch {
 		case flowScoped:
@@ -1711,7 +1765,15 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				view.Title = spec.Scope.Flow
 			}
 		case pathMode:
-			view.Title = fmt.Sprintf("%s → %s", spec.Scope.Nodes[0], spec.Scope.Nodes[1])
+			// Direction honesty (task 1, rev 2 follow-up): a title that
+			// promises a clean A → B when some arrow on the path actually
+			// points back would be a diagram inventing confidence the graph
+			// doesn't back.
+			arrow := "→"
+			if pathBackward {
+				arrow = "↔"
+			}
+			view.Title = fmt.Sprintf("%s %s %s", spec.Scope.Nodes[0], arrow, spec.Scope.Nodes[1])
 		case spec.Scope.Nodes != nil:
 			view.Title = fmt.Sprintf("%d selected nodes", len(spec.Scope.Nodes))
 		case spec.Scope.Service != "":
@@ -1794,13 +1856,14 @@ func hiddenSummary(nodes []VNode) []HiddenEntry {
 
 // ---------- path search ----------
 
-// shortestPath finds the shortest undirected path from→to over non-hierarchy
-// dependency edges (optionally restricted to the allow set of raw edge
-// types). Plain BFS; among multiple shortest paths the choice is
-// deterministic: each node's neighbors are visited in lexicographic node-key
-// order, and the first parent to discover a node wins. Returns the ordered
-// node ids and the set of unordered consecutive pairs, or (nil, nil) when no
-// path exists.
+// shortestPath finds the shortest undirected path from→to over dependency
+// edges plus EXPOSES_ENDPOINT (an endpoint ↔ its handler, task 1) —
+// optionally restricted to the allow set of raw edge types — but never
+// CONTAINS or flow edges (TRIGGERS_FLOW, REQUIRES). Plain BFS; among
+// multiple shortest paths the choice is deterministic: each node's
+// neighbors are visited in lexicographic node-key order, and the first
+// parent to discover a node wins. Returns the ordered node ids and the set
+// of unordered consecutive pairs, or (nil, nil) when no path exists.
 func shortestPath(from, to int64, edges []store.EdgeRow, nodeByID map[int64]*store.NodeRow, allow map[string]bool) ([]int64, map[[2]int64]bool) {
 	return shortestPathSets(map[int64]bool{from: true}, map[int64]bool{to: true}, edges, nodeByID, allow)
 }
@@ -1818,7 +1881,10 @@ func shortestPathSets(from, to map[int64]bool, edges []store.EdgeRow, nodeByID m
 	adj := make(map[int64][]int64)
 	for i := range edges {
 		e := &edges[i]
-		if hierarchyKinds[e.EdgeType] || flowKinds[e.EdgeType] {
+		// A path walks EXPOSES_ENDPOINT (task 1) but not CONTAINS or flow
+		// edges — those still don't answer "how does a request get from A
+		// to B".
+		if (hierarchyKinds[e.EdgeType] && e.EdgeType != "EXPOSES_ENDPOINT") || flowKinds[e.EdgeType] {
 			continue
 		}
 		if allow != nil && !allow[e.EdgeType] {

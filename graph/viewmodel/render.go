@@ -573,6 +573,12 @@ func RenderText(v *View) string {
 		title = "View"
 	}
 	fmt.Fprintf(&b, "# %s\n", title)
+	if v.PathBackward {
+		// Direction honesty (task 1, rev 2 follow-up): the title already
+		// switched to "A ↔ B"; say why right under it, before the reader
+		// reads the arrows as one clean A → B story.
+		b.WriteString("note: some arrows on this path point back\n")
+	}
 	level := v.Spec.Layout.Preset
 	if level == "" {
 		level = "custom"
