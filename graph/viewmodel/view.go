@@ -45,8 +45,17 @@ type View struct {
 	// never a guess. Renderers surface them the same way: RenderText right
 	// after the header, RenderMarkdown before the table, RenderMermaid as
 	// "%% note: …" comments, the dashboard as a line above the canvas.
-	Notes   []string `json:"notes,omitempty"`
-	Missing []string `json:"missing,omitempty"`
+	Notes []string `json:"notes,omitempty"`
+	// AlsoRequires names the flow's REQUIRES targets skipped by the
+	// transitive-reduction rule (rev3 task 6): a use case's "requires"
+	// arrow to X is not drawn when X is reachable from another of its own
+	// REQUIRES targets by a drawn INJECTS chain. Sorted, deduped names —
+	// RenderText prints them as one line under the Arrows section so
+	// nothing disappears silently; RenderMermaid and RenderMarkdown leave
+	// this out on purpose (it is prose about missing arrows, not a note
+	// about the view's own completeness like Notes above).
+	AlsoRequires []string `json:"also_requires,omitempty"`
+	Missing      []string `json:"missing,omitempty"`
 	// Hidden accounts for every node the view carries with
 	// render_mode=hidden, grouped by (layer, type, reason) — nothing leaves
 	// a diagram silently. Reasons are salience Decision.Reason tokens
@@ -499,6 +508,13 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	view := &View{Spec: spec}
 	seeds := make(map[int64]bool)
 	flowTitle := ""
+	// flowHandlerID/flowTriggerEndpointID (rev3 task 6): the flow's trigger
+	// endpoint and the node that EXPOSES_ENDPOINT to it — set below, in the
+	// flowScoped case, once the trigger endpoint is known. Read by the main
+	// edge loop further down to draw exactly that one EXPOSES_ENDPOINT hop
+	// (endpoint -> handler, "handled by"), the same mechanism a path view
+	// already uses (commit b0dc442), not a new one.
+	var flowHandlerID, flowTriggerEndpointID int64
 	// scopedService is the resolved subject of a single-service c3 view
 	// (spec.Scope.Service, tolerant-matched below) — kept for the "owns no
 	// components" note, which needs its display name after the tolerant
@@ -525,6 +541,19 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			}
 			if e.EdgeType == "TRIGGERS_FLOW" && e.ToNodeID == flowNode.NodeID {
 				seeds[e.FromNodeID] = true // trigger endpoint
+				flowTriggerEndpointID = e.FromNodeID
+			}
+		}
+		// The endpoint's own handler (rev3 task 6): the diagram should say
+		// who receives the request, not just that some endpoint triggers
+		// the flow. It joins the view as a seed; its INJECTS to nodes
+		// already in the view (the required providers) draw through the
+		// ordinary main edge loop below — no new node gets pulled in
+		// through it, only the connection to what is already there.
+		if flowTriggerEndpointID != 0 {
+			if handlerID, ok := exposerOf[flowTriggerEndpointID]; ok {
+				seeds[handlerID] = true
+				flowHandlerID = handlerID
 			}
 		}
 	case spec.Scope.Nodes != nil:
@@ -818,6 +847,18 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		for epID, exID := range exposerOf {
 			if pinned[epID] {
 				continue // pinned endpoints render as real VNodes, never pills
+			}
+			if flowScoped && exID == flowHandlerID {
+				// rev3 task 6: the flow's own handler joined the view to
+				// draw one hop (its trigger endpoint, "handled by"), the
+				// same exception a path view makes for its Trace nodes —
+				// scoped here to just this one component instead of the
+				// whole view. Absorbing the handler's OTHER endpoints as
+				// pills would retarget THEIR edges onto it too, pulling in
+				// unrelated callers as this flow's boundary; none of them
+				// were in view before the handler was added, so leaving
+				// them unattached leaves them exactly that untouched.
+				continue
 			}
 			if inView[exID] {
 				attached[epID] = exID
@@ -1146,6 +1187,72 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		return e.EdgeType == "CALLS_SERVICE" && twinnedCall[[2]int64{e.FromNodeID, e.ToNodeID}]
 	}
 
+	// requiresReduced (rev3 task 6): a flow's "requires" arrow from the use
+	// case to X is redundant when X is reachable from another of that same
+	// use case's REQUIRES targets by one or more DRAWN INJECTS hops (both
+	// endpoints in view) — the dependency already reads through that
+	// chain, so the direct arrow would just repeat it (transitive
+	// reduction). Computed once over every flow node in domEdges, not just
+	// a single scope.flow, so it behaves the same under any flow-visible
+	// view. Skipped arrows are not silently dropped: view.AlsoRequires
+	// collects their names (sorted, deduped) for RenderText to print under
+	// the Arrows section — kept out of mermaid on purpose.
+	requiresReduced := make(map[[2]int64]bool) // (use case id, target id)
+	if flowVisible {
+		reqTargets := make(map[int64][]int64) // use case id -> its REQUIRES targets
+		for i := range domEdges {
+			e := &domEdges[i]
+			if e.EdgeType == "REQUIRES" {
+				reqTargets[e.FromNodeID] = append(reqTargets[e.FromNodeID], e.ToNodeID)
+			}
+		}
+		injAdjView := make(map[int64][]int64) // in-view INJECTS adjacency
+		for i := range domEdges {
+			e := &domEdges[i]
+			if e.EdgeType == "INJECTS" && inView[e.FromNodeID] && inView[e.ToNodeID] {
+				injAdjView[e.FromNodeID] = append(injAdjView[e.FromNodeID], e.ToNodeID)
+			}
+		}
+		reducedNames := make(map[string]bool)
+		for ucID, targets := range reqTargets {
+			reqSet := make(map[int64]bool, len(targets))
+			for _, t := range targets {
+				reqSet[t] = true
+			}
+			for _, y := range targets {
+				// BFS from y (one of the use case's own required nodes)
+				// over drawn INJECTS: everything reachable this way is
+				// "already said" once y itself is drawn as a requirement.
+				seen := map[int64]bool{y: true}
+				queue := []int64{y}
+				for len(queue) > 0 {
+					cur := queue[0]
+					queue = queue[1:]
+					for _, nxt := range injAdjView[cur] {
+						if seen[nxt] {
+							continue
+						}
+						seen[nxt] = true
+						queue = append(queue, nxt)
+					}
+				}
+				for x := range seen {
+					if x == y || !reqSet[x] {
+						continue // only redundant when X is ALSO a direct requirement
+					}
+					requiresReduced[[2]int64{ucID, x}] = true
+					if xn := nodeByID[x]; xn != nil {
+						reducedNames[xn.Name] = true
+					}
+				}
+			}
+		}
+		for name := range reducedNames {
+			view.AlsoRequires = append(view.AlsoRequires, name)
+		}
+		sort.Strings(view.AlsoRequires)
+	}
+
 	// ---- f. edges (+ collapse) and g. boundary ----
 	type edgeKeyT struct{ from, to, kind, transport string }
 	edgeAcc := make(map[edgeKeyT]*VEdge)
@@ -1246,8 +1353,14 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			// except a path view, where the hop lying ON the found path is
 			// how a request reaches its handler (task 1); the pathPairs
 			// check in the fIn&&tIn case below still limits it to that one
-			// hop. CONTAINS has no such exception.
-			if !pathMode || e.EdgeType != "EXPOSES_ENDPOINT" {
+			// hop. A flow view draws the same one hop for its own trigger
+			// endpoint (rev3 task 6) — flowHandlerID/flowTriggerEndpointID
+			// pin it to that exact pair, so no other EXPOSES_ENDPOINT edge
+			// rides along. CONTAINS has no such exception.
+			exposesOnPath := pathMode && e.EdgeType == "EXPOSES_ENDPOINT"
+			exposesOnFlow := flowScoped && e.EdgeType == "EXPOSES_ENDPOINT" &&
+				e.FromNodeID == flowHandlerID && e.ToNodeID == flowTriggerEndpointID
+			if !exposesOnPath && !exposesOnFlow {
 				continue // hierarchy is decoration (groups + pills), never an arrow
 			}
 		}
@@ -1289,6 +1402,9 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				fromKey, toKey = nodeByID[fid].NodeKey, nodeByID[tid].NodeKey
 			}
 			kind := e.EdgeType
+			if kind == "REQUIRES" && requiresReduced[[2]int64{e.FromNodeID, e.ToNodeID}] {
+				continue // rev3 task 6: redundant with a drawn INJECTS chain from another required node
+			}
 			// One arrow per conversation: a call to another service's
 			// endpoint, lifted to that service's group, IS a service call
 			// at container altitude — it merges with the parallel

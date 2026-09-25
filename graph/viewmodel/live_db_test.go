@@ -210,8 +210,18 @@ func TestViewFlowScopedComposition(t *testing.T) {
 	if triggers < 1 {
 		t.Errorf("TRIGGERS_FLOW edges=%d want ≥1; edges=%+v", triggers, view.Edges)
 	}
-	if requires < 2 {
-		t.Errorf("REQUIRES edges=%d want ≥2; edges=%+v", requires, view.Edges)
+	// rev3 task 6: this flow REQUIRES three targets (ScoreHub,
+	// ScoreboardDbContext, ScoreService), but ScoreService's own drawn
+	// INJECTS already reach the other two (ScoreService -> ScoreHub,
+	// ScoreService -> ScoreboardDbContext) — transitive reduction leaves
+	// only the one non-redundant "requires" arrow (-> ScoreService); the
+	// other two are said once in RenderText's "also requires" line
+	// instead (view.AlsoRequires), not as a second, repeated arrow.
+	if requires != 1 {
+		t.Errorf("REQUIRES edges=%d want 1 (transitive reduction via ScoreService's injects); edges=%+v", requires, view.Edges)
+	}
+	if len(view.AlsoRequires) != 2 {
+		t.Errorf("AlsoRequires=%v want the 2 reduced targets (ScoreboardDbContext, ScoreHub)", view.AlsoRequires)
 	}
 	// Breadcrumb title: the flow NAME, not the raw key.
 	if view.Title == "" || view.Title == flowKey {
