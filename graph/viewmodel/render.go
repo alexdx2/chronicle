@@ -332,7 +332,11 @@ func RenderMermaid(v *View) string {
 		if n.Repo != "" {
 			label += "<br/>@" + n.Repo
 		}
-		if n.Boundary {
+		if n.Boundary && n.Domain == "" {
+			// rev3 task 8a follow-up: a foreign card's "domain …" line
+			// above already says it sits outside the scope; this line
+			// would just repeat that for the one card type that carries
+			// both flags.
 			label += "<br/>outside"
 		}
 		if p := pillsLabel(n.Endpoints, 2); p != "" {
@@ -487,7 +491,12 @@ const evidenceBar = 0.7
 // rest of the graph (a uniformly weak graph must light up everywhere).
 func nodeProvenanceText(n *VNode) string {
 	var parts []string
-	if n.Status != "" && n.Status != "active" {
+	// A foreign neighbour's own domain (rev3 task 8a) already says "this
+	// node lives elsewhere" — the generic "external" status word would
+	// just repeat that claim a second time. Any OTHER non-active status
+	// (stale, say) still speaks here, foreign or not: it is information
+	// the domain tag does not carry.
+	if n.Status != "" && n.Status != "active" && !(n.Domain != "" && n.Status == "external") {
 		parts = append(parts, n.Status)
 	}
 	c := n.Trust
@@ -688,7 +697,9 @@ func RenderText(v *View) string {
 		if len(n.Marks) > 0 {
 			line += " " + markText(n.Marks, n.Key)
 		}
-		if n.Boundary {
+		if n.Boundary && n.Domain == "" {
+			// rev3 task 8a follow-up: " (domain …)" above already says a
+			// foreign card sits outside the scope — this would repeat it.
 			line += " (outside scope)"
 		}
 		if p := pillsLabel(n.Endpoints, 4); p != "" {

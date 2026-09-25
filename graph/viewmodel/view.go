@@ -2211,13 +2211,71 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		n.SalienceReason = "isolated"
 	}
 
-	// Private topics (rev3 task 3): C2's broker frame draws every topic it
-	// carries as a conversation between services — a topic whose every
-	// publisher AND every consumer (PUBLISHES_TOPIC/CONSUMES_TOPIC sources)
-	// belong to the one same service is not a conversation, it is that
-	// service talking to itself (arena-api's own battle-queue). Checked
-	// over the WHOLE graph (domEdges), not just this view: privacy is a
-	// fact about the graph, not about what happened to expand here. Hidden
+	// Unowned endpoints (rev3 task 8a follow-up): at container altitude an
+	// endpoint is a badge on its service card (the exposer/pill mechanism
+	// above absorbs it there); one with no resolvable owner — no
+	// EXPOSES_ENDPOINT edge, or its exposer itself attributes to no
+	// service — was never absorbed and has nothing to badge onto, so it
+	// renders as a free-standing box answering nothing about "how do the
+	// containers talk" (the reported case: c2-orders' GET /orders and
+	// GET /orders/:id, both with no owner and no arrow at all). Hidden the
+	// same way isolated infra is, right above; any edge that DOES touch
+	// one (unlike the reported case) is stripped from View.Edges too,
+	// same as a private topic's pub/sub edges just below — a hidden
+	// node's arrow is not data either. The api lens exists specifically to
+	// say what nobody owns, so it is exempt: this is c2/services only.
+	// Boundary cards (rev3 task 8a's foreign neighbours, and same-domain
+	// C3 boundary material) are excluded on purpose: `owned` is built from
+	// THIS domain's own nodes and never resolves a foreign id at all, so
+	// this rule would otherwise mislabel every un-twinned foreign endpoint
+	// "unowned" too — a different question this task's own dimmed-card
+	// handling already answers.
+	if spec.Layout.Preset == "c2" || spec.Layout.Preset == "services" {
+		hiddenEndpoints := make(map[string]bool)
+		for i := range view.Nodes {
+			n := &view.Nodes[i]
+			if n.Type != "endpoint" || n.RenderMode == string(salience.RenderHidden) || n.Group != "" || n.Boundary {
+				continue
+			}
+			nn := nodeByKey[n.Key]
+			if nn == nil || owned[nn.NodeID] != nil {
+				continue
+			}
+			n.Tier = string(salience.TierDetail)
+			n.RenderMode = string(salience.RenderHidden)
+			n.SalienceReason = "unowned"
+			hiddenEndpoints[n.Key] = true
+		}
+		if len(hiddenEndpoints) > 0 {
+			keptEdges := view.Edges[:0]
+			for _, e := range view.Edges {
+				if hiddenEndpoints[e.From] || hiddenEndpoints[e.To] {
+					continue
+				}
+				keptEdges = append(keptEdges, e)
+			}
+			view.Edges = keptEdges
+		}
+	}
+
+	// Private topics (rev3 task 3, tightened by the task 8a follow-up):
+	// C2's broker frame draws every topic it carries as a conversation
+	// between services — a topic whose every publisher AND every consumer
+	// (PUBLISHES_TOPIC/CONSUMES_TOPIC sources) belong to the one same
+	// service is not a conversation, it is that service talking to itself
+	// (arena-api's own battle-queue). That reading requires BOTH at least
+	// one publisher and at least one consumer to be in the graph at all —
+	// federation exposed the gap: orders' order-created has a publisher
+	// (orders-api) and NO consumer in this store (its consumer lives in
+	// the analytics repo, invisible here), and the old rule folded
+	// "nothing said otherwise" into "must be private" the moment it saw
+	// exactly one service touching the topic. A topic with a publisher and
+	// no known consumer (or the reverse) is an outbound/inbound event, not
+	// a self-conversation — the graph simply hasn't shown the other side,
+	// which is a very different claim from "the other side IS this same
+	// service." Checked over the WHOLE graph (domEdges), not just this
+	// view: privacy is a fact about the graph, not about what happened to
+	// expand here. Hidden
 	// the same way isolated infra is, right above — a VNode stays
 	// (revealable) but render_mode flips. The renderers already skip an
 	// arrow whose endpoint is a hidden VNode, but only inside RenderText/
@@ -2253,11 +2311,19 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				continue
 			}
 			var only *store.NodeRow
-			private := false
+			hasPub, hasSub, consistent := false, false, true
 			for j := range domEdges {
 				e := &domEdges[j]
 				if e.ToNodeID != topicNode.NodeID || (e.EdgeType != "PUBLISHES_TOPIC" && e.EdgeType != "CONSUMES_TOPIC") {
 					continue
+				}
+				if e.EdgeType == "PUBLISHES_TOPIC" {
+					hasPub = true
+				} else {
+					hasSub = true
+				}
+				if !consistent {
+					continue // already know; keep scanning only to finish hasPub/hasSub
 				}
 				svc := owned[e.FromNodeID]
 				if svc == nil {
@@ -2266,17 +2332,22 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 					}
 				}
 				if svc == nil {
-					private = false
-					break
+					consistent = false
+					continue
 				}
 				if only == nil {
-					only, private = svc, true
+					only = svc
 				} else if svc.NodeID != only.NodeID {
-					private = false
-					break
+					consistent = false
 				}
 			}
-			if private && only != nil {
+			// Private means a self-conversation IS the whole conversation:
+			// at least one publisher, at least one consumer, and every one
+			// of them the same service. A publisher with no consumer (or a
+			// consumer with no publisher) never reaches this — it stays
+			// visible as the one-sided event the graph actually shows.
+			private := hasPub && hasSub && consistent && only != nil
+			if private {
 				n.Tier = string(salience.TierDetail)
 				n.RenderMode = string(salience.RenderHidden)
 				n.SalienceReason = "private"
