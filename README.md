@@ -149,6 +149,8 @@ The MCP server runs a web dashboard on localhost. It opens automatically on firs
 - **Diagrams** — C1/C2/C3, lenses, deps/impact/path views built from the graph; every card and arrow carries its evidence
 - **Settings** — scan manifest, instruction packs, edge type config
 
+**Live diagrams.** Every diagram the agent builds is announced to an open dashboard as a card (and kept in the view bar's *Agent* menu); `live.dashboard_open` in the tool result says whether anyone is watching. The agent reads the human's screen with `chronicle_dashboard_state` — the open view, the selected node or arrow — and can mark real elements of its answer with `marks` (`breaks`, `changed`, `focus`, `note`): marks color and caption what the view already draws, they never add to it.
+
 ## Data and privacy
 
 All data stays on your machine. Nothing is sent externally.

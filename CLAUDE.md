@@ -59,6 +59,7 @@ registry/               Type registry + defaults.yaml (public)
 validate/               Key normalization + validation (public)
 internal/cli/           CLI commands (internal — not importable by pro)
 admin/                  Dashboard server + static/ (public — importable by pro)
+live/                   Agent ↔ dashboard channel (live_events, screen state, diagram tail) (public)
 internal/mcp/           MCP server + tools (internal)
 internal/manifest/      Domain manifest parsing (internal)
 ```
@@ -215,6 +216,7 @@ Tests: stale marking, evidence invalidation, re-resolution, contradiction detect
 - Registry: `.depbot/chronicle.types.yaml` (optional, defaults built in)
 - Node key format: `layer:type:domain:qualified_name`
 - Edge key format: `from_node_key->to_node_key:EDGE_TYPE`
+- live_events is ephemeral: not journaled, not carried by journal rebuild, cleared by ResetDB
 
 ## Dashboard dev
 
