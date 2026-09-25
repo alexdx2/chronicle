@@ -2555,6 +2555,19 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	}
 	groupStatsFor(groupsByKey, memberGroup, nodeByID, domEdges, owned, brokerOf, endpointPills, modelPills, retarget, hiddenMembers)
 
+	// rev3 fix F3: `touched` above was built once, before the unowned-
+	// endpoint and private-topic edge-stripping passes that run right
+	// after it — both can remove a service's only qualifying edge. The
+	// module/isolated-infra hiding those passes sit between still wants
+	// the EARLY snapshot (unchanged, above); the empty-service check just
+	// below wants to know what the view ACTUALLY draws now, so recompute
+	// it fresh from the final view.Edges right before that check.
+	touched = make(map[string]bool)
+	for _, e := range view.Edges {
+		touched[e.From] = true
+		touched[e.To] = true
+	}
+
 	// Empty services (rev3 task 3): on c2/services, a service that owns
 	// nothing drawable in this view and has no arrow either answers
 	// nothing about "how do the containers talk" — the same question C2's

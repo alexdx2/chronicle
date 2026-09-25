@@ -382,3 +382,76 @@ func TestAddPinEdge_CoveredCallsServiceNoWeight(t *testing.T) {
 		t.Errorf("provenance should still be set on a covered edge: %+v", covered)
 	}
 }
+
+// synthStaleTouchedStore (rev3 fix F3): orphan-caller's only owned member
+// is a MODULE (excluded from the "components" stat by design — it is
+// hierarchy, per-service C3's own frame, not a card) whose only activity is
+// a CALLS_ENDPOINT to an endpoint nobody exposes (unowned — the same shape
+// the task 8a follow-up already hides on c2). Neither the module nor any
+// other member of orphan-caller contributes any OTHER stat, so once the
+// unowned-endpoint pass strips that one edge, the service's Stats should
+// read empty and the service itself should be hidden too.
+func synthStaleTouchedStore(t *testing.T) *store.Store {
+	t.Helper()
+	st := synthStore(t)
+	rev, err := st.CreateRevision("d", "", "stale-touched", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(key, layer, ntype, name, file string) int64 {
+		id, err := st.UpsertNode(store.NodeRow{NodeKey: key, Layer: layer, NodeType: ntype, DomainKey: "d", Name: name,
+			FilePath: file, Status: "active", Confidence: 0.9, Freshness: 1, TrustScore: 0.9, Metadata: "{}", LastSeenRevisionID: rev})
+		if err != nil {
+			t.Fatalf("upsert %s: %v", key, err)
+		}
+		return id
+	}
+	mk("service:service:d:orphan-caller", "service", "service", "orphan-caller", "orphan-caller/package.json")
+	callerID := mk("code:module:d:orphan-caller/src/client", "code", "module", "client", "orphan-caller/src/client.ts")
+	epID := mk("contract:endpoint:d:get:/nobody-exposes-this", "contract", "endpoint", "GET /nobody-exposes-this", "")
+	if _, err := st.UpsertEdge(store.EdgeRow{
+		EdgeKey:    "code:module:d:orphan-caller/src/client->contract:endpoint:d:get:/nobody-exposes-this:CALLS_ENDPOINT",
+		FromNodeID: callerID, ToNodeID: epID, EdgeType: "CALLS_ENDPOINT", DerivationKind: "hard", Active: true,
+		Confidence: 0.9, Freshness: 1, TrustScore: 0.9, Metadata: "{}", LastSeenRevisionID: rev,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// TestBuildViewC2_EmptyServiceAfterUnownedEndpointStripped: rev3 fix F3.
+// `touched` (used by the empty-service check) used to be computed once,
+// before the unowned-endpoint and private-topic edge-stripping passes that
+// run right after it. A service whose only qualifying edge gets removed by
+// one of those later passes still read as "touched" off the stale
+// snapshot and survived as an arrowless, statless card instead of being
+// hidden with reason "empty" — a latent reopening of the C2-noise problem
+// task 3 fixed. Exercised on c2 (the endpoint must actually reach
+// view.Nodes to be stripped; "services" bulk-filters endpoints by layer
+// before the unowned pass ever runs, so it can't exercise this ordering
+// bug at all).
+func TestBuildViewC2_EmptyServiceAfterUnownedEndpointStripped(t *testing.T) {
+	st := synthStaleTouchedStore(t)
+	v, err := BuildPreset(st, "c2", "d", "")
+	if err != nil {
+		t.Fatalf("c2: %v", err)
+	}
+	for _, g := range v.Groups {
+		if g.Key == "service:service:d:orphan-caller" {
+			t.Errorf("orphan-caller's only edge was stripped as unowned; it should be hidden empty, not drawn as a group: %+v", g)
+		}
+	}
+	found := false
+	for _, h := range v.Hidden {
+		if h.Type == "service" && h.Reason == "empty" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("hidden summary missing orphan-caller as an empty service: %+v", v.Hidden)
+	}
+	txt := RenderText(v)
+	if strings.Contains(txt, "orphan-caller") {
+		t.Errorf("text should not draw orphan-caller as a card:\n%s", txt)
+	}
+}
