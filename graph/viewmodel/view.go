@@ -1503,9 +1503,19 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				addOut(toNode.Name, "topic", fromNode.Name, "async")
 				addBoundaryEdge(fid, toNode, e, e.EdgeType, false)
 			case "CONSUMES_TOPIC":
-				// Consumption flows from the channel to the consumer.
-				addIn(toNode.Name, "async")
-				addBoundaryEdge(fid, toNode, e, e.EdgeType, true)
+				if flowDirection {
+					// Consumption flows from the channel to the consumer.
+					addIn(toNode.Name, "async")
+					addBoundaryEdge(fid, toNode, e, e.EdgeType, true)
+				} else {
+					// Dependency questions (rev3 task 6b): every arrow
+					// means "depends on" — an in-view consumer of an
+					// outside topic depends on it, an out entry, and the
+					// materialized edge follows the raw consumer -> topic
+					// direction instead of the message-flow reversal.
+					addOut(toNode.Name, "topic", fromNode.Name, "async")
+					addBoundaryEdge(fid, toNode, e, e.EdgeType, false)
+				}
 			}
 			// Other kinds crossing the boundary (INJECTS, USES_MODEL, …) are
 			// intentionally not boundary entries: models show as pills.
@@ -1533,6 +1543,16 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 				if pubSvc := owned[e.FromNodeID]; pubSvc != nil {
 					addIn(pubSvc.Name, "async")
 					addBoundaryEdge(tid, pubSvc, e, e.EdgeType, true)
+				}
+			case "CONSUMES_TOPIC":
+				if !flowDirection {
+					// Dependency questions (rev3 task 6b): an outside
+					// consumer of an in-view topic depends on it — impact's
+					// question ("what depends on X") — an in entry, with
+					// the materialized edge following the raw consumer ->
+					// topic direction (bn -> in-view, incoming=true).
+					addIn(fromNode.Name, "async")
+					addBoundaryEdge(tid, fromNode, e, e.EdgeType, true)
 				}
 			}
 		}
