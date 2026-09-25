@@ -46,15 +46,15 @@ func TestParseScreen_Refuses(t *testing.T) {
 	crumbs := `[` + strings.TrimSuffix(strings.Repeat(`"x",`, 21), ",") + `]`
 	keys := `[` + strings.TrimSuffix(strings.Repeat(`"k",`, 51), ",") + `]`
 	for name, raw := range map[string]string{
-		"bad json":        `{`,
-		"no client":       `{"tab":"graph"}`,
-		"bad client":      `{"client_id":"<script>"}`,
-		"bad kind":        `{"client_id":"a","selected":{"kind":"group","key":"k"}}`,
-		"too many crumbs": `{"client_id":"a","breadcrumbs":` + crumbs + `}`,
-		"too many keys":   `{"client_id":"a","selected":{"kind":"edge","keys":` + keys + `}}`,
-		"long key":        `{"client_id":"a","selected":{"kind":"node","key":"` + strings.Repeat("k", 513) + `"}}`,
-		"bad mark":        `{"client_id":"a","spec":{"marks":{"k":{"kind":"explode"}}}}`,
-		"trailing bytes":  `{"client_id":"a"}TRAILING`,
+		"bad json":          `{`,
+		"no client":         `{"tab":"graph"}`,
+		"bad client":        `{"client_id":"<script>"}`,
+		"bad kind":          `{"client_id":"a","selected":{"kind":"group","key":"k"}}`,
+		"too many crumbs":   `{"client_id":"a","breadcrumbs":` + crumbs + `}`,
+		"too many keys":     `{"client_id":"a","selected":{"kind":"edge","keys":` + keys + `}}`,
+		"long key":          `{"client_id":"a","selected":{"kind":"node","key":"` + strings.Repeat("k", 513) + `"}}`,
+		"bad mark":          `{"client_id":"a","spec":{"marks":{"k":{"kind":"explode"}}}}`,
+		"trailing bytes":    `{"client_id":"a"}TRAILING`,
 		"long key cyrillic": `{"client_id":"a","selected":{"kind":"node","key":"` + strings.Repeat("ж", 513) + `"}}`,
 	} {
 		if _, err := ParseScreen([]byte(raw)); err == nil {

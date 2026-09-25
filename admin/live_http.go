@@ -17,8 +17,8 @@ import (
 
 // LiveQuery is a validated GET /api/live query.
 type LiveQuery struct {
-	Limit    int    // 1..200, default 20
-	After    int64  // meaningful when HasAfter
+	Limit    int   // 1..200, default 20
+	After    int64 // meaningful when HasAfter
 	HasAfter bool
 	Repo     string // repo=<name>; federation readers need it together with after
 }
