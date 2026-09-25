@@ -69,8 +69,6 @@ func toolResultJSON(t *testing.T, res *mcplib.CallToolResult) map[string]any {
 	return out
 }
 
-
-
 func TestQueryDeps_ViewURL(t *testing.T) {
 	g := newLabTestGraph(t)
 	tomKey, _ := seedTomJerry(t, g)
@@ -119,7 +117,6 @@ func TestQueryDeps_ViewURL(t *testing.T) {
 		t.Errorf("decoded spec rejected by BuildView: %v", err)
 	}
 }
-
 
 // An agent cannot open the dashboard: the tool answers with the diagram
 // itself — mermaid and structured text rendered from the SAME View the
@@ -184,6 +181,47 @@ func TestDiagramBuild_Preset_Target(t *testing.T) {
 	out = toolResultJSON(t, res)
 	if mermaid, _ := out["mermaid"].(string); !strings.HasPrefix(mermaid, "flowchart LR") {
 		t.Errorf("path renders left→right: %q", mermaid)
+	}
+}
+
+// TestDiagramBuild_Notes_AlwaysArray (rev3 task 2): "notes" is always a
+// JSON array on the answer — empty when the view has nothing to explain,
+// populated with the honest-empty-answer sentence when it does.
+func TestDiagramBuild_Notes_AlwaysArray(t *testing.T) {
+	g := newLabTestGraph(t)
+	tomKey, _ := seedTomJerry(t, g)
+	h := diagramBuildHandler(g)
+
+	res, err := h(context.Background(), makeRevisionRequest(map[string]any{
+		"title": "Containers", "domain": "test", "preset": "c2",
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	out := toolResultJSON(t, res)
+	notes, ok := out["notes"].([]any)
+	if !ok {
+		t.Fatalf("notes should be a JSON array, got %T: %v", out["notes"], out["notes"])
+	}
+	if len(notes) != 0 {
+		t.Errorf("c2 has nothing to explain, want no notes, got %v", notes)
+	}
+
+	// Nothing depends on tom (the only edge is tom -> jerry) — impact says so.
+	res, err = h(context.Background(), makeRevisionRequest(map[string]any{
+		"title": "Impact", "domain": "test", "preset": "impact", "target": tomKey,
+	}))
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	out = toolResultJSON(t, res)
+	notes, ok = out["notes"].([]any)
+	if !ok {
+		t.Fatalf("notes should be a JSON array, got %T: %v", out["notes"], out["notes"])
+	}
+	want := "Nothing in the graph depends on tom."
+	if len(notes) != 1 || notes[0] != want {
+		t.Errorf("notes = %v, want [%q]", notes, want)
 	}
 }
 

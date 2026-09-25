@@ -36,8 +36,17 @@ type View struct {
 	// Renderers use it for direction honesty: the default title reads
 	// "A ↔ B" instead of "A → B", and RenderText adds a note. Always false
 	// for non-path views.
-	PathBackward bool     `json:"path_backward,omitempty"`
-	Missing      []string `json:"missing,omitempty"`
+	PathBackward bool `json:"path_backward,omitempty"`
+	// Notes are sentences explaining an empty or partial answer (rev3 task
+	// 2): a path with no route, an impact/deps subject with nothing on the
+	// other end, a service's C3 with no components, an API lens call left
+	// unresolved. Decided from the view's own content once it is built, or
+	// from the domain edges a preset structurally excludes (the API lens) —
+	// never a guess. Renderers surface them the same way: RenderText right
+	// after the header, RenderMarkdown before the table, RenderMermaid as
+	// "%% note: …" comments, the dashboard as a line above the canvas.
+	Notes   []string `json:"notes,omitempty"`
+	Missing []string `json:"missing,omitempty"`
 	// Hidden accounts for every node the view carries with
 	// render_mode=hidden, grouped by (layer, type, reason) — nothing leaves
 	// a diagram silently. Reasons are salience Decision.Reason tokens
@@ -490,6 +499,11 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	view := &View{Spec: spec}
 	seeds := make(map[int64]bool)
 	flowTitle := ""
+	// scopedService is the resolved subject of a single-service c3 view
+	// (spec.Scope.Service, tolerant-matched below) — kept for the "owns no
+	// components" note, which needs its display name after the tolerant
+	// match, not spec.Scope.Service's raw (possibly differently-cased) text.
+	var scopedService *store.NodeRow
 	switch {
 	case flowScoped:
 		var flowNode *store.NodeRow
@@ -553,6 +567,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		if svc == nil {
 			return nil, notFoundf("service %q not found", spec.Scope.Service)
 		}
+		scopedService = svc
 		seeds[svc.NodeID] = true
 		for nid, owner := range owned {
 			if owner.NodeID == svc.NodeID {
@@ -1754,6 +1769,109 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 			return bOut[i].Kind < bOut[j].Kind
 		})
 		view.Boundary = &VBoundary{In: bIn, Out: bOut}
+	}
+
+	// ---- h. notes: say so when the answer is empty or partial (rev3 task
+	// 2) — each condition reads the view's own content just built above, or
+	// (the API lens) the raw domain edges a preset structurally excludes
+	// from its own arrows, never a guess about what "should" be there.
+	dispName := func(key string) string {
+		if n := nodeByKey[key]; n != nil {
+			return n.Name
+		}
+		return key
+	}
+	if pathMode {
+		// No Trace means no route was found between the two scope nodes
+		// (shortestPathSets came back empty) — the view still holds the two
+		// seeds (or fewer, if a key did not resolve at all), silently.
+		if len(view.Trace) == 0 {
+			view.Notes = append(view.Notes, fmt.Sprintf("No path between %s and %s in the graph.", dispName(spec.Scope.Nodes[0]), dispName(spec.Scope.Nodes[1])))
+		}
+		if pathBackward {
+			// Folded in from the old RenderText special-case (task 1, rev 2
+			// follow-up) so every note renders through the same mechanism.
+			view.Notes = append(view.Notes, "some arrows on this path point back")
+		}
+	}
+	switch spec.Layout.Preset {
+	case "impact", "deps":
+		// The subject is the view's own scope.nodes[0]; "nothing else in
+		// the view" (no dependent/dependency ever got expanded to) is the
+		// same signal for both, just read in opposite directions.
+		if len(spec.Scope.Nodes) == 1 {
+			if subj := nodeByKey[spec.Scope.Nodes[0]]; subj != nil {
+				hasOther := false
+				for _, n := range view.Nodes {
+					if n.Key != subj.NodeKey {
+						hasOther = true
+						break
+					}
+				}
+				if !hasOther {
+					if spec.Layout.Preset == "impact" {
+						view.Notes = append(view.Notes, fmt.Sprintf("Nothing in the graph depends on %s.", subj.Name))
+					} else {
+						view.Notes = append(view.Notes, fmt.Sprintf("%s depends on nothing in the graph.", subj.Name))
+					}
+				}
+			}
+		}
+	case "c3":
+		// Single-service c3 only (target != ""); the all-services c3 has no
+		// one subject to report on. An empty view here means the service
+		// owns nothing drawable anywhere in the graph, not just nothing
+		// visible at this altitude.
+		if scopedService != nil && len(view.Nodes) == 0 {
+			view.Notes = append(view.Notes, fmt.Sprintf("%s owns no components in the graph.", scopedService.Name))
+		}
+	case "api":
+		// The api lens draws only CALLS_ENDPOINT arrows (filter.edge_kinds);
+		// a CALLS_SERVICE edge between two services the lens DOES draw
+		// (both own visible content here) never becomes an arrow at all —
+		// by construction it can have no "parallel" resolved-endpoint
+		// representation (different edge type, different to-node), so
+		// every one of these is a call the lens leaves unmentioned unless a
+		// note says so. Counted per (caller, callee) service pair from the
+		// raw domain edges, since the collapsed C2-style merge that would
+		// otherwise fold them into an aggregate arrow does not run here.
+		type svcPair struct{ caller, callee string }
+		counts := make(map[svcPair]int)
+		names := make(map[string]string)
+		for i := range domEdges {
+			e := &domEdges[i]
+			if e.EdgeType != "CALLS_SERVICE" {
+				continue
+			}
+			calleeSvc := nodeByID[e.ToNodeID]
+			if calleeSvc == nil || calleeSvc.Layer != "service" || calleeSvc.NodeType != "service" {
+				continue
+			}
+			callerSvc := owned[e.FromNodeID]
+			if callerSvc == nil || callerSvc.NodeID == calleeSvc.NodeID {
+				continue
+			}
+			if groupsByKey[callerSvc.NodeKey] == nil || groupsByKey[calleeSvc.NodeKey] == nil {
+				continue // not a pair this view actually frames
+			}
+			key := svcPair{callerSvc.NodeKey, calleeSvc.NodeKey}
+			counts[key]++
+			names[key.caller] = callerSvc.Name
+			names[key.callee] = calleeSvc.Name
+		}
+		pairs := make([]svcPair, 0, len(counts))
+		for k := range counts {
+			pairs = append(pairs, k)
+		}
+		sort.Slice(pairs, func(i, j int) bool {
+			if pairs[i].caller != pairs[j].caller {
+				return pairs[i].caller < pairs[j].caller
+			}
+			return pairs[i].callee < pairs[j].callee
+		})
+		for _, k := range pairs {
+			view.Notes = append(view.Notes, fmt.Sprintf("%s also calls %s ×%d without a resolved endpoint.", names[k.caller], names[k.callee], counts[k]))
+		}
 	}
 
 	view.PathBackward = pathBackward

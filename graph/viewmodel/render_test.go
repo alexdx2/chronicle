@@ -105,3 +105,59 @@ func TestRenderText_Structure(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderText_Notes (rev3 task 2): each note prints as "note: <text>"
+// right after the header line, in order, before any section.
+func TestRenderText_Notes(t *testing.T) {
+	v := sampleView()
+	v.Notes = []string{"first note", "second note"}
+	txt := RenderText(v)
+	lines := strings.Split(txt, "\n")
+	if len(lines) < 3 || lines[0] != "# C2 — shop" || lines[1] != "note: first note" || lines[2] != "note: second note" {
+		t.Fatalf("notes should follow the header line, one per line:\n%s", txt)
+	}
+	if strings.Index(txt, "note: first note") > strings.Index(txt, "## kafka") {
+		t.Errorf("notes must render before sections:\n%s", txt)
+	}
+}
+
+// TestRenderText_NoNotes: a view with nothing to explain prints no note
+// lines at all (no empty "note: " noise).
+func TestRenderText_NoNotes(t *testing.T) {
+	txt := RenderText(sampleView())
+	if strings.Contains(txt, "note:") {
+		t.Errorf("sampleView has no notes, but text carries one:\n%s", txt)
+	}
+}
+
+// TestRenderMermaid_Notes (rev3 task 2): notes render as "%% note: …"
+// comments right after the title comment, and a literal newline inside a
+// note (an unlikely but possible node-derived name) collapses to a space
+// so the comment stays on one line and the mermaid syntax does not break.
+func TestRenderMermaid_Notes(t *testing.T) {
+	v := sampleView()
+	v.Notes = []string{"first note", "line one\nline two"}
+	m := RenderMermaid(v)
+	if !strings.Contains(m, "%% C2 — shop\n%% note: first note\n%% note: line one line two\n") {
+		t.Fatalf("notes should follow the title comment, one comment line each, newlines sanitized:\n%s", m)
+	}
+	if strings.Contains(m, "line one\nline two") {
+		t.Errorf("a raw newline must not leak into a mermaid comment:\n%s", m)
+	}
+}
+
+// TestRenderMarkdown_NotesBeforeTable (rev3 task 2): a list (Table) view
+// prints its notes before the table, not interleaved with rows.
+func TestRenderMarkdown_NotesBeforeTable(t *testing.T) {
+	v := &View{
+		Title: "Flows — d",
+		Table: &VTable{Columns: []string{"service", "endpoint"}, Rows: [][]string{{"shop-api", "GET /orders"}}, Keys: []string{"flow:use_case:d:x"}},
+		Notes: []string{"an explanatory note"},
+	}
+	md := RenderMarkdown(v)
+	noteIdx := strings.Index(md, "note: an explanatory note")
+	tableIdx := strings.Index(md, "| service | endpoint |")
+	if noteIdx < 0 || tableIdx < 0 || noteIdx > tableIdx {
+		t.Fatalf("note should render before the table:\n%s", md)
+	}
+}

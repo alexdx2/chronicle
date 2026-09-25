@@ -2592,7 +2592,7 @@ func commandHandler(g *graph.Graph) server.ToolHandlerFunc {
 
 func diagramBuildTool() mcp.Tool {
 	return mcp.NewTool("chronicle_diagram_build",
-		mcp.WithDescription(`Build a diagram that answers one architecture question, from the graph, through the view engine — and get it back in three forms at once: "mermaid" (paste into an answer, a PR, a wiki page), "text" (structured, evidence per element) and "url" (the same view live in the dashboard). Every element carries provenance (confidence, evidence count, file:line); hidden nodes are listed with reasons; arrows fold graph edges ("HTTP ×3").
+		mcp.WithDescription(`Build a diagram that answers one architecture question, from the graph, through the view engine — and get it back in three forms at once: "mermaid" (paste into an answer, a PR, a wiki page), "text" (structured, evidence per element) and "url" (the same view live in the dashboard). Every element carries provenance (confidence, evidence count, file:line); hidden nodes are listed with reasons; arrows fold graph edges ("HTTP ×3"). An empty or partial answer (no path, nothing depends on target, a service with no components) says so in "notes" — always an array, empty when there is nothing to explain.
 
 PRIMARY: preset (+ target). Presets are the questions:
 - c1      — who is outside and how do we touch them (system box, external systems, declared infra)
@@ -2745,6 +2745,10 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if unplaced == nil {
 			unplaced = []string{}
 		}
+		notes := view.Notes
+		if notes == nil {
+			notes = []string{}
+		}
 		out := map[string]any{
 			"title":       title,
 			"level":       level,
@@ -2756,6 +2760,7 @@ func diagramBuildHandler(g *graph.Graph) server.ToolHandlerFunc {
 			"edge_count":  len(view.Edges),
 			"missing":     missing,
 			"unplaced":    unplaced,
+			"notes":       notes,
 			"marks":       placed,
 		}
 		if len(view.Hidden) > 0 {

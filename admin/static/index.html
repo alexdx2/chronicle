@@ -1058,6 +1058,14 @@ button,input,select,textarea{font-family:inherit}
       </div>
     </template>
 
+    <!-- View notes (rev3 task 2): the engine explaining an empty or
+         partial answer — one small muted line above the canvas, hidden
+         when there are none. Text only, never HTML. -->
+    <template x-if="viewActive && viewNotes().length > 0">
+      <div data-testid="view-notes" style="padding:4px 12px;font-size:10px;color:var(--text-muted);background:var(--card);border-bottom:1px solid var(--border)"
+           x-text="viewNotes().join(' · ')"></div>
+    </template>
+
     <!-- Main area: canvas + side panel + filter sidebar -->
     <div style="display:flex;flex:1;overflow:hidden">
 
@@ -4470,6 +4478,15 @@ function dashboard() {
     viewMissing() {
       const top = this.viewStack[this.viewStack.length - 1];
       return (top && top.view.missing) || [];
+    },
+
+    // rev3 task 2: sentences explaining an empty or partial answer (no
+    // path, nothing depends on target, a service with no components, an
+    // unresolved API call) — always an array, empty when there is nothing
+    // to explain.
+    viewNotes() {
+      const top = this.viewStack[this.viewStack.length - 1];
+      return (top && top.view.notes) || [];
     },
 
     // ── Filter chips: mutate the top spec's filter, replace top of stack ──

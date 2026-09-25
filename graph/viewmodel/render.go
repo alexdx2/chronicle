@@ -176,6 +176,14 @@ func mermaidText(s string) string {
 	return strings.NewReplacer(`"`, "#quot;", "<", "#lt;", ">", "#gt;", "|", "#124;", "\r", " ", "\n", " ").Replace(s)
 }
 
+// sanitizeNoteLine keeps a View.Notes sentence on one line inside a mermaid
+// "%% " comment: a literal newline would start a new, unprefixed line and
+// break the diagram's syntax. Unlike mermaidText this is not a quoted
+// label, so quotes/brackets stay human-readable — only line breaks matter.
+func sanitizeNoteLine(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+}
+
 // slug turns a display name into a mermaid-safe identifier.
 func slug(name string) string {
 	var b strings.Builder
@@ -295,6 +303,9 @@ func RenderMermaid(v *View) string {
 	fmt.Fprintf(&b, "flowchart %s\n", mermaidDirection(v))
 	if v.Title != "" {
 		fmt.Fprintf(&b, "%%%% %s\n", mermaidEscape(v.Title))
+	}
+	for _, note := range v.Notes {
+		fmt.Fprintf(&b, "%%%% note: %s\n", sanitizeNoteLine(note))
 	}
 
 	members := make(map[string][]VNode)
@@ -523,6 +534,12 @@ func RenderMarkdown(v *View) string {
 	if v.Title != "" {
 		fmt.Fprintf(&b, "# %s\n\n", v.Title)
 	}
+	for _, note := range v.Notes {
+		fmt.Fprintf(&b, "note: %s\n", note)
+	}
+	if len(v.Notes) > 0 {
+		b.WriteString("\n")
+	}
 	fmt.Fprintf(&b, "| %s |\n", strings.Join(v.Table.Columns, " | "))
 	fmt.Fprintf(&b, "|%s\n", strings.Repeat(" --- |", len(v.Table.Columns)))
 	for i, r := range v.Table.Rows {
@@ -573,11 +590,11 @@ func RenderText(v *View) string {
 		title = "View"
 	}
 	fmt.Fprintf(&b, "# %s\n", title)
-	if v.PathBackward {
-		// Direction honesty (task 1, rev 2 follow-up): the title already
-		// switched to "A ↔ B"; say why right under it, before the reader
-		// reads the arrows as one clean A → B story.
-		b.WriteString("note: some arrows on this path point back\n")
+	// Notes (rev3 task 2) explain an empty or partial answer — right under
+	// the header, before the reader reaches the sections (or the table) and
+	// draws a conclusion the view itself does not back.
+	for _, note := range v.Notes {
+		fmt.Fprintf(&b, "note: %s\n", note)
 	}
 	level := v.Spec.Layout.Preset
 	if level == "" {

@@ -128,6 +128,14 @@ func TestBuildViewPathNoPath(t *testing.T) {
 	if len(v.Edges) != 0 {
 		t.Errorf("edges = %v, want none", v.Edges)
 	}
+	// rev3 task 2: a path view with no route says so, by display name.
+	want := "No path between alpha and omega in the graph."
+	if len(v.Notes) != 1 || v.Notes[0] != want {
+		t.Errorf("notes = %v, want [%q]", v.Notes, want)
+	}
+	if !strings.Contains(RenderText(v), "note: "+want) {
+		t.Errorf("RenderText should carry the note:\n%s", RenderText(v))
+	}
 }
 
 // TestBuildViewPathRequiresTwoNodes: mode "path" with the wrong scope shape
