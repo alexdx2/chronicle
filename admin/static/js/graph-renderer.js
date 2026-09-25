@@ -1,6 +1,8 @@
 // graph-renderer.js — Single D3/Dagre render pipeline.
 // Stateless: render what you're given. No filtering, no state management, no preset awareness.
 
+import { MARK_COLORS, strongestMark, markLine, markDetail } from './live-client.js';
+
 const LAYOUT = {
   rankDir: 'TB',
   rankSep: 60,
@@ -284,6 +286,15 @@ export class GraphRenderer {
           .attr('width', gNode.width).attr('height', gNode.height);
         if (frameColor) rect.attr('stroke', frameColor);
         if (meta.inferred) rect.attr('stroke-dasharray', '6,3');
+        const frameMark = strongestMark(meta.marks);
+        if (frameMark) {
+          rect.style('stroke', MARK_COLORS[frameMark]).style('stroke-width', '3px');
+          gg.append('text').attr('class', 'domain-mark')
+            .attr('text-anchor', 'end')
+            .attr('x', gNode.x + gNode.width / 2 - 10).attr('y', gNode.y - gNode.height / 2 + 14)
+            .attr('font-size', 9).attr('font-weight', 600).attr('fill', MARK_COLORS[frameMark])
+            .text(markLine(meta.marks, gk));
+        }
         const label = gg.append('text')
           .attr('class', 'domain-label')
           .attr('x', gNode.x - gNode.width / 2 + 10)
@@ -347,6 +358,9 @@ export class GraphRenderer {
         return cat ? cat.color : '#666';
       })
       .attr('stroke-width', 1.5)
+      // Agent marks win over the category color (inline style beats CSS).
+      .style('stroke', e => { const k = strongestMark(e._marks); return k ? MARK_COLORS[k] : null; })
+      .style('stroke-width', e => strongestMark(e._marks) ? '3px' : null)
       .attr('stroke-dasharray', edgeDash)
       .attr('fill', 'none')
       .attr('marker-end', 'url(#arrowhead)')
@@ -358,9 +372,9 @@ export class GraphRenderer {
       d3.select(event.currentTarget).select('.edge-path').attr('stroke-width', 3);
     });
     edgeG.on('mousemove', (event) => self._moveTooltip(event));
-    edgeG.on('mouseleave', (event) => {
+    edgeG.on('mouseleave', (event, e) => {
       self._hideTooltip();
-      d3.select(event.currentTarget).select('.edge-path').attr('stroke-width', 1.5);
+      d3.select(event.currentTarget).select('.edge-path').attr('stroke-width', strongestMark(e._marks) ? 3 : 1.5);
     });
     edgeG.on('click', (event, e) => {
       if (!callbacks.onEdgeClick) return;
@@ -454,7 +468,9 @@ export class GraphRenderer {
       // Primary salience gets a heavier border; collapsed/badge nodes get a
       // dashed border to read as "folded / secondary form".
       .attr('stroke-width', d => (marks.manual && marks.manual.has(d.id)) ? 2.5 : (d._tier === 'primary' ? 2 : 1.2))
-      .attr('stroke-dasharray', d => (d.status === 'stale' || d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null);
+      .attr('stroke-dasharray', d => (d.status === 'stale' || d._renderMode === 'collapsed_group' || d._renderMode === 'badge') ? '4,2' : null)
+      .style('stroke', d => { const k = strongestMark(d._marks); return k ? MARK_COLORS[k] : null; })
+      .style('stroke-width', d => strongestMark(d._marks) ? '3px' : null);
 
     // Repo tag (federation) in the card's top-right corner: "@analytics".
     nodeG.filter(d => !!d._repo).append('text')
@@ -494,6 +510,15 @@ export class GraphRenderer {
       .attr('fill', 'var(--text-muted, #8a7355)')
       .attr('font-size', 8).attr('opacity', 0.9)
       .text(d => clip(d._subtitle2, 28));
+
+    // Agent marks: a caption under the card in the mark's color; the
+    // tooltip carries every mark in full.
+    nodeG.filter(d => (d._marks || []).length > 0).append('text')
+      .attr('class', 'node-mark')
+      .attr('text-anchor', 'middle').attr('y', nh / 2 + 11)
+      .attr('font-size', 8.5).attr('font-weight', 600)
+      .attr('fill', d => MARK_COLORS[strongestMark(d._marks)])
+      .text(d => clip(markLine(d._marks, d.node_key), 34));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
     // bottom-right corner; click = callbacks.onDrill (same as dblclick).
@@ -663,6 +688,21 @@ export class GraphRenderer {
     return el;
   }
 
+  // Mark lines for a tooltip, built with textContent (agent text is never markup).
+  _markLines(el, marks, ownKey) {
+    if (!(marks || []).length) return;
+    const box = document.createElement('div');
+    marks.forEach(m => {
+      const line = document.createElement('div');
+      line.className = 'nht-type';
+      line.style.color = MARK_COLORS[m.kind] || '';
+      line.style.opacity = '1';
+      line.textContent = markDetail(m, ownKey);
+      box.appendChild(line);
+    });
+    el.insertBefore(box, el.querySelector('.nht-hint'));
+  }
+
   _showTooltip(event, d) {
     const el = this._tooltipEl();
     const esc = t => String(t || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -676,6 +716,7 @@ export class GraphRenderer {
       (d._boundary ? '<div class="nht-type">outside this scope</div>' : '') +
       (typeof d.confidence === 'number' && !d._vgroup ? nodeSignalLine(d, esc) : '') +
       '<div class="nht-hint">click — select · double-click — drill</div>';
+    this._markLines(el, d._marks, d.node_key);
     el.style.display = 'block';
     this._moveTooltip(event);
   }
@@ -693,6 +734,7 @@ export class GraphRenderer {
       '<div class="nht-type">' + esc(cat ? cat.shortLabel : kind) + (e.weight > 1 ? ' · ' + e.weight + ' edges' : '') + '</div>' +
       (prov ? '<div class="nht-type">' + prov + '</div>' : '') +
       '<div class="nht-hint">click — inspect evidence</div>';
+    this._markLines(el, e._marks, null);
     el.style.display = 'block';
     this._moveTooltip(event);
   }

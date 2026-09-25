@@ -223,6 +223,7 @@ button,input,select,textarea{font-family:inherit}
 .view-table tr.row:hover td{background:var(--card-alt,#f6f2ea)}
 .view-table td.mono{font-family:var(--font-mono);font-size:11px}
 .view-table .hint{font-size:10px;color:var(--text-muted);margin-top:14px}
+.view-table-mark{font-size:10px;font-weight:600;margin-top:2px}
 .agent-cards{position:fixed;top:72px;right:16px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:340px}
 .agent-card{background:var(--card,#fff);border:1px solid var(--border,#e4dccf);border-left:3px solid var(--primary);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);padding:10px 12px;font-size:12px;color:var(--text)}
 .agent-card-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-right:6px}
@@ -3813,7 +3814,7 @@ function dashboard() {
       // A list view (the flows lens): rows grouped by service, a row drills
       // into its flow's composition. No picture — the answer is the list.
       if (adapted.table) {
-        this.renderViewTable(top, adapted);
+        await this.renderViewTable(top, adapted);
         return;
       }
       // Empty view: explain WHY instead of a silently blank canvas. The most
@@ -3904,8 +3905,8 @@ function dashboard() {
         salience_hidden_count: this._salienceHiddenCount || 0,
         hidden_summary: this._hiddenSummary || [],
         rank_dir: adapted.rankDir || 'TB',
-        nodes: adapted.nodes.map(n => ({ key: n.node_key, name: n.name, type: n.node_type, layer: n.layer, group: n._group || null, boundary: !!n._isRef, detail: n._subtitle || '', render_mode: n._renderMode || '', tier: n._tier || '' })),
-        edges: edges.map(e => ({ from: e.from_node_key || e.from_node_id, to: e.to_node_key || e.to_node_id, kind: e._kind || e.edge_type, weight: e._weight || 1, label: e._label || '' })),
+        nodes: adapted.nodes.map(n => ({ key: n.node_key, name: n.name, type: n.node_type, layer: n.layer, group: n._group || null, boundary: !!n._isRef, detail: n._subtitle || '', render_mode: n._renderMode || '', tier: n._tier || '', marks: (n._marks || []).map(m => m.kind) })),
+        edges: edges.map(e => ({ from: e.from_node_key || e.from_node_id, to: e.to_node_key || e.to_node_id, kind: e._kind || e.edge_type, weight: e._weight || 1, label: e._label || '', marks: (e._marks || []).map(m => m.kind) })),
         groups: (adapted.groups && adapted.groups.field) ? [...new Set(adapted.nodes.map(n => n._group).filter(Boolean))] : [],
         // Collapsed VGroups rendered as cards (C2 services, C1 system box,
         // pinned-service spotlight carve-outs) with their stats.
@@ -4027,7 +4028,7 @@ function dashboard() {
 
     // Rows of a list view (View.table), grouped by the first column: the
     // flows lens reads "arena-api" then its endpoints → handlers → flows.
-    renderViewTable(top, adapted) {
+    async renderViewTable(top, adapted) {
       const container = document.getElementById('graph-canvas');
       if (!container) return;
       const esc = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -4050,7 +4051,7 @@ function dashboard() {
           last = r[0];
           html += '<h2>' + esc(r[0]) + '</h2><table><thead><tr>' + cols.slice(1).map(c => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>';
         }
-        html += '<tr class="row" data-key="' + esc(keys[i] || '') + '" data-testid="view-table-row">' +
+        html += '<tr class="row" data-key="' + esc(keys[i] || '') + '" data-title="' + esc(r[r.length - 1]) + '" data-testid="view-table-row">' +
           r.slice(1).map((c, j) => '<td class="' + (j === 0 ? 'mono' : '') + '">' + esc(c) + '</td>').join('') + '</tr>';
       });
       html += '</tbody></table>';
@@ -4062,8 +4063,22 @@ function dashboard() {
           const key = el.getAttribute('data-key');
           if (!key) return;
           self.selectedNode = null; self.nodeEvidence = null; self.viewLevel = '';
-          self.pushViewSpec(ViewAdapter.specFlow(self.viewDomain, key), { title: el.querySelector('td:last-child').textContent, pristine: true });
+          self.pushViewSpec(ViewAdapter.specFlow(self.viewDomain, key), { title: el.getAttribute('data-title'), pristine: true });
         });
+      });
+      const { MARK_COLORS, strongestMark } = await import('/js/live-client.js');
+      const marksByKey = {};
+      ((top.view && top.view.nodes) || []).forEach(n => { if ((n.marks || []).length) marksByKey[n.key] = n.marks; });
+      container.querySelectorAll('tr.row').forEach(el => {
+        const ms = marksByKey[el.getAttribute('data-key')];
+        if (!ms) return;
+        const color = MARK_COLORS[strongestMark(ms)];
+        el.style.boxShadow = 'inset 3px 0 0 ' + color;
+        const note = document.createElement('div');
+        note.className = 'view-table-mark';
+        note.style.color = color;
+        note.textContent = ms.map(m => '[' + m.kind + ']' + (m.note ? ' ' + m.note : '')).join('; ');
+        el.lastElementChild.appendChild(note);
       });
       window.__chronicleViewState = {
         mode: 'view',

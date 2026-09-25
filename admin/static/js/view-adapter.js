@@ -217,6 +217,7 @@ function adaptView(view, baseLookup) {
       key: g.key, label: g.name, kind: g.kind || '',
       layer: String(g.key).includes(':') ? String(g.key).split(':')[0] : 'service',
       inferred: !!g.inferred, note: g.note || '', stats: g.stats || {},
+      marks: g.marks || [],
     };
   });
 
@@ -254,6 +255,7 @@ function adaptView(view, baseLookup) {
       _subtitle: (g.note && !g.inferred ? g.note + ' · ' : '') + statsLine(stats, 2, true),
       _subtitle2: statParts(stats, true).slice(2, 4).join(' · '),
       _statsFull: statsLine(stats),
+      _marks: g.marks || [],
       // The C1 system box gets an explicit "→ drill" affordance (renderer
       // draws it; click = enter C2, same as dblclick).
       _drill: isDomainBox,
@@ -279,6 +281,7 @@ function adaptView(view, baseLookup) {
       _subtitle: n.detail || cardSubtitle(n).first,
       _subtitle2: n.detail ? '' : cardSubtitle(n).second,
       _pillsFull: pillsLabel(n.endpoints || [], 4),
+      _marks: n.marks || [],
       // Materialized boundary targets (C3): normal layer styling, dimmed
       // via the renderer's existing ref pattern (_isRef → opacity 0.4).
       _isRef: !!n.boundary,
@@ -343,6 +346,7 @@ function adaptView(view, baseLookup) {
       _label: e.label || '',
       _fromName: nameOf[e.from] || e.from,
       _toName: nameOf[e.to] || e.to,
+      _marks: e.marks || [],
     };
   });
 
