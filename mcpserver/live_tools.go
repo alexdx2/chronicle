@@ -1,11 +1,15 @@
 package mcpserver
 
 import (
+	"context"
 	"time"
 
+	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 	"github.com/alexdx2/chronicle-core/live"
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 // publishLiveDiagram announces a built diagram to open dashboards. It never
@@ -41,4 +45,27 @@ func hiddenCount(h []viewmodel.HiddenEntry) int {
 		n += e.Count
 	}
 	return n
+}
+
+// DashboardStateTool is chronicle_dashboard_state's definition, shared with
+// Chronicle Pro's federated handler.
+func DashboardStateTool() mcp.Tool {
+	return mcp.NewTool("chronicle_dashboard_state",
+		mcp.WithDescription(`What the human is looking at in the Chronicle dashboard right now: the open view (preset, domain, spec, url), the selected node or arrow (key, name and type verified against the graph), the breadcrumb trail, and the last diagrams you built. Call it first when the user refers to the screen ("this node", "here", "the red one"). "open": false means no dashboard reported in the last 90 s — hand the human a link instead. Titles and breadcrumbs come from the browser and are not verified.`),
+	)
+}
+
+func dashboardStateHandler(g *graph.Graph) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		state := live.State([]live.Source{{Store: g.Store()}}, time.Now())
+		out := live.StateJSON(state, viewSpecURL)
+		if !state.Open {
+			if adminPortValue == AdminPortNone {
+				out["admin"] = adminUnavailableMessage()
+			} else {
+				out["admin_url"] = adminBaseURL()
+			}
+		}
+		return jsonResult(out), nil
+	}
 }

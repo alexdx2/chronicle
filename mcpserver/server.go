@@ -2609,7 +2609,7 @@ PRIMARY: preset (+ target). Presets are the questions:
 Alternative: view_spec — a full ViewSpec {"scope":{"domain","service"|"nodes"|"flow"},"expand":{"direction","depth","edges","mode":"neighbors|path"},"filter":{"layers","edge_kinds","exclude_types","name","min_confidence"},"group":{"by":"service|module|layer|domain|none"},"collapse":bool,"layout":{"preset"}}.
 Or node_keys — a custom selection of real nodes (edges discovered). Everything drawn comes from the graph; there is no hand-authored diagram.
 
-The diagram is also announced to the human's open dashboard as a card they can open; "live.dashboard_open" says whether a dashboard reported in the last 90 s — when false, hand the human the "url". Mark what matters with "marks": the named elements are coloured and captioned in the dashboard, the mermaid and the text.`),
+The diagram is also announced to the human's open dashboard as a card they can open; "live.dashboard_open" says whether a dashboard reported in the last 90 s — when false, hand the human the "url". Mark what matters with "marks": the named elements are colored and captioned in the dashboard, the mermaid and the text.`),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Diagram title")),
 		mcp.WithString("preset", mcp.Description("Named question: c1|c2|c3|deps|impact|path|flow|data|api|services|flows")),
 		mcp.WithString("target", mcp.Description("Subject for c3 (service key or name), deps/impact/flow (node key), path (\"A,B\")")),

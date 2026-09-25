@@ -208,6 +208,13 @@ hid and why. You choose the QUESTION (preset) and the SUBJECT (target).
    ("open {url} for the live version"). Use "text" when the reader wants evidence per
    element, or when you need to reason about the diagram. Mention "hidden" if it is
    non-empty ("2 DTOs and 1 cache are hidden: …").
+5. Mark what matters in the answer: marks={"<key>": {"kind": "breaks|changed|focus|note",
+   "note": "…"}} colors and captions the elements you name (impact: the subject "changed",
+   the dependents "breaks"). Marks never add elements — "unplaced" lists keys this view does
+   not draw, "missing" keys the graph lacks.
+6. The diagram also appears in the human's open dashboard as a card ("live.dashboard_open").
+   When the user says "this", "here" or points at something on screen, call
+   chronicle_dashboard_state to see the open view and the selected node or arrow.
 
 ## Presets — the questions
 | User asks | preset | target |
@@ -226,7 +233,7 @@ hid and why. You choose the QUESTION (preset) and the SUBJECT (target).
 Examples:
   chronicle_diagram_build(title: "Containers", preset: "c2")
   chronicle_diagram_build(title: "Inside arena-api", preset: "c3", target: "arena-api")
-  chronicle_diagram_build(title: "Impact of Score", preset: "impact", target: "data:model:tom-and-jerry:score")
+  chronicle_diagram_build(title: "Impact of Score", preset: "impact", target: "data:model:tom-and-jerry:score", marks: "{\"data:model:tom-and-jerry:score\":{\"kind\":\"changed\"}}")
   chronicle_diagram_build(title: "Attack → scoreboard", preset: "path", target: "contract:endpoint:tom-and-jerry:post:/arena/attack,service:service:tom-and-jerry:scoreboardapi")
 
 ## Custom selection

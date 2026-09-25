@@ -65,6 +65,7 @@ func Tools(g *graph.Graph) []server.ServerTool {
 		{Tool: mcpIdentityTool(), Handler: mcpIdentityHandler()},
 		{Tool: commandTool(), Handler: commandHandler(g)},
 		{Tool: diagramBuildTool(), Handler: diagramBuildHandler(g)},
+		{Tool: DashboardStateTool(), Handler: dashboardStateHandler(g)},
 		{Tool: salienceExplainTool(), Handler: salienceExplainHandler(g)},
 		{Tool: domainListTool(), Handler: domainListHandler(g)},
 		{Tool: resolveContextTool(), Handler: resolveContextHandler(g)},

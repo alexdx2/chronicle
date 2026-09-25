@@ -158,7 +158,7 @@ func TestServerRegistrationParity(t *testing.T) {
 	if len(missing) > 0 {
 		t.Fatalf("tool registration drift:\n  %s", strings.Join(missing, "\n  "))
 	}
-	for _, required := range []string{"chronicle_node_search", "chronicle_subgraph"} {
+	for _, required := range []string{"chronicle_node_search", "chronicle_subgraph", "chronicle_diagram_build", "chronicle_dashboard_state"} {
 		if !plain[required] {
 			t.Errorf("missing tool %s", required)
 		}

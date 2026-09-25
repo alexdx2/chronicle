@@ -22,7 +22,9 @@ const serverInstructions = `Chronicle is an evidence-backed knowledge graph of t
 
 START HERE: call chronicle_command(command="help") to list workflows, then chronicle_command(command="<name>") and follow the returned instructions exactly. Do NOT call scan-pipeline tools (chronicle_scan_*, chronicle_import_*, chronicle_commit_scan_outbox, chronicle_resolve_extractions, chronicle_revision_create) outside those instructions — calling them cold corrupts scan state.
 
-QUERY TOOLS (safe to call directly, anytime): chronicle_node_search, chronicle_query_deps, chronicle_query_reverse_deps, chronicle_impact, chronicle_query_path, chronicle_subgraph, chronicle_insights, chronicle_query_stats, chronicle_admin_url.
+QUERY TOOLS (safe to call directly, anytime): chronicle_node_search, chronicle_query_deps, chronicle_query_reverse_deps, chronicle_impact, chronicle_query_path, chronicle_subgraph, chronicle_insights, chronicle_query_stats, chronicle_admin_url, chronicle_dashboard_state.
+
+If the user refers to what they see in the dashboard ("this node", "here", "the red one"), call chronicle_dashboard_state first.
 
 CORE PRINCIPLE: The graph represents real architecture extracted from code.
 If something is wrong in the graph — fix the graph (import correct nodes/edges), not just the visualization.
