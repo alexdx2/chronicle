@@ -224,7 +224,7 @@ button,input,select,textarea{font-family:inherit}
 .view-table td.mono{font-family:var(--font-mono);font-size:11px}
 .view-table .hint{font-size:10px;color:var(--text-muted);margin-top:14px}
 .view-table-mark{font-size:10px;font-weight:600;margin-top:2px}
-.agent-cards{position:fixed;top:72px;right:16px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:340px}
+.agent-cards{position:fixed;top:calc(var(--header-h, 72px) + 8px);right:16px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:340px}
 .agent-card{background:var(--card,#fff);border:1px solid var(--border,#e4dccf);border-left:3px solid var(--primary);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.08);padding:10px 12px;font-size:12px;color:var(--text)}
 .agent-card-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-right:6px}
 .agent-card-meta{font-size:10px;color:var(--text-muted);margin-top:4px}
@@ -354,7 +354,7 @@ button,input,select,textarea{font-family:inherit}
 }
 </style>
 </head>
-<body x-data="dashboard()" x-init="init()">
+<body x-data="dashboard()">
 
 <!-- Header -->
 <header class="header">
@@ -463,7 +463,7 @@ button,input,select,textarea{font-family:inherit}
 <!-- SECTION:agent_live:start -->
 <div class="agent-cards" data-testid="agent-cards">
   <template x-for="card in agentCards" :key="card.id">
-    <div class="agent-card" data-testid="agent-card">
+    <div class="agent-card" data-testid="agent-card" @mouseenter="pauseAgentCard(card.id)" @mouseleave="resumeAgentCard(card)">
       <div>
         <span class="agent-card-kicker">Agent built</span>
         <span x-text="card.summary ? card.text : ((card.ev.payload && card.ev.payload.title) || 'diagram')"></span>
@@ -2078,12 +2078,14 @@ function dashboard() {
     // diagrams (menu, newest first), cards on screen, the unseen badge.
     agentDiagrams: [],
     agentCards: [],
+    _agentCardTimers: {},
     agentUnseen: 0,
     agentOpen: false,
     _live: null,
     _agentSeen: null,
     _agentKey: null,
     _wsWasOpen: false,
+    federationApi: false,
     // SLOT:EXTRA_STATE
     scanProgress: null,
     scanEvents: [],
@@ -2107,6 +2109,19 @@ function dashboard() {
       document.addEventListener('touchmove', (e) => onMove(e.touches[0].clientY));
       document.addEventListener('mouseup', () => { this._resizing = false; });
       document.addEventListener('touchend', () => { this._resizing = false; });
+
+      // Header height (its banner can wrap and grow past the assumed 72px) —
+      // keeps .agent-cards positioned below the real header instead of under it.
+      const headerEl = document.querySelector('.header');
+      if (headerEl) {
+        const setHeaderHeight = () => {
+          document.documentElement.style.setProperty('--header-h', headerEl.offsetHeight + 'px');
+        };
+        setHeaderHeight();
+        if (typeof ResizeObserver !== 'undefined') {
+          new ResizeObserver(setHeaderHeight).observe(headerEl);
+        }
+      }
 
       // Path-based routing
       const path = window.location.pathname;
@@ -2283,15 +2298,18 @@ function dashboard() {
 
     async fetchStats() {
       try {
-        // Try federation stats first (pro only — endpoint doesn't exist in core)
-        let r = await fetch('/api/federation/stats');
-        const ct = r.headers.get('content-type') || '';
-        if (r.ok && ct.includes('application/json')) {
-          const data = await r.json();
-          this.stats = { graph: data.aggregated || data, requests: {} };
-          return;
+        // Federation stats only exist on a federation-aware dashboard (Pro) —
+        // core has no such endpoint, so don't probe it there.
+        if (this.federationApi) {
+          const r = await fetch('/api/federation/stats');
+          const ct = r.headers.get('content-type') || '';
+          if (r.ok && ct.includes('application/json')) {
+            const data = await r.json();
+            this.stats = { graph: data.aggregated || data, requests: {} };
+            return;
+          }
         }
-        r = await fetch('/api/stats' + (this.domain ? '?domain=' + this.domain : ''));
+        const r = await fetch('/api/stats' + (this.domain ? '?domain=' + this.domain : ''));
         const data = await r.json();
         if (data.domain && !this.domain) this.domain = data.domain;
         this.stats = data;
@@ -2618,9 +2636,10 @@ function dashboard() {
 
     async fetchGraphData() {
       try {
-        // Try federation endpoint first (pro only — endpoint doesn't exist in core)
-        let r = await fetch('/api/federation/graph');
-        if (!r.ok) r = await fetch('/api/graph' + (this.domain ? '?domain=' + this.domain : ''));
+        // Federation graph only exists on a federation-aware dashboard (Pro) —
+        // core has no such endpoint, so don't probe it there.
+        let r = this.federationApi ? await fetch('/api/federation/graph') : null;
+        if (!r || !r.ok) r = await fetch('/api/graph' + (this.domain ? '?domain=' + this.domain : ''));
         this.graphData = await r.json();
         if (this.graphData.edgeCategories) {
           this.edgeCategories = this.graphData.edgeCategories;
@@ -4726,10 +4745,27 @@ function dashboard() {
 
     pushAgentCard(card) {
       this.agentCards = [card].concat(this.agentCards.filter(c => c.id !== card.id)).slice(0, 3);
-      setTimeout(() => this.dismissAgentCard(card), 8000);
+      this.armAgentCardTimer(card, 12000);
+    },
+
+    // Per-card dismiss timer, keyed by card id, so hovering one card never
+    // touches another's clock.
+    armAgentCardTimer(card, ms) {
+      clearTimeout(this._agentCardTimers[card.id]);
+      this._agentCardTimers[card.id] = setTimeout(() => this.dismissAgentCard(card), ms);
+    },
+
+    pauseAgentCard(id) {
+      clearTimeout(this._agentCardTimers[id]);
+    },
+
+    resumeAgentCard(card) {
+      this.armAgentCardTimer(card, 4000);
     },
 
     dismissAgentCard(card) {
+      clearTimeout(this._agentCardTimers[card.id]);
+      delete this._agentCardTimers[card.id];
       this.agentCards = this.agentCards.filter(c => c.id !== card.id);
     },
 

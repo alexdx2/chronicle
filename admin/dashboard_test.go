@@ -109,3 +109,15 @@ func TestRenderDashboard_AgentLiveSections(t *testing.T) {
 		}
 	}
 }
+
+// Alpine 3 calls the data object's init() itself; an x-init="init()" on the
+// same element would run it a second time (two sockets, two live clients).
+func TestRenderDashboard_InitRunsOnce(t *testing.T) {
+	html := RenderDashboard(DashboardSlots{})
+	if !strings.Contains(html, `<body x-data="dashboard()">`) {
+		t.Fatal(`the body must carry x-data="dashboard()" without x-init`)
+	}
+	if strings.Contains(html, `x-init="init()"`) {
+		t.Fatal(`x-init="init()" makes Alpine 3 run init() twice`)
+	}
+}

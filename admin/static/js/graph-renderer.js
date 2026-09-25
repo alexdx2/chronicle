@@ -523,14 +523,16 @@ export class GraphRenderer {
       .attr('font-size', 8).attr('opacity', 0.9)
       .text(d => clip(d._subtitle2, 28));
 
-    // Agent marks: a caption under the card in the mark's color; the
-    // tooltip carries every mark in full.
+    // Agent marks: a caption under the card in the mark's color; clipped to
+    // the card's own width (not a fixed char count) so left-edge cards don't
+    // get cut by the viewport — the tooltip carries every mark in full.
     nodeG.filter(d => (d._marks || []).length > 0).append('text')
       .attr('class', 'node-mark')
       .attr('text-anchor', 'middle').attr('y', nh / 2 + 11)
       .attr('font-size', 8.5).attr('font-weight', 600)
       .attr('fill', d => MARK_COLORS[strongestMark(d._marks)])
-      .text(d => clip(markLine(d._marks, d.node_key), 34));
+      .text(d => clip(markLine(d._marks, d.node_key), Math.max(8, Math.floor((nw - 10) / 4.8))))
+      .append('title').text(d => markLine(d._marks, d.node_key));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
     // bottom-right corner; click = callbacks.onDrill (same as dblclick).
