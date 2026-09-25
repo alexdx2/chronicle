@@ -2180,6 +2180,155 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		view.Edges = append(view.Edges, infraEdges...)
 	}
 
+	// Foreign domains on C1 (rev3 task 8b): "who is outside and how do we
+	// touch them" is C1's own question, so a foreign neighbour (task 8a)
+	// belongs here too — one collapsed card PER FOREIGN DOMAIN (not per
+	// node, unlike c2/services' dimmed-node-per-neighbour cards), keyed
+	// and labelled by that domain, note "other domain". Stats count
+	// DISTINCT foreign member nodes in container language; an endpoint the
+	// cross-domain twin rule lifts to its service (foreignTwinService)
+	// counts under that service, not as its own "endpoint" — same
+	// "lifted, no separate card" reading task 8a already applies to c2.
+	// Arrows fold PER DOMAIN, not per node: calls (direct CALLS_SERVICE,
+	// twin-lifted or bare CALLS_ENDPOINT alike — C1 answers "do we talk to
+	// B over HTTP", not which of B's services) into one "HTTP ×N" arrow,
+	// exactly the twin-aware weight accounting c2/services already uses;
+	// subscriptions/publications fold per direction into one arrow each,
+	// but "×N" there means DISTINCT TOPICS (the rule's own example),
+	// so this does not just reuse the generic arrowLabel() weight suffix —
+	// Weight is set to that count once, after every crossing edge for that
+	// domain has been seen, not incremented per edge like every other
+	// arrow's Weight in this file.
+	if spec.Layout.Preset == "c1" && groupsByKey[domain] != nil {
+		type c1ForeignAgg struct {
+			services, topics, endpoints map[int64]bool
+			callsVE                     *VEdge
+			subVE, pubVE                *VEdge
+			subTopics, pubTopics        map[string]string // topic node key -> name
+		}
+		aggs := make(map[string]*c1ForeignAgg) // foreign domain key -> agg
+		aggFor := func(dom string) *c1ForeignAgg {
+			a := aggs[dom]
+			if a == nil {
+				a = &c1ForeignAgg{
+					services: map[int64]bool{}, topics: map[int64]bool{}, endpoints: map[int64]bool{},
+					subTopics: map[string]string{}, pubTopics: map[string]string{},
+				}
+				aggs[dom] = a
+			}
+			return a
+		}
+		addCallsEdge := func(a *c1ForeignAgg, dom string, e *store.EdgeRow) {
+			if a.callsVE == nil {
+				a.callsVE = &VEdge{From: domain, To: dom, Kind: "CALLS_SERVICE", Transport: "http"}
+			}
+			if !callsServiceCovered(e) {
+				a.callsVE.Weight++
+			}
+			addEdgeProvenance(a.callsVE, e, edgeSum[e.EdgeID].Count)
+			a.callsVE.CollapsedFrom = append(a.callsVE.CollapsedFrom, e.EdgeKey)
+		}
+		for i := range domEdges {
+			e := &domEdges[i]
+			did := e.FromNodeID
+			fn := foreignByID[e.ToNodeID]
+			if fn == nil || nodeByID[did] == nil || isForeign(did) || !inView[did] {
+				continue // only "this domain calls out" — see the c2/services block's own note on direction
+			}
+			if explicitlyRemoved(fn) || !edgePasses(e) {
+				continue
+			}
+			a := aggFor(fn.DomainKey)
+			switch e.EdgeType {
+			case "CALLS_SERVICE":
+				if fn.Layer != "service" || fn.NodeType != "service" {
+					continue
+				}
+				a.services[fn.NodeID] = true
+				addCallsEdge(a, fn.DomainKey, e)
+			case "CALLS_ENDPOINT":
+				if svcID, ok := foreignTwinService(did, fn.DomainKey); ok {
+					a.services[svcID] = true
+				} else {
+					a.endpoints[fn.NodeID] = true
+				}
+				addCallsEdge(a, fn.DomainKey, e)
+			case "PUBLISHES_TOPIC":
+				a.topics[fn.NodeID] = true
+				if a.pubVE == nil {
+					a.pubVE = &VEdge{From: domain, To: fn.DomainKey, Kind: "PUBLISHES_TOPIC", Transport: edgeTransport(e, nodeByID)}
+				}
+				addEdgeProvenance(a.pubVE, e, edgeSum[e.EdgeID].Count)
+				a.pubVE.CollapsedFrom = append(a.pubVE.CollapsedFrom, e.EdgeKey)
+				a.pubTopics[fn.NodeKey] = fn.Name
+			case "CONSUMES_TOPIC":
+				// Message-flow direction (rule: "subscriptions in
+				// message-flow direction foreign → system"), same
+				// reversal c2 already draws topic -> consumer.
+				a.topics[fn.NodeID] = true
+				if a.subVE == nil {
+					a.subVE = &VEdge{From: fn.DomainKey, To: domain, Kind: "CONSUMES_TOPIC", Transport: edgeTransport(e, nodeByID)}
+				}
+				addEdgeProvenance(a.subVE, e, edgeSum[e.EdgeID].Count)
+				a.subVE.CollapsedFrom = append(a.subVE.CollapsedFrom, e.EdgeKey)
+				a.subTopics[fn.NodeKey] = fn.Name
+			}
+		}
+		if len(aggs) > 0 {
+			// eventsLabel: "events: <topic>" for exactly one distinct
+			// topic (names it — the rule's own example), "events ×N" for
+			// several (N = distinct topics, set directly rather than left
+			// to arrowLabel's generic per-edge Weight suffix).
+			eventsLabel := func(ve *VEdge, topics map[string]string) {
+				names := make([]string, 0, len(topics))
+				for _, name := range topics {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				if len(names) == 1 {
+					ve.Label = "events: " + names[0]
+					ve.Weight = 1
+				} else {
+					ve.Label = "events"
+					ve.Weight = len(names)
+				}
+			}
+			domKeys := make([]string, 0, len(aggs))
+			for k := range aggs {
+				domKeys = append(domKeys, k)
+			}
+			sort.Strings(domKeys)
+			for _, dk := range domKeys {
+				a := aggs[dk]
+				stats := map[string]int{}
+				if n := len(a.services); n > 0 {
+					stats["services"] = n
+				}
+				if n := len(a.endpoints); n > 0 {
+					stats["endpoints"] = n
+				}
+				if n := len(a.topics); n > 0 {
+					stats["topics"] = n
+				}
+				view.Groups = append(view.Groups, VGroup{Key: dk, Name: dk, Kind: "domain", Note: "other domain", Stats: stats})
+				if a.callsVE != nil {
+					view.Edges = append(view.Edges, *a.callsVE)
+				}
+				if a.subVE != nil {
+					eventsLabel(a.subVE, a.subTopics)
+					view.Edges = append(view.Edges, *a.subVE)
+				}
+				if a.pubVE != nil {
+					eventsLabel(a.pubVE, a.pubTopics)
+					view.Edges = append(view.Edges, *a.pubVE)
+				}
+			}
+			// view.Groups was already sorted once during assembly, above —
+			// re-sort now that the foreign-domain cards joined it.
+			sort.Slice(view.Groups, func(i, j int) bool { return view.Groups[i].Key < view.Groups[j].Key })
+		}
+	}
+
 	// Isolated infrastructure: declared infra nobody touches in THIS view
 	// does not answer the view's question (C2 "how do containers talk") —
 	// hidden, revealable, and accounted for below. C1 keeps declared infra

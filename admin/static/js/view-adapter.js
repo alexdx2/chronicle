@@ -236,8 +236,12 @@ function adaptView(view, baseLookup) {
     // The C1 system box is the synthesized domain group: its key is the bare
     // domain (no layer: prefix), so it gets the service-layer styling and a
     // "N services · M endpoints" stats subtitle instead of falling through to
-    // the renderer's default (black) color.
+    // the renderer's default (black) color. A foreign-domain card (rev3 task
+    // 8b: c1 draws the other domains this one talks to) shares that same
+    // kind:'domain' shape and gets the same box styling, but it is NOT this
+    // view's own system box — g.key is the OTHER domain's key, not `domain`.
     const isDomainBox = g.kind === 'domain' || !String(g.key).includes(':');
+    const isOwnSystemBox = isDomainBox && g.key === domain;
     const stats = g.stats || {};
     nodes.push({
       node_id: g.key,
@@ -262,8 +266,10 @@ function adaptView(view, baseLookup) {
       _statsFull: statsLine(stats),
       _marks: g.marks || [],
       // The C1 system box gets an explicit "→ drill" affordance (renderer
-      // draws it; click = enter C2, same as dblclick).
-      _drill: isDomainBox,
+      // draws it; click = enter C2, same as dblclick) — a foreign-domain
+      // card is not this view's own box, so it gets none (this store has
+      // no C2 of the other domain to drill into).
+      _drill: isOwnSystemBox,
     });
   });
 
