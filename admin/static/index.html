@@ -501,7 +501,7 @@ button,input,select,textarea{font-family:inherit}
   </template>
 
   <!-- Scan Progress Panel -->
-  <template x-if="scanProgress && scanProgress.phase !== 'idle'">
+  <template x-if="scanProgress && scanProgress.phase && scanProgress.phase !== 'idle'">
   <div class="card" style="margin-bottom:20px;border-left:3px solid var(--success);padding:16px">
       <h3 style="margin-top:0;display:flex;align-items:center;gap:8px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--text-secondary)">
           <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);animation:pulse 1.5s infinite;"></span>
@@ -2696,6 +2696,8 @@ function dashboard() {
     async fetchScanProgress() {
       try {
         const res = await fetch(`/api/scan-progress?domain=${this.domain}`);
+        // A server without scan progress (Chronicle Pro) answers 404.
+        if (!res.ok) { this.scanProgress = null; return; }
         this.scanProgress = await res.json();
       } catch (e) {
         this.scanProgress = null;

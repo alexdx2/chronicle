@@ -531,7 +531,7 @@ export class GraphRenderer {
       .attr('text-anchor', 'middle').attr('y', nh / 2 + 11)
       .attr('font-size', 8.5).attr('font-weight', 600)
       .attr('fill', d => MARK_COLORS[strongestMark(d._marks)])
-      .text(d => clip(markLine(d._marks, d.node_key), Math.max(8, Math.floor((nw - 10) / 4.8))))
+      .text(d => clip(markLine(d._marks, d.node_key), Math.max(8, Math.floor((nw - 10) / 5.4))))
       .append('title').text(d => markLine(d._marks, d.node_key));
 
     // Drill affordance (e.g. the C1 system box): small "→ drill" link in the
