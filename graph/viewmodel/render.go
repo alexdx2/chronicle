@@ -47,6 +47,17 @@ func arrowLabel(e *VEdge) string {
 	return label
 }
 
+// hiddenReasonText is one hidden-summary line's reason, with names when the
+// entry is small enough to say who (rev3 fix F5): "empty: shared",
+// "private: battle-queue" — a bulk reason with no Names (above the cutoff,
+// see hiddenEntryNames) prints just the reason, unchanged.
+func hiddenReasonText(h HiddenEntry) string {
+	if len(h.Names) == 0 {
+		return h.Reason
+	}
+	return h.Reason + ": " + strings.Join(h.Names, ", ")
+}
+
 // arrowWeak reports whether the arrow's provenance is weak — inferred or
 // synthesized, backed by no evidence, or below the confidence bar — the
 // same rule the dashboard uses to dash a stroke.
@@ -471,7 +482,7 @@ func RenderMermaid(v *View) string {
 	if len(v.Hidden) > 0 {
 		var parts []string
 		for _, h := range v.Hidden {
-			parts = append(parts, fmt.Sprintf("%d %s (%s)", h.Count, h.Type, h.Reason))
+			parts = append(parts, fmt.Sprintf("%d %s (%s)", h.Count, h.Type, hiddenReasonText(h)))
 		}
 		fmt.Fprintf(&b, "%%%% hidden: %s\n", strings.Join(parts, ", "))
 	}
@@ -667,7 +678,7 @@ func RenderText(v *View) string {
 		if len(v.Hidden) > 0 {
 			b.WriteString("\n## Hidden\n")
 			for _, h := range v.Hidden {
-				fmt.Fprintf(&b, "- %d %s — %s\n", h.Count, h.Type, h.Reason)
+				fmt.Fprintf(&b, "- %d %s — %s\n", h.Count, h.Type, hiddenReasonText(h))
 			}
 		}
 		writeUnplaced(&b, v)
@@ -820,7 +831,7 @@ func RenderText(v *View) string {
 	if len(v.Hidden) > 0 {
 		b.WriteString("\n## Hidden\n")
 		for _, h := range v.Hidden {
-			fmt.Fprintf(&b, "- %d %s — %s\n", h.Count, h.Type, h.Reason)
+			fmt.Fprintf(&b, "- %d %s — %s\n", h.Count, h.Type, hiddenReasonText(h))
 		}
 	}
 	writeUnplaced(&b, v)

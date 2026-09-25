@@ -208,4 +208,46 @@ func TestHiddenSummary_ListsFilteredLayers(t *testing.T) {
 	if seen["code/filter:layers"] != 3 || seen["contract/filter:layers"] != 1 || seen["infra/filter:layers"] != 2 {
 		t.Errorf("filtered layers should be accounted for: %v", seen)
 	}
+	// rev3 fix F5: a filteredOut entry with a small count names WHICH
+	// node(s) it hides — the single filtered-out topic (order-created) is
+	// nameable, not just "1 topic — filter:layers".
+	var topic *HiddenEntry
+	for i := range v.Hidden {
+		if v.Hidden[i].Layer == "contract" && v.Hidden[i].Type == "topic" && v.Hidden[i].Reason == "filter:layers" {
+			topic = &v.Hidden[i]
+		}
+	}
+	if topic == nil || topic.Count != 1 || len(topic.Names) != 1 || topic.Names[0] != "order-created" {
+		t.Errorf("filtered-out topic entry should name order-created: %+v", topic)
+	}
+}
+
+// TestHiddenSummary_NamesWhenCountAtMostThree: rev3 fix F5. HiddenEntry.Names
+// is filled with the hidden nodes' display names, sorted, only when the
+// bucket's count is small enough (<=3) that naming them is still a summary,
+// not a wall of text — a bucket above that threshold keeps the count only.
+func TestHiddenSummary_NamesWhenCountAtMostThree(t *testing.T) {
+	nodes := []VNode{
+		{Key: "a", Name: "battle-queue", Type: "topic", Layer: "contract", RenderMode: "hidden", SalienceReason: "private"},
+		{Key: "b", Name: "b1", Type: "dto", Layer: "data", RenderMode: "hidden", SalienceReason: "type:data.dto"},
+		{Key: "c", Name: "b2", Type: "dto", Layer: "data", RenderMode: "hidden", SalienceReason: "type:data.dto"},
+		{Key: "d", Name: "b3", Type: "dto", Layer: "data", RenderMode: "hidden", SalienceReason: "type:data.dto"},
+		{Key: "e", Name: "b4", Type: "dto", Layer: "data", RenderMode: "hidden", SalienceReason: "type:data.dto"},
+	}
+	out := hiddenSummary(nodes)
+	var priv, dtos *HiddenEntry
+	for i := range out {
+		switch out[i].Reason {
+		case "private":
+			priv = &out[i]
+		case "type:data.dto":
+			dtos = &out[i]
+		}
+	}
+	if priv == nil || priv.Count != 1 || len(priv.Names) != 1 || priv.Names[0] != "battle-queue" {
+		t.Errorf("count-1 entry should carry names: %+v", priv)
+	}
+	if dtos == nil || dtos.Count != 4 || len(dtos.Names) != 0 {
+		t.Errorf("count-4 entry (above the cutoff) should keep the count only, no names: %+v", dtos)
+	}
 }

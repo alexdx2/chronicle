@@ -81,6 +81,11 @@ type HiddenEntry struct {
 	Type   string `json:"type"`
 	Reason string `json:"reason"`
 	Count  int    `json:"count"`
+	// Names holds the display names of the hidden nodes (sorted), but only
+	// when Count is small enough (rev3 fix F5, cutoff 3) that naming them
+	// is still a summary, not a wall of text: "1 service — empty: shared",
+	// not "33 field — filter:layers: a, b, c, …".
+	Names []string `json:"names,omitempty"`
 }
 
 // VGroup is a grouping frame (service, module, layer or domain).
@@ -1229,16 +1234,19 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 	}
 	type filteredKey struct{ layer, typ, reason string }
 	filteredCounts := make(map[filteredKey]int)
+	filteredNames := make(map[filteredKey][]string)
 	for id, reason := range filteredIDs {
 		n := nodeByID[id]
 		if groupsByKey[n.NodeKey] != nil {
 			continue // it is a frame, not a hidden node
 		}
-		filteredCounts[filteredKey{n.Layer, n.NodeType, reason}]++
+		k := filteredKey{n.Layer, n.NodeType, reason}
+		filteredCounts[k]++
+		filteredNames[k] = append(filteredNames[k], n.Name)
 	}
 	var filteredOut []HiddenEntry
 	for k, c := range filteredCounts {
-		filteredOut = append(filteredOut, HiddenEntry{Layer: k.layer, Type: k.typ, Reason: k.reason, Count: c})
+		filteredOut = append(filteredOut, HiddenEntry{Layer: k.layer, Type: k.typ, Reason: k.reason, Count: c, Names: hiddenEntryNames(c, filteredNames[k])})
 	}
 	sort.Slice(filteredOut, func(i, j int) bool {
 		if filteredOut[i].Count != filteredOut[j].Count {
@@ -2582,7 +2590,7 @@ func BuildView(st *store.Store, spec ViewSpec) (*View, error) {
 		kept := view.Groups[:0]
 		for _, g := range view.Groups {
 			if g.Kind == "service" && len(g.Stats) == 0 && !touched[g.Key] {
-				emptyServiceHidden = append(emptyServiceHidden, HiddenEntry{Layer: "service", Type: "service", Reason: "empty", Count: 1})
+				emptyServiceHidden = append(emptyServiceHidden, HiddenEntry{Layer: "service", Type: "service", Reason: "empty", Count: 1, Names: []string{g.Name}})
 				continue
 			}
 			kept = append(kept, g)
@@ -2862,11 +2870,25 @@ func filterReason(f *FilterSpec, n *store.NodeRow) string {
 	return "policy"
 }
 
+// hiddenEntryNames returns a HiddenEntry's Names: the given display names,
+// sorted, but only when count is small enough (rev3 fix F5, cutoff 3) that
+// naming them is still a summary, not a wall of text — nil past that
+// point (the count alone is the whole story).
+func hiddenEntryNames(count int, names []string) []string {
+	if count > 3 || len(names) == 0 {
+		return nil
+	}
+	out := append([]string(nil), names...)
+	sort.Strings(out)
+	return out
+}
+
 // hiddenSummary aggregates hidden VNodes by (layer, type, reason), sorted
 // by count desc then key, so the biggest silence is named first.
 func hiddenSummary(nodes []VNode) []HiddenEntry {
 	type k struct{ layer, typ, reason string }
 	acc := make(map[k]int)
+	names := make(map[k][]string)
 	for i := range nodes {
 		n := &nodes[i]
 		if n.RenderMode != string(salience.RenderHidden) {
@@ -2876,14 +2898,16 @@ func hiddenSummary(nodes []VNode) []HiddenEntry {
 		if reason == "" {
 			reason = "policy"
 		}
-		acc[k{n.Layer, n.Type, reason}]++
+		kk := k{n.Layer, n.Type, reason}
+		acc[kk]++
+		names[kk] = append(names[kk], n.Name)
 	}
 	if len(acc) == 0 {
 		return nil
 	}
 	out := make([]HiddenEntry, 0, len(acc))
 	for kk, c := range acc {
-		out = append(out, HiddenEntry{Layer: kk.layer, Type: kk.typ, Reason: kk.reason, Count: c})
+		out = append(out, HiddenEntry{Layer: kk.layer, Type: kk.typ, Reason: kk.reason, Count: c, Names: hiddenEntryNames(c, names[kk])})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {

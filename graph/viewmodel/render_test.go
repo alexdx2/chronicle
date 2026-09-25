@@ -124,6 +124,41 @@ func TestRenderText_HeaderHiddenCountSumsViewHidden(t *testing.T) {
 	}
 }
 
+// TestRenderText_HiddenEntryNames (rev3 fix F5): a small hidden line names
+// what it hides ("- 1 service — empty: shared"); a large one keeps the
+// count only, in both RenderText and RenderMermaid's hidden comment.
+func TestRenderText_HiddenEntryNames(t *testing.T) {
+	v := sampleView()
+	v.Hidden = []HiddenEntry{
+		{Layer: "service", Type: "service", Reason: "empty", Count: 1, Names: []string{"shared"}},
+		{Layer: "contract", Type: "topic", Reason: "private", Count: 1, Names: []string{"battle-queue"}},
+		{Layer: "code", Type: "field", Reason: "filter:layers", Count: 33},
+	}
+	txt := RenderText(v)
+	for _, want := range []string{
+		"- 1 service — empty: shared",
+		"- 1 topic — private: battle-queue",
+		"- 33 field — filter:layers",
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("text missing %q\n---\n%s", want, txt)
+		}
+	}
+	if strings.Contains(txt, "filter:layers: ") {
+		t.Errorf("a count above the cutoff must not print names:\n%s", txt)
+	}
+	m := RenderMermaid(v)
+	for _, want := range []string{
+		"1 service (empty: shared)",
+		"1 topic (private: battle-queue)",
+		"33 field (filter:layers)",
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("mermaid missing %q\n---\n%s", want, m)
+		}
+	}
+}
+
 // TestRenderText_Notes (rev3 task 2): each note prints as "note: <text>"
 // right after the header line, in order, before any section.
 func TestRenderText_Notes(t *testing.T) {

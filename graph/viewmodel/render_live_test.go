@@ -31,15 +31,23 @@ func TestRenderMermaid_LiveC2(t *testing.T) {
 		// The full hidden comment is one line (all reasons, biggest count
 		// first); check each reason's presence rather than the line's
 		// start, since which reason sorts first depends on their counts.
-		`1 cache (isolated)`,
-		`1 topic (private)`,
+		// rev3 fix F5: a count-1 entry names what it hides.
+		`1 cache (isolated: redis)`,
+		`1 topic (private: battle-queue)`,
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("mermaid missing %q", want)
 		}
 	}
-	if strings.Contains(m, "redis") {
-		t.Errorf("isolated redis must not be drawn at C2")
+	// redis is named in the hidden comment (F5) but must not be drawn as
+	// its own node anywhere else.
+	for _, line := range strings.Split(m, "\n") {
+		if strings.HasPrefix(line, "%% hidden:") {
+			continue
+		}
+		if strings.Contains(line, "redis") {
+			t.Errorf("isolated redis must not be drawn at C2: %q", line)
+		}
 	}
 	if strings.Contains(m, "battle_queue") {
 		t.Errorf("arena-api's private battle-queue must not be drawn at C2")

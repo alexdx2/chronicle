@@ -71,6 +71,10 @@ func TestBuildViewC2AndServices_EmptyIsolatedServiceHidden(t *testing.T) {
 		for _, h := range v.Hidden {
 			if h.Type == "service" && h.Reason == "empty" && h.Count == 1 {
 				found = true
+				// rev3 fix F5: a count-1 entry names which service it hides.
+				if len(h.Names) != 1 || h.Names[0] != "empty-svc" {
+					t.Errorf("%s: empty-service entry should name empty-svc: %+v", preset, h)
+				}
 			}
 		}
 		if !found {
@@ -82,8 +86,14 @@ func TestBuildViewC2AndServices_EmptyIsolatedServiceHidden(t *testing.T) {
 			}
 		}
 		txt := RenderText(v)
-		if strings.Contains(txt, "empty-svc") {
-			t.Errorf("%s: text should not print the empty service:\n%s", preset, txt)
+		if strings.Contains(txt, "## empty-svc") {
+			t.Errorf("%s: text should not draw empty-svc as a card:\n%s", preset, txt)
+		}
+		// rev3 fix F5: the Hidden summary now names it ("- 1 service —
+		// empty: empty-svc") — that is the fix, not a regression of the
+		// "not printed" guarantee above (no card, no free node).
+		if !strings.Contains(txt, "empty: empty-svc") {
+			t.Errorf("%s: hidden summary should name empty-svc:\n%s", preset, txt)
 		}
 	}
 }
@@ -169,6 +179,10 @@ func TestBuildViewC2_PrivateTopicHiddenSharedTopicFramed(t *testing.T) {
 	for _, h := range v.Hidden {
 		if h.Type == "topic" && h.Reason == "private" && h.Count == 1 {
 			found = true
+			// rev3 fix F5: a count-1 entry names which topic it hides.
+			if len(h.Names) != 1 || h.Names[0] != "private-topic" {
+				t.Errorf("private-topic entry should name private-topic: %+v", h)
+			}
 		}
 	}
 	if !found {
@@ -188,8 +202,14 @@ func TestBuildViewC2_PrivateTopicHiddenSharedTopicFramed(t *testing.T) {
 		t.Errorf("shared topic's arrow should still be drawn: %+v", v.Edges)
 	}
 	txt := RenderText(v)
-	if strings.Contains(txt, "private-topic") {
-		t.Errorf("private topic must not appear in rendered text:\n%s", txt)
+	if strings.Contains(txt, "## private-topic") || strings.Contains(txt, "- private-topic [") {
+		t.Errorf("private topic must not be drawn as a card or free node:\n%s", txt)
+	}
+	// rev3 fix F5: the Hidden summary now names it ("- 1 topic — private:
+	// private-topic") — that is the fix, not a regression of the "not
+	// drawn" guarantee above.
+	if !strings.Contains(txt, "private: private-topic") {
+		t.Errorf("hidden summary should name private-topic:\n%s", txt)
 	}
 	if !strings.Contains(txt, "shared-topic") {
 		t.Errorf("shared topic should still appear in rendered text:\n%s", txt)
@@ -241,8 +261,15 @@ func TestBuildViewServices_PrivateTopicNoBoundaryEntry(t *testing.T) {
 		t.Errorf("shared-topic (a real cross-service topic) should still cross the boundary normally: boundary=%+v", v.Boundary)
 	}
 	txt := RenderText(v)
-	if strings.Contains(txt, "private-topic") {
-		t.Errorf("private topic must not appear anywhere in services' rendered text:\n%s", txt)
+	if strings.Contains(txt, "## private-topic") || strings.Contains(txt, "- private-topic [") {
+		t.Errorf("private topic must not be drawn as a card or free node:\n%s", txt)
+	}
+	// rev3 fix F5: the Hidden summary names small buckets, so
+	// private-topic legitimately appears there (folded into the bulk
+	// "filter:layers" reason together with shared-topic, both filtered by
+	// services' own layer filter) — that is the fix, not a regression.
+	if !strings.Contains(txt, "filter:layers: private-topic, shared-topic") {
+		t.Errorf("hidden summary should name both filtered topics:\n%s", txt)
 	}
 
 	// Same guarantee restated directly on c2 (already correct today,
@@ -451,7 +478,12 @@ func TestBuildViewC2_EmptyServiceAfterUnownedEndpointStripped(t *testing.T) {
 		t.Errorf("hidden summary missing orphan-caller as an empty service: %+v", v.Hidden)
 	}
 	txt := RenderText(v)
-	if strings.Contains(txt, "orphan-caller") {
+	if strings.Contains(txt, "## orphan-caller") {
 		t.Errorf("text should not draw orphan-caller as a card:\n%s", txt)
+	}
+	// rev3 fix F5: the Hidden summary now names it — that is the fix, not
+	// a regression of the "not drawn as a card" guarantee above.
+	if !strings.Contains(txt, "empty: orphan-caller") {
+		t.Errorf("hidden summary should name orphan-caller:\n%s", txt)
 	}
 }

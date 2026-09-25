@@ -185,8 +185,13 @@ func TestBuildViewC2_UnownedEndpointHidden(t *testing.T) {
 		t.Errorf("the arrow into a hidden endpoint should not ride in View.Edges either: %+v", e)
 	}
 	txt := RenderText(v)
-	if strings.Contains(txt, "GET /orphan") {
-		t.Errorf("text should not print the hidden endpoint:\n%s", txt)
+	if strings.Contains(txt, "- GET /orphan [") {
+		t.Errorf("text should not draw the hidden endpoint as a free node:\n%s", txt)
+	}
+	// rev3 fix F5: the Hidden summary now names it — that is the fix, not
+	// a regression of the "not drawn" guarantee above.
+	if !strings.Contains(txt, "unowned: GET /orphan") {
+		t.Errorf("hidden summary should name GET /orphan:\n%s", txt)
 	}
 }
 
@@ -207,8 +212,13 @@ func TestBuildViewServices_UnownedEndpointNeverSurfaces(t *testing.T) {
 		t.Errorf("services never draws any endpoint (its own layer filter excludes contract layer entirely): %+v", ep)
 	}
 	txt := RenderText(v)
-	if strings.Contains(txt, "GET /orphan") {
-		t.Errorf("text should not print the endpoint:\n%s", txt)
+	if strings.Contains(txt, "- GET /orphan [") {
+		t.Errorf("text should not draw the endpoint as a free node:\n%s", txt)
+	}
+	// rev3 fix F5: the Hidden summary now names it — that is the fix, not
+	// a regression of the "not drawn" guarantee above.
+	if !strings.Contains(txt, "filter:layers: GET /orphan") {
+		t.Errorf("hidden summary should name GET /orphan:\n%s", txt)
 	}
 }
 
