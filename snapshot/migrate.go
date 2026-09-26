@@ -101,12 +101,17 @@ type blobResolution struct {
 // blob_sha existed carries no "blob_sha" key in its JSON payload at all, and
 // replay's str() field reader (journal_replay.go) returns "" for an absent
 // key — so replay silently reproduces exactly the pre-migrate, blob-less
-// row. `chronicle journal verify` (replay into a temp db, diff against
-// live) will then report every migrated evidence row's blob_sha as a
-// standing, repeating divergence on every run from that point on, and an
-// actual `chronicle journal rebuild` will erase the patch outright. The
-// only remedy is mechanical: re-run `chronicle graph migrate` again after
-// any `journal rebuild` to re-patch the affected rows.
+// row, and `chronicle journal rebuild` erases the patch outright.
+//
+// This revert is completely SILENT — neither `chronicle journal verify` nor
+// `journal rebuild`'s own internal pre-swap check will ever flag it, because
+// both compare databases via the identical store.DiffGraphStores
+// (internal/cli/journal.go), whose evidence query (diffEvidenceQ,
+// store/journal_diff.go) never selects blob_sha at all: derived/
+// non-semantic columns are deliberately excluded from that diff by design.
+// There is no automated signal of any kind. The only mitigation is
+// mechanical: re-run `chronicle graph migrate` again after any
+// `journal rebuild` to re-patch the affected rows.
 //
 // file_coverage is NOT subject to this: UpsertCoverage (like the rest of
 // file_coverage) was already unjournaled before this task, and
