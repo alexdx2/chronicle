@@ -86,7 +86,18 @@ type Freshness struct {
 //
 // graphVer is the GraphVersion snap was loaded from (typically the caller's
 // own prior ResolveVersion+AtCommit call) — it is trusted as-is and reported
-// back verbatim as Freshness.Graph, and its Commit anchors ChangedSince.
+// back verbatim as Freshness.Graph, and its Commit anchors ChangedSince —
+// EXCEPT when graphVer.Commit == "" (the graph itself was never committed;
+// Task 9's SnapshotSource produces this for a working-tree-only
+// graph.jsonl), in which case there is no commit to diff FROM at all and
+// ChangedSince is left nil rather than attempting the diff: git rejects an
+// empty-string revision argument outright as an ambiguous argument, rather
+// than treating it as "diff against nothing" (confirmed empirically), and
+// guessing a fallback anchor (HEAD, say) would assume a specific caller's
+// intent inside a shared function, and would still be wrong for a
+// repository with no commits at all. A caller that wants a best-effort
+// "changed since some other anchor" value for this case is free to compute
+// one itself and overlay it onto the returned Freshness.
 // ComputeFreshness does NOT re-resolve a GraphVersion from rev itself: rev=""
 // (working tree; see below) is ambiguous on its own between "no revision was
 // named at all" and "an explicit revision was named, but the FILE side of
@@ -102,8 +113,11 @@ type Freshness struct {
 // commands with no commit to point at, and by Task 9's SnapshotSource): scan
 // scope and every file's blob are read from disk (os.ReadDir, gitutil.
 // FileBlobSHA) instead of from git. Freshness.Rev is left "" either way, and
-// the rest of the algorithm (Coverage comparison, every FileState, and
-// ChangedSince) is identical to the git-history case.
+// the rest of the algorithm (Coverage comparison and every FileState) is
+// identical to the git-history case — ChangedSince too, PROVIDED
+// graphVer.Commit is non-empty (see above for the graphVer.Commit == ""
+// case, which is independent of rev and can occur with rev either empty or
+// not).
 func ComputeFreshness(repoRoot string, snap *Snapshot, graphVer GraphVersion, man *manifest.Manifest, rev string) (Freshness, error) {
 	if snap == nil {
 		return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: snapshot is nil")
@@ -165,15 +179,35 @@ func ComputeFreshness(repoRoot string, snap *Snapshot, graphVer GraphVersion, ma
 
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 
-	changedFiles, err := gitdiff.ChangedFiles(repoRoot, graphVer.Commit, rev)
-	if err != nil {
-		return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: changes since %s: %w", graphVer.Commit, err)
+	// ChangedSince has no coherent git-diffable anchor when the graph
+	// itself has no committed identity (graphVer.Commit == "" — e.g. a
+	// working-tree-only graph.jsonl that has never been committed at all;
+	// Task 9's review.SnapshotSource produces exactly this GraphVersion).
+	// gitdiff.ChangedFiles would otherwise be asked to diff an empty string
+	// against something, and git rejects an empty-string revision argument
+	// outright as ambiguous, rather than treating it as "nothing to compare
+	// against" — confirmed empirically. There is genuinely no commit to
+	// diff FROM in that state, so ChangedSince is left empty rather than
+	// the function guessing at a fallback anchor
+	// (e.g. HEAD) that might not even exist (a repository with zero commits
+	// at all) or might not be what every caller means — that guess, if
+	// wanted, belongs in the one caller that wants it, not in this shared
+	// function. Every existing caller (runGraphStatus, and every test in
+	// this file) always resolves a real graphVer.Commit via ResolveVersion
+	// first, so this is purely additive: it only changes behavior for a
+	// GraphVersion no caller before Task 9 ever produced.
+	var changedSince []string
+	if graphVer.Commit != "" {
+		changedFiles, err := gitdiff.ChangedFiles(repoRoot, graphVer.Commit, rev)
+		if err != nil {
+			return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: changes since %s: %w", graphVer.Commit, err)
+		}
+		changedSince = make([]string, 0, len(changedFiles))
+		for _, c := range changedFiles {
+			changedSince = append(changedSince, c.Path)
+		}
+		sort.Strings(changedSince)
 	}
-	changedSince := make([]string, 0, len(changedFiles))
-	for _, c := range changedFiles {
-		changedSince = append(changedSince, c.Path)
-	}
-	sort.Strings(changedSince)
 
 	return Freshness{
 		Rev:          rev,

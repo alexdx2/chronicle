@@ -392,3 +392,53 @@ func TestComputeFreshness_WorkingTree(t *testing.T) {
 		t.Fatalf("Files = %+v, want exactly one Stale file.ts (disk content changed, nothing committed)", fr.Files)
 	}
 }
+
+// TestComputeFreshness_NoCommitAnchor: graphVer.Commit=="" (the graph itself
+// has never been committed — e.g. review.SnapshotSource loading
+// .depbot/graph.jsonl straight off disk for the working tree) means there is
+// no coherent git-diffable anchor for ChangedSince. Before this fix,
+// ComputeFreshness unconditionally called gitdiff.ChangedFiles(repoRoot,
+// graphVer.Commit, rev) — with graphVer.Commit=="" AND rev=="" (the working-
+// tree combination), that ran a plain `git diff` with an empty-string
+// revision argument, which git rejects outright as an ambiguous argument,
+// turning a valid input state into a hard error. ComputeFreshness must
+// now recognize graphVer.Commit=="" and simply leave ChangedSince empty,
+// while still computing every other part of the report normally.
+func TestComputeFreshness_NoCommitAnchor(t *testing.T) {
+	dir := initGitRepoT(t)
+
+	writeFileT(t, dir, "file.ts", "v1")
+	commitAllT(t, dir, "seed")
+	blob1 := captureGitT(t, dir, "rev-parse", "HEAD:file.ts")
+
+	snap := &Snapshot{
+		Header: Header{
+			Kind: "header", Format: Format, Version: Version, Seq: 1, FactSchema: FactSchema,
+			Domains: []string{"d"},
+		},
+		Coverage: []Coverage{
+			{Kind: "coverage", Path: "file.ts", Blob: blob1, Extractors: []ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}},
+		},
+	}
+
+	// Uncommitted edit: proves per-file freshness state is still computed
+	// normally from disk — only ChangedSince is affected by the empty
+	// Commit, nothing else short-circuits.
+	writeFileT(t, dir, "file.ts", "v2-uncommitted")
+
+	man := singleDomainManifest("d", "file*.ts")
+
+	fr, err := ComputeFreshness(dir, snap, GraphVersion{Commit: "", Blob: "irrelevant-in-this-test", Seq: 1}, man, "")
+	if err != nil {
+		t.Fatalf("ComputeFreshness: %v, want no error (graphVer.Commit==\"\" must not crash)", err)
+	}
+	if fr.ChangedSince != nil {
+		t.Errorf("ChangedSince = %v, want nil/empty (no commit to diff against)", fr.ChangedSince)
+	}
+	if fr.Graph.Commit != "" {
+		t.Errorf("Graph.Commit = %q, want \"\" (graphVer reported back verbatim)", fr.Graph.Commit)
+	}
+	if len(fr.Files) != 1 || fr.Files[0].Path != "file.ts" || fr.Files[0].State != Stale {
+		t.Fatalf("Files = %+v, want exactly one Stale file.ts (per-file state still computes normally)", fr.Files)
+	}
+}

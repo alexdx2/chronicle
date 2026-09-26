@@ -196,6 +196,54 @@ func TestDiff_Touched_PureInsertionNoIntersect(t *testing.T) {
 	}
 }
 
+// --- Diff: nil-safety for a missing VersionGraph ----------------------
+
+// TestDiff_MissingOrigin_NilSafe: Origin:"missing" (ErrNoVersion — a
+// revision whose history never committed a graph, or a repo predating graph
+// adoption) is a first-class VersionGraph state this same task produces:
+// Graph and Export are both nil. Diff must treat a nil Export as an empty
+// snapshot rather than panicking — diffing a missing base against a
+// populated head reports every head fact as Added (or StructuralAdded), and
+// symmetrically for a missing head.
+func TestDiff_MissingOrigin_NilSafe(t *testing.T) {
+	missing := &VersionGraph{Origin: OriginMissing}
+	populated := vgFor([]snapshot.Node{
+		{ID: "contract:endpoint:d:foo", Layer: "contract", Type: "endpoint"},
+	}, []snapshot.Edge{
+		{ID: "a->b:CONTAINS", Type: "CONTAINS", From: "a", To: "b"},
+	})
+
+	delta := Diff(missing, populated, nil)
+	if len(delta.Added) != 1 || delta.Added[0].ID != "contract:endpoint:d:foo" {
+		t.Errorf("Added = %+v, want exactly [contract:endpoint:d:foo] (missing base -> everything in head is Added)", delta.Added)
+	}
+	if delta.StructuralAdded != 1 {
+		t.Errorf("StructuralAdded = %d, want 1 (the CONTAINS edge)", delta.StructuralAdded)
+	}
+	if len(delta.Removed) != 0 || delta.StructuralRemoved != 0 {
+		t.Errorf("Removed/StructuralRemoved = %+v/%d, want empty/0", delta.Removed, delta.StructuralRemoved)
+	}
+
+	delta2 := Diff(populated, missing, nil)
+	if len(delta2.Removed) != 1 || delta2.Removed[0].ID != "contract:endpoint:d:foo" {
+		t.Errorf("Removed = %+v, want exactly [contract:endpoint:d:foo] (missing head -> everything in base is Removed)", delta2.Removed)
+	}
+	if delta2.StructuralRemoved != 1 {
+		t.Errorf("StructuralRemoved = %d, want 1 (the CONTAINS edge)", delta2.StructuralRemoved)
+	}
+	if len(delta2.Added) != 0 || delta2.StructuralAdded != 0 {
+		t.Errorf("Added/StructuralAdded = %+v/%d, want empty/0", delta2.Added, delta2.StructuralAdded)
+	}
+
+	// A literal nil *VersionGraph (not just a nil Export) must be just as
+	// safe — exportNodes/exportEdges check vg == nil before vg.Export.
+	if delta3 := Diff(nil, nil, nil); delta3 == nil ||
+		len(delta3.Added) != 0 || len(delta3.Removed) != 0 || len(delta3.Changed) != 0 ||
+		len(delta3.Moved) != 0 || len(delta3.Touched) != 0 {
+		t.Errorf("Diff(nil, nil, nil) = %+v, want an empty, non-nil GraphDelta", delta3)
+	}
+}
+
 // --- Diff: structural facts are counted, never listed ----------------------
 
 // TestDiff_StructuralCountedNotListed: a CONTAINS edge added in head is

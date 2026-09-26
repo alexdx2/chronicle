@@ -268,6 +268,42 @@ func TestSnapshotSource_Load_WorkingTree(t *testing.T) {
 	}
 }
 
+// TestSnapshotSource_Load_WorkingTree_NoCommits: a repository with NO
+// commits at all (only `git init`) still has a real, on-disk working-tree
+// graph. Before fix-round-1, this path would have failed inside
+// ComputeFreshness's internal ChangedSince computation, which unconditionally
+// tried `git diff <empty-Commit>..<empty-rev>` — an argument error with
+// nothing to do with whether HEAD exists. Now that ComputeFreshness itself
+// recognizes Version.Commit=="" and skips that computation, Load must
+// succeed even here — this is the "root cause fix" resolving the exact
+// limitation task-9-report.md originally documented as unfixed.
+func TestSnapshotSource_Load_WorkingTree_NoCommits(t *testing.T) {
+	dir := initGitRepoT(t) // git init only — no commits anywhere
+	writeManifestT(t, dir)
+
+	snap := &snapshot.Snapshot{
+		Header: snapshot.Header{
+			Kind: "header", Format: snapshot.Format, Version: snapshot.Version, Seq: 1, FactSchema: snapshot.FactSchema,
+			Domains: []string{"d"},
+		},
+	}
+	writeFileT(t, dir, ".depbot/graph.jsonl", encodeSnapshotT(t, snap))
+
+	src := SnapshotSource{RepoRoot: dir, Rev: ""}
+	vg, err := src.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v, want success (must not depend on any commit existing)", err)
+	}
+	defer vg.Close()
+
+	if vg.Origin != "snapshot" {
+		t.Errorf("Origin = %q, want %q", vg.Origin, "snapshot")
+	}
+	if len(vg.Freshness.ChangedSince) != 0 {
+		t.Errorf("ChangedSince = %v, want empty (no commit anywhere to diff against)", vg.Freshness.ChangedSince)
+	}
+}
+
 // TestSnapshotSource_Load_CanceledContext: an already-canceled context must
 // short-circuit Load before it does any real work (point 6 — ctx.Err()
 // checked once at the top).

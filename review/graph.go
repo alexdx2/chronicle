@@ -86,8 +86,10 @@ func noopClose() error { return nil }
 // file's blob (gitutil.FileBlobSHA), and Version.Seq comes from decoding
 // that same content's own Header. Freshness is computed against the actual
 // files on disk (ComputeFreshness's own rev=="" convention), not HEAD's
-// tree — see loadWorkingTree's own comment for the one adjustment this
-// requires beyond simply passing rev="" through.
+// tree; ChangedSince comes back empty (ComputeFreshness's own
+// graphVer.Commit=="" convention — there is no commit to diff a
+// never-committed graph's freshness FROM) rather than guessing at one — see
+// loadWorkingTree's own comment.
 //
 // Rev != "" is the ordinary path: ResolveVersion finds the nearest ancestor
 // of Rev that last touched the graph file, AtCommit loads that content,
@@ -170,19 +172,22 @@ func (s SnapshotSource) loadAtRev() (*VersionGraph, error) {
 // loadWorkingTree implements the Rev=="" path described in SnapshotSource's
 // doc comment.
 //
-// One adjustment beyond a plain rev="" pass-through: ComputeFreshness's
-// ChangedSince computes `git diff graphVer.Commit..rev` internally
-// (snapshot/freshness.go), and an empty string on BOTH sides of that diff
-// (graphVer.Commit=="" here, rev=="" for the working tree) is not "diff
-// against nothing" — it is a git argument error ("fatal: ambiguous argument
-// ”"), confirmed empirically. There is no commit to anchor ChangedSince to
-// when the graph itself has never been committed, so "HEAD" is substituted
-// for that one internal call only — the same default this codebase already
-// falls back to whenever no revision is given (internal/cli/graph.go's
-// runGraphStatus: graphRev defaults to "HEAD"). The real (commit-less)
-// version is restored onto the result's Freshness.Graph afterward, so
-// Freshness.Graph and VersionGraph.Version never disagree about the graph's
-// own identity — only ChangedSince's internal anchor borrows HEAD.
+// Version.Commit is "" here (no ResolveVersion call — see above), which
+// snapshot.ComputeFreshness treats as "no commit to diff ChangedSince from":
+// it leaves Freshness.ChangedSince empty rather than guessing at a fallback
+// anchor (fix-round-1: this used to be worked around locally here by
+// substituting "HEAD" for that one internal call and restoring the real
+// version afterward, but ComputeFreshness itself now handles Commit=="" — a
+// shared, already-public function crashing on a valid input state is that
+// function's bug to fix, not every caller's workaround to invent; see
+// task-9-report.md's fix-round-1 section). An empty ChangedSince is the
+// honest answer for a graph that was never committed at all: there's no
+// coherent "since" to measure from. A caller that wants a best-effort
+// "changed since HEAD" convenience value for this case can compute one
+// itself (gitdiff.ChangedFiles(s.RepoRoot, "HEAD", "")) — deliberately not
+// done here, since it would reintroduce a dependency on HEAD existing at
+// all (see TestSnapshotSource_Load_WorkingTree_NoCommits) for a value nothing
+// in this package currently consumes.
 func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
 	graphPath := filepath.Join(s.RepoRoot, snapshot.Path)
 	data, err := os.ReadFile(graphPath)
@@ -219,14 +224,11 @@ func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: manifest: %w", err)
 	}
 
-	freshnessAnchor := version
-	freshnessAnchor.Commit = "HEAD" // see doc comment above
-	fr, err := snapshot.ComputeFreshness(s.RepoRoot, snap, freshnessAnchor, man, "")
+	fr, err := snapshot.ComputeFreshness(s.RepoRoot, snap, version, man, "")
 	if err != nil {
 		closer()
 		return nil, fmt.Errorf("review: SnapshotSource.Load: freshness: %w", err)
 	}
-	fr.Graph = version
 
 	return &VersionGraph{
 		Graph: g, Export: snap,
