@@ -41,6 +41,15 @@ func runAttach(root string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+
+	// .gitignore/.gitattributes/the chronicle-graph merge driver — same §3
+	// shape `init` writes (internal/cli/init.go), so an attached project
+	// that never ran `chronicle init` still gets graph.jsonl tracked and
+	// mergeable. Idempotent, and independent of the AGENTS.md/CLAUDE.md/
+	// settings.json ownership-tracked plan below: detach does not reverse
+	// it, the same way it never reversed anything init.go writes either.
+	ensureGitWiring(root)
+
 	remote := gitRemote(root)
 	id := wiring.ProjectID(root, remote)
 	prev, err := wiring.LoadAttachment(id)

@@ -8,7 +8,51 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/internal/wiring"
+	"github.com/alexdx2/chronicle-core/paths"
 )
+
+// TestAttachWritesGitWiring guards the task-6 requirement that `attach`
+// reaches the exact same .gitignore/.gitattributes/merge-driver §3 shape
+// `init` does (internal/cli/init.go's ensureGitWiring) — before this task,
+// attach.go had no gitignore-related code at all, so a project wired only
+// via `attach` (never `chronicle init`) still needs graph.jsonl tracked and
+// mergeable.
+func TestAttachWritesGitWiring(t *testing.T) {
+	t.Setenv("CHRONICLE_HOME", t.TempDir())
+	paths.SetChronicleDir("")
+	t.Cleanup(func() { paths.SetChronicleDir("") })
+
+	root := t.TempDir()
+	gitRun(t, root, "init", "-q")
+
+	var out bytes.Buffer
+	if err := runAttach(root, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	gitignore, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatalf("attach should write .gitignore: %v", err)
+	}
+	for _, want := range []string{".depbot/*", "!.depbot/graph.jsonl", "!.depbot/chronicle.domain.yaml", "!.depbot/chronicle.types.yaml"} {
+		if !strings.Contains(string(gitignore), want) {
+			t.Errorf(".gitignore missing %q, got:\n%s", want, gitignore)
+		}
+	}
+
+	gitattributes, err := os.ReadFile(filepath.Join(root, ".gitattributes"))
+	if err != nil {
+		t.Fatalf("attach should write .gitattributes: %v", err)
+	}
+	if !strings.Contains(string(gitattributes), "merge=chronicle-graph") {
+		t.Errorf(".gitattributes missing merge=chronicle-graph, got:\n%s", gitattributes)
+	}
+
+	driver := gitCapture(t, root, "config", "--get", "merge.chronicle-graph.driver")
+	if strings.TrimSpace(driver) == "" {
+		t.Error("merge.chronicle-graph.driver is empty after attach")
+	}
+}
 
 func TestAttachThenDetachRoundtrip(t *testing.T) {
 	t.Setenv("CHRONICLE_HOME", t.TempDir())
