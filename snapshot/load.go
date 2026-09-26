@@ -362,7 +362,7 @@ func loadAliasesTermsCoverage(st *store.Store, s *Snapshot, nodeIDs map[string]i
 // side, selected by targetKind; the other is ignored, so passing 0 for it is
 // harmless.
 func evidenceRowFrom(targetKind string, nodeID, edgeID int64, ev Evidence) store.EvidenceRow {
-	lineStart, lineEnd, colStart, colEnd := parseRange(ev.Range)
+	lineStart, lineEnd, colStart, colEnd := ParseRange(ev.Range)
 	polarity := ev.Polarity
 	if polarity == "" {
 		polarity = "positive"
@@ -404,7 +404,7 @@ func metadataOrEmpty(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// parseRange reverses export.go's formatRange: "" -> all zero, "L-L" ->
+// ParseRange reverses export.go's formatRange: "" -> all zero, "L-L" ->
 // LineStart/LineEnd only, "L:C-L:C" -> Column{Start,End} too. It is exactly
 // the inverse of what formatRange renders, so re-exporting a Load'ed
 // evidence row through formatRange reproduces the same Range string again —
@@ -412,7 +412,13 @@ func metadataOrEmpty(raw json.RawMessage) string {
 // the ORIGINAL row had before formatRange's own defaulting collapsed them
 // into that string. That distinction is unrecoverable: the snapshot format
 // keeps only the rendered Range string, never the four separate ints.
-func parseRange(r string) (lineStart, lineEnd, colStart, colEnd int) {
+//
+// Exported (capitalized only — same body, same file, same logic as the
+// unexported parseRange this replaces) so package review's Touched-detection
+// (Task 9) can parse an Evidence.Range without a second, independently
+// drifting implementation of the same "lineStart-lineEnd" /
+// "lineStart:colStart-lineEnd:colEnd" grammar.
+func ParseRange(r string) (lineStart, lineEnd, colStart, colEnd int) {
 	if r == "" {
 		return 0, 0, 0, 0
 	}
