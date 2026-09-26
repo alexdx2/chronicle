@@ -44,6 +44,21 @@ func (s *Store) JournalSyncApplied() int {
 	return s.journalSyncApplied
 }
 
+// SetJournaling turns journal recording for this store on or off. Off
+// (on == false) sets the same suppressJournal flag the replay path already
+// uses: appendEvent (store/journal.go) short-circuits to a no-op, so no row
+// is ever written to journal_outbox or graph_changelog — and because nothing
+// is ever added to journal_outbox, FlushJournal (store/journal_flush.go)
+// finds nothing pending and is a no-op too, writing no .depbot/events/ files.
+//
+// Used by snapshot.Load: a store rebuilt from a graph.jsonl snapshot is an
+// ephemeral, disposable graph (built fresh for one review/CI run), not
+// something anyone will `chronicle journal flush` out of, and it starts with
+// no journal_state/lamport history of its own to append to coherently.
+func (s *Store) SetJournaling(on bool) {
+	s.suppressJournal = !on
+}
+
 func Open(dbPath string) (*Store, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
