@@ -127,8 +127,21 @@ type ReviewFinding struct {
 //     Downstream = nil.
 //   - ContractRemoved: Downstream = q.QueryImpact(SourceID, depth) as
 //     Affected (q is baseQ here, per Change.Seed).
-//   - ContractChanged: Downstream = q.QueryImpact(SourceID, depth) as
-//     Affected (q is headQ here, per Change.Seed).
+//   - ContractChanged: Downstream = q.QueryImpact(seed, depth) as Affected
+//     (q is headQ here, per Change.Seed), where seed is normally SourceID —
+//     EXCEPT when the underlying fact is a changed CONTRACT EDGE (e.g.
+//     HAS_FIELD), classify.go's own doc comment for the last row of its
+//     table): there, SourceID is that edge's own composite key ("a->b:
+//     HAS_FIELD"), which QueryImpact/Collapse can never resolve via
+//     GetNodeByKey (a real gap this task's own SourceID convention has for
+//     exactly one Kind — see task-11-report.md's fix-round-1 section). In
+//     that case seed is the edge's own From node instead (contractChangedSeed)
+//     — a real, resolvable node key, the model/service the changed contract
+//     edge originates from. This ONLY changes which key seeds the Downstream
+//     BFS: the finding's own SourceID/System/Reason still reflect the real
+//     fact unchanged (every other ChangeKind's SourceID is already
+//     guaranteed to be a real node key by classify.go's more specific rules,
+//     so no other branch needs this treatment).
 func Analyze(changes []Change, baseQ, headQ ImpactQuerier, depth int) []ReviewFinding {
 	findings := make([]ReviewFinding, 0, len(changes))
 	for _, c := range changes {
@@ -164,14 +177,36 @@ func analyzeOne(c Change, baseQ, headQ ImpactQuerier, depth int) ReviewFinding {
 		// Downstream = nil: see the judgment call in task-11-report.md —
 		// an addition (standalone or merged) doesn't threaten anything
 		// that already existed, so there is no downstream to walk.
-	case ContractRemoved, ContractChanged:
+	case ContractRemoved:
 		finding.Downstream = affectedFrom(q, c.SourceID, depth)
+	case ContractChanged:
+		finding.Downstream = affectedFrom(q, contractChangedSeed(c), depth)
 	}
 
 	for i := range finding.Downstream {
 		finding.Downstream[i].Kind = c.Kind
 	}
 	return finding
+}
+
+// contractChangedSeed picks the QueryImpact seed for a ContractChanged
+// Change (fix-round-1, task-11-report.md). classify.go's changedChanges rule
+// produces ContractChanged from EITHER a changed contract NODE (SourceID is
+// already that node's own key — a real, resolvable node_key) OR a changed
+// contract EDGE such as HAS_FIELD (SourceID is that EDGE's own composite key,
+// e.g. "a->b:HAS_FIELD", which QueryImpact/Collapse can never resolve via
+// GetNodeByKey). For the edge case, seed from the edge's own From node
+// instead — the model/service the changed contract edge originates from, a
+// real node key — rather than the unresolvable edge key. This deliberately
+// only changes the DOWNSTREAM BFS seed: Change.SourceID itself, and
+// everything analyzeOne derives from it before this point (the finding's own
+// System, Reason, Counterpart, Facts, Evidence), are untouched — they still
+// reflect the real fact, edge-shaped or not.
+func contractChangedSeed(c Change) string {
+	if len(c.Facts) > 0 && c.Facts[0].Kind == KindEdge && c.Facts[0].Edge != nil {
+		return c.Facts[0].Edge.From
+	}
+	return c.SourceID
 }
 
 // analyzeIntegration handles the two IntegrationAdded/IntegrationRemoved

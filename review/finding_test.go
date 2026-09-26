@@ -395,24 +395,56 @@ func TestAnalyze_ContractChanged(t *testing.T) {
 	}
 }
 
-// TestAnalyze_ContractChanged_EdgeSourceID_DoesNotCrash: classify.go's own
-// doc comment says a Changed CONTRACT EDGE (e.g. HAS_FIELD) also produces
-// ContractChanged, with SourceID = that EDGE's own key, not a node key (see
-// task-11-report.md — a real gap this task's Analyze can't fully close,
-// since QueryImpact/Collapse need a node_key). This pins the degrade-
-// gracefully behavior: an ImpactQuerier error for a bogus seed must not
-// panic and must not fabricate a finding, just leave System/Downstream at
-// their zero values.
+// TestAnalyze_ContractChanged_EdgeFact_SeedsFromEdgeFrom (fix-round-1,
+// task-11-report.md): classify.go's own doc comment says a Changed CONTRACT
+// EDGE (e.g. HAS_FIELD) also produces ContractChanged, with SourceID = that
+// EDGE's own composite key ("svcA->field:HAS_FIELD"), not a node key.
+// Analyze must not seed QueryImpact with that unresolvable key: it must
+// notice Facts[0] is edge-shaped and seed from the edge's own From node
+// (svcA) instead — a real, resolvable node key — recovering real Downstream
+// signal instead of silently coming back empty. The fake querier is keyed
+// ONLY by "svcA" (the edge's From), not by the edge's own composite key: if
+// Analyze regressed to seeding with Change.SourceID directly, this lookup
+// would miss and Downstream would come back empty again, catching the
+// regression.
+func TestAnalyze_ContractChanged_EdgeFact_SeedsFromEdgeFrom(t *testing.T) {
+	edge := snapshot.Edge{ID: "svcA->field:HAS_FIELD", Type: "HAS_FIELD", From: "svcA", To: "field"}
+	c := Change{Kind: ContractChanged, SourceID: edge.ID, Counterpart: "", Seed: "head", Facts: []Fact{edgeFact(edge.ID, edge)}}
+
+	headQ := fakeImpactQuerier{
+		impacts: map[string][]SystemImpact{
+			"svcA": {{System: sysA}}, // keyed by the edge's own From, the corrected seed
+		},
+	}
+
+	findings := Analyze([]Change{c}, fakeImpactQuerier{err: errors.New("base unused")}, headQ, 4)
+	f := findings[0]
+	if len(f.Downstream) != 1 || f.Downstream[0].System != sysA {
+		t.Fatalf("Downstream = %+v, want exactly [Affected sysA] (seeded from the edge's own From, not its composite SourceID key)", f.Downstream)
+	}
+}
+
+// TestAnalyze_ContractChanged_EdgeSourceID_DoesNotCrash (still a valid
+// defensive-fallback proof after fix-round-1, but no longer exercising the
+// "SourceID is an unresolvable edge key" problem itself — that's fixed above
+// via contractChangedSeed, which this test's Downstream seed (svcA, the
+// edge's own From) now correctly receives too): this pins that an
+// ImpactQuerier error for ANY reason still degrades gracefully rather than
+// panicking or fabricating a finding. System is a separate story — it is
+// deliberately still built from the raw Change.SourceID (the edge's own
+// composite key, per Analyze's own doc comment: this fix only changes the
+// Downstream BFS seed, not what the finding reports itself to be), so it
+// still can't resolve and stays at its zero value, exactly as before.
 func TestAnalyze_ContractChanged_EdgeSourceID_DoesNotCrash(t *testing.T) {
 	edge := snapshot.Edge{ID: "svcA->field:HAS_FIELD", Type: "HAS_FIELD", From: "svcA", To: "field"}
 	c := Change{Kind: ContractChanged, SourceID: edge.ID, Counterpart: "", Seed: "head", Facts: []Fact{edgeFact(edge.ID, edge)}}
 
-	headQ := fakeImpactQuerier{err: errors.New("not found: edge key is not a node key")}
+	headQ := fakeImpactQuerier{err: errors.New("simulated failure — any ImpactQuerier error must degrade gracefully")}
 
 	findings := Analyze([]Change{c}, fakeImpactQuerier{}, headQ, 4)
 	f := findings[0]
 	if f.System != (SystemRef{}) {
-		t.Errorf("System = %+v, want the zero value on a Collapse error", f.System)
+		t.Errorf("System = %+v, want the zero value: System is still built from the raw edge-shaped SourceID, unaffected by the Downstream seed fix", f.System)
 	}
 	if f.Downstream != nil {
 		t.Errorf("Downstream = %+v, want nil on a QueryImpact error", f.Downstream)
