@@ -126,6 +126,17 @@ func kindLabel(k ChangeKind) string {
 // type this table doesn't name (defensive — every Kind this renderer builds
 // a Relationship sentence for is seeded from one of the five named here, per
 // finding.go/classify.go's own construction).
+//
+// The fallback branch is escaped (escapeText/viewmodel.TextEscape), unlike
+// the five named branches above (static string literals, nothing to escape):
+// edgeType is graph-derived text like every other display string this file
+// builds, and every OTHER such string in this renderer goes through the same
+// escaping — this one branch was the sole exception, caught in fix round 1
+// (task-13-report.md). Not currently exploitable in practice (Task 1's
+// snapshot decoder already validates edge types against the registry before
+// a Fact is ever constructed, so a hostile edge-type string shouldn't reach
+// here), but escaped anyway for consistency and defense in depth in case
+// that upstream guarantee ever changes.
 func edgeVerb(edgeType string) string {
 	switch edgeType {
 	case "PUBLISHES_TOPIC":
@@ -141,7 +152,7 @@ func edgeVerb(edgeType string) string {
 	case "HAS_FIELD":
 		return "has field"
 	default:
-		return strings.ToLower(strings.ReplaceAll(edgeType, "_", " "))
+		return escapeText(strings.ToLower(strings.ReplaceAll(edgeType, "_", " ")))
 	}
 }
 

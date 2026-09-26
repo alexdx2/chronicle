@@ -283,6 +283,105 @@ func TestRenderMarkdown_NoSystemChange(t *testing.T) {
 	compareGolden(t, "review_markdown_nosystemchange.golden.md", got)
 }
 
+// TestRenderMarkdown_MixedUnknownAndTouched: fix round 1's regression test
+// (task-13-report.md), pinning the independent reviewer's own repro shape
+// exactly. Two real Touched findings — the SAME inert
+// ConsumerChanged/ProducerChanged pair TestRenderMarkdown_NoSystemChange
+// uses, empty Downstream — plus one Unknown finding for a THIRD, unrelated
+// file. ChangedRelationships() is empty for this input (the two Touched
+// findings are excluded by its own Producer/ConsumerChanged-with-no-
+// Downstream filter, not because nothing real happened), and
+// Verdict.UnknownFiles is 1 (>0) — the OLD 4th-state trigger
+// (len(ChangedRelationships())==0 && UnknownFiles>0) fired on exactly this
+// input and silently dropped the two real findings, showing only "1 of 3
+// changed files changed after their last scan." with nothing else. The
+// fixed trigger (covered==0 && uncovered>0, via changedFileCounts) must NOT
+// fire here — covered is 2 (both Touched findings carry real evidence, in
+// two distinct files) — so this must fall through to the NORMAL report,
+// with the two real findings actually visible in "Code changed, graph
+// unchanged".
+func TestRenderMarkdown_MixedUnknownAndTouched(t *testing.T) {
+	consumerChanged := ReviewFinding{
+		Severity: SeverityChanged, Kind: ConsumerChanged,
+		System:      SystemRef{Kind: kindService, Key: "service:service:d:battle-api", Name: "battle-api"},
+		Reason:      string(ConsumerChanged),
+		Counterpart: "battle.guard",
+		Facts: []Fact{{
+			ID: "arena.controller->battle.guard:INJECTS", Kind: KindEdge,
+			Edge: &snapshot.Edge{Type: "INJECTS", From: "arena.controller", To: "battle.guard",
+				Evidence: []snapshot.Evidence{{File: "arena.controller.ts", Range: "10-20"}}},
+		}},
+	}
+	producerChanged := ReviewFinding{
+		Severity: SeverityChanged, Kind: ProducerChanged,
+		System:      SystemRef{Kind: kindService, Key: "service:service:d:battle-api", Name: "battle-api"},
+		Reason:      string(ProducerChanged),
+		Counterpart: "battle-events",
+		Facts: []Fact{{
+			ID: "battle.guard->battle-events:PUBLISHES_TOPIC", Kind: KindEdge,
+			Edge: &snapshot.Edge{Type: "PUBLISHES_TOPIC", From: "battle.guard", To: "battle-events",
+				Evidence: []snapshot.Evidence{{File: "battle.guard.ts", Range: "5-9"}}},
+		}},
+	}
+	unknownFinding := ReviewFinding{
+		Severity: SeverityUnknown,
+		File:     "leaderboard/score.service.cs",
+		Reason:   ReasonHeadStaleFile,
+	}
+	findings := []ReviewFinding{consumerChanged, producerChanged, unknownFinding}
+
+	r := &ReviewResult{
+		SchemaVersion: reviewSchemaVersion,
+		Base:          Provenance{Ref: "origin/main", Commit: "aaa", Origin: OriginSnapshot, Graph: &snapshot.GraphVersion{Commit: "aaa", Seq: 5}},
+		Head:          Provenance{Ref: "HEAD", Commit: "bbb", Origin: OriginSnapshot, Graph: &snapshot.GraphVersion{Commit: "bbb", Seq: 6}},
+		Findings:      findings,
+		Delta:         deltaFromFindings(findings),
+	}
+	r.Verdict = verdictFrom(findings)
+
+	// Pin the precondition that makes this the reviewer's exact repro: the
+	// OLD trigger's two clauses both hold...
+	if len(r.ChangedRelationships()) != 0 {
+		t.Fatalf("fixture ChangedRelationships() = %+v, want empty (both Touched findings excluded by their own empty-Downstream filter)", r.ChangedRelationships())
+	}
+	if r.Verdict.UnknownFiles == 0 {
+		t.Fatal("fixture Verdict.UnknownFiles = 0, want > 0")
+	}
+	// ...but the NEW trigger's own clause does not: real evidence exists in
+	// 2 distinct files (arena.controller.ts, battle.guard.ts), so covered>0.
+	covered, uncovered, total := changedFileCounts(r)
+	if covered == 0 {
+		t.Fatalf("fixture changedFileCounts covered = 0, want > 0 (this is the case the fix targets)")
+	}
+	if uncovered != 1 || total != 3 {
+		t.Fatalf("fixture changedFileCounts = (covered=%d, uncovered=%d, total=%d), want (covered>0, uncovered=1, total=3)", covered, uncovered, total)
+	}
+
+	got, err := RenderMarkdown(r, MarkdownOptions{})
+	if err != nil {
+		t.Fatalf("RenderMarkdown: %v", err)
+	}
+
+	if strings.Contains(got, "Impact unknown.") {
+		t.Errorf("RenderMarkdown took the impact-unknown branch (dropping the 2 real findings), want the normal report:\n%s", got)
+	}
+	if !strings.Contains(got, "### Chronicle review") {
+		t.Errorf("RenderMarkdown output missing the normal report's own heading:\n%s", got)
+	}
+	if !strings.Contains(got, "Code changed, graph unchanged (2)") {
+		t.Errorf("RenderMarkdown output missing \"Code changed, graph unchanged (2)\" — the 2 real findings must still be shown:\n%s", got)
+	}
+	if !strings.Contains(got, "`arena.controller` → `battle.guard`") {
+		t.Errorf("RenderMarkdown output missing the first real finding's own line:\n%s", got)
+	}
+	if !strings.Contains(got, "`battle.guard` → `battle-events`") {
+		t.Errorf("RenderMarkdown output missing the second real finding's own line:\n%s", got)
+	}
+	if !strings.Contains(got, "#### Unknown impact (1 file)") {
+		t.Errorf("RenderMarkdown output missing the one real Unknown file's own section:\n%s", got)
+	}
+}
+
 // TestRenderMarkdown_MissingGraph: the mockup's "!45 · add Chronicle graph"
 // state — base predates the graph entirely, head has it (the real shape of
 // that scenario: the PR that adds the graph file necessarily has

@@ -72,16 +72,29 @@ type MarkdownOptions struct {
 //  3. Impact-unknown — this task's own 4th state, not in the brief's literal
 //     three-way branch but named by its own commit message and pinned by a
 //     fourth mockup thread ("!44 · new leaderboard filters") the brief's
-//     prose never mentions. Triggered when r.ChangedRelationships() is empty
-//     AND r.Verdict.UnknownFiles > 0: every changed file's facts are
-//     unclassifiable, so there is no relationship verdict to compute at all
-//     — and, left unhandled, the "normal report" branch below would call
-//     CompactDiagram and get back its "no changed relationships to diagram"
-//     error. See task-13-report.md for the full derivation (why this
-//     condition is exactly equivalent to "every changed file is Unknown"
-//     given verdictFrom's own formula) and for the one piece of the
-//     mockup's own "!44" wording this task could NOT reproduce faithfully
-//     (the "relationships whose code was touched" list) and why.
+//     prose never mentions. Triggered when changedFileCounts reports
+//     covered == 0 (equivalently uncovered == total) AND uncovered > 0:
+//     EVERY changed file is Unknown, so there is no relationship verdict to
+//     compute at all.
+//
+//     Fix round 1 (task-13-report.md) tightened this from an earlier,
+//     broader condition (len(r.ChangedRelationships())==0 &&
+//     Verdict.UnknownFiles>0), which independent review caught firing on a
+//     real, wrong input: a ReviewResult with real Touched findings (an inert
+//     ConsumerChanged/ProducerChanged pair, empty Downstream — exactly
+//     CodeChangedGraphUnchanged's own shape) PLUS one unrelated Unknown
+//     file. ChangedRelationships() is empty for THAT input too (the two
+//     Touched findings are excluded by its own filter, not because nothing
+//     real happened), so the old condition fired and silently dropped two
+//     legitimate findings with no rendering anywhere. covered==0 does not
+//     have this failure mode: every ChangedRelationships() finding traces
+//     back to a fact with real evidence in r.Delta, so covered==0 makes
+//     ChangedRelationships() empty BY CONSTRUCTION (there is no fact left
+//     for it to report), not as a coincidental side effect of its own
+//     Producer/ConsumerChanged filter. See task-13-report.md's fix-round-1
+//     section for the full derivation and the reviewer's repro; the same
+//     mixed-shape input is now TestRenderMarkdown_MixedUnknownAndTouched,
+//     pinned to fall through to the NORMAL report instead.
 //
 // Otherwise: the ordinary full report.
 func RenderMarkdown(r *ReviewResult, o MarkdownOptions) (string, error) {
@@ -91,7 +104,7 @@ func RenderMarkdown(r *ReviewResult, o MarkdownOptions) (string, error) {
 	if r.Verdict.NoSystemChange {
 		return renderNoSystemChange(r, o), nil
 	}
-	if len(r.ChangedRelationships()) == 0 && r.Verdict.UnknownFiles > 0 {
+	if covered, uncovered, _ := changedFileCounts(r); covered == 0 && uncovered > 0 {
 		return renderImpactUnknown(r, o), nil
 	}
 	return renderNormal(r, o)
@@ -140,6 +153,16 @@ func renderMissingGraph(r *ReviewResult, _ MarkdownOptions) string {
 // requires Verdict.UnknownFiles == 0, so total == covered), then the
 // collapsed "Code changed, graph unchanged" section if CodeChangedGraphUnchanged()
 // is non-empty.
+//
+// No footer here, despite the brief's own prose listing "подпись" (a
+// signature/footer line) as part of this state's content — checked directly
+// against the approved mockup's own "!43" thread (fix round 1,
+// task-13-report.md) rather than trusted from the brief's paraphrase, and
+// the mockup shows no footer at all for this state. Same class of
+// brief-vs-mockup conflict as the missing-graph Base-or-Head check and the
+// "Code changed, graph unchanged" bullet format above: the approved mockup
+// is what the owner actually signed off on, so it wins over the brief's own
+// secondary prose description of it.
 func renderNoSystemChange(r *ReviewResult, o MarkdownOptions) string {
 	_, _, total := changedFileCounts(r)
 
@@ -162,13 +185,19 @@ func renderNoSystemChange(r *ReviewResult, o MarkdownOptions) string {
 // ("N of N changed files changed after their last scan"); the mockup's
 // further "Relationships whose code was touched:" bulleted list is
 // deliberately NOT reproduced — see this file's RenderMarkdown doc comment
-// and task-13-report.md for why: under this branch's own trigger condition,
-// r.Delta.Touched is provably always empty (a non-empty Touched entry always
-// carries evidence for some file, which would make that file "covered" and
-// contradict "every changed file is Unknown"), and the mockup's example list
-// is not reconstructible from data ReviewResult actually exposes anyway (it
-// would need "every edge whose evidence names a now-stale file", a broader
-// query than anything Diff/ClassifyDelta compute).
+// and task-13-report.md for why: given THIS branch's own (fix-round-1
+// tightened) trigger condition, covered == 0, r.Delta.Touched really is
+// always empty — a non-empty Touched entry always carries evidence for some
+// file (coveredFiles' own construction), which would make that file
+// "covered" and contradict covered == 0. (This claim was written down but
+// NOT actually true under the original, broader trigger condition fix round
+// 1 replaced — see task-13-report.md's fix-round-1 section; it only holds
+// now that the trigger is covered == 0 itself.) The mockup's example list is
+// also not reconstructible from data ReviewResult exposes anyway (it would
+// need "every edge whose evidence names a now-stale file", a broader query
+// than anything Diff/ClassifyDelta compute) — so even with an empty
+// Delta.Touched this section stays deliberately narrower than the mockup's
+// own illustration.
 func renderImpactUnknown(r *ReviewResult, _ MarkdownOptions) string {
 	_, uncovered, total := changedFileCounts(r)
 
