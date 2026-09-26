@@ -316,10 +316,31 @@ func deriveFlowName(endpointName string) string {
 	return lastSeg + " (" + endpointName + ")"
 }
 
-// ensureFlowNode creates a flow:use_case node if it doesn't already exist.
+// ensureFlowNode creates a flow:use_case node if it doesn't already exist,
+// and either way (re)asserts its derive-flows evidence.
+//
+// The evidence call runs on both branches — including when the node already
+// exists — so that a flow node loaded from a graph snapshot (which excludes
+// derive-flows evidence by design: it is recomputed here, not stored) gets
+// its evidence back on the very next DeriveFlows pass rather than being
+// stuck with no evidence, and therefore no derivable trust, forever. Before
+// this, the already-exists branch returned immediately and never called
+// addCreationEvidence, leaving such a node's trust at whatever placeholder
+// it was inserted with.
+//
+// Safe to call unconditionally on every DeriveFlows run, including the
+// ordinary repeated-scan case where the node already exists with its
+// evidence already current: addCreationEvidence's AddEvidence call dedupes
+// on (target_kind, node_id, source_kind, file_path, extractor_id, polarity),
+// which is identical across repeat calls for the same flow node, so a repeat
+// call revalidates the existing row (observed_at/confidence refreshed, status
+// back to "valid") rather than inserting a duplicate — see
+// TestDeriveFlows_Idempotent, which pins evidence count staying at 1 across
+// two consecutive DeriveFlows runs.
 func (g *Graph) ensureFlowNode(domainKey string, revisionID int64, nodeKey, name string) error {
 	if _, err := g.store.GetNodeIDByKey(nodeKey); err == nil {
-		return nil // already exists
+		return g.addCreationEvidence(nodeKey, revisionID, name, "",
+			"chronicle:derive_flows", "system_generated")
 	}
 	g.store.UpsertNode(store.NodeRow{
 		NodeKey:            nodeKey,

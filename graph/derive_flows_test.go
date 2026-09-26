@@ -217,6 +217,18 @@ func TestDeriveFlows_Cycle(t *testing.T) {
 }
 
 // TestDeriveFlows_Idempotent: re-running DeriveFlows must not create duplicate nodes or edges.
+//
+// This also pins the safety property ensureFlowNode's already-exists branch
+// now depends on: calling addCreationEvidence unconditionally (so a flow node
+// loaded from a snapshot, with no evidence of its own, gets it back) must not
+// duplicate evidence on an ordinary repeated scan where the flow node already
+// has it. AddEvidence's dedup lookup keys on (target_kind, node_id,
+// source_kind, file_path, extractor_id, polarity) — identical across the two
+// DeriveFlows calls below for the same flow node — so the second call must
+// revalidate the existing row, not insert a second one. If this ever regresses
+// (dedup stops holding for this tuple), the fix in ensureFlowNode would turn
+// every ordinary incremental scan into an evidence leak, so this is checked
+// with the same weight as the node/edge duplication checks below it.
 func TestDeriveFlows_Idempotent(t *testing.T) {
 	g, revID := setupFlowTestGraph(t)
 	domain := "idempotent-domain"
@@ -235,6 +247,19 @@ func TestDeriveFlows_Idempotent(t *testing.T) {
 	if err := g.DeriveFlows(domain, revID); err != nil {
 		t.Fatalf("DeriveFlows (1st): %v", err)
 	}
+
+	flowsAfterFirst := listFlowNodes(t, g, domain)
+	if len(flowsAfterFirst) != 1 {
+		t.Fatalf("want 1 flow node after 1st run, got %d", len(flowsAfterFirst))
+	}
+	evidenceAfterFirst, err := g.store.ListEvidenceByNode(flowsAfterFirst[0].NodeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode after 1st run: %v", err)
+	}
+	if len(evidenceAfterFirst) != 1 {
+		t.Fatalf("want 1 evidence row on the flow node after 1st run, got %d: %+v", len(evidenceAfterFirst), evidenceAfterFirst)
+	}
+
 	if err := g.DeriveFlows(domain, revID); err != nil {
 		t.Fatalf("DeriveFlows (2nd): %v", err)
 	}
@@ -243,6 +268,21 @@ func TestDeriveFlows_Idempotent(t *testing.T) {
 	flows := listFlowNodes(t, g, domain)
 	if len(flows) != 1 {
 		t.Errorf("want 1 flow node after 2 runs, got %d", len(flows))
+	}
+
+	// The critical assertion: the flow node's evidence count must NOT grow on
+	// the second run — dedup must revalidate the existing row, not duplicate it.
+	evidenceAfterSecond, err := g.store.ListEvidenceByNode(flows[0].NodeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode after 2nd run: %v", err)
+	}
+	if len(evidenceAfterSecond) != 1 {
+		t.Fatalf("want 1 evidence row on the flow node after 2 runs (dedup should revalidate, not duplicate), got %d: %+v",
+			len(evidenceAfterSecond), evidenceAfterSecond)
+	}
+	if evidenceAfterSecond[0].EvidenceID != evidenceAfterFirst[0].EvidenceID {
+		t.Errorf("evidence row identity changed across runs: 1st run evidence_id=%d, 2nd run evidence_id=%d — expected the same row to be revalidated in place",
+			evidenceAfterFirst[0].EvidenceID, evidenceAfterSecond[0].EvidenceID)
 	}
 
 	// Exactly 1 TRIGGERS_FLOW edge
@@ -256,6 +296,18 @@ func TestDeriveFlows_Idempotent(t *testing.T) {
 	requires, _ := g.store.ListEdges(store.EdgeFilter{EdgeType: "REQUIRES", Active: &active})
 	if len(requires) != 1 {
 		t.Errorf("want 1 REQUIRES edge after 2 runs, got %d: %v", len(requires), requires)
+	}
+
+	// Same dedup property must hold for the TRIGGERS_FLOW edge's own
+	// derive-flows evidence (addEdgeCreationEvidence is called unconditionally
+	// on every run, unrelated to this fix, but was never directly checked for
+	// duplication either).
+	triggerEvidence, err := g.store.ListEvidenceByEdge(triggers[0].EdgeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByEdge(TRIGGERS_FLOW) after 2 runs: %v", err)
+	}
+	if len(triggerEvidence) != 1 {
+		t.Errorf("want 1 evidence row on the TRIGGERS_FLOW edge after 2 runs, got %d: %+v", len(triggerEvidence), triggerEvidence)
 	}
 }
 

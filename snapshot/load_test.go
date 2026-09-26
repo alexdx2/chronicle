@@ -76,32 +76,35 @@ func TestLoad_RoundTrip(t *testing.T) {
 }
 
 // TestLoad_TrustRecomputed proves trust is actually recomputed to match the
-// original — not merely present or non-zero — for every node whose evidence
-// survived export and whose ORIGINAL stored trust is itself consistent with
-// that evidence. Two categories are excluded, both verified directly against
-// the fixture db rather than assumed:
+// original — not merely present or non-zero — for every node and edge whose
+// ORIGINAL stored trust is itself consistent with its own current evidence.
 //
-//   - Zero surviving evidence: a node whose ENTIRE evidence was derived
-//     (dropped by FromStore — see snapshot/derived.go) has nothing left for
-//     RecalculateNodeTrust to recompute FROM; it leaves a zero-evidence node
-//     exactly as inserted (graph/trust.go) rather than deriving a number from
-//     nothing, so such a node keeps Load's placeholder. tom-and-jerry's 19
-//     flow:use_case nodes are exactly this case (each has a single
-//     chronicle:derive_flows evidence row, stripped by export).
-//   - Original already stale relative to its own evidence: graph.ComputeTrust
-//     — the same function RecalculateNodeTrust calls — is run here directly
-//     against the node's surviving evidence; if that disagrees with what the
-//     fixture has stored, the fixture's stored trust predates some earlier,
-//     unrelated change to that evidence (verified: node
-//     infra:broker:battle-result has one evidence row whose status is
-//     "stale" — recomputing gives confidence 0, but the fixture still stores
-//     0.6, i.e. nothing recomputed it after that transition). There is no
-//     correct value to hold Load to in that case; it is a pre-existing
-//     fixture data-quality artifact, not a Load defect.
+// The exclusion (originalConsistentWithOwnEvidence, below) is structural, not
+// a hardcoded key list: it recomputes graph.ComputeTrust — the exact function
+// RecalculateNodeTrust/RecalculateEdgeTrust call — directly against the
+// ORIGINAL store's own current evidence for that node/edge (not the
+// snapshot's, which may have dropped derived rows) and skips only when that
+// disagrees with what the fixture has stored, i.e. the fixture's stored trust
+// predates some earlier, unrelated change to its evidence (or was set some
+// other way entirely) and there is no correct value left to hold Load to.
+// Verified directly against the fixture, this excludes exactly 3 of 126
+// nodes and 0 of 198 edges:
+//   - infra:broker:battle-result: one evidence row whose status is "stale" —
+//     recomputing gives confidence 0, but the fixture still stores 0.6, i.e.
+//     nothing recomputed it after that transition.
+//   - contract:endpoint:tom-and-jerry:post:/email/digest and .../post/push:
+//     materialized "external" boundary-marker nodes with a hardcoded
+//     confidence 0.8 and no evidence at all (see graph's
+//     materializeExternalEndpoints) — there is nothing to recompute from.
 //
-// Both exclusions are structural (evidence shape), not a hardcoded node list,
-// so this keeps checking every node the fixture actually allows checking —
-// verified to still be the large majority (see the t.Logf breakdown).
+// tom-and-jerry's 19 flow:use_case nodes are NOT excluded: their original
+// evidence (one chronicle:derive_flows row, confidence 0.6) recomputes to
+// exactly the fixture's stored 0.6/1.0/0.6, and after the
+// graph/derive_flows.go fix (ensureFlowNode now re-asserts a flow node's
+// evidence even when the node already exists, not just on first creation)
+// Load restores that evidence too, so these nodes are included and checked
+// like any other — this is what closes that finding: this test no longer
+// looks away from them.
 func TestLoad_TrustRecomputed(t *testing.T) {
 	s := copyFixtureStore(t)
 	reg := testRegistry(t)
@@ -118,30 +121,35 @@ func TestLoad_TrustRecomputed(t *testing.T) {
 	defer closer()
 
 	const eps = 1e-9
-	compared, skippedNoEvidence, skippedStaleOriginal := 0, 0, 0
-	for _, n := range snap.Nodes {
-		if len(n.Evidence) == 0 {
-			skippedNoEvidence++
-			continue
-		}
 
+	// originalConsistentWithOwnEvidence reports whether trust (confidence,
+	// freshness, trustScore) already matches what graph.ComputeTrust derives
+	// from evidence — the set of rows passed in is the caller's choice, so
+	// this works for both a node's ListEvidenceByNode and an edge's
+	// ListEvidenceByEdge.
+	originalConsistentWithOwnEvidence := func(confidence, freshness, trustScore float64, evidence []store.EvidenceRow) (bool, float64, float64, float64) {
+		impliedConf, impliedFresh, impliedTrust, _ := graph.ComputeTrust(evidence)
+		ok := math.Abs(confidence-impliedConf) <= eps &&
+			math.Abs(freshness-impliedFresh) <= eps &&
+			math.Abs(trustScore-impliedTrust) <= eps
+		return ok, impliedConf, impliedFresh, impliedTrust
+	}
+
+	nodesCompared, nodesSkipped := 0, 0
+	for _, n := range snap.Nodes {
 		orig, err := s.GetNodeByKey(n.ID)
 		if err != nil {
 			t.Fatalf("original store: GetNodeByKey(%q): %v", n.ID, err)
 		}
-
-		// What the snapshot's surviving evidence for this node implies,
-		// via the exact function RecalculateNodeTrust itself calls.
-		rows := make([]store.EvidenceRow, len(n.Evidence))
-		for i, ev := range n.Evidence {
-			rows[i] = evidenceRowFrom("node", 0, 0, ev)
+		origEvidence, err := s.ListEvidenceByNode(orig.NodeID)
+		if err != nil {
+			t.Fatalf("original store: ListEvidenceByNode(%q): %v", n.ID, err)
 		}
-		impliedConf, impliedFresh, impliedTrust, _ := graph.ComputeTrust(rows)
-		if math.Abs(orig.Confidence-impliedConf) > eps ||
-			math.Abs(orig.Freshness-impliedFresh) > eps ||
-			math.Abs(orig.TrustScore-impliedTrust) > eps {
-			skippedStaleOriginal++
-			t.Logf("node %s: original stored trust (%.4f/%.4f/%.4f) already disagrees with what its own surviving evidence implies (%.4f/%.4f/%.4f) — skipping as a pre-existing fixture artifact, not a Load defect",
+		ok, impliedConf, impliedFresh, impliedTrust := originalConsistentWithOwnEvidence(
+			orig.Confidence, orig.Freshness, orig.TrustScore, origEvidence)
+		if !ok {
+			nodesSkipped++
+			t.Logf("node %s: original stored trust (%.4f/%.4f/%.4f) already disagrees with what its own current evidence implies (%.4f/%.4f/%.4f) — skipping as a pre-existing fixture artifact, not a Load defect",
 				n.ID, orig.Confidence, orig.Freshness, orig.TrustScore, impliedConf, impliedFresh, impliedTrust)
 			continue
 		}
@@ -159,13 +167,54 @@ func TestLoad_TrustRecomputed(t *testing.T) {
 		if math.Abs(orig.TrustScore-got.TrustScore) > eps {
 			t.Errorf("node %s: trust_score = %v, want %v (original, within %g)", n.ID, got.TrustScore, orig.TrustScore, eps)
 		}
-		compared++
+		nodesCompared++
 	}
-	if compared == 0 {
+	if nodesCompared == 0 {
 		t.Fatal("no nodes were compared — test fixture is not exercising anything")
 	}
-	t.Logf("compared trust on %d nodes (%d skipped: no surviving evidence, %d skipped: original already stale relative to its own evidence)",
-		compared, skippedNoEvidence, skippedStaleOriginal)
+	t.Logf("compared trust on %d nodes (%d skipped: original already stale relative to its own evidence)", nodesCompared, nodesSkipped)
+
+	// Edge trust is a separate code path (RecalculateEdgeTrust) from node
+	// trust (RecalculateNodeTrust) and needs its own proof, not an inference
+	// from the node case above.
+	edgesCompared, edgesSkipped := 0, 0
+	for _, e := range snap.Edges {
+		orig, err := s.GetEdgeByKey(e.ID)
+		if err != nil {
+			t.Fatalf("original store: GetEdgeByKey(%q): %v", e.ID, err)
+		}
+		origEvidence, err := s.ListEvidenceByEdge(orig.EdgeID)
+		if err != nil {
+			t.Fatalf("original store: ListEvidenceByEdge(%q): %v", e.ID, err)
+		}
+		ok, impliedConf, impliedFresh, impliedTrust := originalConsistentWithOwnEvidence(
+			orig.Confidence, orig.Freshness, orig.TrustScore, origEvidence)
+		if !ok {
+			edgesSkipped++
+			t.Logf("edge %s: original stored trust (%.4f/%.4f/%.4f) already disagrees with what its own current evidence implies (%.4f/%.4f/%.4f) — skipping as a pre-existing fixture artifact, not a Load defect",
+				e.ID, orig.Confidence, orig.Freshness, orig.TrustScore, impliedConf, impliedFresh, impliedTrust)
+			continue
+		}
+
+		got, err := g.Store().GetEdgeByKey(e.ID)
+		if err != nil {
+			t.Fatalf("reloaded store: GetEdgeByKey(%q): %v", e.ID, err)
+		}
+		if math.Abs(orig.Confidence-got.Confidence) > eps {
+			t.Errorf("edge %s: confidence = %v, want %v (original, within %g)", e.ID, got.Confidence, orig.Confidence, eps)
+		}
+		if math.Abs(orig.Freshness-got.Freshness) > eps {
+			t.Errorf("edge %s: freshness = %v, want %v (original, within %g)", e.ID, got.Freshness, orig.Freshness, eps)
+		}
+		if math.Abs(orig.TrustScore-got.TrustScore) > eps {
+			t.Errorf("edge %s: trust_score = %v, want %v (original, within %g)", e.ID, got.TrustScore, orig.TrustScore, eps)
+		}
+		edgesCompared++
+	}
+	if edgesCompared == 0 {
+		t.Fatal("no edges were compared — test fixture is not exercising anything")
+	}
+	t.Logf("compared trust on %d edges (%d skipped: original already stale relative to its own evidence)", edgesCompared, edgesSkipped)
 }
 
 // TestLoad_NoJournalWrites proves SetJournaling(false) produces zero journal
@@ -217,6 +266,105 @@ func TestLoad_NoJournalWrites(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(st.Dir(), "events")); !os.IsNotExist(err) {
 		t.Errorf("events directory exists after FlushJournal (err=%v), want it never created", err)
+	}
+}
+
+// TestLoad_TermsAndCoverage exercises loadAliasesTermsCoverage's term and
+// file-coverage restoration — the one part of Load neither the tom-and-jerry
+// fixture (0 domain_language rows, no file_coverage table at all in the
+// tracked db) nor buildSyntheticSnapshot's performance fixture (nodes/edges/
+// evidence only) touches at all. Built by hand rather than derived from a
+// store, since nothing else in this file already has term/coverage data to
+// reuse.
+func TestLoad_TermsAndCoverage(t *testing.T) {
+	reg := testRegistry(t)
+
+	snap := &Snapshot{
+		Header: Header{
+			Kind: "header", Format: Format, Version: Version, FactSchema: FactSchema,
+			Domains: []string{"testdomain"},
+		},
+		Terms: []Term{
+			{
+				Kind: "term", ID: "testdomain#Order", Domain: "testdomain", Term: "Order",
+				Aliases: []string{"PO", "purchase order"}, AntiPatterns: []string{"Invoice"},
+				Description: "A customer order.", Context: "commerce", Examples: []string{"order-123"},
+			},
+		},
+		Coverage: []Coverage{
+			{
+				Kind: "coverage", Path: "src/order.service.ts", Blob: "abc123",
+				Extractors: []ExtractorRun{
+					{ID: "chronicle-ast", Version: "1", Status: "extracted"},
+					{ID: "chronicle-scan", Version: "fact-schema@1", Status: "extracted"},
+				},
+			},
+		},
+	}
+
+	g, closer, err := Load(snap, reg, LoadOptions{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer closer()
+
+	terms, err := g.Store().GetGlossary("testdomain")
+	if err != nil {
+		t.Fatalf("GetGlossary: %v", err)
+	}
+	if len(terms) != 1 {
+		t.Fatalf("len(terms) = %d, want 1: %+v", len(terms), terms)
+	}
+	term := terms[0]
+	if term.Term != "Order" || term.DomainKey != "testdomain" || term.Description != "A customer order." ||
+		term.Context != "commerce" ||
+		len(term.Aliases) != 2 || term.Aliases[0] != "PO" || term.Aliases[1] != "purchase order" ||
+		len(term.AntiPatterns) != 1 || term.AntiPatterns[0] != "Invoice" ||
+		len(term.Examples) != 1 || term.Examples[0] != "order-123" {
+		t.Errorf("term = %+v, want the fields from the snapshot's Term record", term)
+	}
+
+	coverage, err := g.Store().ListCoverage("")
+	if err != nil {
+		t.Fatalf("ListCoverage: %v", err)
+	}
+	if len(coverage) != 2 {
+		t.Fatalf("len(coverage rows) = %d, want 2 (one row per extractor): %+v", len(coverage), coverage)
+	}
+	byExtractor := map[string]store.CoverageRow{}
+	for _, c := range coverage {
+		byExtractor[c.ExtractorID] = c
+	}
+	ast, ok := byExtractor["chronicle-ast"]
+	if !ok {
+		t.Fatalf("missing coverage row for chronicle-ast: %+v", coverage)
+	}
+	if ast.FilePath != "src/order.service.ts" || ast.ExtractorVersion != "1" || ast.Status != "extracted" || ast.BlobSHA != "abc123" {
+		t.Errorf("chronicle-ast coverage row = %+v, want the fields from the snapshot's Coverage record", ast)
+	}
+	scan, ok := byExtractor["chronicle-scan"]
+	if !ok {
+		t.Fatalf("missing coverage row for chronicle-scan: %+v", coverage)
+	}
+	if scan.FilePath != "src/order.service.ts" || scan.ExtractorVersion != "fact-schema@1" || scan.Status != "extracted" || scan.BlobSHA != "abc123" {
+		t.Errorf("chronicle-scan coverage row = %+v, want the fields from the snapshot's Coverage record", scan)
+	}
+
+	// Re-exporting must reproduce the same grouped Term/Coverage shape —
+	// this is the actual round trip loadAliasesTermsCoverage exists to
+	// support, not just individual rows landing in the right table.
+	reExported, err := FromStore(g.Store(), ExportOptions{})
+	if err != nil {
+		t.Fatalf("FromStore (reloaded): %v", err)
+	}
+	if len(reExported.Terms) != 1 {
+		t.Fatalf("re-export: len(Terms) = %d, want 1", len(reExported.Terms))
+	}
+	if len(reExported.Coverage) != 1 {
+		t.Fatalf("re-export: len(Coverage) = %d, want 1 (one record per path)", len(reExported.Coverage))
+	}
+	if got := len(reExported.Coverage[0].Extractors); got != 2 {
+		t.Errorf("re-export: Coverage[0].Extractors has %d entries, want 2: %+v", got, reExported.Coverage[0].Extractors)
 	}
 }
 

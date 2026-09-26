@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -168,6 +169,192 @@ func TestListEvidenceByAssertionKind(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Errorf("expected 0 rows for unknown assertion_kind, got %d", len(none))
+	}
+}
+
+// evidenceUIDByID reads evidence_uid directly by evidence_id. Needed because
+// queryEvidenceArgs — the SELECT shared by ListEvidenceByNode/ListEvidenceByEdge/
+// ListEvidenceByEdgeIDs — does not select evidence_uid (or context_id) at
+// all, so EvidenceRow.EvidenceUID on anything those return is always "",
+// regardless of what is actually stored. Discovered while writing
+// TestInsertEvidenceBatch_Inserts: asserting EvidenceUID off a
+// ListEvidenceByNode result silently passed on empty strings on both sides,
+// which is exactly the kind of true-by-accident assertion worth naming
+// rather than leaving in place — this helper goes straight at the column
+// instead. Pre-existing in queryEvidenceArgs, unrelated to InsertEvidenceBatch
+// and out of scope for this test to fix (it also affects AddEvidence's
+// existing callers and snapshot/export.go's exportNodes/exportEdges, which
+// read node/edge evidence through the same two listing functions) — see the
+// task report.
+func evidenceUIDByID(t *testing.T, s *Store, evidenceID int64) string {
+	t.Helper()
+	var uid string
+	if err := s.db.QueryRow(`SELECT COALESCE(evidence_uid,'') FROM graph_evidence WHERE evidence_id = ?`, evidenceID).Scan(&uid); err != nil {
+		t.Fatalf("evidenceUIDByID(%d): %v", evidenceID, err)
+	}
+	return uid
+}
+
+// TestInsertEvidenceBatch_Inserts proves the batch path (no dedup lookup,
+// see the method's own doc comment) inserts node- and edge-attached rows
+// correctly — same fields, same evidence_uid — round-tripping through
+// ListEvidenceByNode/ListEvidenceByEdge (plus a direct evidence_uid column
+// read — see evidenceUIDByID) exactly like AddEvidence's own insert path
+// would.
+func TestInsertEvidenceBatch_Inserts(t *testing.T) {
+	s := openTestStore(t)
+	revID, n1, n2 := seedNodes(t, s)
+	edgeID, err := s.UpsertEdge(makeEdgeRow("edge:calls:oc:os", n1, n2, revID))
+	if err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	rows := []EvidenceRow{
+		{
+			TargetKind: "node", NodeID: n1, SourceKind: "file", FilePath: "src/a.go",
+			LineStart: 5, ExtractorID: "chronicle-scan", ExtractorVersion: "1",
+			Confidence: 0.9, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			EvidenceUID: "ev-node-1", Metadata: "{}",
+		},
+		{
+			TargetKind: "node", NodeID: n2, SourceKind: "file", FilePath: "src/b.go",
+			LineStart: 10, ExtractorID: "chronicle-scan", ExtractorVersion: "1",
+			Confidence: 0.8, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			EvidenceUID: "ev-node-2", Metadata: "{}",
+		},
+		{
+			TargetKind: "edge", EdgeID: edgeID, SourceKind: "file", FilePath: "src/c.go",
+			LineStart: 20, ExtractorID: "chronicle-scan", ExtractorVersion: "1",
+			Confidence: 0.7, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			EvidenceUID: "ev-edge-1", Metadata: "{}", BlobSHA: "deadbeef",
+		},
+	}
+
+	if err := s.InsertEvidenceBatch(rows); err != nil {
+		t.Fatalf("InsertEvidenceBatch: %v", err)
+	}
+
+	n1Rows, err := s.ListEvidenceByNode(n1)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode(n1): %v", err)
+	}
+	if len(n1Rows) != 1 {
+		t.Fatalf("n1: len(rows) = %d, want 1: %+v", len(n1Rows), n1Rows)
+	}
+	if n1Rows[0].Confidence != 0.9 || n1Rows[0].FilePath != "src/a.go" || n1Rows[0].LineStart != 5 {
+		t.Errorf("n1 evidence = %+v, want the fields from the batch row", n1Rows[0])
+	}
+	if got := evidenceUIDByID(t, s, n1Rows[0].EvidenceID); got != "ev-node-1" {
+		t.Errorf("n1 evidence_uid = %q, want %q", got, "ev-node-1")
+	}
+
+	n2Rows, err := s.ListEvidenceByNode(n2)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode(n2): %v", err)
+	}
+	if len(n2Rows) != 1 {
+		t.Fatalf("n2: len(rows) = %d, want 1: %+v", len(n2Rows), n2Rows)
+	}
+	if n2Rows[0].Confidence != 0.8 {
+		t.Errorf("n2 evidence = %+v, want the fields from the batch row", n2Rows[0])
+	}
+	if got := evidenceUIDByID(t, s, n2Rows[0].EvidenceID); got != "ev-node-2" {
+		t.Errorf("n2 evidence_uid = %q, want %q", got, "ev-node-2")
+	}
+
+	edgeRows, err := s.ListEvidenceByEdge(edgeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByEdge: %v", err)
+	}
+	if len(edgeRows) != 1 {
+		t.Fatalf("edge: len(rows) = %d, want 1: %+v", len(edgeRows), edgeRows)
+	}
+	if edgeRows[0].Confidence != 0.7 || edgeRows[0].BlobSHA != "deadbeef" {
+		t.Errorf("edge evidence = %+v, want the fields from the batch row", edgeRows[0])
+	}
+	if got := evidenceUIDByID(t, s, edgeRows[0].EvidenceID); got != "ev-edge-1" {
+		t.Errorf("edge evidence_uid = %q, want %q", got, "ev-edge-1")
+	}
+}
+
+// TestInsertEvidenceBatch_RollsBackOnConstraintFailure proves the batch is
+// all-or-nothing: a row that fails a SQL CHECK constraint partway through
+// must roll back rows the transaction already executed successfully before
+// it, not just skip the bad one.
+func TestInsertEvidenceBatch_RollsBackOnConstraintFailure(t *testing.T) {
+	s := openTestStore(t)
+	_, n1, n2 := seedNodes(t, s)
+
+	rows := []EvidenceRow{
+		{
+			TargetKind: "node", NodeID: n1, SourceKind: "file", FilePath: "src/a.go",
+			LineStart: 5, ExtractorID: "chronicle-scan", ExtractorVersion: "1",
+			Confidence: 0.9, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			EvidenceUID: "ev-good", Metadata: "{}",
+		},
+		{
+			// Confidence 1.5 violates graph_evidence's own
+			// CHECK (confidence >= 0 AND confidence <= 1).
+			TargetKind: "node", NodeID: n2, SourceKind: "file", FilePath: "src/b.go",
+			LineStart: 10, ExtractorID: "chronicle-scan", ExtractorVersion: "1",
+			Confidence: 1.5, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			EvidenceUID: "ev-bad", Metadata: "{}",
+		},
+	}
+
+	if err := s.InsertEvidenceBatch(rows); err == nil {
+		t.Fatal("InsertEvidenceBatch: want an error from the out-of-range confidence, got nil")
+	}
+
+	n1Rows, err := s.ListEvidenceByNode(n1)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode(n1): %v", err)
+	}
+	if len(n1Rows) != 0 {
+		t.Errorf("n1 has %d evidence rows after a failed batch, want 0 (the row before the failing one should have rolled back too): %+v", len(n1Rows), n1Rows)
+	}
+
+	var total int
+	if err := s.QueryRowScan(`SELECT COUNT(*) FROM graph_evidence`, &total); err != nil {
+		t.Fatalf("count graph_evidence: %v", err)
+	}
+	if total != 0 {
+		t.Errorf("graph_evidence has %d rows after a failed batch, want 0", total)
+	}
+}
+
+// TestInsertEvidenceBatch_RefusesTransactionScopedStore confirms the
+// transaction-scoping guard InsertEvidenceBatch actually has — it must
+// refuse to run (and insert nothing) when called on a store already inside
+// a WithTx callback, since it needs to open its own top-level transaction
+// (mirroring CopyLocalState in store/journal_rebuild.go), and *sql.Tx
+// cannot nest.
+func TestInsertEvidenceBatch_RefusesTransactionScopedStore(t *testing.T) {
+	s := openTestStore(t)
+	_, n1, _ := seedNodes(t, s)
+
+	batchErr := s.WithTx(func(tx *Store) error {
+		return tx.InsertEvidenceBatch([]EvidenceRow{
+			{
+				TargetKind: "node", NodeID: n1, SourceKind: "file", FilePath: "src/a.go",
+				ExtractorID: "chronicle-scan", ExtractorVersion: "1", Confidence: 0.9,
+				EvidenceStatus: "valid", EvidencePolarity: "positive", EvidenceUID: "ev-x", Metadata: "{}",
+			},
+		})
+	})
+	if batchErr == nil {
+		t.Fatal("InsertEvidenceBatch on a transaction-scoped store: want an error, got nil")
+	}
+	if !strings.Contains(batchErr.Error(), "transaction-scoped") {
+		t.Errorf("error = %q, want it to mention the transaction-scoping guard", batchErr.Error())
+	}
+
+	rows, err := s.ListEvidenceByNode(n1)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("evidence was inserted despite the transaction-scoping guard: %+v", rows)
 	}
 }
 
