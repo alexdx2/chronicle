@@ -31,30 +31,64 @@ func backfillExtractorVersion() string {
 	return fmt.Sprintf("fact-schema@%d", store.FactSchemaVersion)
 }
 
-// BackfillReport summarizes one BackfillBlobs run: Updated is how many files
-// got a file_coverage row with a real blob; Unresolved is how many could
-// not be resolved at all because the revision that recorded them names a
-// commit no longer reachable in repoRoot's git history (a shallow clone, or
-// a repository recreated from scratch).
+// BackfillReport summarizes one BackfillBlobs run: Updated is how many
+// distinct (domain, file) pairs got a file_coverage row with a real blob;
+// Unresolved is how many could not be resolved at all because the revision
+// that recorded them names a commit no longer reachable in repoRoot's git
+// history (a shallow clone, or a repository recreated from scratch).
+//
+// Counted once per (domain, file), not once per row: a file can carry many
+// scan_extractions rows (voting) and many evidence rows (one per fact any
+// node or edge asserts from it), and a human reading "47 unresolved" means
+// "47 files", not "many facts about a handful of files". Evidence rows that
+// get their own blob_sha patched by the fallback pass below by reusing an
+// already-resolved file's cached blob do not add to either count — only the
+// (domain, file) resolution itself does.
 type BackfillReport struct{ Updated, Unresolved int }
 
-// coverageKey identifies one (domain, file) pair BackfillBlobs has already
-// attempted to resolve — successfully or not. It mirrors file_coverage's own
-// primary key minus extractor_id: BackfillBlobs only ever writes one
-// extractor's worth of coverage per file, so the pair is enough to dedupe on.
+// coverageKey identifies one (domain, file) pair. It mirrors file_coverage's
+// own primary key minus extractor_id: BackfillBlobs only ever writes one
+// extractor's worth of coverage per file, so the pair is enough to key a
+// cache (and BackfillReport's counts) on.
 type coverageKey struct {
 	domain string
 	path   string
 }
 
-// BackfillBlobs reconstructs file_coverage.blob_sha for a project whose scan
-// history predates blob tracking, or whose event journal used to be
-// committed to git instead of the graph.jsonl snapshot: neither
-// scan_extractions nor graph_evidence carried a git blob id back then (the
-// column defaults to an empty string for any row written before it
+// blobResolution is a cached outcome of resolving one coverageKey's blob:
+// Blob is set and OK is true on success; OK is false (Blob "") when the
+// revision that would answer it is not reachable in repoRoot's history.
+// Cached so a (domain, file) pair already settled by one row — whether a
+// scan_extractions row in the main pass or an earlier evidence row in the
+// fallback pass — is never re-resolved (no repeat git subprocess calls, no
+// double-counted report) when a LATER evidence row for the very same file
+// needs the same answer.
+type blobResolution struct {
+	Blob string
+	OK   bool
+}
+
+// BackfillBlobs reconstructs blob ids for a project whose scan history
+// predates blob tracking, or whose event journal used to be committed to
+// git instead of the graph.jsonl snapshot: neither scan_extractions,
+// file_coverage nor graph_evidence carried a git blob id back then (blob_sha
+// defaults to an empty string for any row written before the column
 // existed), so a project adopting the snapshot format has nothing telling
 // `chronicle graph status` which blob each already-scanned file was last
-// seen at.
+// seen at, and would export every old evidence row's Blob field empty in
+// graph.jsonl forever.
+//
+// It fills in BOTH places blob_sha lives:
+//
+//   - file_coverage, via the existing UpsertCoverage — what
+//     snapshot.ComputeFreshness (chronicle graph status) actually compares
+//     against.
+//   - graph_evidence.blob_sha on any evidence row that has none, via the new
+//     UpdateEvidenceBlobSHA — what FromStore's own evidence export
+//     (filterEvidence, snapshot/export.go) reads directly off the row to
+//     fill Evidence.Blob in graph.jsonl. Leaving this column alone would
+//     mean a migrated project's graph.jsonl still shows every old evidence
+//     entry with an empty blob, defeating half the point of migrating.
 //
 // Main pass: for every domain (GetDomains), every scan revision
 // (ListScanRevisions, newest first — see unboundedScanRevisions) and every
@@ -64,28 +98,39 @@ type coverageKey struct {
 // git directly for the blob id via rev-parse/ls-tree, so the blob
 // computation always goes through the one function this project already
 // trusts for it. Revisions are walked newest-first and a (domain, file) pair
-// is only ever resolved once, so the coverage row this writes always
-// reflects the file's MOST RECENTLY recorded content — file_coverage's usual
-// "standing latest observation" shape (UpsertCoverage overwrites in place).
+// is only ever resolved once (cached in a blobResolution), so the coverage
+// row this writes always reflects the file's MOST RECENTLY recorded
+// content — file_coverage's usual "standing latest observation" shape
+// (UpsertCoverage overwrites in place).
 //
-// Fallback pass: every current node's and edge's evidence is then walked to
-// catch files the main pass never touched at all — a file captured only by
-// the structural phase (whose scan_extractions rows use the "structural"
-// role, which ListScanExtractions deliberately excludes) has no "serving"
-// scan_extractions row, so its blob is instead reconstructed from the
-// evidence's OWN valid_from_revision_id and file_path. Evidence that already
-// carries a blob, or whose (domain, file) the main pass already settled, is
-// skipped.
+// Fallback pass (backfillFromEvidence): every current node's and edge's
+// evidence is then walked. Two independent things happen per evidence row
+// with a non-empty FilePath:
+//
+//  1. If that (domain, file) has no cached resolution yet (the main pass
+//     never reached it — e.g. a file captured only by the structural phase,
+//     whose scan_extractions rows use the "structural" role, which
+//     ListScanExtractions deliberately excludes), it is resolved from the
+//     evidence's OWN valid_from_revision_id and file_path, cached, and
+//     (on success) written to file_coverage too, exactly like the main pass
+//     would have.
+//  2. If the row's own blob_sha is empty and a resolution (fresh or cached
+//     from any earlier row or the main pass) succeeded, THIS row is patched
+//     via UpdateEvidenceBlobSHA — regardless of whether its (domain, file)
+//     was already settled by the main pass or by a previous evidence row.
+//     This runs for every qualifying row, not just the first one seen for a
+//     given file: a file the main pass already resolved can still have
+//     several evidence rows with no blob of their own, and every one of
+//     them needs patching, not just whichever file happens to need a NEW
+//     resolution.
 //
 // A file whose revision's git_after_sha is not reachable in repoRoot's
 // history at all (a shallow clone, or a repository recreated from scratch)
 // cannot be resolved: it is left without a blob and counted as Unresolved
-// rather than failing the whole run. The only mutation this function
-// performs is st.UpsertCoverage — it never writes graph_evidence directly;
-// evidence is read here only to find files scan_extractions missed.
+// rather than failing the whole run.
 func BackfillBlobs(st *store.Store, repoRoot string) (BackfillReport, error) {
 	var report BackfillReport
-	resolved := map[coverageKey]bool{}
+	cache := map[coverageKey]blobResolution{}
 
 	domains, err := st.GetDomains()
 	if err != nil {
@@ -104,13 +149,14 @@ func BackfillBlobs(st *store.Store, repoRoot string) (BackfillReport, error) {
 			}
 			for _, ext := range extractions {
 				key := coverageKey{domain, ext.FilePath}
-				if resolved[key] {
+				if _, already := cache[key]; already {
 					continue // a newer revision already settled this file
 				}
-				resolved[key] = true
 
-				blob, ok := resolveBlob(repoRoot, rev.GitAfterSHA, ext.FilePath)
-				if !ok {
+				res := blobResolution{}
+				res.Blob, res.OK = resolveBlob(repoRoot, rev.GitAfterSHA, ext.FilePath)
+				cache[key] = res
+				if !res.OK {
 					report.Unresolved++
 					continue
 				}
@@ -120,7 +166,7 @@ func BackfillBlobs(st *store.Store, repoRoot string) (BackfillReport, error) {
 					ExtractorID:      backfillExtractorID,
 					ExtractorVersion: backfillExtractorVersion(),
 					Status:           ext.Status,
-					BlobSHA:          blob,
+					BlobSHA:          res.Blob,
 				}); err != nil {
 					return BackfillReport{}, fmt.Errorf("BackfillBlobs: upsert coverage %q/%q: %w", domain, ext.FilePath, err)
 				}
@@ -129,7 +175,7 @@ func BackfillBlobs(st *store.Store, repoRoot string) (BackfillReport, error) {
 		}
 	}
 
-	if err := backfillFromEvidence(st, repoRoot, resolved, &report); err != nil {
+	if err := backfillFromEvidence(st, repoRoot, cache, &report); err != nil {
 		return BackfillReport{}, err
 	}
 
@@ -141,9 +187,9 @@ func BackfillBlobs(st *store.Store, repoRoot string) (BackfillReport, error) {
 // FromStore itself does (ListNodes/ListEdges, then per-node/per-edge
 // evidence), rather than adding a new store method to select graph_evidence
 // broadly: this is a one-time migration path, not a hot one, and reusing an
-// established read pattern keeps it inside "never mutate graph_* tables with
-// raw SQL" without inventing a new store query surface for it.
-func backfillFromEvidence(st *store.Store, repoRoot string, resolved map[coverageKey]bool, report *BackfillReport) error {
+// established read pattern keeps it from growing the store's read surface
+// for a single caller.
+func backfillFromEvidence(st *store.Store, repoRoot string, cache map[coverageKey]blobResolution, report *BackfillReport) error {
 	nodes, err := st.ListNodes(store.NodeFilter{})
 	if err != nil {
 		return fmt.Errorf("BackfillBlobs: list nodes: %w", err)
@@ -153,7 +199,7 @@ func backfillFromEvidence(st *store.Store, repoRoot string, resolved map[coverag
 		if err != nil {
 			return fmt.Errorf("BackfillBlobs: evidence for node %d: %w", n.NodeID, err)
 		}
-		if err := backfillEvidenceRows(st, repoRoot, n.DomainKey, ev, resolved, report); err != nil {
+		if err := backfillEvidenceRows(st, repoRoot, n.DomainKey, ev, cache, report); err != nil {
 			return err
 		}
 	}
@@ -173,7 +219,7 @@ func backfillFromEvidence(st *store.Store, repoRoot string, resolved map[coverag
 		// write, so this is populated for any edge written through the
 		// ordinary store API.
 		domain := store.DomainFromNodeKey(e.FromNodeKey)
-		if err := backfillEvidenceRows(st, repoRoot, domain, ev, resolved, report); err != nil {
+		if err := backfillEvidenceRows(st, repoRoot, domain, ev, cache, report); err != nil {
 			return err
 		}
 	}
@@ -181,49 +227,70 @@ func backfillFromEvidence(st *store.Store, repoRoot string, resolved map[coverag
 }
 
 // backfillEvidenceRows applies BackfillBlobs' evidence fallback to one
-// node's or edge's evidence rows, scoped to domain (see BackfillBlobs' doc
-// comment for the algorithm).
-func backfillEvidenceRows(st *store.Store, repoRoot, domain string, rows []store.EvidenceRow, resolved map[coverageKey]bool, report *BackfillReport) error {
+// node's or edge's evidence rows, scoped to domain — see BackfillBlobs' doc
+// comment for the two independent things this does per row: settle (and
+// cache/write coverage for) the row's (domain, file) pair if nothing has
+// yet, and separately patch the row's OWN blob_sha if it has none and a
+// resolution is available.
+func backfillEvidenceRows(st *store.Store, repoRoot, domain string, rows []store.EvidenceRow, cache map[coverageKey]blobResolution, report *BackfillReport) error {
 	for _, e := range rows {
-		if e.BlobSHA != "" || e.FilePath == "" {
-			continue // already has a blob, or carries no file to backfill one for
+		if e.FilePath == "" {
+			continue // synthetic/derived evidence has no file to backfill a blob for
 		}
+
 		key := coverageKey{domain, e.FilePath}
-		if resolved[key] {
-			continue // scan_extractions (or an earlier evidence row) already settled this file
-		}
-		resolved[key] = true
+		res, cached := cache[key]
+		if !cached {
+			// Nothing — not the main pass, not an earlier evidence row — has
+			// resolved this (domain, file) yet. Resolve it from THIS row's
+			// own revision (the brief's "evidence without a serving
+			// scan_extractions row" case) and write the file_coverage row
+			// the main pass never got to, exactly as it would have.
+			rev, revErr := st.GetRevision(e.ValidFromRevisionID)
+			if revErr != nil {
+				res = blobResolution{}
+			} else {
+				res.Blob, res.OK = resolveBlob(repoRoot, rev.GitAfterSHA, e.FilePath)
+			}
+			cache[key] = res
 
-		rev, err := st.GetRevision(e.ValidFromRevisionID)
-		if err != nil {
-			report.Unresolved++
-			continue
-		}
-		blob, ok := resolveBlob(repoRoot, rev.GitAfterSHA, e.FilePath)
-		if !ok {
-			report.Unresolved++
-			continue
+			if !res.OK {
+				report.Unresolved++
+			} else {
+				extractorID := e.ExtractorID
+				if extractorID == "" {
+					extractorID = backfillExtractorID
+				}
+				extractorVersion := e.ExtractorVersion
+				if extractorVersion == "" {
+					extractorVersion = backfillExtractorVersion()
+				}
+				if err := st.UpsertCoverage(store.CoverageRow{
+					DomainKey:        domain,
+					FilePath:         e.FilePath,
+					ExtractorID:      extractorID,
+					ExtractorVersion: extractorVersion,
+					Status:           "extracted",
+					BlobSHA:          res.Blob,
+				}); err != nil {
+					return fmt.Errorf("BackfillBlobs: upsert coverage %q/%q: %w", domain, e.FilePath, err)
+				}
+				report.Updated++
+			}
 		}
 
-		extractorID := e.ExtractorID
-		if extractorID == "" {
-			extractorID = backfillExtractorID
+		// Patch THIS row's own blob_sha whenever it has none and a
+		// resolution is available — whether that resolution came from the
+		// main pass, from the block just above, or from an earlier evidence
+		// row on the same file. This must run for every qualifying row, not
+		// just the first one seen for a given (domain, file): a file the
+		// main pass already resolved can still carry several evidence rows
+		// with no blob of their own, and each one needs patching.
+		if e.BlobSHA == "" && res.OK {
+			if err := st.UpdateEvidenceBlobSHA(e.EvidenceID, res.Blob); err != nil {
+				return fmt.Errorf("BackfillBlobs: update evidence %d blob: %w", e.EvidenceID, err)
+			}
 		}
-		extractorVersion := e.ExtractorVersion
-		if extractorVersion == "" {
-			extractorVersion = backfillExtractorVersion()
-		}
-		if err := st.UpsertCoverage(store.CoverageRow{
-			DomainKey:        domain,
-			FilePath:         e.FilePath,
-			ExtractorID:      extractorID,
-			ExtractorVersion: extractorVersion,
-			Status:           "extracted",
-			BlobSHA:          blob,
-		}); err != nil {
-			return fmt.Errorf("BackfillBlobs: upsert coverage %q/%q: %w", domain, e.FilePath, err)
-		}
-		report.Updated++
 	}
 	return nil
 }

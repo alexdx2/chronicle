@@ -727,6 +727,22 @@ func (s *Store) UpdateEvidenceVerification(evidenceID int64, status, verificatio
 	})
 }
 
+// UpdateEvidenceBlobSHA patches one existing evidence row's blob_sha column
+// directly. Deliberately unjournaled, the same shape (and for the same
+// reason) as the evidence_uid legacy backfill just above
+// (`UPDATE graph_evidence SET evidence_uid = ? WHERE evidence_id = ?`):
+// blob_sha, like evidence_uid, is fully deterministic from data already on
+// the row (its own file_path, plus a resolvable historical git revision) —
+// not new semantic information a journal replay would need an event to
+// reproduce. Used by snapshot.BackfillBlobs to fill in the blob a
+// pre-blob-tracking evidence row never recorded.
+func (s *Store) UpdateEvidenceBlobSHA(evidenceID int64, blob string) error {
+	if _, err := s.db.Exec(`UPDATE graph_evidence SET blob_sha = ? WHERE evidence_id = ?`, blob, evidenceID); err != nil {
+		return fmt.Errorf("UpdateEvidenceBlobSHA %d: %w", evidenceID, err)
+	}
+	return nil
+}
+
 // Phase-1 verification must neither stale-mark nor re-verify evidence another
 // writer owns and will put right itself. Two writers qualify, and they are
 // recognised differently — one by source kind, one by extractor id.

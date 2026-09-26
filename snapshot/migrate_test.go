@@ -65,12 +65,13 @@ func TestBackfillBlobs_FromScanExtractions(t *testing.T) {
 	if _, err := st.SaveExtraction(revID, "d", "src/a.ts", "extracted", "controller", "[]", ""); err != nil {
 		t.Fatalf("SaveExtraction: %v", err)
 	}
-	if _, err := st.AddEvidence(store.EvidenceRow{
+	evID, err := st.AddEvidence(store.EvidenceRow{
 		TargetKind: "node", NodeID: nodeID, SourceKind: "structural",
 		FilePath: "src/a.ts", ExtractorID: "structural", ExtractorVersion: "1",
 		Confidence: 1, EvidenceStatus: "valid", EvidencePolarity: "positive",
 		ValidFromRevisionID: revID,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("AddEvidence: %v", err)
 	}
 
@@ -100,6 +101,28 @@ func TestBackfillBlobs_FromScanExtractions(t *testing.T) {
 	}
 	if got.BlobSHA != wantBlob {
 		t.Errorf("BlobSHA = %s, want %s (git's own blob id for src/a.ts at %s)", got.BlobSHA, wantBlob, sha)
+	}
+
+	// The evidence row itself — not just file_coverage — must also end up
+	// with a blob: FromStore's own evidence export (filterEvidence) reads
+	// Evidence.Blob straight off graph_evidence.blob_sha, never from
+	// file_coverage, so leaving this column alone would still export an
+	// empty Blob for every old evidence row after "migrating".
+	nodeEv, err := st.ListEvidenceByNode(nodeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	var gotEv *store.EvidenceRow
+	for i := range nodeEv {
+		if nodeEv[i].EvidenceID == evID {
+			gotEv = &nodeEv[i]
+		}
+	}
+	if gotEv == nil {
+		t.Fatalf("evidence %d not found after backfill", evID)
+	}
+	if gotEv.BlobSHA != wantBlob {
+		t.Errorf("evidence BlobSHA = %s, want %s (evidence's own blob_sha column, not just file_coverage)", gotEv.BlobSHA, wantBlob)
 	}
 }
 
@@ -220,5 +243,118 @@ func TestBackfillBlobs_EvidenceFallbackWhenNoScanExtractions(t *testing.T) {
 	}
 	if got.BlobSHA != wantBlob {
 		t.Errorf("BlobSHA = %s, want %s (git's own blob id for src/b.ts at %s)", got.BlobSHA, wantBlob, sha)
+	}
+}
+
+// TestBackfillBlobs_PatchesAllEvidenceRowsSharingAFile is the fix-round-1
+// regression test: a file with NO scan_extractions row at all (reachable
+// only through the evidence fallback) carries evidence on TWO different
+// owners — a node and an edge. Both rows' own blob_sha must end up patched,
+// not just the first one BackfillBlobs happens to look at.
+//
+// Before this fix, backfillEvidenceRows shared one map ("have I resolved
+// this (domain, file) yet") between two different questions: "should I
+// write file_coverage for this path" (correct to dedupe — one row is
+// enough) and "should I even look at this row to patch ITS blob_sha"
+// (wrong to dedupe this way). Once the first evidence row settled the
+// file's coverage, the second row sharing that same path was skipped
+// entirely and kept blob_sha empty forever — and, separately, BackfillBlobs
+// never wrote graph_evidence.blob_sha at all in the first version of this
+// task, only file_coverage, so FromStore's evidence export (which reads
+// Evidence.Blob straight off the row, never off file_coverage) still showed
+// every old evidence entry with an empty blob after "migrating".
+func TestBackfillBlobs_PatchesAllEvidenceRowsSharingAFile(t *testing.T) {
+	dir := initGitRepoT(t)
+	writeFileT(t, dir, "src/shared.ts", "export class Shared {}\n")
+	sha := commitAllT(t, dir, "add shared.ts")
+	wantBlob := captureGitT(t, dir, "rev-parse", sha+":src/shared.ts")
+
+	st := newMigrateTestStore(t)
+	nodeA := seedMigrateNode(t, st, "d", "src/shared.ts")
+	nodeB, err := st.UpsertNode(store.NodeRow{
+		NodeKey: "code:controller:d:b", Layer: "code", NodeType: "controller",
+		DomainKey: "d", Name: "B", FilePath: "src/other.ts", Status: "active",
+		Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("UpsertNode nodeB: %v", err)
+	}
+	edgeID, err := st.UpsertEdge(store.EdgeRow{
+		EdgeKey:        "code:controller:d:a->code:controller:d:b:CALLS_SYMBOL",
+		FromNodeID:     nodeA,
+		ToNodeID:       nodeB,
+		EdgeType:       "CALLS_SYMBOL",
+		DerivationKind: "hard",
+		Confidence:     1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	revID, err := st.CreateRevision("d", "", sha, "full_scan", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+	// Deliberately NO scan_extractions row for src/shared.ts at all — this
+	// file is reachable ONLY through evidence, on two different owners.
+	nodeEvID, err := st.AddEvidence(store.EvidenceRow{
+		TargetKind: "node", NodeID: nodeA, SourceKind: "structural",
+		FilePath: "src/shared.ts", ExtractorID: "structural", ExtractorVersion: "1",
+		Confidence: 1, EvidenceStatus: "valid", EvidencePolarity: "positive",
+		ValidFromRevisionID: revID,
+	})
+	if err != nil {
+		t.Fatalf("AddEvidence node: %v", err)
+	}
+	edgeEvID, err := st.AddEvidence(store.EvidenceRow{
+		TargetKind: "edge", EdgeID: edgeID, SourceKind: "structural",
+		FilePath: "src/shared.ts", ExtractorID: "structural", ExtractorVersion: "1",
+		Confidence: 1, EvidenceStatus: "valid", EvidencePolarity: "positive",
+		ValidFromRevisionID: revID,
+	})
+	if err != nil {
+		t.Fatalf("AddEvidence edge: %v", err)
+	}
+
+	report, err := BackfillBlobs(st, dir)
+	if err != nil {
+		t.Fatalf("BackfillBlobs: %v", err)
+	}
+	if report.Updated != 1 {
+		t.Errorf("report.Updated = %d, want 1 (one file, resolved once and cached for the second evidence row)", report.Updated)
+	}
+
+	nodeEv, err := st.ListEvidenceByNode(nodeA)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	edgeEv, err := st.ListEvidenceByEdge(edgeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByEdge: %v", err)
+	}
+
+	findByID := func(rows []store.EvidenceRow, id int64) *store.EvidenceRow {
+		for i := range rows {
+			if rows[i].EvidenceID == id {
+				return &rows[i]
+			}
+		}
+		return nil
+	}
+
+	gotNodeEv := findByID(nodeEv, nodeEvID)
+	if gotNodeEv == nil {
+		t.Fatalf("node evidence %d not found after backfill", nodeEvID)
+	}
+	if gotNodeEv.BlobSHA != wantBlob {
+		t.Errorf("node evidence BlobSHA = %s, want %s", gotNodeEv.BlobSHA, wantBlob)
+	}
+
+	gotEdgeEv := findByID(edgeEv, edgeEvID)
+	if gotEdgeEv == nil {
+		t.Fatalf("edge evidence %d not found after backfill", edgeEvID)
+	}
+	if gotEdgeEv.BlobSHA != wantBlob {
+		t.Errorf("edge evidence BlobSHA = %s, want %s (this is the row the fix-round-1 bug left empty)", gotEdgeEv.BlobSHA, wantBlob)
 	}
 }
