@@ -90,6 +90,31 @@ type blobResolution struct {
 //     mean a migrated project's graph.jsonl still shows every old evidence
 //     entry with an empty blob, defeating half the point of migrating.
 //
+// LIMITATION — the graph_evidence.blob_sha patch does not survive
+// `chronicle journal rebuild`, and there is no fix for this short of
+// re-running migrate. UpdateEvidenceBlobSHA writes straight to the column,
+// deliberately unjournaled (like the pre-existing evidence_uid legacy
+// backfill it mirrors), and graph_evidence is one of the tables
+// `journal rebuild` throws away and rebuilds from scratch by replaying
+// .depbot/events/*.jsonl (store/journal_replay.go's applyJournalEvent,
+// EvEvidenceAdd case). A historical evidence_add event recorded before
+// blob_sha existed carries no "blob_sha" key in its JSON payload at all, and
+// replay's str() field reader (journal_replay.go) returns "" for an absent
+// key — so replay silently reproduces exactly the pre-migrate, blob-less
+// row. `chronicle journal verify` (replay into a temp db, diff against
+// live) will then report every migrated evidence row's blob_sha as a
+// standing, repeating divergence on every run from that point on, and an
+// actual `chronicle journal rebuild` will erase the patch outright. The
+// only remedy is mechanical: re-run `chronicle graph migrate` again after
+// any `journal rebuild` to re-patch the affected rows.
+//
+// file_coverage is NOT subject to this: UpsertCoverage (like the rest of
+// file_coverage) was already unjournaled before this task, and
+// store/journal_rebuild.go's localStateTables carries the whole
+// file_coverage table over VERBATIM from the old db into the rebuilt one
+// rather than replaying it — so the coverage half of this function's work
+// survives a rebuild intact. Only the evidence-row patch needs re-running.
+//
 // Main pass: for every domain (GetDomains), every scan revision
 // (ListScanRevisions, newest first — see unboundedScanRevisions) and every
 // scan_extractions row on it (ListScanExtractions), the file's content at

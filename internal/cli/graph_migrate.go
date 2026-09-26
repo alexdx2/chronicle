@@ -136,6 +136,16 @@ func hasScanHistory(st *store.Store) (bool, error) {
 	return false, nil
 }
 
+// journalRebuildWarning surfaces a real, non-obvious hazard at the one
+// moment someone can actually act on it — printed to the person running the
+// command, not just left in a source comment. snapshot.BackfillBlobs' own
+// doc comment has the full mechanism (UpdateEvidenceBlobSHA's write to
+// graph_evidence.blob_sha is deliberately unjournaled, so a `chronicle
+// journal rebuild` replays graph_evidence from events that predate blob_sha
+// and silently reverts it); file_coverage is unaffected, since it is
+// carried over verbatim by a rebuild rather than replayed.
+const journalRebuildWarning = "Note: a future `chronicle journal rebuild` will silently clear the evidence blob ids just patched (file_coverage is unaffected) — re-run `chronicle graph migrate` afterward to restore them."
+
 // printMigrateReport prints the human-readable backfill report and the next
 // steps for the person running `chronicle graph migrate` — plain text, not
 // JSON: unlike `graph update`/`graph status`, this command's whole point is
@@ -145,6 +155,8 @@ func printMigrateReport(result migrateResult, graphPath string) {
 	fmt.Printf("backfilled %d file(s) from scan history, %d unresolved (revision not found in git history)\n",
 		result.Backfill.Updated, result.Backfill.Unresolved)
 	fmt.Printf("wrote %s (seq %d)\n", graphPath, result.Update.Seq)
+	fmt.Println()
+	fmt.Println(journalRebuildWarning)
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  " + migrateNextSteps)

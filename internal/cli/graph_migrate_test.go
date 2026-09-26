@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -98,11 +99,28 @@ func TestRunGraphMigrate_TomAndJerryFixture(t *testing.T) {
 	// something BackfillBlobs/runGraphMigrate introduces, so it is tolerated
 	// here by name; any OTHER warning fails the test — that would mean
 	// migrate's own output is malformed, which is exactly the brief's bar.
+	//
+	// The counts_mismatch allowlist is pinned to the exact message THIS
+	// decode produced (computed from snap's own header/actual node counts,
+	// not a hardcoded historical literal — the fixture's exact node count
+	// can drift from unrelated e2e runs writing to the same tracked db, see
+	// task-7-report.md) plus an explicit check that the drop is exactly one
+	// node. A loose substring match on "node:" would also match — and
+	// silently wave through — a real regression that drops MORE than the
+	// one known bad node, or that additionally mismatches edge/term/coverage
+	// counts (countsMismatch joins every category into one "; "-separated
+	// message, so any second category would make the actual message no
+	// longer equal this one).
+	if delta := snap.Header.Counts.Node - len(snap.Nodes); delta != 1 {
+		t.Errorf("node count dropped by %d (header=%d actual=%d), want exactly 1 (only the known infra:broker:battle-result row) — a real regression may have dropped more nodes",
+			delta, snap.Header.Counts.Node, len(snap.Nodes))
+	}
+	wantMismatchMsg := fmt.Sprintf("node: header=%d actual=%d", snap.Header.Counts.Node, len(snap.Nodes))
 	for _, w := range warnings {
 		known := (w.Code == "bad_key" && strings.Contains(w.Msg, "infra:broker:battle-result")) ||
-			(w.Code == "counts_mismatch" && strings.Contains(w.Msg, "node:"))
+			(w.Code == "counts_mismatch" && w.Msg == wantMismatchMsg)
 		if !known {
-			t.Errorf("unexpected Decode warning = %+v, want only the fixture's known pre-existing bad_key/counts_mismatch pair", w)
+			t.Errorf("unexpected Decode warning = %+v, want only the fixture's known pre-existing bad_key/counts_mismatch pair (exactly %q)", w, wantMismatchMsg)
 		}
 	}
 	if snap.Header.Seq != 1 {
@@ -200,6 +218,46 @@ func TestPrintMigrateReport_ContainsNextSteps(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(got), []byte("3")) || !bytes.Contains([]byte(got), []byte("1")) {
 		t.Errorf("printMigrateReport output = %q, want it to mention Updated=3 and Unresolved=1", got)
+	}
+}
+
+// TestPrintMigrateReport_WarnsAboutJournalRebuild is fix-round-2's own
+// regression test: the review that prompted this round found that
+// UpdateEvidenceBlobSHA's unjournaled write to graph_evidence.blob_sha does
+// NOT survive `chronicle journal rebuild` (replay reconstructs a historical
+// evidence_add event with no blob_sha field as an empty one — see
+// BackfillBlobs' doc comment in snapshot/migrate.go for the full mechanism),
+// and asked that this be surfaced in the command's own output, not just a
+// source comment — this is where a person running the command would
+// actually see it.
+func TestPrintMigrateReport_WarnsAboutJournalRebuild(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realStdout := os.Stdout
+	os.Stdout = w
+	printMigrateReport(migrateResult{
+		Migrated: true,
+		Backfill: snapshot.BackfillReport{Updated: 1, Unresolved: 0},
+		Update:   graphUpdateResult{Seq: 1},
+	}, ".depbot/graph.jsonl")
+	w.Close()
+	os.Stdout = realStdout
+	out, _ := io.ReadAll(r)
+
+	got := string(out)
+	if !bytes.Contains([]byte(got), []byte(journalRebuildWarning)) {
+		t.Errorf("printMigrateReport output = %q, want it to contain the journal-rebuild warning %q", got, journalRebuildWarning)
+	}
+	// The warning must actually say what to do about it, and must not
+	// overstate the damage to file_coverage (which is unaffected — carried
+	// over verbatim by a rebuild, not replayed).
+	if !strings.Contains(got, "journal rebuild") || !strings.Contains(got, "graph migrate") {
+		t.Errorf("printMigrateReport output = %q, want the warning to name both `journal rebuild` and the `graph migrate` remedy", got)
+	}
+	if !strings.Contains(got, "file_coverage") {
+		t.Errorf("printMigrateReport output = %q, want the warning to clarify file_coverage is unaffected", got)
 	}
 }
 
