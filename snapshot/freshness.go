@@ -84,31 +84,32 @@ type Freshness struct {
 // is reported Deleted — the file may have moved out of every domain's
 // include/exclude, but the graph still carries facts sourced from it.
 //
+// graphVer is the GraphVersion snap was loaded from (typically the caller's
+// own prior ResolveVersion+AtCommit call) — it is trusted as-is and reported
+// back verbatim as Freshness.Graph, and its Commit anchors ChangedSince.
+// ComputeFreshness does NOT re-resolve a GraphVersion from rev itself: rev=""
+// (working tree; see below) is ambiguous on its own between "no revision was
+// named at all" and "an explicit revision was named, but the FILE side of
+// the comparison should read from disk" — a caller resolving a real,
+// possibly non-HEAD revision and then asking to compare its working tree
+// against THAT revision's graph (`chronicle graph status <rev>
+// --working-tree`) needs graphVer to stay anchored to <rev>'s own graph, not
+// silently jump to HEAD's. Guessing "HEAD" from rev=="" alone previously did
+// exactly that and was wrong whenever <rev> wasn't HEAD (fixed 2026-09-26;
+// see task-5-report.md's fix-round-1 section).
+//
 // rev == "" means the working tree rather than a git commit (used by
 // commands with no commit to point at, and by Task 9's SnapshotSource): scan
 // scope and every file's blob are read from disk (os.ReadDir, gitutil.
-// FileBlobSHA) instead of from git. The graph version this compares against
-// is still resolved from git history — a graph is always a committed
-// artifact, and "how fresh is my uncommitted working tree against the last
-// committed graph" is exactly the question this mode answers — via
-// ResolveVersion(repoRoot, "HEAD"). Freshness.Rev is left "" either way, and
+// FileBlobSHA) instead of from git. Freshness.Rev is left "" either way, and
 // the rest of the algorithm (Coverage comparison, every FileState, and
 // ChangedSince) is identical to the git-history case.
-func ComputeFreshness(repoRoot string, snap *Snapshot, man *manifest.Manifest, rev string) (Freshness, error) {
+func ComputeFreshness(repoRoot string, snap *Snapshot, graphVer GraphVersion, man *manifest.Manifest, rev string) (Freshness, error) {
 	if snap == nil {
 		return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: snapshot is nil")
 	}
 	if man == nil {
 		return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: manifest is nil")
-	}
-
-	graphRev := rev
-	if graphRev == "" {
-		graphRev = "HEAD"
-	}
-	version, err := ResolveVersion(repoRoot, graphRev)
-	if err != nil {
-		return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: %w", err)
 	}
 
 	exists, blobOf, err := freshnessSource(repoRoot, rev)
@@ -164,9 +165,9 @@ func ComputeFreshness(repoRoot string, snap *Snapshot, man *manifest.Manifest, r
 
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 
-	changedFiles, err := gitdiff.ChangedFiles(repoRoot, version.Commit, rev)
+	changedFiles, err := gitdiff.ChangedFiles(repoRoot, graphVer.Commit, rev)
 	if err != nil {
-		return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: changes since %s: %w", version.Commit, err)
+		return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: changes since %s: %w", graphVer.Commit, err)
 	}
 	changedSince := make([]string, 0, len(changedFiles))
 	for _, c := range changedFiles {
@@ -176,7 +177,7 @@ func ComputeFreshness(repoRoot string, snap *Snapshot, man *manifest.Manifest, r
 
 	return Freshness{
 		Rev:          rev,
-		Graph:        version,
+		Graph:        graphVer,
 		Files:        files,
 		ChangedSince: changedSince,
 	}, nil

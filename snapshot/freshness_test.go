@@ -191,7 +191,11 @@ func TestComputeFreshness_AllFive(t *testing.T) {
 
 	man := singleDomainManifest("d", "file*.ts")
 
-	fr, err := ComputeFreshness(dir, snap, man, rev)
+	graphVer, err := ResolveVersion(dir, rev)
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+	fr, err := ComputeFreshness(dir, snap, graphVer, man, rev)
 	if err != nil {
 		t.Fatalf("ComputeFreshness: %v", err)
 	}
@@ -277,7 +281,11 @@ func TestComputeFreshness_MultiDomain(t *testing.T) {
 		},
 	}
 
-	fr, err := ComputeFreshness(dir, snap, man, rev)
+	graphVer, err := ResolveVersion(dir, rev)
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+	fr, err := ComputeFreshness(dir, snap, graphVer, man, rev)
 	if err != nil {
 		t.Fatalf("ComputeFreshness: %v", err)
 	}
@@ -322,7 +330,11 @@ func TestComputeFreshness_UnicodeAndSpacesPaths(t *testing.T) {
 
 	man := singleDomainManifest("d", "src/**")
 
-	fr, err := ComputeFreshness(dir, snap, man, rev)
+	graphVer, err := ResolveVersion(dir, rev)
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+	fr, err := ComputeFreshness(dir, snap, graphVer, man, rev)
 	if err != nil {
 		t.Fatalf("ComputeFreshness: %v", err)
 	}
@@ -358,7 +370,15 @@ func TestComputeFreshness_WorkingTree(t *testing.T) {
 
 	man := singleDomainManifest("d", "file*.ts")
 
-	fr, err := ComputeFreshness(dir, snap, man, "")
+	// The caller resolves the graph version at HEAD itself (mirroring what
+	// `chronicle graph status --working-tree`, with no explicit <rev>, does)
+	// — ComputeFreshness no longer re-derives this from rev=="" internally.
+	graphVer, err := ResolveVersion(dir, "HEAD")
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+
+	fr, err := ComputeFreshness(dir, snap, graphVer, man, "")
 	if err != nil {
 		t.Fatalf("ComputeFreshness: %v", err)
 	}

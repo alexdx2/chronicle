@@ -188,7 +188,7 @@ Prints the non-fresh files as text by default, or the full report with
 				return fmt.Errorf("load manifest: %w", err)
 			}
 
-			result, err := runGraphStatus(paths.GitDir(), man, rev, workingTree)
+			result, warnings, err := runGraphStatus(paths.GitDir(), man, rev, workingTree)
 			if err != nil {
 				if errors.Is(err, snapshot.ErrNoVersion) {
 					label := rev
@@ -199,6 +199,7 @@ Prints the non-fresh files as text by default, or the full report with
 				}
 				return err
 			}
+			printWarnings(warnings)
 
 			if jsonOut {
 				outputJSON(result)
@@ -221,7 +222,16 @@ Prints the non-fresh files as text by default, or the full report with
 // graph status abc123 --working-tree` is "how fresh is my working tree
 // against the graph as it stood at abc123", a meaningful combination the two
 // separate defaults below preserve.
-func runGraphStatus(repoRoot string, man *manifest.Manifest, rev string, workingTree bool) (snapshot.Freshness, error) {
+//
+// version is resolved ONCE, against graphRev, and passed straight through to
+// ComputeFreshness — never re-derived from scanRev. ComputeFreshness has no
+// way to tell "no revision was given" apart from "an explicit non-HEAD
+// revision was given, but read files from disk" if it is handed scanRev=""
+// and left to guess the graph version itself: guessing "HEAD" got this
+// exactly backwards for `chronicle graph status <rev> --working-tree` with
+// <rev> != HEAD, reporting the wrong Graph and an incomplete ChangedSince
+// (fixed 2026-09-26 — see task-5-report.md's fix-round-1 section).
+func runGraphStatus(repoRoot string, man *manifest.Manifest, rev string, workingTree bool) (snapshot.Freshness, []snapshot.Warning, error) {
 	graphRev := rev
 	if graphRev == "" {
 		graphRev = "HEAD"
@@ -233,13 +243,14 @@ func runGraphStatus(repoRoot string, man *manifest.Manifest, rev string, working
 
 	version, err := snapshot.ResolveVersion(repoRoot, graphRev)
 	if err != nil {
-		return snapshot.Freshness{}, err
+		return snapshot.Freshness{}, nil, err
 	}
-	snap, _, err := snapshot.AtCommit(repoRoot, version)
+	snap, warnings, err := snapshot.AtCommit(repoRoot, version)
 	if err != nil {
-		return snapshot.Freshness{}, fmt.Errorf("load graph at %s: %w", version.Commit, err)
+		return snapshot.Freshness{}, nil, fmt.Errorf("load graph at %s: %w", version.Commit, err)
 	}
-	return snapshot.ComputeFreshness(repoRoot, snap, man, scanRev)
+	fr, err := snapshot.ComputeFreshness(repoRoot, snap, version, man, scanRev)
+	return fr, warnings, err
 }
 
 // printFreshnessText prints one line per non-fresh file: "<path>: <state>".
@@ -254,6 +265,16 @@ func printFreshnessText(f snapshot.Freshness) {
 	}
 	if nonFresh == 0 {
 		fmt.Println("graph is fresh: no stale, unscanned, version-stale or deleted files")
+	}
+}
+
+// printWarnings prints every snapshot decode warning to stderr, one per
+// line. AtCommit's whole point (Task 1's design) is that a malformed or
+// hostile line in a historical graph.jsonl is reported, not silently
+// skipped — discarding this with "_" at the call site would defeat that.
+func printWarnings(warnings []snapshot.Warning) {
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: graph.jsonl:%d: %s: %s\n", w.Line, w.Code, w.Msg)
 	}
 }
 
@@ -285,13 +306,14 @@ stack trace) when no commit reachable from <rev> ever committed
 			cmd.SilenceUsage = true
 			rev := args[0]
 
-			result, err := runGraphShow(paths.GitDir(), rev)
+			result, warnings, err := runGraphShow(paths.GitDir(), rev)
 			if err != nil {
 				if errors.Is(err, snapshot.ErrNoVersion) {
 					return noVersionMessage(rev)
 				}
 				return err
 			}
+			printWarnings(warnings)
 			outputJSON(result)
 			return nil
 		},
@@ -300,20 +322,21 @@ stack trace) when no commit reachable from <rev> ever committed
 }
 
 // runGraphShow is the testable core of `chronicle graph show`.
-func runGraphShow(repoRoot, rev string) (graphShowResult, error) {
+func runGraphShow(repoRoot, rev string) (graphShowResult, []snapshot.Warning, error) {
 	version, err := snapshot.ResolveVersion(repoRoot, rev)
 	if err != nil {
-		return graphShowResult{}, err
+		return graphShowResult{}, nil, err
 	}
-	snap, _, err := snapshot.AtCommit(repoRoot, version)
+	snap, warnings, err := snapshot.AtCommit(repoRoot, version)
 	if err != nil {
-		return graphShowResult{}, fmt.Errorf("load graph at %s: %w", version.Commit, err)
+		return graphShowResult{}, nil, fmt.Errorf("load graph at %s: %w", version.Commit, err)
 	}
-	return graphShowResult{
+	result := graphShowResult{
 		Commit:  version.Commit,
 		Blob:    version.Blob,
 		Seq:     version.Seq,
 		Counts:  snap.Header.Counts,
 		Domains: snap.Header.Domains,
-	}, nil
+	}
+	return result, warnings, nil
 }

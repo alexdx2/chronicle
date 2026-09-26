@@ -251,9 +251,12 @@ func TestRunGraphStatus_AtRevision(t *testing.T) {
 		{Key: "d", Name: "d", Scan: manifest.ScanConfig{Include: []string{"svc/**"}}},
 	}}
 
-	result, err := runGraphStatus(dir, man, rev, false)
+	result, warnings, err := runGraphStatus(dir, man, rev, false)
 	if err != nil {
 		t.Fatalf("runGraphStatus: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none (well-formed fixture)", warnings)
 	}
 	if result.Graph.Commit != graphSHA {
 		t.Errorf("Graph.Commit = %s, want %s", result.Graph.Commit, graphSHA)
@@ -288,7 +291,7 @@ func TestRunGraphStatus_WorkingTree(t *testing.T) {
 		{Key: "d", Name: "d", Scan: manifest.ScanConfig{Include: []string{"svc/**"}}},
 	}}
 
-	result, err := runGraphStatus(dir, man, "", true)
+	result, _, err := runGraphStatus(dir, man, "", true)
 	if err != nil {
 		t.Fatalf("runGraphStatus: %v", err)
 	}
@@ -323,9 +326,12 @@ func TestRunGraphShow_ResolvesVersion(t *testing.T) {
 	writePlainFile(t, dir, "code.txt", "v2")
 	rev := commitAllCLI(t, dir, "code change")
 
-	result, err := runGraphShow(dir, rev)
+	result, warnings, err := runGraphShow(dir, rev)
 	if err != nil {
 		t.Fatalf("runGraphShow: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none (well-formed fixture)", warnings)
 	}
 	if result.Commit != graphSHA {
 		t.Errorf("Commit = %s, want %s", result.Commit, graphSHA)
@@ -354,7 +360,7 @@ func TestRunGraphShow_NoVersion_ErrNoVersion(t *testing.T) {
 	writePlainFile(t, dir, "readme.txt", "hello")
 	commitAllCLI(t, dir, "only commit")
 
-	_, err := runGraphShow(dir, "HEAD")
+	_, _, err := runGraphShow(dir, "HEAD")
 	if !errors.Is(err, snapshot.ErrNoVersion) {
 		t.Fatalf("runGraphShow: err = %v, want ErrNoVersion", err)
 	}
@@ -456,5 +462,164 @@ func TestGraphStatusCmd_ResolvesManifestPathEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(out, `"fresh"`) {
 		t.Fatalf("graph status --json output = %s, want it to report svc/a.ts fresh", out)
+	}
+}
+
+// TestRunGraphStatus_WorkingTreeAgainstNonHEADRev is the fix-round-1
+// regression test for the Important finding: `chronicle graph status <rev>
+// --working-tree` with <rev> != HEAD must anchor Freshness.Graph (and
+// ChangedSince) to <rev>'s OWN nearest graph version, never silently to
+// HEAD's, even though the file side of the comparison always reads the
+// working tree regardless of <rev> when --working-tree is set.
+//
+// Repro shape (mirrors the reviewer's own reproduction exactly): commit2
+// (graph seq1) -> commit3 (the explicit <rev>, an unrelated change — the
+// graph does not move here) -> commit4=HEAD (graph seq2, content re-covered)
+// -> an uncommitted disk edit on top of HEAD. Before the fix, runGraphStatus
+// correctly resolved `snap` from commit3's history (commit2/seq1), but
+// ComputeFreshness — handed scanRev="" for --working-tree — re-resolved ITS
+// OWN GraphVersion by defaulting blindly to literal "HEAD" (commit4/seq2),
+// so Freshness.Graph and Freshness.ChangedSince silently described the wrong
+// graph version and the wrong diff range.
+func TestRunGraphStatus_WorkingTreeAgainstNonHEADRev(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+
+	// commit2: graph seq1, covering svc/a.ts at its v1 blob.
+	writePlainFile(t, dir, "svc/a.ts", "v1")
+	commitAllCLI(t, dir, "content")
+	blob1 := blobAtHEAD(t, dir, "svc/a.ts")
+	writeGraphFixture(t, dir, 1, []string{"d"}, []snapshot.Coverage{
+		{Kind: "coverage", Path: "svc/a.ts", Blob: blob1, Extractors: []snapshot.ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}},
+	})
+	graphSHA1 := commitAllCLI(t, dir, "graph seq1")
+
+	// commit3: the explicit <rev> the caller names below. An unrelated
+	// change — the graph itself does not move here.
+	writePlainFile(t, dir, "other.txt", "unrelated")
+	rev := commitAllCLI(t, dir, "unrelated code change")
+
+	// commit4 = HEAD: content changes again, and the graph is updated to
+	// seq2 to match — a LATER, and also real, graph version.
+	writePlainFile(t, dir, "svc/a.ts", "v2")
+	commitAllCLI(t, dir, "content v2")
+	blob2 := blobAtHEAD(t, dir, "svc/a.ts")
+	writeGraphFixture(t, dir, 2, []string{"d"}, []snapshot.Coverage{
+		{Kind: "coverage", Path: "svc/a.ts", Blob: blob2, Extractors: []snapshot.ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}},
+	})
+	commitAllCLI(t, dir, "graph seq2")
+
+	// An uncommitted edit on top of HEAD — workingTree=true must see this
+	// (and only this, for svc/a.ts's own state) regardless of which commit
+	// <rev> names.
+	writePlainFile(t, dir, "svc/a.ts", "v3-uncommitted")
+
+	man := &manifest.Manifest{Domains: []manifest.DomainEntry{
+		{Key: "d", Name: "d", Scan: manifest.ScanConfig{Include: []string{"svc/**"}}},
+	}}
+
+	result, _, err := runGraphStatus(dir, man, rev, true)
+	if err != nil {
+		t.Fatalf("runGraphStatus: %v", err)
+	}
+
+	if result.Graph.Commit != graphSHA1 {
+		t.Errorf("Graph.Commit = %s, want %s (commit3's own nearest graph version, seq1) — NOT HEAD's later seq2", result.Graph.Commit, graphSHA1)
+	}
+	if result.Graph.Seq != 1 {
+		t.Errorf("Graph.Seq = %d, want 1 (commit3's own graph version) — got HEAD's if this is 2", result.Graph.Seq)
+	}
+
+	// ChangedSince must be anchored at commit2 (the correct graph version),
+	// not commit4/HEAD: "other.txt" (added at commit3) and
+	// ".depbot/graph.jsonl" (seq1 -> seq2 at commit4) are BOTH invisible to
+	// a diff wrongly anchored at commit4/HEAD, since by commit4 neither one
+	// changes again before the (uncommitted) present.
+	changed := map[string]bool{}
+	for _, p := range result.ChangedSince {
+		changed[p] = true
+	}
+	for _, want := range []string{"other.txt", ".depbot/graph.jsonl"} {
+		if !changed[want] {
+			t.Errorf("ChangedSince = %v, missing %q — invisible to a diff wrongly anchored at HEAD instead of <rev>'s (commit3's) own graph commit", result.ChangedSince, want)
+		}
+	}
+}
+
+// TestPrintFreshnessText_FreshAndNonFresh covers the default (non-JSON) text
+// output of `chronicle graph status` — every other CLI test exercises only
+// --json, so this format itself had zero coverage before fix-round-1.
+func TestPrintFreshnessText_FreshAndNonFresh(t *testing.T) {
+	capture := func(f snapshot.Freshness) string {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		realStdout := os.Stdout
+		os.Stdout = w
+		printFreshnessText(f)
+		w.Close()
+		os.Stdout = realStdout
+		out, _ := io.ReadAll(r)
+		return string(out)
+	}
+
+	fresh := capture(snapshot.Freshness{
+		Files: []snapshot.FileFreshness{{Path: "svc/a.ts", State: snapshot.Fresh}},
+	})
+	if fresh != "graph is fresh: no stale, unscanned, version-stale or deleted files\n" {
+		t.Errorf("all-fresh output = %q, want the fresh summary line", fresh)
+	}
+
+	nonFresh := capture(snapshot.Freshness{
+		Files: []snapshot.FileFreshness{
+			{Path: "svc/a.ts", State: snapshot.Fresh},
+			{Path: "svc/b.ts", State: snapshot.Stale},
+		},
+	})
+	if nonFresh != "svc/b.ts: stale\n" {
+		t.Errorf("mixed output = %q, want exactly one \"<path>: <state>\" line for the stale file (fresh files print nothing)", nonFresh)
+	}
+}
+
+// TestPrintWarnings_WritesToStderr and TestPrintWarnings_EmptyPrintsNothing
+// pin fix-round-1's Minor #2: AtCommit's []Warning was discarded with "_" at
+// both runGraphStatus's and runGraphShow's CLI call sites, defeating Task
+// 1's whole point for Warning (malformed/hostile snapshot content is
+// reported, not silently skipped).
+func TestPrintWarnings_WritesToStderr(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realStderr := os.Stderr
+	os.Stderr = w
+	printWarnings([]snapshot.Warning{
+		{Line: 3, Code: "bad_json", Msg: "unexpected end of JSON input"},
+	})
+	w.Close()
+	os.Stderr = realStderr
+	out, _ := io.ReadAll(r)
+
+	got := string(out)
+	if !strings.Contains(got, "3") || !strings.Contains(got, "bad_json") || !strings.Contains(got, "unexpected end of JSON input") {
+		t.Errorf("printWarnings output = %q, want it to mention the line, code and message", got)
+	}
+}
+
+func TestPrintWarnings_EmptyPrintsNothing(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	realStderr := os.Stderr
+	os.Stderr = w
+	printWarnings(nil)
+	w.Close()
+	os.Stderr = realStderr
+	out, _ := io.ReadAll(r)
+	if len(out) != 0 {
+		t.Errorf("printWarnings(nil) wrote %q, want nothing", out)
 	}
 }
