@@ -439,6 +439,7 @@ func commitOneFileExtracted(g *graph.Graph, ctx context.Context, item map[string
 	if err != nil {
 		return errorResult(err), nil
 	}
+	recordScanCoverage(g, domain, filePath, status)
 
 	_ = g.SatisfyFileObligation(revisionID, filePath)
 	if voteGroup != "" {

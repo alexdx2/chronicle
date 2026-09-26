@@ -162,3 +162,92 @@ func TestExtractions_CRUD(t *testing.T) {
 		t.Fatalf("MarkExtractionsResolved: %v", err)
 	}
 }
+
+// TestCoverage_UpsertListClear exercises file_coverage: per-(domain, file,
+// extractor) upsert, domain-scoped listing in file_path/extractor_id order,
+// re-observation updating in place rather than duplicating, and
+// ClearCoverageBlob blanking the blob for every extractor on a file while
+// leaving status (and other files) alone.
+func TestCoverage_UpsertListClear(t *testing.T) {
+	s := openTestStore(t)
+
+	for _, c := range []CoverageRow{
+		{DomainKey: "d", FilePath: "b.ts", ExtractorID: "chronicle-scan",
+			ExtractorVersion: "fact-schema@1", Status: "extracted", BlobSHA: "blob-b-1"},
+		{DomainKey: "d", FilePath: "a.ts", ExtractorID: "chronicle-structural",
+			ExtractorVersion: "1", Status: "extracted", BlobSHA: "blob-a-struct"},
+		{DomainKey: "d", FilePath: "a.ts", ExtractorID: "chronicle-scan",
+			ExtractorVersion: "fact-schema@1", Status: "extracted", BlobSHA: "blob-a-scan"},
+		{DomainKey: "other", FilePath: "z.ts", ExtractorID: "chronicle-scan",
+			ExtractorVersion: "fact-schema@1", Status: "extracted", BlobSHA: "blob-z"},
+	} {
+		if err := s.UpsertCoverage(c); err != nil {
+			t.Fatalf("UpsertCoverage(%+v): %v", c, err)
+		}
+	}
+
+	rows, err := s.ListCoverage("d")
+	if err != nil {
+		t.Fatalf("ListCoverage(d): %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("ListCoverage(d) = %d rows, want 3: %+v", len(rows), rows)
+	}
+	// Ordered by file_path then extractor_id: a.ts/chronicle-scan,
+	// a.ts/chronicle-structural, b.ts/chronicle-scan.
+	if rows[0].FilePath != "a.ts" || rows[0].ExtractorID != "chronicle-scan" {
+		t.Errorf("rows[0] = %+v, want a.ts/chronicle-scan", rows[0])
+	}
+	if rows[1].FilePath != "a.ts" || rows[1].ExtractorID != "chronicle-structural" {
+		t.Errorf("rows[1] = %+v, want a.ts/chronicle-structural", rows[1])
+	}
+	if rows[2].FilePath != "b.ts" || rows[2].ExtractorID != "chronicle-scan" {
+		t.Errorf("rows[2] = %+v, want b.ts/chronicle-scan", rows[2])
+	}
+
+	if all, err := s.ListCoverage(""); err != nil || len(all) != 4 {
+		t.Fatalf("ListCoverage(\"\") = %d rows err=%v, want 4", len(all), err)
+	}
+
+	// Re-observing the SAME (domain, file, extractor) updates in place.
+	if err := s.UpsertCoverage(CoverageRow{
+		DomainKey: "d", FilePath: "a.ts", ExtractorID: "chronicle-scan",
+		ExtractorVersion: "fact-schema@1", Status: "extracted", BlobSHA: "blob-a-scan-v2",
+	}); err != nil {
+		t.Fatalf("UpsertCoverage re-observe: %v", err)
+	}
+	rows, err = s.ListCoverage("d")
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("re-upsert must update in place, got %d rows err=%v: %+v", len(rows), err, rows)
+	}
+	if rows[0].BlobSHA != "blob-a-scan-v2" {
+		t.Errorf("re-upsert blob = %q, want blob-a-scan-v2", rows[0].BlobSHA)
+	}
+
+	// ClearCoverageBlob blanks the blob for EVERY extractor on that file
+	// (no extractor_id param) but keeps the row and its status, and must not
+	// touch a different file.
+	if err := s.ClearCoverageBlob("d", "a.ts"); err != nil {
+		t.Fatalf("ClearCoverageBlob: %v", err)
+	}
+	rows, err = s.ListCoverage("d")
+	if err != nil {
+		t.Fatalf("ListCoverage after clear: %v", err)
+	}
+	for _, r := range rows {
+		if r.FilePath != "a.ts" {
+			continue
+		}
+		if r.BlobSHA != "" {
+			t.Errorf("ClearCoverageBlob left a blob on %+v", r)
+		}
+		if r.Status != "extracted" {
+			t.Errorf("ClearCoverageBlob must not touch status: %+v", r)
+		}
+	}
+	for _, r := range rows {
+		if r.FilePath == "b.ts" && r.BlobSHA != "blob-b-1" {
+			t.Errorf("ClearCoverageBlob touched an unrelated file: %+v", r)
+		}
+	}
+}

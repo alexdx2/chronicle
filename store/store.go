@@ -267,6 +267,10 @@ func (s *Store) migrate() error {
 		// Scan-lab autopilot support
 		`ALTER TABLE scan_runs ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE scan_runs ADD COLUMN auto_confirms TEXT NOT NULL DEFAULT '[]'`,
+		// Evidence carries the git blob of the file it was read from, computed
+		// from disk at report time — lets a later reader ask "is this evidence
+		// still fresh" without re-reading the file's facts.
+		`ALTER TABLE graph_evidence ADD COLUMN blob_sha TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, q := range alters {
 		s.db.Exec(q) // ignore errors (column already exists)
@@ -835,6 +839,19 @@ CREATE TABLE IF NOT EXISTS journal_state (
   actor        TEXT PRIMARY KEY,
   last_lamport INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS file_coverage (
+  domain_key        TEXT NOT NULL,
+  file_path         TEXT NOT NULL,
+  extractor_id      TEXT NOT NULL,
+  extractor_version TEXT NOT NULL DEFAULT '',
+  status            TEXT NOT NULL DEFAULT '',
+  blob_sha          TEXT NOT NULL DEFAULT '',
+  observed_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  PRIMARY KEY (domain_key, file_path, extractor_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_coverage_domain ON file_coverage(domain_key, file_path);
 
 CREATE TABLE IF NOT EXISTS journal_applied_events (
   event_id   TEXT PRIMARY KEY,

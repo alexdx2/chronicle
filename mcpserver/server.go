@@ -1034,6 +1034,7 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
+		recordScanCoverage(g, domain, filePath, status)
 
 		// Satisfy obligations + update progress
 		_ = g.SatisfyFileObligation(revisionID, filePath)
@@ -1058,6 +1059,31 @@ func fileExtractedHandler(g *graph.Graph) server.ToolHandlerFunc {
 			"status":        status,
 		}), nil
 	}
+}
+
+// recordScanCoverage upserts a file_coverage row for the agent scan extractor
+// after a file_extracted report: BlobSHA is the git blob of filePath's
+// content on disk AT REPORT TIME (not at whatever later moment resolve runs),
+// read relative to the project root — the same root chronicle_file_groups and
+// other source-reading tools use. Best-effort and shared by both file report
+// paths (fileExtractedHandler here and commitOneFileExtracted in
+// scan_artifacts.go, which build their scan_extractions row independently —
+// see task-2-report.md) so the coverage/blob logic itself is written once.
+//
+// A file that cannot be read (deleted between report and now, sandboxed
+// caller with no filesystem access, ...) still gets a coverage row with an
+// empty blob: the report's status is still worth recording, and an empty blob
+// reads as "unknown", never as a false match.
+func recordScanCoverage(g *graph.Graph, domain, filePath, status string) {
+	blob, _ := gitutil.FileBlobSHA(graph.ProjectRoot(), filePath)
+	_ = g.Store().UpsertCoverage(store.CoverageRow{
+		DomainKey:        domain,
+		FilePath:         filePath,
+		ExtractorID:      "chronicle-scan",
+		ExtractorVersion: fmt.Sprintf("fact-schema@%d", store.FactSchemaVersion),
+		Status:           status,
+		BlobSHA:          blob,
+	})
 }
 
 // ---------------------------------------------------------------------------

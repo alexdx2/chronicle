@@ -125,3 +125,47 @@ func TestCopyLocalStateSkipsFlushedOutbox(t *testing.T) {
 		t.Errorf("copied %d flushed outbox rows, want 0 (they live in events/*.jsonl)", counts["journal_outbox"])
 	}
 }
+
+// TestCopyLocalState_CarriesFileCoverage verifies file_coverage — what each
+// extractor has seen, including its blob — is local state carried verbatim by
+// rebuild, not something ReplayJournal could ever reconstruct (UpsertCoverage
+// never journals).
+func TestCopyLocalState_CarriesFileCoverage(t *testing.T) {
+	src := openJournalTestStore(t)
+	if err := src.UpsertCoverage(CoverageRow{
+		DomainKey: "dom", FilePath: "src/a.ts", ExtractorID: "chronicle-scan",
+		ExtractorVersion: "fact-schema@1", Status: "extracted", BlobSHA: "blob-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := openJournalTestStore(t)
+	counts, err := dst.CopyLocalState(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["file_coverage"] != 1 {
+		t.Errorf("counts[file_coverage] = %d, want 1", counts["file_coverage"])
+	}
+
+	rows, err := dst.ListCoverage("dom")
+	if err != nil {
+		t.Fatalf("ListCoverage: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BlobSHA != "blob-a" {
+		t.Fatalf("file_coverage not carried over correctly: %+v", rows)
+	}
+
+	// Never journaled: CopyLocalState is the ONLY way it reaches the rebuilt
+	// db. UpsertCoverage was the only mutation src made, so if it had
+	// appendEvent-ed anything, FlushJournal would find it in the outbox — it
+	// must find nothing, or the "excluded from replay" half of the contract
+	// has silently regressed.
+	flushed, err := src.FlushJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flushed != 0 {
+		t.Errorf("FlushJournal flushed %d event(s) — UpsertCoverage must never journal", flushed)
+	}
+}

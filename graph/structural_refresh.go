@@ -11,6 +11,8 @@ import (
 
 	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/extract/structural"
+	"github.com/alexdx2/chronicle-core/gitutil"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -212,6 +214,16 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "extracted", r.FromType, r.FactsJSON, "", ""); err != nil {
 				return nil, fmt.Errorf("structural: save extraction for %s: %w", file, err)
 			}
+			// Coverage records what this extractor saw: the blob of the exact
+			// bytes just parsed, computed at report time — not re-read from
+			// disk later, which could see a since-changed file. Best-effort,
+			// like the agent scan's equivalent wiring in mcpserver.
+			blobSHA, _ := gitutil.BlobSHA(paths.GitDir(), content)
+			_ = g.store.UpsertCoverage(store.CoverageRow{
+				DomainKey: in.DomainKey, FilePath: file,
+				ExtractorID: structural.ExtractorID, ExtractorVersion: pack,
+				Status: "extracted", BlobSHA: blobSHA,
+			})
 			res.Facts += r.FactCount
 			res.Processed++
 			hashes[file] = r.ContentHash
@@ -228,6 +240,16 @@ func (g *Graph) StructuralRefresh(in StructuralInput) (*StructuralResult, error)
 			if _, err := g.store.SaveStructuralExtraction(revID, in.DomainKey, file, "failed", "", "[]", msg, outcome); err != nil {
 				return nil, fmt.Errorf("structural: record failure for %s: %w", file, err)
 			}
+			// The phase DID read and look at these bytes — record the blob it
+			// saw even though extraction found nothing usable in them, so a
+			// later reader can tell "looked, found no facts" from "never
+			// looked".
+			blobSHA, _ := gitutil.BlobSHA(paths.GitDir(), content)
+			_ = g.store.UpsertCoverage(store.CoverageRow{
+				DomainKey: in.DomainKey, FilePath: file,
+				ExtractorID: structural.ExtractorID, ExtractorVersion: pack,
+				Status: "failed", BlobSHA: blobSHA,
+			})
 			if r.Outcome == structural.Unreadable {
 				res.Unread = append(res.Unread, file)
 			} else {

@@ -283,6 +283,7 @@ func (s *Store) applyJournalEvent(ev flushedEvent) error {
 			ASTRule:          str("ast_rule"),
 			SnippetHash:      str("snippet_hash"),
 			CommitSHA:        str("commit_sha"),
+			BlobSHA:          str("blob_sha"),
 			Confidence:       f64("confidence"),
 			EvidencePolarity: str("polarity"),
 			EvidenceStatus:   str("status"),

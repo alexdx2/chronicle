@@ -10,6 +10,8 @@ import (
 
 	"github.com/alexdx2/chronicle-core/extract/rules"
 	"github.com/alexdx2/chronicle-core/extract/structural"
+	"github.com/alexdx2/chronicle-core/gitutil"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -1050,5 +1052,48 @@ func TestStructuralRefreshCapsTheRetrySetAtTheBatch(t *testing.T) {
 	in3.BacklogBatch = 2
 	if res3 := srRun(t, g, in3); res3.Processed != 1 {
 		t.Fatalf("third run processed %d, want the last one: %+v", res3.Processed, res3)
+	}
+}
+
+// TestStructuralRefresh_RecordsCoverageWithBlob checks that a successful
+// extraction leaves a file_coverage row behind carrying the git blob of the
+// exact bytes the phase just parsed (chronicle-structural, this pack's
+// version) — the per-file "what did this extractor see" record the agent
+// scan path answers via UpsertCoverage in mcpserver, mirrored here for the
+// deterministic path.
+func TestStructuralRefresh_RecordsCoverageWithBlob(t *testing.T) {
+	g, s, f := srSetup(t)
+	res := srRun(t, g, srInput(f, "head-1", srController, srService))
+	if res.Processed != 2 || len(res.Failed) != 0 || len(res.Unread) != 0 {
+		t.Fatalf("setup: expected both files cleanly extracted: %+v", res)
+	}
+
+	rows, err := s.ListCoverage(srDomain)
+	if err != nil {
+		t.Fatalf("ListCoverage: %v", err)
+	}
+	for _, file := range []string{srController, srService} {
+		var found *store.CoverageRow
+		for i := range rows {
+			if rows[i].FilePath == file && rows[i].ExtractorID == structural.ExtractorID {
+				found = &rows[i]
+			}
+		}
+		if found == nil {
+			t.Fatalf("no file_coverage row for %s/%s: %+v", file, structural.ExtractorID, rows)
+		}
+		if found.Status != "extracted" {
+			t.Errorf("%s: coverage status = %q, want extracted", file, found.Status)
+		}
+		if found.ExtractorVersion != rules.PackVersion {
+			t.Errorf("%s: coverage extractor_version = %q, want %q", file, found.ExtractorVersion, rules.PackVersion)
+		}
+		wantBlob, err := gitutil.BlobSHA(paths.GitDir(), []byte(f.content[file]))
+		if err != nil {
+			t.Fatalf("BlobSHA: %v", err)
+		}
+		if found.BlobSHA != wantBlob {
+			t.Errorf("%s: coverage blob = %q, want %q (blob of the content the phase just read)", file, found.BlobSHA, wantBlob)
+		}
 	}
 }

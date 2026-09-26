@@ -1,6 +1,7 @@
 package store
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -167,5 +168,53 @@ func TestListEvidenceByAssertionKind(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Errorf("expected 0 rows for unknown assertion_kind, got %d", len(none))
+	}
+}
+
+// TestEvidence_BlobSHARoundTripsThroughJournal writes evidence carrying a
+// BlobSHA, flushes the journal to events/*.jsonl, replays those events into a
+// completely fresh store (the same mechanism `chronicle journal rebuild`
+// uses), and checks the blob survived — not just that it sits in the live
+// table AddEvidence wrote to directly.
+func TestEvidence_BlobSHARoundTripsThroughJournal(t *testing.T) {
+	src := openJournalTestStore(t)
+	_, n1, _ := seedNodes(t, src)
+
+	const wantBlob = "0123456789abcdef0123456789abcdef01234567"
+	ev := makeEvidence("node", n1, 3)
+	ev.ExtractorID = "chronicle-scan"
+	ev.AssertionKind = "declares_service"
+	ev.Assertion = `{}`
+	ev.BlobSHA = wantBlob
+	if _, err := src.AddEvidence(ev); err != nil {
+		t.Fatalf("AddEvidence: %v", err)
+	}
+
+	if _, err := src.FlushJournal(); err != nil {
+		t.Fatalf("FlushJournal: %v", err)
+	}
+
+	dst := openJournalTestStore(t)
+	res, err := dst.ReplayJournal(filepath.Join(src.Dir(), "events"))
+	if err != nil {
+		t.Fatalf("ReplayJournal: %v", err)
+	}
+	if res.Applied == 0 {
+		t.Fatal("ReplayJournal applied 0 events — nothing to check")
+	}
+
+	dstNodeID, err := dst.GetNodeIDByKey("code:controller:orders:orderscontroller")
+	if err != nil {
+		t.Fatalf("replayed node missing: %v", err)
+	}
+	rows, err := dst.ListEvidenceByNode(dstNodeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 replayed evidence row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].BlobSHA != wantBlob {
+		t.Errorf("replayed BlobSHA = %q, want %q — blob did not survive journal rebuild", rows[0].BlobSHA, wantBlob)
 	}
 }

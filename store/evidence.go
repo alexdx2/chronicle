@@ -39,6 +39,11 @@ type EvidenceRow struct {
 	InvalidatedByRevisionID int64   `json:"invalidated_by_revision_id,omitempty"`
 	InvalidatedReason       string  `json:"invalidated_reason,omitempty"`
 	Metadata                string  `json:"metadata"`
+	// BlobSHA is the git blob id of FilePath's content as read from disk at
+	// report time (see gitutil.BlobSHA / gitutil.FileBlobSHA) — column
+	// blob_sha. Empty when the evidence has no file (synthetic/derived) or the
+	// writer did not compute one.
+	BlobSHA string `json:"blob_sha,omitempty"`
 	// Assertion-based verification fields
 	Assertion          string `json:"assertion,omitempty"`
 	AssertionKind      string `json:"assertion_kind,omitempty"`
@@ -135,6 +140,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 			    extractor_version=?,
 			    evidence_status=?,
 			    last_verified_revision_id=?,
+			    blob_sha=?,
 			    assertion=COALESCE(?, assertion),
 			    assertion_kind=COALESCE(?, assertion_kind),
 			    line_end=COALESCE(?, line_end),
@@ -144,7 +150,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 			WHERE evidence_id=?
 		`
 		_, err = s.db.Exec(updQ, e.Confidence, nullableStr(e.CommitSHA), e.ExtractorVersion,
-			newStatus, nullableInt64(e.ValidFromRevisionID),
+			newStatus, nullableInt64(e.ValidFromRevisionID), e.BlobSHA,
 			nullableStr(e.Assertion), nullableStr(e.AssertionKind),
 			nullableInt(e.LineEnd), nullableStr(e.VerificationStatus), nullableStr(e.VerificationReason),
 			evKey, existingID)
@@ -205,8 +211,8 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		   context_id, evidence_uid,
 		   assertion, assertion_kind, assertion_version,
 		   verification_status, verification_reason,
-		   metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   metadata, blob_sha)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	`
 	res, err := s.db.Exec(insQ,
 		e.TargetKind, nodeID, edgeID,
@@ -222,7 +228,7 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		nullableInt64(e.ContextID), nullableStr(uid),
 		assertion, assertionKind, assertionVersion,
 		defaultStr(e.VerificationStatus, "unverified"), defaultStr(e.VerificationReason, ""),
-		e.Metadata,
+		e.Metadata, e.BlobSHA,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("AddEvidence insert: %w", err)
@@ -273,6 +279,9 @@ func evidenceEventFields(e EvidenceRow) map[string]any {
 	}
 	if e.CommitSHA != "" {
 		evFields["commit_sha"] = e.CommitSHA
+	}
+	if e.BlobSHA != "" {
+		evFields["blob_sha"] = e.BlobSHA
 	}
 	if e.ColumnStart != 0 {
 		evFields["column_start"] = e.ColumnStart
@@ -336,7 +345,7 @@ func (s *Store) queryEvidenceArgs(where string, args ...any) ([]EvidenceRow, err
 		       COALESCE(invalidated_reason,''),
 		       COALESCE(assertion,'{}'), COALESCE(assertion_kind,''), COALESCE(assertion_version,'v1'),
 		       COALESCE(verification_status,'unverified'), COALESCE(verification_reason,''),
-		       metadata
+		       metadata, COALESCE(blob_sha,'')
 		FROM graph_evidence
 		WHERE ` + where + `
 		ORDER BY evidence_id
@@ -363,7 +372,7 @@ func (s *Store) queryEvidenceArgs(where string, args ...any) ([]EvidenceRow, err
 			&r.InvalidatedReason,
 			&r.Assertion, &r.AssertionKind, &r.AssertionVersion,
 			&r.VerificationStatus, &r.VerificationReason,
-			&r.Metadata,
+			&r.Metadata, &r.BlobSHA,
 		); err != nil {
 			return nil, fmt.Errorf("listEvidence scan: %w", err)
 		}
@@ -391,7 +400,7 @@ func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) 
 		       COALESCE(invalidated_reason,''),
 		       COALESCE(assertion,'{}'), COALESCE(assertion_kind,''), COALESCE(assertion_version,'v1'),
 		       COALESCE(verification_status,'unverified'), COALESCE(verification_reason,''),
-		       metadata
+		       metadata, COALESCE(blob_sha,'')
 		FROM graph_evidence
 		WHERE file_path = ? AND evidence_status = 'stale'
 		ORDER BY evidence_id
@@ -418,7 +427,7 @@ func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) 
 			&r.InvalidatedReason,
 			&r.Assertion, &r.AssertionKind, &r.AssertionVersion,
 			&r.VerificationStatus, &r.VerificationReason,
-			&r.Metadata,
+			&r.Metadata, &r.BlobSHA,
 		); err != nil {
 			return nil, fmt.Errorf("ListStaleEvidenceByFile scan: %w", err)
 		}
@@ -897,7 +906,7 @@ func (s *Store) ListRejectedEvidence(domainKey string) ([]EvidenceRow, error) {
 	             COALESCE(e.invalidated_reason,''),
 	             COALESCE(e.assertion,'{}'), COALESCE(e.assertion_kind,''), COALESCE(e.assertion_version,'v1'),
 	             COALESCE(e.verification_status,'unverified'), COALESCE(e.verification_reason,''),
-	             e.metadata
+	             e.metadata, COALESCE(e.blob_sha,'')
 	      FROM graph_evidence e
 	      LEFT JOIN graph_nodes n ON e.node_id = n.node_id
 	      LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
@@ -927,7 +936,7 @@ func (s *Store) ListRejectedEvidence(domainKey string) ([]EvidenceRow, error) {
 			&r.InvalidatedReason,
 			&r.Assertion, &r.AssertionKind, &r.AssertionVersion,
 			&r.VerificationStatus, &r.VerificationReason,
-			&r.Metadata,
+			&r.Metadata, &r.BlobSHA,
 		); err != nil {
 			return nil, err
 		}
@@ -992,7 +1001,8 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 	         e.confidence, e.evidence_polarity,
 	         COALESCE(e.evidence_uid,''),
 	         COALESCE(e.metadata,'{}'),
-	         COALESCE(n.node_key, ed.edge_key, '')
+	         COALESCE(n.node_key, ed.edge_key, ''),
+	         COALESCE(e.blob_sha,'')
 	    FROM graph_evidence e
 	    LEFT JOIN graph_nodes n ON e.node_id = n.node_id
 	    LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
@@ -1028,6 +1038,7 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 		evidenceUID      string
 		metadata         string
 		ownerKey         string
+		blobSHA          string
 	}
 
 	var found []evidenceInfo
@@ -1040,7 +1051,7 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 			&e.locator, &e.extractorID, &e.extractorVersion,
 			&e.astRule, &e.snippetHash, &e.commitSHA,
 			&e.confidence, &e.polarity, &e.evidenceUID,
-			&e.metadata, &e.ownerKey,
+			&e.metadata, &e.ownerKey, &e.blobSHA,
 		); err != nil {
 			return 0, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned scan: %w", err)
 		}
@@ -1086,8 +1097,8 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 			   extractor_id, extractor_version, ast_rule, snippet_hash, commit_sha,
 			   confidence, evidence_status, evidence_polarity, evidence_uid,
 			   valid_from_revision_id, context_id,
-			   metadata)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			   metadata, blob_sha)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		`
 		_, err = s.db.Exec(insQ,
 			e.targetKind, nodeID, edgeID,
@@ -1100,7 +1111,7 @@ func (s *Store) MarkEvidenceStaleByFilesVersioned(filePaths []string, revisionID
 			nullableStr(e.astRule), nullableStr(e.snippetHash), nullableStr(e.commitSHA),
 			e.confidence, "stale", e.polarity, nullableStr(e.evidenceUID),
 			revisionID, nullableInt64(contextID),
-			e.metadata,
+			e.metadata, e.blobSHA,
 		)
 		if err != nil {
 			return staleCount, nil, nil, fmt.Errorf("MarkEvidenceStaleByFilesVersioned insert: %w", err)

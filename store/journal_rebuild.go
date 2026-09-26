@@ -35,6 +35,11 @@ var localStateTables = []struct {
 	{"scan_extractions", ""},
 	{"evidence_verification_runs", ""},
 	{"journal_outbox", "WHERE flushed_at IS NULL"},
+	// file_coverage is derived state describing what each extractor has SEEN
+	// (status + blob per domain/file/extractor) — not a journaled
+	// architectural fact, so it is carried over verbatim like the rest of
+	// this list rather than replayed.
+	{"file_coverage", ""},
 }
 
 // CopyLocalState copies all non-journaled local state from another store into
