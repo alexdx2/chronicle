@@ -456,13 +456,13 @@ func (s *Store) ListEvidenceByEdge(edgeID int64) ([]EvidenceRow, error) {
 }
 
 func (s *Store) listEvidence(col string, id int64) ([]EvidenceRow, error) {
-	return s.queryEvidence(col+" = ?", id)
+	return s.queryEvidence("e."+col+" = ?", id)
 }
 
 // ListEvidenceBySourceKind returns all evidence rows with the given source_kind
 // (across all nodes/edges). Used e.g. to batch-load role_classification claims.
 func (s *Store) ListEvidenceBySourceKind(sourceKind string) ([]EvidenceRow, error) {
-	return s.queryEvidence("source_kind = ?", sourceKind)
+	return s.queryEvidence("e.source_kind = ?", sourceKind)
 }
 
 // ListEvidenceByAssertionKind returns all evidence rows carrying the given
@@ -471,7 +471,7 @@ func (s *Store) ListEvidenceBySourceKind(sourceKind string) ([]EvidenceRow, erro
 // graph_evidence has no assertion_kind index and okeep-scale tables
 // (~9k rows) don't need one.
 func (s *Store) ListEvidenceByAssertionKind(assertionKind string) ([]EvidenceRow, error) {
-	return s.queryEvidence("assertion_kind = ?", assertionKind)
+	return s.queryEvidence("e.assertion_kind = ?", assertionKind)
 }
 
 func (s *Store) queryEvidence(where string, arg any) ([]EvidenceRow, error) {
@@ -479,29 +479,51 @@ func (s *Store) queryEvidence(where string, arg any) ([]EvidenceRow, error) {
 }
 
 // queryEvidenceArgs is queryEvidence for a WHERE clause with more than one
-// placeholder.
+// placeholder. where must reference graph_evidence's own columns through the
+// "e." alias: the query joins graph_nodes/graph_edges (aliased n/ed) to
+// resolve each row's owner key for the evidence_uid backfill below, and
+// several columns (node_id, edge_id, file_path, confidence, metadata,
+// verification_status, ...) exist on more than one of these tables, so an
+// unqualified reference would be ambiguous or silently bind to the wrong
+// table.
+//
+// Backfills evidence_uid for legacy rows (written before that column
+// existed) on read, exactly like every other reader/writer of graph_evidence
+// in this file already does (UpdateEvidenceVerification, MarkEvidenceStaleByFiles,
+// markEvidenceStatusForOwner, MarkEvidenceStaleByFilesVersioned,
+// SupersedeEvidenceNotIn): derive it from the row's own dedup tuple via
+// EvidenceKey and persist it, rather than leaving EvidenceUID "" on every
+// caller forever. Before this, ListEvidenceByNode/ListEvidenceByEdge/
+// ListEvidenceByEdgeIDs (the only callers of this function) never selected
+// evidence_uid at all, so EvidenceRow.EvidenceUID off any of their results
+// was always "" regardless of what was actually stored — in particular,
+// snapshot/export.go's exportNodes/exportEdges read evidence through exactly
+// these two functions, so every exported Evidence.ID was empty too.
 func (s *Store) queryEvidenceArgs(where string, args ...any) ([]EvidenceRow, error) {
 	q := `
-		SELECT evidence_id, target_kind,
-		       COALESCE(node_id,0), COALESCE(edge_id,0),
-		       source_kind,
-		       COALESCE(repo_name,''), COALESCE(file_path,''),
-		       COALESCE(line_start,0), COALESCE(line_end,0),
-		       COALESCE(column_start,0), COALESCE(column_end,0),
-		       COALESCE(locator,''),
-		       extractor_id, extractor_version,
-		       COALESCE(ast_rule,''), COALESCE(snippet_hash,''), COALESCE(commit_sha,''),
-		       observed_at, COALESCE(verified_at,''),
-		       confidence, evidence_status, evidence_polarity,
-		       COALESCE(valid_from_revision_id,0), COALESCE(valid_to_revision_id,0),
-		       COALESCE(last_verified_revision_id,0), COALESCE(invalidated_by_revision_id,0),
-		       COALESCE(invalidated_reason,''),
-		       COALESCE(assertion,'{}'), COALESCE(assertion_kind,''), COALESCE(assertion_version,'v1'),
-		       COALESCE(verification_status,'unverified'), COALESCE(verification_reason,''),
-		       metadata, COALESCE(blob_sha,'')
-		FROM graph_evidence
+		SELECT e.evidence_id, e.target_kind,
+		       COALESCE(e.node_id,0), COALESCE(e.edge_id,0),
+		       e.source_kind,
+		       COALESCE(e.repo_name,''), COALESCE(e.file_path,''),
+		       COALESCE(e.line_start,0), COALESCE(e.line_end,0),
+		       COALESCE(e.column_start,0), COALESCE(e.column_end,0),
+		       COALESCE(e.locator,''),
+		       e.extractor_id, e.extractor_version,
+		       COALESCE(e.ast_rule,''), COALESCE(e.snippet_hash,''), COALESCE(e.commit_sha,''),
+		       e.observed_at, COALESCE(e.verified_at,''),
+		       e.confidence, e.evidence_status, e.evidence_polarity,
+		       COALESCE(e.valid_from_revision_id,0), COALESCE(e.valid_to_revision_id,0),
+		       COALESCE(e.last_verified_revision_id,0), COALESCE(e.invalidated_by_revision_id,0),
+		       COALESCE(e.invalidated_reason,''),
+		       COALESCE(e.assertion,'{}'), COALESCE(e.assertion_kind,''), COALESCE(e.assertion_version,'v1'),
+		       COALESCE(e.verification_status,'unverified'), COALESCE(e.verification_reason,''),
+		       e.metadata, COALESCE(e.blob_sha,''),
+		       COALESCE(e.evidence_uid,''), COALESCE(n.node_key, ed.edge_key, '')
+		FROM graph_evidence e
+		LEFT JOIN graph_nodes n ON e.node_id = n.node_id
+		LEFT JOIN graph_edges ed ON e.edge_id = ed.edge_id
 		WHERE ` + where + `
-		ORDER BY evidence_id
+		ORDER BY e.evidence_id
 	`
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -510,8 +532,10 @@ func (s *Store) queryEvidenceArgs(where string, args ...any) ([]EvidenceRow, err
 	defer rows.Close()
 
 	var out []EvidenceRow
+	var ownerKeys []string
 	for rows.Next() {
 		var r EvidenceRow
+		var ownerKey string
 		if err := rows.Scan(
 			&r.EvidenceID, &r.TargetKind, &r.NodeID, &r.EdgeID,
 			&r.SourceKind, &r.RepoName, &r.FilePath,
@@ -526,12 +550,30 @@ func (s *Store) queryEvidenceArgs(where string, args ...any) ([]EvidenceRow, err
 			&r.Assertion, &r.AssertionKind, &r.AssertionVersion,
 			&r.VerificationStatus, &r.VerificationReason,
 			&r.Metadata, &r.BlobSHA,
+			&r.EvidenceUID, &ownerKey,
 		); err != nil {
 			return nil, fmt.Errorf("listEvidence scan: %w", err)
 		}
 		out = append(out, r)
+		ownerKeys = append(ownerKeys, ownerKey)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range out {
+		if out[i].EvidenceUID != "" {
+			continue
+		}
+		out[i].EvidenceUID = EvidenceKey(out[i].TargetKind, ownerKeys[i], out[i].SourceKind,
+			out[i].RepoName, out[i].FilePath, out[i].LineStart, out[i].ExtractorID, out[i].EvidencePolarity)
+		if _, err := s.db.Exec(`UPDATE graph_evidence SET evidence_uid = ? WHERE evidence_id = ?`,
+			out[i].EvidenceUID, out[i].EvidenceID); err != nil {
+			return nil, fmt.Errorf("queryEvidenceArgs uid backfill: %w", err)
+		}
+	}
+
+	return out, nil
 }
 
 // ListStaleEvidenceByFile returns all stale evidence for a given file path.
@@ -597,9 +639,9 @@ func (s *Store) ListStaleEvidenceByFile(filePath string) ([]EvidenceRow, error) 
 // can only produce a refutation of something that was never wrong, and the
 // structural phase re-asserts or supersedes its own rows itself.
 func (s *Store) ListReverifiableEvidenceByFile(filePath string) ([]EvidenceRow, error) {
-	skipOwned, ownedArgs := notOwnedByAnotherWriter("")
+	skipOwned, ownedArgs := notOwnedByAnotherWriter("e.")
 	return s.queryEvidenceArgs(
-		"file_path = ? AND (evidence_status = 'stale' OR verification_status = 'rejected')"+skipOwned,
+		"e.file_path = ? AND (e.evidence_status = 'stale' OR e.verification_status = 'rejected')"+skipOwned,
 		append([]any{filePath}, ownedArgs...)...)
 }
 
@@ -1732,7 +1774,7 @@ func (s *Store) ListEvidenceByEdgeIDs(ids []int64) (map[int64][]EvidenceRow, err
 		for i, id := range part {
 			args[i] = id
 		}
-		rows, err := s.queryEvidenceArgs("edge_id IN ("+placeholders+")", args...)
+		rows, err := s.queryEvidenceArgs("e.edge_id IN ("+placeholders+")", args...)
 		if err != nil {
 			return nil, err
 		}

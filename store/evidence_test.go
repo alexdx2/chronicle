@@ -117,6 +117,58 @@ func TestListEvidenceByNode(t *testing.T) {
 	}
 }
 
+// TestListEvidenceByNodeAndEdge_PopulateEvidenceUID is the regression test
+// for queryEvidenceArgs's evidence_uid fix: before it, ListEvidenceByNode and
+// ListEvidenceByEdge never selected evidence_uid at all, so EvidenceRow.EvidenceUID
+// off either was always "" regardless of what was actually in the column.
+// AddEvidence always sets a real, non-empty evidence_uid on insert (an
+// explicit one, or its EvidenceKey(...) fallback), so a fresh row here proves
+// the fix by construction: if this ever regresses back to reading "", it is
+// caught here directly, not inferred from some other test merely not failing.
+func TestListEvidenceByNodeAndEdge_PopulateEvidenceUID(t *testing.T) {
+	s := openTestStore(t)
+	revID, n1, n2 := seedNodes(t, s)
+	edgeID, err := s.UpsertEdge(makeEdgeRow("edge:calls:oc:os", n1, n2, revID))
+	if err != nil {
+		t.Fatalf("UpsertEdge: %v", err)
+	}
+
+	if _, err := s.AddEvidence(makeEvidence("node", n1, 5)); err != nil {
+		t.Fatalf("AddEvidence (node): %v", err)
+	}
+	if _, err := s.AddEvidence(makeEvidence("edge", edgeID, 10)); err != nil {
+		t.Fatalf("AddEvidence (edge): %v", err)
+	}
+
+	nodeRows, err := s.ListEvidenceByNode(n1)
+	if err != nil {
+		t.Fatalf("ListEvidenceByNode: %v", err)
+	}
+	if len(nodeRows) != 1 {
+		t.Fatalf("len(nodeRows) = %d, want 1", len(nodeRows))
+	}
+	if nodeRows[0].EvidenceUID == "" {
+		t.Error("ListEvidenceByNode: EvidenceUID is empty, want the stored value")
+	}
+	if want := evidenceUIDByID(t, s, nodeRows[0].EvidenceID); nodeRows[0].EvidenceUID != want {
+		t.Errorf("ListEvidenceByNode: EvidenceUID = %q, want %q (direct column read)", nodeRows[0].EvidenceUID, want)
+	}
+
+	edgeRows, err := s.ListEvidenceByEdge(edgeID)
+	if err != nil {
+		t.Fatalf("ListEvidenceByEdge: %v", err)
+	}
+	if len(edgeRows) != 1 {
+		t.Fatalf("len(edgeRows) = %d, want 1", len(edgeRows))
+	}
+	if edgeRows[0].EvidenceUID == "" {
+		t.Error("ListEvidenceByEdge: EvidenceUID is empty, want the stored value")
+	}
+	if want := evidenceUIDByID(t, s, edgeRows[0].EvidenceID); edgeRows[0].EvidenceUID != want {
+		t.Errorf("ListEvidenceByEdge: EvidenceUID = %q, want %q (direct column read)", edgeRows[0].EvidenceUID, want)
+	}
+}
+
 // TestListEvidenceByAssertionKind verifies the selector filters by
 // assertion_kind across target kinds/domains (no domain filter, unlike
 // ListRejectedEvidence) and that the returned rows carry NodeID/EdgeID —
