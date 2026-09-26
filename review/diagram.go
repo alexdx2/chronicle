@@ -35,10 +35,11 @@ type DiagramOptions struct{ MaxNodes int }
 // View's own Missing list instead of rendering. Rather than let that second
 // cause fail silently (a real, reachable outcome of a multi-hop
 // WhoMayBeAffected() blast radius — see task-12-report.md for an empirical
-// reproduction), CompactDiagram folds both causes into this one field: a
-// non-zero Truncated means "some blast-radius system isn't on this diagram",
-// for either reason. FullDiagram's own doc comment explains why it can't
-// take the same fix and is left as a documented, known gap instead.
+// reproduction), both CompactDiagram and FullDiagram fold both causes into
+// this one field: a non-zero Truncated always means "some blast-radius
+// system isn't on this diagram", for either reason, regardless of which of
+// the two functions produced it. See each function's own doc comment for
+// which of the two causes is actually reachable for it.
 type DiagramResult struct {
 	Spec      viewmodel.ViewSpec
 	Mermaid   string
@@ -315,8 +316,14 @@ func missingPinCount(v *viewmodel.View, nodeKeys, pinKeys []string) int {
 // no Mark either, consistent with it not being on the diagram at all).
 //
 // foldMissing controls whether missingPinCount is added into the returned
-// Truncated — true for CompactDiagram, false for FullDiagram (which must
-// keep Truncated at exactly 0 — see its own doc comment).
+// Truncated. Both CompactDiagram and FullDiagram now pass true (fix round 1
+// — see task-12-report.md's dated section): a "full" diagram that silently
+// drops a cross-domain system while reporting Truncated==0 would misrepresent
+// exactly the thing this field exists to be honest about. The parameter
+// stays (rather than being inlined away) because the two callers still
+// differ in maxNodes, and because a future caller might legitimately want
+// the MaxNodes-only count back — but nothing in this package constructs one
+// with foldMissing:false today.
 func buildDiagram(r *ReviewResult, head *VersionGraph, maxNodes int, foldMissing bool) (*DiagramResult, error) {
 	changed := r.ChangedRelationships()
 	if len(changed) == 0 {
@@ -377,24 +384,22 @@ func CompactDiagram(r *ReviewResult, head *VersionGraph, o DiagramOptions) (*Dia
 
 // FullDiagram renders the same view CompactDiagram does, with no MaxNodes
 // cutoff (math.MaxInt): every system truncateSystemPins could ever cut stays
-// in, so Truncated's own MaxNodes-cause component is always 0.
+// in, so MaxNodes itself never removes anything here (truncateSystemPins(pins,
+// math.MaxInt) always takes its len(pins)<=maxNodes early return, since
+// len(pins) is an int and math.MaxInt is int's own maximum value — a
+// tautology, not a coincidence of today's inputs; confirmed directly rather
+// than assumed, see task-12-report.md's fix-round-1 section).
 //
-// It is NOT, however, a strict guarantee that every blast-radius system
-// renders: the OTHER cause DiagramResult.Truncated documents — a pinned key
-// dropped by viewmodel.BuildView because it resolves to a different domain
-// than Scope.Domain — is exactly as reachable here as it is for
-// CompactDiagram (same builder, same Scope.Domain, same WhoMayBeAffected()
-// call; MaxNodes never enters into that mechanism at all). This function
-// still reports Truncated == 0 always, per the brief's own literal, explicit
-// "Truncated всегда 0" — deliberately not folding missingPinCount in here,
-// unlike CompactDiagram, so as to not contradict that explicit contract.
-// The residual risk (a "full" diagram that is honestly not full, with no
-// field on this exact DiagramResult shape to say so) is a real, known gap
-// this task leaves open rather than silently papering over — see
-// task-12-report.md for the empirical reproduction and the two remediation
-// options weighed (a new DiagramResult field vs. reusing Truncated) before
-// choosing to preserve the brief's literal contract for THIS function and
-// document the gap instead.
+// Truncated is therefore 0 unless a pinned system falls outside this
+// diagram's own chosen domain (Scope.Domain, from the first
+// ChangedRelationships() finding) — the one remaining cause
+// DiagramResult.Truncated documents, and the only one that can ever apply
+// here now that MaxNodes is provably inert. This is FullDiagram's whole
+// reason to exist: the un-abridged escape hatch a caller reaches for after
+// CompactDiagram truncates, so it owes the same honesty CompactDiagram
+// already gives about a blast-radius system it could not draw — a "full"
+// diagram that silently under-reports would defeat the point of asking for
+// it.
 func FullDiagram(r *ReviewResult, head *VersionGraph) (*DiagramResult, error) {
-	return buildDiagram(r, head, math.MaxInt, false)
+	return buildDiagram(r, head, math.MaxInt, true)
 }
