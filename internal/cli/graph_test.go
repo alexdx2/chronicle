@@ -2,11 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/manifest"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/snapshot"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -158,5 +164,297 @@ func TestNewGraphUpdateCmd_RegisteredUnderGraph(t *testing.T) {
 	}
 	if f := cmd.Flags().Lookup("check"); f == nil {
 		t.Fatal("graph update is missing its --check flag")
+	}
+}
+
+// writeGraphFixture writes a valid, decodable .depbot/graph.jsonl (real
+// Encode, not a hand-rolled JSON literal) into dir, for runGraphStatus/
+// runGraphShow tests that need a real committed graph to resolve.
+func writeGraphFixture(t *testing.T, dir string, seq int, domains []string, coverage []snapshot.Coverage) {
+	t.Helper()
+	snap := &snapshot.Snapshot{
+		Header: snapshot.Header{
+			Kind: "header", Format: snapshot.Format, Version: snapshot.Version,
+			Seq: seq, FactSchema: snapshot.FactSchema, Domains: domains,
+		},
+		Coverage: coverage,
+	}
+	var buf bytes.Buffer
+	if err := snapshot.Encode(&buf, snap); err != nil {
+		t.Fatalf("snapshot.Encode: %v", err)
+	}
+	full := filepath.Join(dir, ".depbot", "graph.jsonl")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writePlainFile(t *testing.T, dir, relPath, content string) {
+	t.Helper()
+	full := filepath.Join(dir, relPath)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// commitAllCLI stages everything (including deletions) and commits, the same
+// inline "-c user.email=... -c user.name=..." shape refresh_test.go's own
+// commit closure uses in this package, and returns the new commit's SHA.
+//
+// gitCapture (hook_test.go) does not trim its output — every one of its
+// callers that wants a bare SHA trims it themselves (see refresh_test.go's
+// own commit closure) — so this does too; skipping it would leave a trailing
+// "\n" riding along inside the SHA, silently turning it into an invalid git
+// revision the moment it is used as one.
+func commitAllCLI(t *testing.T, dir, msg string) string {
+	t.Helper()
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", msg)
+	return strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD"))
+}
+
+// blobAtHEAD returns the (trimmed) git blob id of path at HEAD — see
+// commitAllCLI's comment on why gitCapture's output must be trimmed at every
+// call site.
+func blobAtHEAD(t *testing.T, dir, path string) string {
+	t.Helper()
+	return strings.TrimSpace(gitCapture(t, dir, "rev-parse", "HEAD:"+path))
+}
+
+// TestRunGraphStatus_AtRevision drives runGraphStatus directly (no cobra,
+// no --working-tree) against a real temp git repo: a file covered at the
+// graph commit changes afterward, so status at the later revision must
+// report it Stale, resolved against the graph commit (not the later one).
+func TestRunGraphStatus_AtRevision(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+
+	writePlainFile(t, dir, "svc/a.ts", "v1")
+	commitAllCLI(t, dir, "content")
+	blob := blobAtHEAD(t, dir, "svc/a.ts")
+
+	writeGraphFixture(t, dir, 1, []string{"d"}, []snapshot.Coverage{
+		{Kind: "coverage", Path: "svc/a.ts", Blob: blob, Extractors: []snapshot.ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}},
+	})
+	graphSHA := commitAllCLI(t, dir, "graph seq1")
+
+	writePlainFile(t, dir, "svc/a.ts", "v2")
+	rev := commitAllCLI(t, dir, "change")
+
+	man := &manifest.Manifest{Domains: []manifest.DomainEntry{
+		{Key: "d", Name: "d", Scan: manifest.ScanConfig{Include: []string{"svc/**"}}},
+	}}
+
+	result, err := runGraphStatus(dir, man, rev, false)
+	if err != nil {
+		t.Fatalf("runGraphStatus: %v", err)
+	}
+	if result.Graph.Commit != graphSHA {
+		t.Errorf("Graph.Commit = %s, want %s", result.Graph.Commit, graphSHA)
+	}
+	if result.Graph.Seq != 1 {
+		t.Errorf("Graph.Seq = %d, want 1", result.Graph.Seq)
+	}
+	if len(result.Files) != 1 || result.Files[0].Path != "svc/a.ts" || result.Files[0].State != snapshot.Stale {
+		t.Fatalf("Files = %+v, want exactly one Stale svc/a.ts", result.Files)
+	}
+}
+
+// TestRunGraphStatus_WorkingTree drives runGraphStatus with workingTree=true:
+// an edit sitting on disk, never committed, must be seen immediately.
+func TestRunGraphStatus_WorkingTree(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+
+	writePlainFile(t, dir, "svc/a.ts", "v1")
+	commitAllCLI(t, dir, "content")
+	blob := blobAtHEAD(t, dir, "svc/a.ts")
+
+	writeGraphFixture(t, dir, 1, []string{"d"}, []snapshot.Coverage{
+		{Kind: "coverage", Path: "svc/a.ts", Blob: blob, Extractors: []snapshot.ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}},
+	})
+	graphSHA := commitAllCLI(t, dir, "graph seq1")
+
+	// Uncommitted edit.
+	writePlainFile(t, dir, "svc/a.ts", "v2-uncommitted")
+
+	man := &manifest.Manifest{Domains: []manifest.DomainEntry{
+		{Key: "d", Name: "d", Scan: manifest.ScanConfig{Include: []string{"svc/**"}}},
+	}}
+
+	result, err := runGraphStatus(dir, man, "", true)
+	if err != nil {
+		t.Fatalf("runGraphStatus: %v", err)
+	}
+	if result.Rev != "" {
+		t.Errorf("Rev = %q, want \"\"", result.Rev)
+	}
+	if result.Graph.Commit != graphSHA {
+		t.Errorf("Graph.Commit = %s, want %s (HEAD, unmoved)", result.Graph.Commit, graphSHA)
+	}
+	if len(result.Files) != 1 || result.Files[0].Path != "svc/a.ts" || result.Files[0].State != snapshot.Stale {
+		t.Fatalf("Files = %+v, want exactly one Stale svc/a.ts (uncommitted disk edit)", result.Files)
+	}
+}
+
+// TestRunGraphShow_ResolvesVersion drives runGraphShow directly: it must
+// resolve the same nearest-ancestor graph commit runGraphStatus does, and
+// summarize its header (seq, counts, domains) plus its own commit/blob.
+func TestRunGraphShow_ResolvesVersion(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+
+	writePlainFile(t, dir, "svc/a.ts", "v1")
+	commitAllCLI(t, dir, "content")
+	blob := blobAtHEAD(t, dir, "svc/a.ts")
+
+	writeGraphFixture(t, dir, 1, []string{"d"}, []snapshot.Coverage{
+		{Kind: "coverage", Path: "svc/a.ts", Blob: blob, Extractors: []snapshot.ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}},
+	})
+	graphSHA := commitAllCLI(t, dir, "graph seq1")
+	wantGraphBlob := strings.TrimSpace(gitCapture(t, dir, "rev-parse", graphSHA+":.depbot/graph.jsonl"))
+
+	writePlainFile(t, dir, "code.txt", "v2")
+	rev := commitAllCLI(t, dir, "code change")
+
+	result, err := runGraphShow(dir, rev)
+	if err != nil {
+		t.Fatalf("runGraphShow: %v", err)
+	}
+	if result.Commit != graphSHA {
+		t.Errorf("Commit = %s, want %s", result.Commit, graphSHA)
+	}
+	if result.Blob != wantGraphBlob {
+		t.Errorf("Blob = %s, want %s", result.Blob, wantGraphBlob)
+	}
+	if result.Seq != 1 {
+		t.Errorf("Seq = %d, want 1", result.Seq)
+	}
+	if result.Counts.Coverage != 1 {
+		t.Errorf("Counts.Coverage = %d, want 1", result.Counts.Coverage)
+	}
+	if len(result.Domains) != 1 || result.Domains[0] != "d" {
+		t.Errorf("Domains = %v, want [d]", result.Domains)
+	}
+}
+
+// TestRunGraphShow_NoVersion_ErrNoVersion: a repo whose history never
+// committed .depbot/graph.jsonl must surface snapshot.ErrNoVersion, so the
+// CLI layer can turn it into "no graph version in history of <rev>" and
+// exit 1 instead of a stack trace.
+func TestRunGraphShow_NoVersion_ErrNoVersion(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	writePlainFile(t, dir, "readme.txt", "hello")
+	commitAllCLI(t, dir, "only commit")
+
+	_, err := runGraphShow(dir, "HEAD")
+	if !errors.Is(err, snapshot.ErrNoVersion) {
+		t.Fatalf("runGraphShow: err = %v, want ErrNoVersion", err)
+	}
+}
+
+// TestNewGraphStatusCmd_RegisteredUnderGraph and
+// TestNewGraphShowCmd_RegisteredUnderGraph are thin wiring smoke tests, the
+// same shape as TestNewGraphUpdateCmd_RegisteredUnderGraph: they never call
+// Execute(), so they can't trip either command's error-exit paths.
+func TestNewGraphStatusCmd_RegisteredUnderGraph(t *testing.T) {
+	root := NewRootCmd()
+	cmd, _, err := root.Find([]string{"graph", "status"})
+	if err != nil {
+		t.Fatalf("chronicle graph status not registered: %v", err)
+	}
+	if f := cmd.Flags().Lookup("working-tree"); f == nil {
+		t.Fatal("graph status is missing its --working-tree flag")
+	}
+	if f := cmd.Flags().Lookup("json"); f == nil {
+		t.Fatal("graph status is missing its --json flag")
+	}
+}
+
+func TestNewGraphShowCmd_RegisteredUnderGraph(t *testing.T) {
+	root := NewRootCmd()
+	if _, _, err := root.Find([]string{"graph", "show"}); err != nil {
+		t.Fatalf("chronicle graph show not registered: %v", err)
+	}
+}
+
+// runGraphStatusCmdIn chdirs into dir, runs the REAL `chronicle graph status`
+// cobra command (not runGraphStatus directly) with args, and returns
+// everything it printed to stdout. Same recipe as refresh_test.go's
+// runRefreshIn: status is a leaf command with no store to open, so
+// PersistentPreRun (which lives on the root command and normally resolves
+// paths from --project/--chronicle-dir) never runs when the command is
+// constructed and executed standalone — paths has to be primed by hand,
+// exactly as it would be for a real invocation from cwd with no flags.
+func runGraphStatusCmdIn(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetWorktreeGlobals(t, cwd) // clean baseline, independent of prior tests' state
+	defer resetWorktreeGlobals(t, cwd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	paths.SetGitDir("")
+	defer paths.SetGitDir("")
+
+	r, w, perr := os.Pipe()
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	realStdout := os.Stdout
+	os.Stdout = w
+
+	cmd := newGraphStatusCmd()
+	cmd.SetArgs(args)
+	runErr := cmd.Execute()
+
+	w.Close()
+	os.Stdout = realStdout
+	out, _ := io.ReadAll(r)
+	return string(out), runErr
+}
+
+// TestGraphStatusCmd_ResolvesManifestPathEndToEnd exercises the actual cobra
+// RunE, not runGraphStatus directly. This is a regression test: `chronicle
+// graph status` opens no store, so — unlike `update`, which gets manifestPath
+// populated as a side effect of openGraph — its RunE originally left
+// manifestPath at its zero value ("") and failed every real invocation with
+// "load manifest: reading manifest: open : no such file or directory" until
+// newGraphStatusCmd's RunE was given its own resolveWorktreeGraph/
+// resolveDefaults call (the same pair hookAdvisory uses in hook.go). Found by
+// manually running the built binary end-to-end, not by the runGraphStatus
+// unit tests above — they pass a *manifest.Manifest directly and so never
+// touch manifestPath at all.
+func TestGraphStatusCmd_ResolvesManifestPathEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+
+	writePlainFile(t, dir, "svc/a.ts", "v1")
+	commitAllCLI(t, dir, "content")
+	blob := blobAtHEAD(t, dir, "svc/a.ts")
+
+	writeGraphFixture(t, dir, 1, []string{"d"}, []snapshot.Coverage{
+		{Kind: "coverage", Path: "svc/a.ts", Blob: blob, Extractors: []snapshot.ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}},
+	})
+	commitAllCLI(t, dir, "graph seq1")
+
+	writePlainFile(t, dir, ".depbot/chronicle.domain.yaml", "domains:\n  - name: d\n    scan:\n      include:\n        - \"svc/**\"\n")
+
+	out, err := runGraphStatusCmdIn(t, dir, "--json")
+	if err != nil {
+		t.Fatalf("graph status --json: %v (output: %s)", err, out)
+	}
+	if !strings.Contains(out, `"fresh"`) {
+		t.Fatalf("graph status --json output = %s, want it to report svc/a.ts fresh", out)
 	}
 }
