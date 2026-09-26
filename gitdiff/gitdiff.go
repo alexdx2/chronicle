@@ -115,6 +115,22 @@ func MergeBase(repoRoot, ref string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// MergeBaseOf is MergeBase's free two-argument sibling: the merge base of a
+// and b, neither of which need be HEAD (e.g. `chronicle review A...B`, where
+// HEAD may be neither A nor B). The single --end-of-options marker shields
+// EVERY token after it from option parsing, so it protects both a and b at
+// once, the same way it protects the one ref MergeBase/Show take — confirmed
+// empirically, not just assumed, by TestMergeBaseOf_RefusesOptionShapedRef
+// (mirroring TestShowAndMergeBaseRefuseAnOptionShapedRef) with an
+// option-shaped ref in EITHER position.
+func MergeBaseOf(repoRoot, a, b string) (string, error) {
+	out, err := git(repoRoot, "merge-base", "--end-of-options", a, b)
+	if err != nil {
+		return "", fmt.Errorf("git merge-base %s %s: %w", a, b, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // Hunk is one unified-diff range: the header "@@ -OldStart,OldLines
 // +NewStart,NewLines @@" from a -U0 diff. OldLines==0 is a pure insertion
 // after OldStart in base (there is no base-side line to anchor to); NewLines==0

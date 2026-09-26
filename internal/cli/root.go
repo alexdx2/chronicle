@@ -70,6 +70,7 @@ func NewRootCmd() *cobra.Command {
 		newValidateCmd(),
 		newMCPCmd(),
 		newImpactCmd(),
+		newReviewCmd(),
 		newAdminCmd(),
 		newAliasCmd(),
 		newJournalCmd(),

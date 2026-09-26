@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -226,6 +227,116 @@ func TestShowAndMergeBaseRefuseAnOptionShapedRef(t *testing.T) {
 	if _, err := MergeBase(dir, "--output="+canary); err == nil {
 		t.Fatal("MergeBase accepted an option-shaped ref")
 	}
+	got, err := os.ReadFile(canary)
+	if err != nil || string(got) != "intact\n" {
+		t.Fatalf("canary = %q (err %v), want it untouched", got, err)
+	}
+}
+
+// gitRunT and gitCaptureT are this file's own -C-based helpers (mirroring
+// initRepo's inline closures) for tests that need branching, which initRepo's
+// single-branch fixture doesn't give them.
+func gitRunT(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func gitCaptureT(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestMergeBaseOf exercises the free two-argument form MergeBase itself can
+// never offer (MergeBase always merge-bases against HEAD): a fork point
+// followed by two branches that both add a commit, plus a THIRD branch that
+// forks from an EARLIER commit and becomes HEAD. If MergeBaseOf secretly
+// depended on HEAD (e.g. a copy-paste that merge-based one argument against
+// HEAD instead of against the other argument), it would report the earlier,
+// wrong ancestor; only a real two-argument `git merge-base branch-a branch-b`
+// reports the later, correct fork point regardless of where HEAD sits.
+func TestMergeBaseOf(t *testing.T) {
+	dir := initRepo(t) // main @ c1 ("root")
+	root := gitCaptureT(t, dir, "rev-parse", "HEAD")
+
+	// A branch that forks from root BEFORE main advances — HEAD ends up here,
+	// deliberately unrelated to the fork point MergeBaseOf must find.
+	gitRunT(t, dir, "checkout", "-b", "head-branch")
+	gitRunT(t, dir, "checkout", "main")
+
+	// main advances: this is the fork point branch-a/branch-b actually share.
+	if err := os.WriteFile(filepath.Join(dir, "main.txt"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunT(t, dir, "add", ".")
+	gitRunT(t, dir, "commit", "-m", "main advances")
+	forkPoint := gitCaptureT(t, dir, "rev-parse", "HEAD")
+	if forkPoint == root {
+		t.Fatal("test setup: fork point must differ from root")
+	}
+
+	gitRunT(t, dir, "checkout", "-b", "branch-a")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunT(t, dir, "add", ".")
+	gitRunT(t, dir, "commit", "-m", "a")
+
+	gitRunT(t, dir, "checkout", "main")
+	gitRunT(t, dir, "checkout", "-b", "branch-b")
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRunT(t, dir, "add", ".")
+	gitRunT(t, dir, "commit", "-m", "b")
+
+	// HEAD is now on head-branch (forked from root, before forkPoint existed)
+	// — unrelated to the branch-a/branch-b comparison MergeBaseOf is asked for.
+	gitRunT(t, dir, "checkout", "head-branch")
+
+	got, err := MergeBaseOf(dir, "branch-a", "branch-b")
+	if err != nil {
+		t.Fatalf("MergeBaseOf: %v", err)
+	}
+	if got != forkPoint {
+		t.Errorf("MergeBaseOf(branch-a, branch-b) = %q, want the fork point %q (not root %q, and not HEAD-dependent)", got, forkPoint, root)
+	}
+}
+
+// TestMergeBaseOf_RefusesOptionShapedRef mirrors
+// TestShowAndMergeBaseRefuseAnOptionShapedRef: the brief's own single
+// --end-of-options marker must shield BOTH positional arguments, not just the
+// first, since a or b can each independently be a review_report/CLI argument
+// an agent or user chose.
+func TestMergeBaseOf_RefusesOptionShapedRef(t *testing.T) {
+	dir := initRepo(t)
+	canary := filepath.Join(dir, "canary.txt")
+	if err := os.WriteFile(canary, []byte("intact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, a, b string }{
+		{"option-shaped a", "--output=" + canary, "HEAD"},
+		{"option-shaped b", "HEAD", "--output=" + canary},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := MergeBaseOf(dir, tc.a, tc.b); err == nil {
+				t.Fatalf("MergeBaseOf(%q, %q) accepted an option-shaped ref", tc.a, tc.b)
+			}
+		})
+	}
+
 	got, err := os.ReadFile(canary)
 	if err != nil || string(got) != "intact\n" {
 		t.Fatalf("canary = %q (err %v), want it untouched", got, err)
