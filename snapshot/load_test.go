@@ -279,46 +279,29 @@ func buildSyntheticSnapshot(numNodes, numEdges, numEvidence int) *Snapshot {
 	return snap
 }
 
-// TestLoad_Performance is the brief's synthetic-volume timing check, under
-// 20s — skipped under -short so it never slows down the ordinary test loop.
+// TestLoad_Performance is the brief's synthetic-volume timing check — 5,000
+// nodes, 16,000 edges, 26,000 evidence, under 20s — skipped under -short so
+// it never slows down the ordinary test loop.
 //
-// numEvidence is 1,000, not the brief's specified 26,000: at that scale, the
-// dominant cost is store.AddEvidence's own dedup lookup (store/evidence.go),
-// not anything in Load. That query's WHERE clause wraps every comparison
-// column in COALESCE(...) ("COALESCE(node_id, 0) = COALESCE(?, 0)", etc.),
-// which is not sargable against any existing index — confirmed directly with
-// EXPLAIN QUERY PLAN, which reports a full "SCAN graph_evidence" for that
-// query regardless of table size. Every AddEvidence call therefore scans the
-// whole table so far, making N sequential calls O(N^2) overall. Measured
-// against this exact fixture-shaped load (5,000 nodes, 16,000 edges present,
-// evidence count varied, machine otherwise idle): 0 evidence ~4.6s, 1,000
-// ~5.4s, 2,000 ~7.6s, 3,000 ~12s, climbing sharply from there (16,000
-// evidence alone, isolated from the node/edge cost, measured ~47s) — 26,000
-// extrapolates to roughly two minutes. This machine also showed real
-// run-to-run variance under concurrent load (the same 3,000-evidence config
-// measured 12s in isolation and 18.7s while the rest of this suite ran
-// alongside it — too close to the 20s budget for comfort), so 1,000 is
-// chosen with real margin, not the largest number that happened to fit once.
-// None of this is anything Load's own code does (Load already batches its
-// entire insert phase into one transaction; that removes per-statement
-// commit/fsync overhead but cannot help a per-query full-table scan). This
-// is a pre-existing characteristic of AddEvidence, unmodified here per the
-// brief's own instruction to use it as-is, not a defect in Load — see the
-// task report for a verified fix candidate (a matching expression index
-// makes the same query plan report "SEARCH ... USING INDEX" instead) that
-// belongs in store/evidence.go, not here.
-//
-// Node and edge counts are kept at the brief's exact figures: UpsertNode and
-// UpsertEdge both look their row up by an indexed exact-match column
-// (node_key / edge_key), so neither has this problem, and this test still
-// exercises Load at that volume for both.
+// Fix round 1: this was temporarily run at reduced evidence volume (1,000,
+// not 26,000) because store.AddEvidence's dedup lookup is a full table scan
+// regardless of table size (its WHERE clause wraps every comparison column
+// in COALESCE(...), which defeats every index on graph_evidence), making N
+// sequential AddEvidence calls O(N^2) — 26,000 extrapolated to roughly two
+// minutes against the unmodified function. Load now inserts evidence via
+// store.InsertEvidenceBatch instead (see Load's and InsertEvidenceBatch's own
+// doc comments), which skips the dedup lookup entirely — safe here because a
+// snapshot's evidence is already deduplicated by construction and Load always
+// targets a brand-new, empty store. The brief's original numbers are restored
+// below now that they hold in practice (see the task report for the measured
+// time).
 func TestLoad_Performance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("performance test skipped under -short")
 	}
 	reg := testRegistry(t)
 
-	const numNodes, numEdges, numEvidence = 5000, 16000, 1000
+	const numNodes, numEdges, numEvidence = 5000, 16000, 26000
 	snap := buildSyntheticSnapshot(numNodes, numEdges, numEvidence)
 
 	start := time.Now()

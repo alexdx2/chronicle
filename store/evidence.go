@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -244,6 +245,158 @@ func (s *Store) AddEvidence(e EvidenceRow) (int64, error) {
 		return 0, err
 	}
 	return id, nil
+}
+
+// InsertEvidenceBatch inserts rows with no dedup lookup, in one transaction —
+// safe only when the caller guarantees no duplicates exist against the
+// destination table. snapshot.Load is exactly that caller: it always builds a
+// brand-new, empty store from an already-deduplicated snapshot (FromStore
+// reads already-deduped evidence out of a live store, so two entries in one
+// exported snapshot can never collide on AddEvidence's own dedup tuple), so
+// there is nothing pre-existing to dedupe against in the first place.
+//
+// AddEvidence's dedup lookup (`COALESCE(node_id, 0) = COALESCE(?, 0)`, etc.)
+// is not sargable against any index — confirmed with EXPLAIN QUERY PLAN, it
+// is a full graph_evidence table scan regardless of table size — so calling
+// AddEvidence once per row makes bulk-loading N evidence rows O(N^2). This
+// performs exactly AddEvidence's own "not found" branch (same column list,
+// same value defaulting, same evidence_uid and journal-event behavior) via
+// insertEvidenceNoDedup, just without the SELECT that makes that branch
+// expensive at volume, batched into one transaction the way CopyLocalState
+// (store/journal_rebuild.go) batches its own bulk copy: refuse a
+// transaction-scoped receiver, begin one transaction, commit once at the end.
+//
+// This is deliberately narrow — a fix for AddEvidence's shared dedup query
+// itself (e.g. an index matching its COALESCE expressions, or reusing the
+// existing evidence_uid/idx_evidence_uid index instead of re-deriving the
+// dedup tuple column-by-column) belongs in AddEvidence, for every caller, not
+// here; that fix needs its own backward-compatibility handling (existing rows
+// with an empty evidence_uid) and test coverage.
+func (s *Store) InsertEvidenceBatch(rows []EvidenceRow) error {
+	if s.conn == nil {
+		return fmt.Errorf("InsertEvidenceBatch: store is transaction-scoped")
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	sqlTx, err := s.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("InsertEvidenceBatch begin: %w", err)
+	}
+	tx := &Store{conn: nil, db: sqlTx, dbPath: s.dbPath, journalActor: s.journalActor, suppressJournal: s.suppressJournal}
+
+	for i, e := range rows {
+		if err := tx.insertEvidenceNoDedup(e); err != nil {
+			sqlTx.Rollback()
+			return fmt.Errorf("InsertEvidenceBatch row %d: %w", i, err)
+		}
+	}
+
+	if err := sqlTx.Commit(); err != nil {
+		return fmt.Errorf("InsertEvidenceBatch commit: %w", err)
+	}
+	// Best-effort, matching WithTx: a flush failure must not fail the
+	// already-committed batch — journaling is off for every real caller
+	// (Load calls SetJournaling(false) first) so this is a cheap no-op there.
+	if _, ferr := s.FlushJournal(); ferr != nil {
+		fmt.Fprintf(os.Stderr, "chronicle: journal flush failed (events retained in outbox): %v\n", ferr)
+	}
+	return nil
+}
+
+// insertEvidenceNoDedup performs exactly AddEvidence's "insert new" branch —
+// same column list, same value defaulting, same evidence_uid and journal-
+// event behavior — without AddEvidence's preceding dedup SELECT. One call per
+// row inside InsertEvidenceBatch's transaction.
+func (s *Store) insertEvidenceNoDedup(e EvidenceRow) error {
+	var nodeID, edgeID *int64
+	if e.TargetKind == "node" {
+		nodeID = &e.NodeID
+	} else {
+		edgeID = &e.EdgeID
+	}
+
+	polarity := e.EvidencePolarity
+	if polarity == "" {
+		polarity = "positive"
+	}
+
+	// Same integrity check as AddEvidence: an evidence row pointing at a
+	// nonexistent node/edge is a bug, and journaling an event with an empty
+	// owner_key would hard-fail replay on another machine — fail loud here
+	// instead of inserting it.
+	ownerKey := ""
+	if e.TargetKind == "node" {
+		if err := s.db.QueryRow(`SELECT node_key FROM graph_nodes WHERE node_id = ?`, e.NodeID).Scan(&ownerKey); err != nil || ownerKey == "" {
+			return fmt.Errorf("owner node %d not found (err=%v)", e.NodeID, err)
+		}
+	} else {
+		if err := s.db.QueryRow(`SELECT edge_key FROM graph_edges WHERE edge_id = ?`, e.EdgeID).Scan(&ownerKey); err != nil || ownerKey == "" {
+			return fmt.Errorf("owner edge %d not found (err=%v)", e.EdgeID, err)
+		}
+	}
+	domain := DomainFromNodeKey(ownerKey)
+	if e.TargetKind == "edge" {
+		domain = domainFromEdgeKey(ownerKey)
+	}
+
+	status := e.EvidenceStatus
+	if status == "" {
+		status = "valid"
+	}
+	assertionVersion := e.AssertionVersion
+	if assertionVersion == "" {
+		assertionVersion = "v1"
+	}
+	assertion := e.Assertion
+	if assertion == "" {
+		assertion = "{}"
+	}
+	uid := e.EvidenceUID
+	if uid == "" {
+		uid = EvidenceKey(e.TargetKind, ownerKey, e.SourceKind, e.RepoName, e.FilePath, e.LineStart, e.ExtractorID, polarity)
+	}
+
+	const insQ = `
+		INSERT INTO graph_evidence
+		  (target_kind, node_id, edge_id, source_kind, repo_name, file_path,
+		   line_start, line_end, column_start, column_end, locator,
+		   extractor_id, extractor_version, ast_rule, snippet_hash, commit_sha,
+		   confidence, evidence_status, evidence_polarity,
+		   valid_from_revision_id, last_verified_revision_id,
+		   context_id, evidence_uid,
+		   assertion, assertion_kind, assertion_version,
+		   verification_status, verification_reason,
+		   metadata, blob_sha)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	`
+	if _, err := s.db.Exec(insQ,
+		e.TargetKind, nodeID, edgeID,
+		e.SourceKind,
+		nullableStr(e.RepoName), nullableStr(e.FilePath),
+		nullableInt(e.LineStart), nullableInt(e.LineEnd),
+		nullableInt(e.ColumnStart), nullableInt(e.ColumnEnd),
+		nullableStr(e.Locator),
+		e.ExtractorID, e.ExtractorVersion,
+		nullableStr(e.ASTRule), nullableStr(e.SnippetHash), nullableStr(e.CommitSHA),
+		e.Confidence, status, polarity,
+		nullableInt64(e.ValidFromRevisionID), nullableInt64(e.ValidFromRevisionID),
+		nullableInt64(e.ContextID), nullableStr(uid),
+		assertion, e.AssertionKind, assertionVersion,
+		defaultStr(e.VerificationStatus, "unverified"), defaultStr(e.VerificationReason, ""),
+		e.Metadata, e.BlobSHA,
+	); err != nil {
+		return fmt.Errorf("insert: %w", err)
+	}
+
+	e.EvidencePolarity, e.Assertion, e.EvidenceStatus = polarity, assertion, status
+	evFields := evidenceEventFields(e)
+	return s.appendEvent(journalEvent{
+		DomainKey: domain, RevisionID: e.ValidFromRevisionID,
+		Kind: EvEvidenceAdd, Key: uid, OwnerKey: ownerKey,
+		Fields: evFields,
+	})
 }
 
 // evidenceEventFields builds the evidence_add journal payload for a row whose

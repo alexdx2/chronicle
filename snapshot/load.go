@@ -38,11 +38,27 @@ type LoadOptions struct {
 // over it: nodes, edges (From/To resolved from the snapshot's keys to the
 // new store's ids), evidence (node- and edge-attached, BlobSHA included),
 // aliases, glossary terms and file coverage are inserted via the store's
-// ordinary write methods (UpsertNode, UpsertEdge, AddEvidence, AddAlias,
-// UpsertTerm, UpsertCoverage) — never raw SQL — in the order the store's own
+// ordinary write methods (UpsertNode, UpsertEdge, AddAlias, UpsertTerm,
+// UpsertCoverage, and — for evidence specifically — InsertEvidenceBatch, not
+// AddEvidence; see below) — never raw SQL — in the order the store's own
 // references require: nodes before the edges that resolve From/To against
 // them, both before the evidence that attaches to whichever node or edge id
 // they resolved to.
+//
+// Evidence goes through store.InsertEvidenceBatch rather than a loop of
+// AddEvidence. AddEvidence's dedup lookup is a full table scan regardless of
+// table size (its WHERE clause wraps every comparison column in COALESCE(...),
+// which defeats every index on graph_evidence — confirmed with EXPLAIN QUERY
+// PLAN), so N sequential AddEvidence calls cost O(N^2) — the dominant cost at
+// snapshot scale, independent of anything else in Load (measured: 16,000
+// evidence rows alone took ~47s against an unmodified AddEvidence). Skipping
+// the dedup check is safe here specifically: FromStore reads already-
+// deduplicated evidence out of a live store, so two entries in one exported
+// snapshot can never collide on AddEvidence's own dedup tuple, and Load
+// always builds a brand-new, empty store, so there is nothing pre-existing to
+// dedupe against either. See InsertEvidenceBatch's own doc comment
+// (store/evidence.go) for the fuller version of this, including why the
+// general fix belongs in AddEvidence itself, for every caller, not here.
 //
 // The store never journals: SetJournaling(false) runs before the first
 // write and is never turned back on. A snapshot-loaded store is an
@@ -126,15 +142,43 @@ func Load(s *Snapshot, reg *registry.Registry, opt LoadOptions) (*graph.Graph, f
 	// doc comment above for why a snapshot-loaded store never journals.
 	st.SetJournaling(false)
 
-	// One transaction for the whole bulk load. At snapshot scale (thousands
-	// of nodes/edges/evidence rows) the dominant cost is round trips, not
-	// row count: every store write method commits its own statement
-	// immediately outside a transaction, each one its own fsync under WAL.
-	// Batching is a straight performance necessity here, not a correctness
-	// one — SetJournaling above already makes every write a journal no-op,
-	// in or out of a transaction.
+	// Nodes and edges, batched into one transaction: at snapshot scale
+	// (thousands of rows) the dominant cost is round trips, not row count —
+	// every store write method commits its own statement immediately outside
+	// a transaction, each one its own fsync under WAL. Batching is a
+	// performance necessity here, not a correctness one (SetJournaling above
+	// already makes every write a journal no-op, in or out of a transaction).
+	// Both maps are filled in by loadNodesAndEdges and read afterward, by
+	// collectEvidenceRows and loadAliasesTermsCoverage, to resolve the
+	// snapshot's node/edge keys to this store's ids.
+	nodeIDs := make(map[string]int64, len(s.Nodes))
+	edgeIDs := make(map[string]int64, len(s.Edges))
 	if err := st.WithTx(func(tx *store.Store) error {
-		return loadInto(tx, s)
+		return loadNodesAndEdges(tx, s, nodeIDs, edgeIDs)
+	}); err != nil {
+		closer()
+		return nil, nil, fmt.Errorf("snapshot: Load: %w", err)
+	}
+
+	// Evidence goes through InsertEvidenceBatch, not a WithTx-wrapped loop of
+	// AddEvidence: AddEvidence's dedup lookup is a full table scan (see
+	// InsertEvidenceBatch's doc comment in store/evidence.go), making N
+	// sequential calls O(N^2) — the dominant cost at snapshot scale.
+	// InsertEvidenceBatch manages its own transaction (mirroring
+	// CopyLocalState, store/journal_rebuild.go) and therefore needs the
+	// top-level store, not a WithTx handle — it cannot be folded into the
+	// transaction above.
+	if err := st.InsertEvidenceBatch(collectEvidenceRows(s, nodeIDs, edgeIDs)); err != nil {
+		closer()
+		return nil, nil, fmt.Errorf("snapshot: Load: insert evidence: %w", err)
+	}
+
+	// Aliases, glossary terms and file coverage: none of them are on the hot
+	// path (aliases and terms are typically a small fraction of node/edge
+	// count; coverage is one row per (file, extractor)), so a second,
+	// ordinary WithTx batch is enough.
+	if err := st.WithTx(func(tx *store.Store) error {
+		return loadAliasesTermsCoverage(tx, s, nodeIDs)
 	}); err != nil {
 		closer()
 		return nil, nil, fmt.Errorf("snapshot: Load: %w", err)
@@ -157,12 +201,12 @@ func Load(s *Snapshot, reg *registry.Registry, opt LoadOptions) (*graph.Graph, f
 	return g, closer, nil
 }
 
-// loadInto writes every record in s into st via the store's ordinary write
-// methods. st may be the top-level store or a WithTx transaction handle —
-// every store write method takes a DBTX-shaped executor either way, so the
-// logic here does not need to know which.
-func loadInto(st *store.Store, s *Snapshot) error {
-	nodeIDs := make(map[string]int64, len(s.Nodes))
+// loadNodesAndEdges writes every node and edge in s into st, via UpsertNode
+// and UpsertEdge, filling in nodeIDs/edgeIDs (snapshot key -> this store's
+// id) as it goes. Nodes first: UpsertEdge only back-fills a key from an id it
+// is given, never the reverse (confirmed by reading its full body), so edges
+// must resolve From/To against nodeIDs themselves before calling it.
+func loadNodesAndEdges(st *store.Store, s *Snapshot, nodeIDs, edgeIDs map[string]int64) error {
 	for _, n := range s.Nodes {
 		id, err := st.UpsertNode(store.NodeRow{
 			NodeKey:       n.ID,
@@ -195,7 +239,6 @@ func loadInto(st *store.Store, s *Snapshot) error {
 		nodeIDs[n.ID] = id
 	}
 
-	edgeIDs := make(map[string]int64, len(s.Edges))
 	for _, e := range s.Edges {
 		fromID, ok := nodeIDs[e.From]
 		if !ok {
@@ -227,23 +270,34 @@ func loadInto(st *store.Store, s *Snapshot) error {
 		edgeIDs[e.ID] = id
 	}
 
+	return nil
+}
+
+// collectEvidenceRows builds the full list of store.EvidenceRow values to
+// insert (every node's evidence, then every edge's), resolving each owner's
+// snapshot key to the id loadNodesAndEdges assigned it in nodeIDs/edgeIDs.
+// Fed to InsertEvidenceBatch — see Load's doc comment for why that, rather
+// than a loop of AddEvidence, is what actually inserts them.
+func collectEvidenceRows(s *Snapshot, nodeIDs, edgeIDs map[string]int64) []store.EvidenceRow {
+	rows := make([]store.EvidenceRow, 0, len(s.Nodes)+len(s.Edges))
 	for _, n := range s.Nodes {
 		nodeID := nodeIDs[n.ID]
 		for _, ev := range n.Evidence {
-			if _, err := st.AddEvidence(evidenceRowFrom("node", nodeID, 0, ev)); err != nil {
-				return fmt.Errorf("evidence %q on node %q: %w", ev.ID, n.ID, err)
-			}
+			rows = append(rows, evidenceRowFrom("node", nodeID, 0, ev))
 		}
 	}
 	for _, e := range s.Edges {
 		edgeID := edgeIDs[e.ID]
 		for _, ev := range e.Evidence {
-			if _, err := st.AddEvidence(evidenceRowFrom("edge", 0, edgeID, ev)); err != nil {
-				return fmt.Errorf("evidence %q on edge %q: %w", ev.ID, e.ID, err)
-			}
+			rows = append(rows, evidenceRowFrom("edge", 0, edgeID, ev))
 		}
 	}
+	return rows
+}
 
+// loadAliasesTermsCoverage writes every alias (resolved via nodeIDs), every
+// glossary term and every file coverage record in s into st.
+func loadAliasesTermsCoverage(st *store.Store, s *Snapshot, nodeIDs map[string]int64) error {
 	for _, n := range s.Nodes {
 		nodeID := nodeIDs[n.ID]
 		for _, a := range n.Aliases {
@@ -303,9 +357,10 @@ func loadInto(st *store.Store, s *Snapshot) error {
 }
 
 // evidenceRowFrom builds the store.EvidenceRow for one snapshot Evidence
-// record attached to a node or edge. Exactly one of nodeID/edgeID is used by
-// store.AddEvidence, selected by targetKind; the other is ignored, so
-// passing 0 for it is harmless.
+// record attached to a node or edge, for collectEvidenceRows to feed to
+// InsertEvidenceBatch. Exactly one of nodeID/edgeID is read on the store
+// side, selected by targetKind; the other is ignored, so passing 0 for it is
+// harmless.
 func evidenceRowFrom(targetKind string, nodeID, edgeID int64, ev Evidence) store.EvidenceRow {
 	lineStart, lineEnd, colStart, colEnd := parseRange(ev.Range)
 	polarity := ev.Polarity
