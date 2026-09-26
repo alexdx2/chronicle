@@ -25,6 +25,7 @@ func newGraphCmd() *cobra.Command {
 	cmd.AddCommand(newGraphStatusCmd())
 	cmd.AddCommand(newGraphShowCmd())
 	cmd.AddCommand(newGraphMergeCmd())
+	cmd.AddCommand(newGraphMigrateCmd())
 	return cmd
 }
 
