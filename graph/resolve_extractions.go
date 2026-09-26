@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/alexdx2/chronicle-core/extract/structural"
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/alexdx2/chronicle-core/validate"
 )
@@ -2589,6 +2590,40 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 	return id
 }
 
+// blobForEvidenceFile computes the git blob of filePath's current on-disk
+// content for a creation-evidence row — "" for a file-less (synthetic)
+// entity, same convention as store.EvidenceRow.BlobSHA generally. Reads
+// relative to ProjectRoot(), the same root chronicle_file_groups and the
+// file_extracted handlers' own blob computation already use.
+//
+// Memoized for the lifetime of one DETERMINISTIC resolve pass (g.det, which
+// detBegin scopes to exactly one ResolveExtractionsWithOptions call and
+// discards when it returns — see resolve_deterministic.go): a rules-pack
+// backlog drain or a file with many facts calls addCreationEvidence /
+// addEdgeCreationEvidence repeatedly for the SAME file, and re-reading +
+// re-hashing it every time would be pure waste within that one pass. Outside
+// a deterministic pass (legacy/agent-scan mode, where g.det is nil) this
+// hashes directly on every call — correct, just not memoized; those callers
+// are not the many-facts-per-file hot path the cache exists for.
+func (g *Graph) blobForEvidenceFile(filePath string) string {
+	if filePath == "" {
+		return ""
+	}
+	if g.det != nil {
+		if b, ok := g.det.blobCache[filePath]; ok {
+			return b
+		}
+	}
+	blob, _ := gitutil.FileBlobSHA(ProjectRoot(), filePath)
+	if g.det != nil {
+		if g.det.blobCache == nil {
+			g.det.blobCache = map[string]string{}
+		}
+		g.det.blobCache[filePath] = blob
+	}
+	return blob
+}
+
 // addCreationEvidence records why an auto-created node exists. Every creation
 // path must call it — the evidence-first invariant: no active entity without
 // at least one evidence row. A missing node (creation failed upstream) is
@@ -2642,6 +2677,7 @@ func (g *Graph) addCreationEvidence(nodeKey string, revisionID int64, name, file
 		Assertion:           string(assertion),
 		Metadata:            metadata,
 		ValidFromRevisionID: revisionID,
+		BlobSHA:             g.blobForEvidenceFile(evidenceFile),
 	})
 	if err != nil {
 		return fmt.Errorf("creation evidence for %s: %w", nodeKey, err)
@@ -2691,6 +2727,7 @@ func (g *Graph) addEdgeCreationEvidence(edgeKey string, revisionID int64, filePa
 		Assertion:           assertion,
 		Metadata:            metadata,
 		ValidFromRevisionID: revisionID,
+		BlobSHA:             g.blobForEvidenceFile(filePath),
 	})
 	if err != nil {
 		return fmt.Errorf("creation evidence for %s: %w", edgeKey, err)

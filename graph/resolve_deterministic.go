@@ -56,6 +56,16 @@ type detResolve struct {
 	// node type per deferred fact; on a real repo that is thousands of full
 	// table scans.
 	nameIndex map[string][]store.NodeRow
+
+	// blobCache memoizes blobForEvidenceFile's git blob hash per file path for
+	// the lifetime of this one resolve pass — a rules-pack backlog drain can
+	// run addCreationEvidence/addEdgeCreationEvidence many times over facts
+	// from the same file, and re-reading and re-hashing it each time would be
+	// wasted work. Scoped to this struct's own lifetime (created by detBegin,
+	// discarded when the pass ends), so a file changing between two SEPARATE
+	// resolve passes is never a staleness risk — only re-reads WITHIN one pass
+	// are skipped.
+	blobCache map[string]string
 }
 
 // detDeferredFact is one name-resolved fact waiting for the structural base.

@@ -323,6 +323,7 @@ func (g *Graph) AddNodeEvidence(nodeKey string, input validate.EvidenceInput) (i
 		VerificationStatus:  verificationStatus,
 		VerificationReason:  verificationReason,
 		Metadata:            metadata,
+		BlobSHA:             g.blobForEvidenceFile(input.FilePath),
 	}
 	id, err := g.store.AddEvidence(row)
 	if err != nil {
@@ -398,6 +399,7 @@ func (g *Graph) AddEdgeEvidence(edgeKey string, input validate.EvidenceInput) (i
 		VerificationStatus:  verificationStatus,
 		VerificationReason:  verificationReason,
 		Metadata:            metadata,
+		BlobSHA:             g.blobForEvidenceFile(input.FilePath),
 	}
 	id, err := g.store.AddEvidence(row)
 	if err != nil {
