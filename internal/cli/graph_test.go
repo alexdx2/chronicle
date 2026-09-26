@@ -70,6 +70,13 @@ func TestRunGraphUpdate_WriteThenCheck(t *testing.T) {
 	if result.Added != 1 || result.Removed != 0 || result.Changed != 0 {
 		t.Fatalf("first update summary = %+v, want Added=1 Removed=0 Changed=0", result)
 	}
+	// Pins internal/cli/graph.go's ordering: runGraphUpdate reads
+	// next.Header.Counts only after calling Encode, which is what actually
+	// fills it in (see snapshot.TestFromStore_EncodeFillsHeaderCounts for
+	// the underlying invariant this depends on).
+	if result.Counts.Node != 1 || result.Counts.Edge != 0 {
+		t.Fatalf("first update Counts = %+v, want Node=1 Edge=0", result.Counts)
+	}
 	written, err := os.ReadFile(graphPath)
 	if err != nil {
 		t.Fatalf("read graph.jsonl: %v", err)
@@ -126,6 +133,9 @@ func TestRunGraphUpdate_WriteThenCheck(t *testing.T) {
 	}
 	if result3.Added != 1 || result3.Removed != 0 || result3.Changed != 0 {
 		t.Fatalf("second update summary = %+v, want Added=1 Removed=0 Changed=0", result3)
+	}
+	if result3.Counts.Node != 2 || result3.Counts.Edge != 0 {
+		t.Fatalf("second update Counts = %+v, want Node=2 Edge=0", result3.Counts)
 	}
 
 	// Final check is clean again.

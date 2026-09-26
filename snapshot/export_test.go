@@ -288,3 +288,198 @@ func TestFromStore_TermsAndCoverage(t *testing.T) {
 		t.Errorf("svc/b.ts Extractors = %+v, want one entry with status no_runtime_architecture", b.Extractors)
 	}
 }
+
+// TestFromStore_FiltersEveryDerivedKind proves each closed-list value in
+// derived.go is actually filtered, not merely "happened not to survive".
+// The tom-and-jerry fixture only ever has evidence source_kind "file" or
+// "synthetic" and extractor "chronicle:derive_flows" — none of the other 6
+// signal-pipeline source_kinds, and neither derived edge type, occur in it,
+// so TestFromStore_FixtureCounts's "no surviving evidence is derived"
+// assertion would still pass even if IsDerivedEvidence/IsDerivedEdgeType
+// were wrong for any of them. This constructs one fact for each value by
+// hand — plus a non-derived control of each kind, so an over-eager filter
+// would also be caught — and checks it is actually absent from the export.
+func TestFromStore_FiltersEveryDerivedKind(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer s.Close()
+
+	nodeID, err := s.UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:d:a", Layer: "code", NodeType: "provider", DomainKey: "d",
+		Name: "A", FilePath: "svc/a.ts", Status: "active",
+		Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("UpsertNode a: %v", err)
+	}
+	otherID, err := s.UpsertNode(store.NodeRow{
+		NodeKey: "code:provider:d:b", Layer: "code", NodeType: "provider", DomainKey: "d",
+		Name: "B", FilePath: "svc/b.ts", Status: "active",
+		Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+	})
+	if err != nil {
+		t.Fatalf("UpsertNode b: %v", err)
+	}
+
+	// One evidence row per derivedSourceKinds value, each with an ordinary
+	// (non-derived) extractor id, so a bug in the source_kind branch can't
+	// hide behind the extractor_id branch instead.
+	derivedKinds := []string{
+		"complexity-ast", "complexity-smells", "complexity-graph",
+		"churn-git", "coupling-git", "test-link", "similarity-minhash",
+	}
+	for i, kind := range derivedKinds {
+		if _, err := s.AddEvidence(store.EvidenceRow{
+			TargetKind: "node", NodeID: nodeID, SourceKind: kind,
+			FilePath: "svc/a.ts", LineStart: i + 1, ExtractorID: "chronicle-scan", ExtractorVersion: "1",
+			Locator: kind, Confidence: 0.9, EvidenceStatus: "valid", EvidencePolarity: "positive",
+		}); err != nil {
+			t.Fatalf("AddEvidence %s: %v", kind, err)
+		}
+	}
+	// Control: ordinary, non-derived evidence on the same node — proves the
+	// node itself isn't dropped, and that filtering isn't over-eager.
+	if _, err := s.AddEvidence(store.EvidenceRow{
+		TargetKind: "node", NodeID: nodeID, SourceKind: "file",
+		FilePath: "svc/a.ts", LineStart: 100, ExtractorID: "chronicle-scan", ExtractorVersion: "1",
+		Locator: "control", Confidence: 0.9, EvidenceStatus: "valid", EvidencePolarity: "positive",
+	}); err != nil {
+		t.Fatalf("AddEvidence control: %v", err)
+	}
+
+	// One edge of each derivedEdgeTypes value, plus one ordinary edge as a
+	// control so the export isn't vacuously "every edge is gone". "inferred"
+	// is the real derivation_kind production code uses for both
+	// (graph/gitsignals.go, graph/similarity.go) — also the only value in
+	// the schema's CHECK constraint that fits an analytical, non-code edge.
+	for _, edgeType := range []string{"CHANGES_WITH", "SIMILAR_TO"} {
+		if _, err := s.UpsertEdge(store.EdgeRow{
+			EdgeKey: "code:provider:d:a->code:provider:d:b:" + edgeType, FromNodeID: nodeID, ToNodeID: otherID,
+			EdgeType: edgeType, DerivationKind: "inferred", Active: true,
+			Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+		}); err != nil {
+			t.Fatalf("UpsertEdge %s: %v", edgeType, err)
+		}
+	}
+	if _, err := s.UpsertEdge(store.EdgeRow{
+		EdgeKey: "code:provider:d:a->code:provider:d:b:INJECTS", FromNodeID: nodeID, ToNodeID: otherID,
+		EdgeType: "INJECTS", DerivationKind: "hard", Active: true,
+		Confidence: 1, Freshness: 1, TrustScore: 1, Metadata: "{}",
+	}); err != nil {
+		t.Fatalf("UpsertEdge INJECTS (control): %v", err)
+	}
+
+	snap, err := FromStore(s, ExportOptions{})
+	if err != nil {
+		t.Fatalf("FromStore: %v", err)
+	}
+
+	if len(snap.Nodes) != 2 {
+		t.Fatalf("len(Nodes) = %d, want 2 (neither node is itself derived)", len(snap.Nodes))
+	}
+	var nodeA *Node
+	for i := range snap.Nodes {
+		if snap.Nodes[i].ID == "code:provider:d:a" {
+			nodeA = &snap.Nodes[i]
+		}
+	}
+	if nodeA == nil {
+		t.Fatal("node a is missing from the export")
+	}
+	gotByLocator := map[string]bool{}
+	for _, ev := range nodeA.Evidence {
+		gotByLocator[ev.Locator] = true
+	}
+	for _, kind := range derivedKinds {
+		if gotByLocator[kind] {
+			t.Errorf("evidence with source_kind %q survived export — IsDerivedEvidence should have filtered it", kind)
+		}
+	}
+	if !gotByLocator["control"] {
+		t.Error("the non-derived control evidence is missing — filtering is over-eager")
+	}
+	if len(nodeA.Evidence) != 1 {
+		t.Errorf("node a Evidence = %+v, want exactly the control entry", nodeA.Evidence)
+	}
+
+	gotEdgeType := map[string]bool{}
+	for _, e := range snap.Edges {
+		gotEdgeType[e.Type] = true
+	}
+	if gotEdgeType["CHANGES_WITH"] {
+		t.Error("a CHANGES_WITH edge survived export — IsDerivedEdgeType should have dropped it")
+	}
+	if gotEdgeType["SIMILAR_TO"] {
+		t.Error("a SIMILAR_TO edge survived export — IsDerivedEdgeType should have dropped it")
+	}
+	if !gotEdgeType["INJECTS"] {
+		t.Error("the non-derived control edge (INJECTS) is missing — filtering is over-eager")
+	}
+	if len(snap.Edges) != 1 {
+		t.Errorf("len(Edges) = %d, want 1 (only the control edge)", len(snap.Edges))
+	}
+}
+
+// TestFromStore_EncodeFillsHeaderCounts pins an invariant internal/cli/graph.go's
+// runGraphUpdate depends on: Encode fills Header.Counts from a Snapshot's
+// actual record slices as a documented side effect, so reading
+// Header.Counts is only valid AFTER calling Encode, never before. Nothing
+// else in this package's tests exercises Header.Counts at all — without
+// this, a future change that reordered runGraphUpdate's Encode/read-Counts
+// lines, or that stopped Encode from mutating Counts, would break silently.
+func TestFromStore_EncodeFillsHeaderCounts(t *testing.T) {
+	s := copyFixtureStore(t)
+
+	snap, err := FromStore(s, ExportOptions{})
+	if err != nil {
+		t.Fatalf("FromStore: %v", err)
+	}
+	wantNode, wantEdge := len(snap.Nodes), len(snap.Edges)
+	wantTerm, wantCoverage := len(snap.Terms), len(snap.Coverage)
+	if wantNode == 0 || wantEdge == 0 {
+		t.Fatal("fixture produced zero nodes/edges — test is not exercising anything")
+	}
+
+	// Before Encode, Header.Counts is whatever FromStore left it (Task 1
+	// documents Encode, not FromStore, as owning Counts) — assert that too,
+	// so this test would fail loud if FromStore ever started filling it in
+	// some other, inconsistent way instead.
+	if snap.Header.Counts != (Counts{}) {
+		t.Errorf("before Encode, Header.Counts = %+v, want the zero value", snap.Header.Counts)
+	}
+
+	var buf bytes.Buffer
+	if err := Encode(&buf, snap); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	if snap.Header.Counts.Node != wantNode {
+		t.Errorf("after Encode, Header.Counts.Node = %d, want %d", snap.Header.Counts.Node, wantNode)
+	}
+	if snap.Header.Counts.Edge != wantEdge {
+		t.Errorf("after Encode, Header.Counts.Edge = %d, want %d", snap.Header.Counts.Edge, wantEdge)
+	}
+	if snap.Header.Counts.Term != wantTerm {
+		t.Errorf("after Encode, Header.Counts.Term = %d, want %d", snap.Header.Counts.Term, wantTerm)
+	}
+	if snap.Header.Counts.Coverage != wantCoverage {
+		t.Errorf("after Encode, Header.Counts.Coverage = %d, want %d", snap.Header.Counts.Coverage, wantCoverage)
+	}
+
+	// Deliberately no Decode round trip here: tom-and-jerry has one
+	// pre-existing, unrelated node ("infra:broker:battle-result", status
+	// stale) whose node_key has only 3 of the required 4 colon-separated
+	// segments — predates this branch (present since commit 275bbca) and is
+	// not something FromStore or Encode did. FromStore correctly keeps it
+	// (only "deleted" is excluded), Encode correctly counts it, and Decode
+	// correctly rejects the malformed key with a bad_key/counts_mismatch
+	// warning on the way back in — all three exactly per spec. Round-tripping
+	// this exact fixture through Decode would make this test assert "zero
+	// warnings" against data known to legitimately produce one, coupling a
+	// Header.Counts test to an unrelated fixture data-quality quirk. The
+	// direct assertions above already pin the invariant this test exists
+	// for: Header.Counts matches Nodes/Edges/Terms/Coverage's real lengths
+	// once Encode has run.
+}
