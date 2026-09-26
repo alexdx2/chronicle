@@ -59,6 +59,7 @@ func NewRootCmd() *cobra.Command {
 		newEdgeCmd(),
 		newEvidenceCmd(),
 		newSnapshotCmd(),
+		newGraphCmd(),
 		newImportCmd(),
 		newQueryCmd(),
 		newSearchCmd(),
