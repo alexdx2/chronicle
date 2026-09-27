@@ -60,6 +60,8 @@ validate/               Key normalization + validation (public)
 internal/cli/           CLI commands (internal — not importable by pro)
 admin/                  Dashboard server + static/ (public — importable by pro)
 live/                   Agent ↔ dashboard channel (live_events, screen state, diagram tail) (public)
+snapshot/                Canonical graph.jsonl — encode/decode/export/load/freshness/merge (public)
+review/                  Compare two graph versions — diff, classify, impact, findings, renderers (public)
 internal/mcp/           MCP server + tools (internal)
 internal/manifest/      Domain manifest parsing (internal)
 ```
@@ -89,6 +91,22 @@ Sync on open: every command applies journal events the db hasn't seen yet, so ev
 **Contributor rules:**
 - NEVER mutate `graph_*` tables with raw SQL. Every mutation goes through the instrumented store methods so it journals. Scan-lab runs `journal verify` as a shadow validator — raw-SQL mutations make replay diverge and fail it.
 - Trust/confidence are derived from evidence (asserter-tier caps, verification promotion) and recomputed on read — never journaled. If a choke point forces a status, it must adjust the evidence in the same write so the derived state stays coherent.
+
+## Graph snapshot + review
+
+`.depbot/graph.jsonl` is the committed, canonical state of the graph — one current record per
+node/edge/term/coverage entry, evidence with file/blob/line-range. `chronicle graph update` writes
+it from the local database; `chronicle graph status`/`show` report freshness and the nearest graph
+version in a revision's git history; `chronicle graph migrate` backfills blobs from an
+already-committed event journal. Conflicts on the file regenerate the disputed records instead of
+a text merge (`.gitattributes` registers a `chronicle-graph` merge driver via `chronicle graph merge`).
+
+`chronicle review <base>...<head>` compares two committed graph versions (no LLM): what changed
+(added/removed/changed/touched facts), what it means (`ChangeClassifier`: integration/producer/
+consumer/contract changes, direction-aware), who it may affect (`ImpactAnalyzer`, collapsed to
+services/domains), and what the graph does not know (files changed after their last scan). See
+`docs/superpowers/specs/2026-09-25-graph-snapshot-contract-design.md` and
+`2026-09-25-review-engine-design.md` (outer repo).
 
 ## Signal pipeline (scan finalize)
 
@@ -217,6 +235,8 @@ Tests: stale marking, evidence invalidation, re-resolution, contradiction detect
 - Node key format: `layer:type:domain:qualified_name`
 - Edge key format: `from_node_key->to_node_key:EDGE_TYPE`
 - live_events is ephemeral: not journaled, not carried by journal rebuild, cleared by ResetDB
+- .depbot/graph.jsonl is the committed canonical snapshot; chronicle.db/events/wiki.db are local and gitignored
+- Evidence carries a git blob SHA per file; freshness is computed from it, never guessed
 
 ## Dashboard dev
 

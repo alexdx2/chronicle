@@ -137,6 +137,11 @@ for the instant demo.)
 
 New MCP tools for agents: `chronicle_node_search` (resolve a name to a node key), `chronicle_subgraph` (one-call neighborhood), and `chronicle_insights` (hubs, low-trust edges to verify, structural gaps).
 
+**Review across versions.** `chronicle review main...HEAD` (or the `chronicle_review_report` MCP
+tool) compares two committed graph snapshots and reports which systems a change may affect —
+deterministically, without an LLM call. Requires `.depbot/graph.jsonl` on both sides
+(`chronicle graph update` writes it; commit it like any other source file).
+
 ## Dashboard
 
 The MCP server runs a web dashboard on localhost. It opens automatically on first scan, or get the URL with `chronicle status`.
