@@ -89,10 +89,15 @@ func (q CoreImpactQuerier) QueryImpact(seed string, depth int) ([]SystemImpact, 
 		return nil, fmt.Errorf("review: CoreImpactQuerier.QueryImpact: node index: %w", err)
 	}
 
+	flowTrigger, err := flowTriggerIndex(st)
+	if err != nil {
+		return nil, fmt.Errorf("review: CoreImpactQuerier.QueryImpact: flow triggers: %w", err)
+	}
+
 	bestDepth := make(map[string]int, len(res.Impacts))
 	best := make(map[string]SystemImpact, len(res.Impacts))
 	for _, entry := range res.Impacts {
-		ref, ok := collapseKey(own, idx, entry.NodeKey)
+		ref, ok := collapseKey(own, idx, flowTrigger, entry.NodeKey)
 		if !ok {
 			continue
 		}
@@ -139,10 +144,14 @@ func (q CoreImpactQuerier) TopicSubscribers(topic string) ([]SystemImpact, error
 	if err != nil {
 		return nil, fmt.Errorf("review: CoreImpactQuerier.TopicSubscribers: node index: %w", err)
 	}
+	flowTrigger, err := flowTriggerIndex(st)
+	if err != nil {
+		return nil, fmt.Errorf("review: CoreImpactQuerier.TopicSubscribers: flow triggers: %w", err)
+	}
 
 	best := make(map[string]SystemImpact, len(edges))
 	for _, e := range edges {
-		ref, ok := collapseKey(own, idx, e.FromNodeKey)
+		ref, ok := collapseKey(own, idx, flowTrigger, e.FromNodeKey)
 		if !ok {
 			continue
 		}
@@ -181,14 +190,34 @@ func collapseOne(st *store.Store, nodeKey string) (SystemRef, error) {
 	if err != nil {
 		return SystemRef{}, fmt.Errorf("review: collapse %s: %w", nodeKey, err)
 	}
+	// A flow:use_case node is derived scaffolding — DeriveFlows synthesizes
+	// it from an endpoint plus that endpoint's own INJECTS closure, so
+	// viewmodel.OwnershipMap never attributes one to a service directly (its
+	// per-node loops only ever walk layer=="code"/"data" nodes — see
+	// OwnershipMap's own doc comment). Falling straight to kindForUnowned
+	// below would label it its own separate "domain" system, keyed by this
+	// one flow's own synthetic node key — Bug 3 (task-18-report.md): a real
+	// reproduction against tom-and-jerry inflated one real change into "6
+	// systems affected" this way, five of them derived flow nodes with no
+	// owner a human would recognize. Attribute it instead to whatever owns
+	// the endpoint that triggers it (TRIGGERS_FLOW, the same edge DeriveFlows
+	// itself writes to connect the two) — a real, resolvable node, and
+	// usually a service once collapsed again through this same function.
+	if n.Layer == "flow" {
+		if trigger, ok, terr := flowTriggerFor(st, n.NodeID); terr == nil && ok {
+			return collapseOne(st, trigger)
+		}
+	}
 	return systemRefFromNode(n, kindForUnowned(n)), nil
 }
 
-// collapseKey is collapseOne's batch-friendly twin: same two-step rule
-// (owned -> owner; unowned -> self, typed by NodeType), but against
-// caller-supplied own/idx maps built once per query instead of a fresh
-// store round trip per call.
-func collapseKey(own, idx map[string]*store.NodeRow, nodeKey string) (SystemRef, bool) {
+// collapseKey is collapseOne's batch-friendly twin: same rule (owned ->
+// owner; a flow node -> whatever collapses its triggering endpoint; anything
+// else unowned -> self, typed by NodeType), but against caller-supplied
+// own/idx/flowTrigger maps built once per query instead of a fresh store
+// round trip per call. flowTrigger maps a flow node's own key to the node_key
+// of the endpoint whose TRIGGERS_FLOW edge created it (flowTriggerIndex).
+func collapseKey(own, idx map[string]*store.NodeRow, flowTrigger map[string]string, nodeKey string) (SystemRef, bool) {
 	if svc, ok := own[nodeKey]; ok {
 		return systemRefFromNode(svc, kindService), true
 	}
@@ -196,7 +225,50 @@ func collapseKey(own, idx map[string]*store.NodeRow, nodeKey string) (SystemRef,
 	if !ok {
 		return SystemRef{}, false
 	}
+	if n.Layer == "flow" {
+		if trigger, ok := flowTrigger[nodeKey]; ok {
+			if ref, ok := collapseKey(own, idx, flowTrigger, trigger); ok {
+				return ref, true
+			}
+		}
+	}
 	return systemRefFromNode(n, kindForUnowned(n)), true
+}
+
+// flowTriggerIndex maps every flow node's own key to the node_key of the
+// endpoint whose active TRIGGERS_FLOW edge points at it — DeriveFlows
+// (graph/derive_flows.go) writes exactly one such edge per flow node, from
+// the endpoint it was derived from, and a traced flow (not derived at all,
+// see DeriveFlows' own doc comment on "a traced flow claimed this entry
+// point") gets the same edge shape from whichever code traced it. Built once
+// per query, the same way OwnershipMap/nodeIndex already are, so collapsing
+// N impact-BFS results costs one extra ListEdges, not N.
+func flowTriggerIndex(st *store.Store) (map[string]string, error) {
+	active := true
+	edges, err := st.ListEdges(store.EdgeFilter{EdgeType: "TRIGGERS_FLOW", Active: &active})
+	if err != nil {
+		return nil, fmt.Errorf("review: flowTriggerIndex: %w", err)
+	}
+	idx := make(map[string]string, len(edges))
+	for _, e := range edges {
+		idx[e.ToNodeKey] = e.FromNodeKey
+	}
+	return idx, nil
+}
+
+// flowTriggerFor is flowTriggerIndex's single-lookup twin, for collapseOne's
+// one-off resolution (Collapse's own contract: a single lookup, no
+// traversal-scale cost to justify building the whole map).
+func flowTriggerFor(st *store.Store, flowNodeID int64) (triggerKey string, ok bool, err error) {
+	active := true
+	edges, err := st.ListEdges(store.EdgeFilter{EdgeType: "TRIGGERS_FLOW", ToNodeID: flowNodeID, Active: &active})
+	if err != nil {
+		return "", false, fmt.Errorf("review: flowTriggerFor: %w", err)
+	}
+	if len(edges) == 0 {
+		return "", false, nil
+	}
+	return edges[0].FromNodeKey, true, nil
 }
 
 // kindForUnowned decides the SystemRef.Kind for a node ownershipMap never

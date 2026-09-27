@@ -94,6 +94,57 @@ func TestCoreImpactQuerier_CollapsesToService(t *testing.T) {
 	}
 }
 
+// TestCoreImpactQuerier_FlowNodesCollapseToTriggeringEndpointOwner is Bug 3's
+// reproduction (task-18-report.md), against the real tom-and-jerry fixture's
+// own real wiring rather than hand-built data: arena-api's JerryClient
+// (code:provider:...:arena-api/src/arena/jerry.client) is injected by
+// arena.service, and 5 of arena-api's own flow nodes (get:/arena/history,
+// get:/arena/score, post:/arena/attack, post:/arena/trap, ws:/watch-battle)
+// REQUIRE it — a real REQUIRES closure DeriveFlows wrote from each flow to
+// every provider its triggering endpoint's controller injects, verified
+// directly against the fixture db before writing this test. QueryImpact(jerry
+// client) is exactly the reverse-BFS a removed CALLS_ENDPOINT edge FROM
+// jerry.client seeds (ClassifyDelta's IntegrationRemoved, SourceID=
+// jerry.client) — so before the fix, this call alone produced arena.service
+// (correctly attributed to arena-api) PLUS 5 separately-mislabeled "domain"
+// systems, one per flow node, none of them owned by anything a human would
+// recognize as a system. All 6 must now collapse to the ONE real owner: the
+// service whose endpoint triggers each flow (arena-api, the same service
+// that owns jerry.client itself and arena.service) — QueryImpact's own
+// per-System.Key dedup then folds all 6 raw entries into that single result.
+func TestCoreImpactQuerier_FlowNodesCollapseToTriggeringEndpointOwner(t *testing.T) {
+	g := openTomAndJerryFixture(t)
+	q := CoreImpactQuerier{Graph: g}
+
+	const jerryClient = "code:provider:tom-and-jerry:arena-api/src/arena/jerry.client"
+	const arenaAPI = "service:service:tom-and-jerry:arena-api"
+
+	impacts, err := q.QueryImpact(jerryClient, 4)
+	if err != nil {
+		t.Fatalf("QueryImpact: %v", err)
+	}
+	if len(impacts) == 0 {
+		t.Fatal("QueryImpact returned no impacts, want at least arena-api (via arena.service's INJECTS)")
+	}
+
+	for _, imp := range impacts {
+		if imp.System.Kind == kindDomain {
+			t.Errorf("impact %+v collapsed to a bare domain label, want every entry attributed to a real service (no unowned flow-node fallout)", imp)
+		}
+	}
+
+	seen := map[string]int{}
+	for _, imp := range impacts {
+		seen[imp.System.Key]++
+	}
+	if n := seen[arenaAPI]; n != 1 {
+		t.Errorf("System.Key %q appears %d times in %+v, want exactly 1 (QueryImpact's own dedup must fold arena.service and all 5 flow nodes into one arena-api entry)", arenaAPI, n, impacts)
+	}
+	if len(impacts) != 1 {
+		t.Errorf("impacts = %+v, want exactly [arena-api] (every raw entry reachable from jerry.client in this fixture collapses to arena-api)", impacts)
+	}
+}
+
 // TestCoreImpactQuerier_TopicSubscribers: battle-results has two real
 // CONSUMES_TOPIC subscribers in this fixture (scoreboard-api's
 // BattleResultConsumer and spectators-api's battle-result.consumer) — both

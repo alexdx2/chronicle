@@ -140,6 +140,74 @@ func TestAnalyze_IntegrationAdded_Sync(t *testing.T) {
 	}
 }
 
+// TestAnalyze_DropsSelfAffected pins Bug 3's second fix (task-18-report.md,
+// dropSelfAffected): a Downstream Affected entry whose collapsed System
+// equals the finding's own System must be removed — the design spec's own
+// rule (review-engine-design.md §5: a change is never both changed and
+// affected by the same underlying event). This is exactly the shape a flow
+// node re-attributed to its triggering endpoint's owner (impact.go's Bug 3
+// fix) produces when that owner IS the system that changed: QueryImpact's
+// SystemImpact results can legitimately include the source's own collapsed
+// identity (via some other node that also collapses to it) alongside a
+// real, distinct affected system — this must drop the former, keep the
+// latter.
+func TestAnalyze_DropsSelfAffected(t *testing.T) {
+	edge := snapshot.Edge{ID: "caller->b:CALLS_SERVICE", Type: "CALLS_SERVICE", From: "caller", To: "b"}
+	c := Change{Kind: IntegrationAdded, SourceID: "caller", Counterpart: "b", Seed: "head", Facts: []Fact{edgeFact(edge.ID, edge)}}
+
+	headQ := fakeImpactQuerier{
+		impacts: map[string][]SystemImpact{"caller": {
+			{System: sysCaller, Path: []PathStep{{Node: "self-loop", Edge: "REQUIRES"}}}, // collapses back to the source's own system
+			{System: sysA, Path: []PathStep{{Node: "a", Edge: "CALLS_SERVICE"}}},
+		}},
+		collapse: map[string]SystemRef{"caller": sysCaller, "b": sysB},
+	}
+	baseQ := fakeImpactQuerier{err: errors.New("must not be called for a head-seeded change")}
+
+	findings := Analyze([]Change{c}, baseQ, headQ, 4)
+	if len(findings) != 1 {
+		t.Fatalf("Analyze = %+v, want exactly 1 finding", findings)
+	}
+	f := findings[0]
+	if f.System != sysCaller {
+		t.Fatalf("finding.System = %+v, want sysCaller (precondition for this test)", f.System)
+	}
+
+	affected := onlySeverity(f.Downstream, SeverityAffected)
+	if len(affected) != 1 || affected[0].System != sysA {
+		t.Errorf("Affected downstream = %+v, want exactly [sysA] (sysCaller dropped as self-affected)", affected)
+	}
+	// The informational counterpart entry (sysB, unrelated to self) must
+	// survive untouched — dropSelfAffected only ever filters Affected.
+	info := onlySeverity(f.Downstream, SeverityInformational)
+	if len(info) != 1 || info[0].System != sysB {
+		t.Errorf("Informational downstream = %+v, want exactly [sysB]", info)
+	}
+}
+
+// TestAnalyze_DropSelfAffected_KeepsSelfInformational: an Informational entry
+// whose System happens to equal the finding's own System (a self-call losing
+// itself as a caller — a degenerate but real shape) must NOT be dropped:
+// dropSelfAffected's own doc comment explains why only Affected is filtered.
+func TestAnalyze_DropSelfAffected_KeepsSelfInformational(t *testing.T) {
+	edge := snapshot.Edge{ID: "caller->caller:CALLS_SERVICE", Type: "CALLS_SERVICE", From: "caller", To: "caller"}
+	c := Change{Kind: IntegrationRemoved, SourceID: "caller", Counterpart: "caller", Seed: "base", Facts: []Fact{edgeFact(edge.ID, edge)}}
+
+	baseQ := fakeImpactQuerier{
+		collapse: map[string]SystemRef{"caller": sysCaller},
+	}
+	headQ := fakeImpactQuerier{err: errors.New("must not be called for a base-seeded change")}
+
+	findings := Analyze([]Change{c}, baseQ, headQ, 4)
+	if len(findings) != 1 {
+		t.Fatalf("Analyze = %+v, want exactly 1 finding", findings)
+	}
+	info := onlySeverity(findings[0].Downstream, SeverityInformational)
+	if len(info) != 1 || info[0].System != sysCaller || info[0].Reason != ReasonProviderLostConsumer {
+		t.Errorf("Informational downstream = %+v, want exactly [{System:sysCaller Reason:provider_lost_consumer}] (a self-referencing Informational entry must not be dropped)", info)
+	}
+}
+
 // TestAnalyze_IntegrationRemoved_InformationalCounterpart (named explicitly
 // by the brief): symmetric case for removal — reason provider_lost_consumer
 // on the informational entry, integration_removed on the top finding, and q

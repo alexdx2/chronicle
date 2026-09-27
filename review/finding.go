@@ -142,6 +142,15 @@ type ReviewFinding struct {
 //     fact unchanged (every other ChangeKind's SourceID is already
 //     guaranteed to be a real node key by classify.go's more specific rules,
 //     so no other branch needs this treatment).
+//
+// After the branch above builds Downstream, dropSelfAffected (Bug 3,
+// task-18-report.md) removes any Affected entry that collapses to the same
+// System as the finding's own — the design spec's "never both changed and
+// affected by the same event" rule (§5). This runs for every Kind uniformly,
+// after the switch, rather than per-branch: the collision it guards against
+// (a reverse-impact BFS looping back to the source through derived
+// scaffolding, e.g. a flow node correctly re-attributed to its owning
+// service) can in principle reach any Kind's Downstream, not just one.
 func Analyze(changes []Change, baseQ, headQ ImpactQuerier, depth int) []ReviewFinding {
 	findings := make([]ReviewFinding, 0, len(changes))
 	for _, c := range changes {
@@ -183,10 +192,49 @@ func analyzeOne(c Change, baseQ, headQ ImpactQuerier, depth int) ReviewFinding {
 		finding.Downstream = affectedFrom(q, contractChangedSeed(c), depth)
 	}
 
+	finding.Downstream = dropSelfAffected(finding.Downstream, finding.System.Key)
+
 	for i := range finding.Downstream {
 		finding.Downstream[i].Kind = c.Kind
 	}
 	return finding
+}
+
+// dropSelfAffected removes every Severity Affected entry from downstream
+// whose collapsed System.Key equals selfKey — the design spec's own rule
+// (review-engine-design.md §5: "a change is never both changed and affected
+// by the same underlying event"). Bug 3 (task-18-report.md): before
+// impact.go's flow-node fix, a change's own reverse-impact BFS could reach
+// derived flow nodes that (once correctly attributed to their triggering
+// endpoint's owner, instead of each getting its own synthetic "domain"
+// label) collapse right back to the CHANGED system itself — e.g. arena-api's
+// own endpoints' flows require the very arena-api code that changed, so
+// walking "who depends on this" from arena-api's own code finds arena-api's
+// own flows. Fixing the collapsing alone surfaces that self-collision rather
+// than hiding it inside five separately-mislabeled entries; this is the
+// second half of the fix, dropping it per the spec's own rule.
+//
+// Only Affected entries are checked. An Informational entry (e.g. "provider
+// lost consumer") describes the COUNTERPART's own reaction to this change,
+// which is correct even in the degenerate case where the counterpart
+// happens to collapse to the same system that changed (a self-call losing
+// itself as a caller) — dropping it would hide a real, if unusual, fact
+// rather than an artifact of collapsing. selfKey=="" (finding.System itself
+// failed to resolve — safeCollapse's own error path) never matches anything,
+// so nothing is dropped in that case; an unresolved System is not evidence
+// of a real self-collision.
+func dropSelfAffected(downstream []ReviewFinding, selfKey string) []ReviewFinding {
+	if selfKey == "" || len(downstream) == 0 {
+		return downstream
+	}
+	var out []ReviewFinding
+	for _, d := range downstream {
+		if d.Severity == SeverityAffected && d.System.Key == selfKey {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // contractChangedSeed picks the QueryImpact seed for a ContractChanged

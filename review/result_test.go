@@ -198,6 +198,15 @@ func TestReview_Verdict_Counts(t *testing.T) {
 	writeFileT(t, dir, "svc/unknown.ts", "new file, never scanned\n") // brand new -> Unscanned on head, absent on base
 	headSHA := commitAllT(t, dir, "head")
 
+	// systemA/systemC are svcA/svcC's OWN collapsed identity — deliberately
+	// distinct from every system they impact (systemX/Y, systemZ). Reusing
+	// one of the impacted systems as the origin's own identity would trip
+	// the "never both changed and affected" self-collision filter
+	// (dropSelfAffected, task-18-report.md's Bug 3 fix) and silently drop a
+	// system this test intends to count — this fixture's own narrative is 3
+	// DISTINCT affected systems, none of which is the origin itself.
+	systemA := SystemRef{Kind: kindService, Key: "sys:a", Name: "A"}
+	systemC := SystemRef{Kind: kindService, Key: "sys:c", Name: "C"}
 	systemX := SystemRef{Kind: kindService, Key: "sys:x", Name: "X"}
 	systemY := SystemRef{Kind: kindService, Key: "sys:y", Name: "Y"}
 	systemZ := SystemRef{Kind: kindService, Key: "sys:z", Name: "Z"}
@@ -211,13 +220,13 @@ func TestReview_Verdict_Counts(t *testing.T) {
 				{System: systemY, Path: []PathStep{{Node: "y", Edge: "CALLS_SERVICE"}}},
 			},
 		},
-		collapse: map[string]SystemRef{svcA.ID: systemX, svcB.ID: systemB},
+		collapse: map[string]SystemRef{svcA.ID: systemA, svcB.ID: systemB},
 	}
 	baseFake := fakeImpactQuerier{
 		impacts: map[string][]SystemImpact{
 			svcC.ID: {{System: systemZ, Path: []PathStep{{Node: "z", Edge: "CALLS_SERVICE"}}}},
 		},
-		collapse: map[string]SystemRef{svcC.ID: systemZ, svcD.ID: systemD},
+		collapse: map[string]SystemRef{svcC.ID: systemC, svcD.ID: systemD},
 	}
 
 	result, err := Review(context.Background(), ReviewInput{
