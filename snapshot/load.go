@@ -82,8 +82,13 @@ type LoadOptions struct {
 //     matching the original graph's values for anything with surviving
 //     (non-derived, or just-regenerated) evidence.
 //
+//  3. restoreInactiveEdges then re-applies every "active": false the
+//     snapshot recorded — both passes above can flip a stale-marked removal
+//     back on (see restoreInactiveEdges for exactly how).
+//
 // The order matters: recomputing trust before DeriveFlows would derive it
-// from evidence that doesn't exist yet.
+// from evidence that doesn't exist yet, and restoring inactive edges before
+// either pass would let that pass undo it.
 //
 // One gap survives this: DeriveFlows only ever backfills evidence for
 // EDGES it revisits — ensureFlowNode (graph/derive_flows.go) skips a
@@ -198,7 +203,69 @@ func Load(s *Snapshot, reg *registry.Registry, opt LoadOptions) (*graph.Graph, f
 		return nil, nil, fmt.Errorf("snapshot: Load: recalculate trust: %w", err)
 	}
 
+	if err := restoreInactiveEdges(st, s, edgeIDs); err != nil {
+		closer()
+		return nil, nil, fmt.Errorf("snapshot: Load: %w", err)
+	}
+
 	return g, closer, nil
+}
+
+// restoreInactiveEdges re-applies every snapshot edge's recorded
+// "active": false, after DeriveFlows and RecalculateAllTrust have both had
+// their turn.
+//
+// Both of those passes can flip an inactive edge back on. The scan pipeline
+// never deletes a removed edge: chronicle_stale_mark (store.MarkStaleEdges)
+// sets active=0 and stales the edge's evidence, and the snapshot keeps the
+// edge with "active": false (spec §4.3). RecalculateEdgeTrust then derives
+// status "stale" from that evidence, and store.UpdateEdgeTrust maps every
+// status except "removed"/"contradicted" to active=1 — so without this pass
+// a stale-marked removal comes back to life in every loaded graph, the
+// impact BFS and topic-subscriber queries walk a dependency the code no
+// longer has, and a FromStore → Load → FromStore round trip rewrites the
+// recorded fact (TestLoad_StaleMarkedEdgeStaysInactive). DeriveFlows does
+// the same to a flow edge it re-derives. The live graph those passes would
+// be reproducing never ran them after stale-marking, so the snapshot's own
+// flag is the faithful answer.
+//
+// This only ever makes an edge less live, never more: an edge the snapshot
+// calls active still goes through the trust model, which deactivates it when
+// its evidence says "removed" or "contradicted". So the file is not trusted
+// to grant anything (spec §7) — only to record a removal, which it could
+// equally express by omitting the edge. UpdateEdgeTrust is used, rather
+// than DeactivateEdge, because it is the one store write that sets active
+// without touching the edge's evidence: DeactivateEdge also invalidates the
+// evidence, which would rewrite "stale" to "invalidated" on re-export. The
+// just-recomputed confidence/freshness/trust values are written back
+// unchanged; "removed" is passed only because it is the status
+// UpdateEdgeTrust maps to active=0.
+//
+// Fixing UpdateEdgeTrust's own mapping instead would also close the same
+// gap in journal replay, but that mapping drives the live incremental-scan
+// pipeline too (finalize's needs_review detection reads active edges whose
+// evidence went stale), so it is left alone here — see task-18-report.md.
+func restoreInactiveEdges(st *store.Store, s *Snapshot, edgeIDs map[string]int64) error {
+	for _, e := range s.Edges {
+		if e.Active {
+			continue
+		}
+		id, ok := edgeIDs[e.ID]
+		if !ok {
+			continue
+		}
+		row, err := st.GetEdgeByKey(e.ID)
+		if err != nil {
+			return fmt.Errorf("restore inactive edge %q: %w", e.ID, err)
+		}
+		if !row.Active {
+			continue
+		}
+		if err := st.UpdateEdgeTrust(id, row.Confidence, row.Freshness, row.TrustScore, "removed"); err != nil {
+			return fmt.Errorf("restore inactive edge %q: %w", e.ID, err)
+		}
+	}
+	return nil
 }
 
 // loadNodesAndEdges writes every node and edge in s into st, via UpsertNode

@@ -538,3 +538,101 @@ func TestLoad_ExplicitDBPathNotDeleted(t *testing.T) {
 		t.Errorf("explicit DBPath %q should still exist after closer: %v", dbPath, err)
 	}
 }
+
+// TestLoad_StaleMarkedEdgeStaysInactive pins Load against the way the real
+// scan pipeline records a removal: never a deleted row, always a soft delete.
+// A full rescan re-observes every edge it still finds (UpsertEdge with the new
+// revision's id) and chronicle_stale_mark (store.MarkStaleEdges) then sets
+// active=0 on the one it did not find, staling its evidence too. The exported
+// snapshot keeps that edge with "active": false (spec §4.3), and Load must
+// reproduce it as inactive — a reloaded graph where a removed call is live
+// again would hand every impact query on it a dependency the code no longer
+// has, and a FromStore → Load → FromStore round trip would silently flip the
+// recorded fact.
+//
+// The trap this guards against: RecalculateAllTrust derives an edge's status
+// from its evidence, and store.UpdateEdgeTrust maps every status except
+// "removed"/"contradicted" to active=1 — so an edge whose evidence is merely
+// "stale" (exactly what MarkStaleEdges leaves behind) is reactivated by the
+// very trust pass Load runs last.
+func TestLoad_StaleMarkedEdgeStaysInactive(t *testing.T) {
+	s := copyFixtureStore(t)
+	s.SetJournaling(false)
+	reg := testRegistry(t)
+	const target = "code:provider:tom-and-jerry:arena-api/src/arena/jerry.client->contract:endpoint:tom-and-jerry:get:/jerry/traps:CALLS_ENDPOINT"
+
+	rev, err := s.CreateRevision("tom-and-jerry", "", "rescan-sha", "manual", "full", "{}")
+	if err != nil {
+		t.Fatalf("CreateRevision: %v", err)
+	}
+	edges, err := s.ListEdges(store.EdgeFilter{})
+	if err != nil {
+		t.Fatalf("ListEdges: %v", err)
+	}
+	found := false
+	for _, e := range edges {
+		if e.EdgeKey == target {
+			found = true
+			continue // the one call the rescan no longer finds
+		}
+		e.LastSeenRevisionID = rev
+		if _, err := s.UpsertEdge(e); err != nil {
+			t.Fatalf("re-observe %s: %v", e.EdgeKey, err)
+		}
+	}
+	if !found {
+		t.Fatalf("fixture has no edge %s", target)
+	}
+	n, err := s.MarkStaleEdges("tom-and-jerry", rev)
+	if err != nil {
+		t.Fatalf("MarkStaleEdges: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("MarkStaleEdges marked %d edges, want exactly 1 (%s)", n, target)
+	}
+
+	opt := ExportOptions{PrevSeq: 1, Registry: "sha256:abc"}
+	snap, err := FromStore(s, opt)
+	if err != nil {
+		t.Fatalf("FromStore: %v", err)
+	}
+	if e := findSnapEdge(snap, target); e == nil || e.Active {
+		t.Fatalf("exported edge = %+v, want present with Active=false", e)
+	}
+
+	g, closer, err := Load(snap, reg, LoadOptions{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer closer()
+
+	loaded, err := g.Store().GetEdgeByKey(target)
+	if err != nil {
+		t.Fatalf("GetEdgeByKey on loaded store: %v", err)
+	}
+	if loaded.Active {
+		t.Errorf("loaded edge %s is active, want inactive — Load reactivated a stale-marked removal", target)
+	}
+
+	again, err := FromStore(g.Store(), opt)
+	if err != nil {
+		t.Fatalf("FromStore (reloaded): %v", err)
+	}
+	if e := findSnapEdge(again, target); e == nil || e.Active {
+		t.Errorf("re-exported edge = %+v, want present with Active=false (round trip flipped the fact)", e)
+	}
+	for _, orig := range snap.Edges {
+		if e := findSnapEdge(again, orig.ID); e != nil && e.Active != orig.Active {
+			t.Errorf("edge %s: Active %v after Load, %v in the snapshot", orig.ID, e.Active, orig.Active)
+		}
+	}
+}
+
+func findSnapEdge(s *Snapshot, id string) *Edge {
+	for i := range s.Edges {
+		if s.Edges[i].ID == id {
+			return &s.Edges[i]
+		}
+	}
+	return nil
+}
