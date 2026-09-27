@@ -48,14 +48,29 @@ type Verdict struct {
 
 // ReviewResult is Review's answer: where base/head came from, the verdict
 // headline, the full finding tree, the raw delta (for a renderer that wants
-// more detail than the findings alone), and any warnings (missing-graph
-// being the only producer of these today).
+// more detail than the findings alone), any warnings (missing-graph being the
+// only producer of these today), and the real changed-file list.
+//
+// ChangedFiles is the actual `git diff --name-status` result between base and
+// head (gitdiff.ChangedFiles) — the same list Diff/DiffHunks and
+// unknownFindings are built from. It exists on ReviewResult (task-18-report.md's
+// changed-file-count fix) so a renderer can compute an honest "N/M changed
+// files covered" count directly from it, instead of re-deriving an
+// approximation by walking which files happen to appear in Delta's evidence
+// (render_markdown.go's old coveredFiles: a real approximation, not the real
+// list — a comment-only edit or a file type nothing extracts from produces no
+// evidence at all, so it was invisible to that count; conversely nothing
+// guaranteed the evidence-derived file set was even a SUBSET of the real
+// changed files). Empty for the two missing-graph short-circuits below,
+// which return before ChangedFiles is ever computed — RenderMarkdown never
+// reads it on that path (it takes an entirely different, earlier branch).
 type ReviewResult struct {
 	SchemaVersion int
 	Base, Head    Provenance
 	Verdict       Verdict
 	Findings      []ReviewFinding
 	Delta         *GraphDelta
+	ChangedFiles  []gitdiff.ChangedFile
 	Warnings      []string
 }
 
@@ -267,6 +282,7 @@ func Review(ctx context.Context, in ReviewInput) (*ReviewResult, error) {
 		Head:          provenanceOf(head),
 		Findings:      findings,
 		Delta:         delta,
+		ChangedFiles:  changedFiles,
 	}
 	result.Verdict = verdictFrom(findings)
 	return result, nil

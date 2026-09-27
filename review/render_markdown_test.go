@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/snapshot"
 )
 
@@ -133,6 +134,16 @@ func mockupFixtureResult() *ReviewResult {
 		},
 		Findings: findings,
 		Delta:    delta,
+		// The real `git diff --name-status` result for this scenario (task-18
+		// changed-file-count fix): 3 files with real evidence above, plus the
+		// one Unknown file (battle.gateway.ts) — matching the golden fixture's
+		// own "3/4 changed files covered" line.
+		ChangedFiles: []gitdiff.ChangedFile{
+			{Path: "arena-api/src/arena/battle-result.producer.ts"},
+			{Path: "arena-api/src/arena/jerry.client.ts"},
+			{Path: "arena-api/src/arena/arena.controller.ts"},
+			{Path: "arena-api/src/arena/battle.gateway.ts"},
+		},
 	}
 	r.Verdict = verdictFrom(findings)
 	return r
@@ -270,6 +281,7 @@ func TestRenderMarkdown_NoSystemChange(t *testing.T) {
 		Head:          Provenance{Ref: "HEAD", Commit: "bbb", Origin: OriginSnapshot, Graph: &snapshot.GraphVersion{Commit: "bbb", Seq: 6}},
 		Findings:      findings,
 		Delta:         deltaFromFindings(findings),
+		ChangedFiles:  []gitdiff.ChangedFile{{Path: "arena.controller.ts"}, {Path: "battle.guard.ts"}},
 	}
 	r.Verdict = verdictFrom(findings)
 	if !r.Verdict.NoSystemChange {
@@ -336,6 +348,9 @@ func TestRenderMarkdown_MixedUnknownAndTouched(t *testing.T) {
 		Head:          Provenance{Ref: "HEAD", Commit: "bbb", Origin: OriginSnapshot, Graph: &snapshot.GraphVersion{Commit: "bbb", Seq: 6}},
 		Findings:      findings,
 		Delta:         deltaFromFindings(findings),
+		ChangedFiles: []gitdiff.ChangedFile{
+			{Path: "arena.controller.ts"}, {Path: "battle.guard.ts"}, {Path: "leaderboard/score.service.cs"},
+		},
 	}
 	r.Verdict = verdictFrom(findings)
 
@@ -418,6 +433,9 @@ func TestRenderMarkdown_ImpactUnknown(t *testing.T) {
 		Head:          Provenance{Ref: "HEAD", Commit: "bbb", Origin: OriginSnapshot, Graph: &snapshot.GraphVersion{Commit: "bbb", Seq: 8}},
 		Findings:      findings,
 		Delta:         &GraphDelta{},
+		ChangedFiles: []gitdiff.ChangedFile{
+			{Path: "leaderboard/score.service.cs"}, {Path: "leaderboard/score.controller.cs"},
+		},
 	}
 	r.Verdict = verdictFrom(findings)
 	if r.Verdict.NoSystemChange {

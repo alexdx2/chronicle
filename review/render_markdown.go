@@ -642,67 +642,51 @@ func footer(o MarkdownOptions) string {
 
 // --- shared: changed-file coverage count ------------------------------------
 
-// changedFileCounts reconstructs the "<covered>/<total> changed files
-// covered" provenance count from r.Delta and r.Findings alone (the brief's
-// own instruction: compute this here rather than re-invoking git).
+// changedFileCounts computes the "<covered>/<total> changed files covered"
+// provenance count from r.ChangedFiles — the real `git diff --name-status`
+// result between base and head (gitdiff.ChangedFiles), the same list
+// Review() feeds to Diff/DiffHunks and unknownFindings — cross-referenced
+// against the Severity Unknown findings those same inputs already produced.
 //
-// uncovered is the number of distinct files carrying a Severity Unknown
-// finding (unknownFiles). covered is the number of distinct file paths named
-// by ANY evidence entry on ANY fact anywhere in r.Delta — Added, Removed,
-// Changed's Before/After, Touched, Moved's Before/After. total is their sum.
+// total is simply len(r.ChangedFiles): every file git reports as changed,
+// full stop. A changed file counts as uncovered if EITHER its head-side path
+// or (for a rename) its base-side OldPath carries a Severity Unknown finding
+// — the identical dual-path check unknownFindings itself used to decide
+// whether to emit one; covered is everything else.
 //
-// This can under-count total against the true git-diff changed-file count in
-// one real edge case, verified against this task's own golden fixture rather
-// than assumed: a changed file that produced literally no graph-relevant
-// fact at all (a comment-only edit, or a file type nothing extracts from) is
-// neither Unknown (it isn't stale) nor present in any Delta evidence
-// (nothing was extracted from it), so it is counted in neither covered nor
-// uncovered. See task-13-report.md for why this task leaves that gap open
-// rather than threading the real git-diff changed-file list through
-// RenderMarkdown's own signature to close it.
+// task-18-report.md's fix: the previous version of this function derived
+// "covered" from an approximation instead — walking which file paths
+// happened to appear in evidence anywhere in r.Delta (Added, Removed,
+// Changed's Before/After, Touched, Moved's Before/After) — and total was
+// covered+uncovered from two DIFFERENT, independently-computed sources
+// (Delta evidence vs. Findings) that were never guaranteed to agree with, or
+// even be a subset of, the real changed-file set: a comment-only edit (no
+// graph-relevant fact, so absent from Delta evidence) was silently invisible
+// to that count, and there was no guarantee the evidence-derived file set
+// didn't OVER-count too (e.g. evidence naming a file outside the actual
+// diff). Reading r.ChangedFiles directly closes both gaps: total is now the
+// real number git reports changed, always.
 func changedFileCounts(r *ReviewResult) (covered, uncovered, total int) {
-	uncovered = len(unknownFiles(r))
-	covered = len(coveredFiles(r))
-	return covered, uncovered, covered + uncovered
+	unknown := unknownFileSet(r)
+	total = len(r.ChangedFiles)
+	for _, cf := range r.ChangedFiles {
+		if unknown[cf.Path] || (cf.OldPath != "" && unknown[cf.OldPath]) {
+			uncovered++
+			continue
+		}
+		covered++
+	}
+	return covered, uncovered, total
 }
 
-func coveredFiles(r *ReviewResult) map[string]bool {
-	files := make(map[string]bool)
-	if r.Delta == nil {
-		return files
+// unknownFileSet is unknownFiles's own result as a set, for changedFileCounts'
+// O(1) membership checks.
+func unknownFileSet(r *ReviewResult) map[string]bool {
+	set := make(map[string]bool)
+	for _, f := range unknownFiles(r) {
+		set[f] = true
 	}
-	add := func(f Fact) {
-		var evs []snapshot.Evidence
-		switch {
-		case f.Kind == KindNode && f.Node != nil:
-			evs = f.Node.Evidence
-		case f.Kind == KindEdge && f.Edge != nil:
-			evs = f.Edge.Evidence
-		}
-		for _, e := range evs {
-			if e.File != "" {
-				files[e.File] = true
-			}
-		}
-	}
-	for _, f := range r.Delta.Added {
-		add(f)
-	}
-	for _, f := range r.Delta.Removed {
-		add(f)
-	}
-	for _, c := range r.Delta.Changed {
-		add(c.Before)
-		add(c.After)
-	}
-	for _, m := range r.Delta.Moved {
-		add(m.Before)
-		add(m.After)
-	}
-	for _, t := range r.Delta.Touched {
-		add(t.Fact)
-	}
-	return files
+	return set
 }
 
 // provenanceLine is the "Graph vN · based on commit X · c/t changed files
