@@ -112,6 +112,76 @@ func TestDiff_Moved(t *testing.T) {
 	}
 }
 
+// TestDiff_MovedButTouched_BecomesTouched is task-18-report.md's Bug 1 (cause
+// 1a) reproduction: a fact whose evidence moved to a new line (a real rescan
+// re-extracting the SAME call after an edit shifted it — e.g. hoisting a URL
+// into a local variable pushed the fetch() call from line 8 to line 9) AND
+// whose OLD (base) evidence line sits inside a real hunk of this diff. Before
+// this fix, evidenceIsMoved short-circuited the whole check straight to
+// Moved and RETURNED — this fact never even reached touchedHunks, so a human
+// who rescanned and genuinely touched that exact code got nothing in the
+// finding pipeline (ClassifyDelta never reads d.Moved). It must now be
+// Touched, not Moved: the hunk directly overlaps the base evidence's own
+// line 8 (a real 1-line-to-2-line replacement, not a pure insertion — this
+// case does not need Bug 1b's insertion-strictly-inside fix at all).
+func TestDiff_MovedButTouched_BecomesTouched(t *testing.T) {
+	base := vgFor(nil, []snapshot.Edge{{
+		ID: "jerry.client->status:CALLS_ENDPOINT", Type: "CALLS_ENDPOINT", From: "jerry.client", To: "status",
+		Evidence: []snapshot.Evidence{{ID: "ev-line8", File: "jerry.client.ts", Range: "8-8"}},
+	}})
+	head := vgFor(nil, []snapshot.Edge{{
+		ID: "jerry.client->status:CALLS_ENDPOINT", Type: "CALLS_ENDPOINT", From: "jerry.client", To: "status",
+		Evidence: []snapshot.Evidence{{ID: "ev-line9", File: "jerry.client.ts", Range: "9-9"}},
+	}})
+	// One old line (the fetch call) replaced by two new lines (URL hoisted to
+	// its own line, then the call) — a real, non-insertion hunk overlapping
+	// old line 8 exactly.
+	hunks := []gitdiff.FileHunks{
+		{Path: "jerry.client.ts", Hunks: []gitdiff.Hunk{{OldStart: 8, OldLines: 1, NewStart: 8, NewLines: 2}}},
+	}
+
+	delta := Diff(base, head, hunks)
+
+	if len(delta.Moved) != 0 {
+		t.Errorf("Moved = %+v, want empty (this fact must be reclassified as Touched)", delta.Moved)
+	}
+	if len(delta.Touched) != 1 || delta.Touched[0].ID != "jerry.client->status:CALLS_ENDPOINT" {
+		t.Fatalf("Touched = %+v, want exactly [jerry.client->status:CALLS_ENDPOINT]", delta.Touched)
+	}
+	if got := delta.Touched[0].Fact; got.Edge == nil || len(got.Edge.Evidence) != 1 || got.Edge.Evidence[0].ID != "ev-line8" {
+		t.Errorf("Touched[0].Fact = %+v, want the BASE-side fact (evidence ev-line8)", got)
+	}
+}
+
+// TestDiff_MovedNotTouched_StaysMoved: evidence moved, but the diff's only
+// hunk is nowhere near the fact's base evidence line — this fact "moved for
+// reasons the diff being reviewed didn't cause" (Moved's own doc comment)
+// and must stay Moved alone, not be promoted to Touched just because SOME
+// hunk exists somewhere in the same file.
+func TestDiff_MovedNotTouched_StaysMoved(t *testing.T) {
+	base := vgFor(nil, []snapshot.Edge{{
+		ID: "a->b:CALLS_SERVICE", Type: "CALLS_SERVICE", From: "a", To: "b",
+		Evidence: []snapshot.Evidence{{ID: "ev1", File: "svc.ts", Range: "8-8"}},
+	}})
+	head := vgFor(nil, []snapshot.Edge{{
+		ID: "a->b:CALLS_SERVICE", Type: "CALLS_SERVICE", From: "a", To: "b",
+		Evidence: []snapshot.Evidence{{ID: "ev2", File: "svc.ts", Range: "9-9"}},
+	}})
+	// A real hunk exists in the same file, but far from line 8.
+	hunks := []gitdiff.FileHunks{
+		{Path: "svc.ts", Hunks: []gitdiff.Hunk{{OldStart: 100, OldLines: 1, NewStart: 100, NewLines: 1}}},
+	}
+
+	delta := Diff(base, head, hunks)
+
+	if len(delta.Touched) != 0 {
+		t.Errorf("Touched = %+v, want empty (the only hunk is nowhere near this fact's evidence)", delta.Touched)
+	}
+	if len(delta.Moved) != 1 || delta.Moved[0].ID != "a->b:CALLS_SERVICE" {
+		t.Fatalf("Moved = %+v, want exactly [a->b:CALLS_SERVICE]", delta.Moved)
+	}
+}
+
 // --- Diff: Touched -----------------------------------------------------
 
 // TestDiff_Touched: an edge identical in base and head (same semantic
@@ -172,12 +242,18 @@ func TestDiff_Touched_RenamedFile(t *testing.T) {
 	}
 }
 
-// TestDiff_Touched_PureInsertionNoIntersect: a hunk with OldLines==0 is a
-// pure insertion — zero width on the base side. Documented judgment call:
-// nothing in base was actually touched at a zero-width point, so this must
-// NOT produce a Touched fact even though OldStart falls inside the
-// evidence's range.
-func TestDiff_Touched_PureInsertionNoIntersect(t *testing.T) {
+// TestDiff_Touched_PureInsertionInsideRangeIntersects: a hunk with
+// OldLines==0 is a pure insertion — zero width on the base side, sitting
+// between base lines OldStart and OldStart+1. task-18-report.md's Bug 1b fix:
+// when that point falls STRICTLY inside a fact's evidence range (a real
+// evidence line on both sides of it), the fact IS touched — a line inserted
+// literally in the middle of a fact's own code is an edit to that fact's
+// code by insertion, not a no-op. This reverses the older, narrower reading
+// of "an empty interval cannot overlap a non-empty range" pinned by this
+// test's own previous form (TestDiff_Touched_PureInsertionNoIntersect),
+// which reasoned about a boundary insertion and is still correct for that
+// case — see TestDiff_Touched_PureInsertionAtBoundaryNoIntersect below.
+func TestDiff_Touched_PureInsertionInsideRangeIntersects(t *testing.T) {
 	edge := snapshot.Edge{
 		ID: "a->b:CALLS_SERVICE", Type: "CALLS_SERVICE", From: "a", To: "b",
 		Evidence: []snapshot.Evidence{{ID: "ev1", File: "svc.ts", Range: "10-15"}},
@@ -191,8 +267,51 @@ func TestDiff_Touched_PureInsertionNoIntersect(t *testing.T) {
 
 	delta := Diff(base, head, hunks)
 
-	if len(delta.Touched) != 0 {
-		t.Errorf("Touched = %+v, want none (OldLines==0 pure insertion must not intersect)", delta.Touched)
+	if len(delta.Touched) != 1 || delta.Touched[0].ID != "a->b:CALLS_SERVICE" {
+		t.Fatalf("Touched = %+v, want exactly [a->b:CALLS_SERVICE] (insertion at line 12 sits strictly inside the 10-15 range)", delta.Touched)
+	}
+	if got := delta.Touched[0].Hunks[0]; got.OldStart != 12 || got.OldLines != 0 {
+		t.Errorf("Touched[0].Hunks[0] = %+v, want {OldStart:12 OldLines:0}", got)
+	}
+}
+
+// TestDiff_Touched_PureInsertionAtBoundaryNoIntersect: an insertion
+// immediately before a range's first line, or immediately after its last
+// line, is a BOUNDARY insertion — still not a touch, per Diff's own doc
+// comment (task-18-report.md's Bug 1b fix narrows the old blanket rule to
+// exactly this case, it does not remove it). Also covers a single-line range
+// (10-10, via the OldStart==10 sub-case), which can never be touched by a
+// pure insertion at all: there is no "inside" a single line to insert into.
+func TestDiff_Touched_PureInsertionAtBoundaryNoIntersect(t *testing.T) {
+	cases := []struct {
+		name     string
+		rng      string
+		oldStart int
+	}{
+		{"immediately before range start", "10-15", 9},
+		{"immediately after range end", "10-15", 15},
+		{"single-line range, insertion after its only line", "10-10", 10},
+		{"single-line range, insertion before its only line", "10-10", 9},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			edge := snapshot.Edge{
+				ID: "a->b:CALLS_SERVICE", Type: "CALLS_SERVICE", From: "a", To: "b",
+				Evidence: []snapshot.Evidence{{ID: "ev1", File: "svc.ts", Range: tc.rng}},
+			}
+			base := vgFor(nil, []snapshot.Edge{edge})
+			head := vgFor(nil, []snapshot.Edge{edge})
+
+			hunks := []gitdiff.FileHunks{
+				{Path: "svc.ts", Hunks: []gitdiff.Hunk{{OldStart: tc.oldStart, OldLines: 0, NewStart: tc.oldStart, NewLines: 1}}},
+			}
+
+			delta := Diff(base, head, hunks)
+
+			if len(delta.Touched) != 0 {
+				t.Errorf("Touched = %+v, want none (boundary/single-line insertion must not intersect)", delta.Touched)
+			}
+		})
 	}
 }
 

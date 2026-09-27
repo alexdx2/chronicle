@@ -23,7 +23,14 @@ type Changed struct {
 // Moved is one fact present in both base and head whose semantic fields are
 // identical but whose evidence attachment changed to a different, non-empty
 // set of evidence ids — the fact's own meaning didn't change, but what it's
-// now sourced from did (e.g. re-extracted after a refactor).
+// now sourced from did (e.g. re-extracted after a refactor) — AND (see
+// Touched below, task-18-report.md's fix for Bug 1) that new evidence does
+// NOT intersect a hunk of the diff being reviewed. A fact whose evidence
+// moved for reasons this diff didn't cause (a rescan shifting its line
+// number for some unrelated reason elsewhere) stays here; a fact whose
+// evidence moved AND was touched by this diff's own hunks is Touched
+// instead — see Touched's own doc comment for why that reclassification
+// matters.
 type Moved struct {
 	ID     string
 	Kind   FactKind
@@ -39,10 +46,25 @@ type HunkRef struct {
 }
 
 // Touched is one fact, present and semantically unchanged in both base and
-// head (not in Added/Removed/Changed/Moved), at least one of whose BASE
-// evidence ranges overlaps a hunk in the diff between base and head — the
-// fact's own meaning didn't change, but the code it was extracted from sits
-// inside a changed region.
+// head (not in Added/Removed/Changed — see below for Moved), at least one of
+// whose BASE evidence ranges overlaps a hunk in the diff between base and
+// head — the fact's own meaning didn't change, but the code it was extracted
+// from sits inside a changed region.
+//
+// This check runs whether or not the fact's evidence also moved (task-18
+// Bug 1 fix): the original design only ran it for facts that were not ALSO
+// Moved, on the theory that Moved already explained why the fact was
+// present-but-different. That theory doesn't hold: evidence_uid bakes in the
+// evidence's own line number (store/journal.go's EvidenceKey), so ANY real
+// edit that shifts a fact's line — including one that also lands squarely in
+// a hunk this diff reports — changes the evidence id and used to make the
+// fact Moved FIRST, short-circuiting before this Touched check ever ran.
+// That silently hid an ordinary rescanned edit from the whole finding
+// pipeline (ClassifyDelta never reads d.Moved at all). Now: Moved and
+// Touched are still mutually exclusive (a fact is in at most one), but the
+// boundary is redrawn — Touched wins whenever its own hunk-overlap
+// condition holds, regardless of whether evidence also moved; Moved is only
+// what's left over (evidence changed, no hunk of THIS diff explains it).
 type Touched struct {
 	ID    string
 	Kind  FactKind
@@ -86,26 +108,46 @@ type GraphDelta struct {
 //
 // Otherwise (semantic fields identical), Evidence is compared: if the full,
 // order-normalized Evidence slices are not equal, AND both sides are
-// non-empty, AND the two slides' evidence ids are not the same SET, the fact
-// is Moved (ClassStructural: folded into StructuralChanged too — there is no
-// dedicated StructuralMoved counter, and an evidence-set change is still a
-// difference worth surfacing at the coarse structural-counter level; see
-// task-9-report.md for the rejected alternative of dropping it silently
-// like Structural Touched). Any other Evidence difference (one side empty,
-// or the id sets match despite some other field differing) is treated the
-// same as no difference at all: the fact does not enter the delta via
-// Changed or Moved.
+// non-empty, AND the two slides' evidence ids are not the same SET, the
+// fact's evidence has "moved" (ClassStructural: folded into StructuralChanged
+// too — there is no dedicated StructuralMoved counter, and an evidence-set
+// change is still a difference worth surfacing at the coarse
+// structural-counter level; see task-9-report.md for the rejected
+// alternative of dropping it silently like Structural Touched). Any other
+// Evidence difference (one side empty, or the id sets match despite some
+// other field differing) is treated the same as no difference at all.
 //
-// A fact that reaches neither Changed nor Moved is a Touched candidate
-// (ClassStructural facts are excluded from Touched entirely — "Structural
-// Touched is not counted"): if any of its BASE evidence entries' (File,
-// Range) overlaps a hunk for that file (matched rename-aware: a hunk's
-// base-side file is its OldPath when set, else its Path — see
-// task-9-report.md point 5), the fact is Touched, listing every such hunk.
+// A fact that reaches neither Changed nor (for ClassStructural) moved is a
+// Touched candidate: if any of its BASE evidence entries' (File, Range)
+// overlaps a hunk for that file (matched rename-aware: a hunk's base-side
+// file is its OldPath when set, else its Path — see task-9-report.md point
+// 5), the fact is Touched, listing every such hunk — REGARDLESS of whether
+// its evidence also moved (task-18-report.md's fix for Bug 1: an earlier
+// version of this check only ran for facts with no other classification,
+// which meant a fact whose evidence moved to a new line AND whose new
+// location sits inside a real hunk was classified Moved and never even
+// checked for Touched — invisible to ClassifyDelta, which never reads
+// d.Moved. Touched now takes priority over Moved for non-structural facts:
+// evidence-moved-and-touched is Touched; evidence-moved-and-NOT-touched is
+// Moved; a ClassStructural fact never enters Touched at all — "Structural
+// Touched is not counted" — so for that class evidence-moved alone still
+// decides Moved-vs-nothing, unchanged from before this fix).
+//
 // A hunk with OldLines==0 (pure insertion — zero width on the base side)
-// never overlaps anything: nothing in base was actually touched at a
-// zero-width point (documented judgment call; see task-9-report.md for the
-// rejected alternative).
+// overlaps an evidence range [lineStart, lineEnd] only when it falls
+// STRICTLY inside it (lineStart <= OldStart < lineEnd) — a real evidence
+// line on both sides of the insertion point, not merely a shared boundary.
+// This reverses part of an earlier design decision (task-9-report.md: "an
+// empty interval cannot overlap a non-empty range") that reasoned only about
+// a boundary insertion (right before or right after the range) and is still
+// correct for that case — task-18-report.md's Bug 1b fix narrows the
+// original blanket "never touches" rule to that boundary case alone: a line
+// inserted literally in the middle of a fact's evidence range (e.g. evidence
+// spans 10-15, a line is inserted after line 12) is code inside the fact's
+// own boundaries being edited by insertion, and must count as touching it.
+// A single-line evidence range (lineStart == lineEnd) can never satisfy the
+// strict inequality, so it is never touched by a pure insertion — consistent
+// with there being no "inside" a single line to insert into.
 func Diff(base, head *VersionGraph, hunks []gitdiff.FileHunks) *GraphDelta {
 	delta := &GraphDelta{}
 	byFile := baseFileHunks(hunks)
@@ -263,16 +305,27 @@ func diffMatchedNodes(delta *GraphDelta, id string, b, h snapshot.Node, byFile m
 		return
 	}
 
-	if evidenceIsMoved(nb.Evidence, nh.Evidence) {
-		routeMoved(delta, Moved{ID: id, Kind: KindNode, Before: nodeFact(id, b), After: nodeFact(id, h)}, class)
+	moved := evidenceIsMoved(nb.Evidence, nh.Evidence)
+
+	// ClassStructural never enters Touched ("Structural Touched is not
+	// counted") — moved-or-nothing is the whole story for it, same as before
+	// the Bug 1 fix.
+	if class == ClassStructural {
+		if moved {
+			routeMoved(delta, Moved{ID: id, Kind: KindNode, Before: nodeFact(id, b), After: nodeFact(id, h)}, class)
+		}
 		return
 	}
 
-	if class == ClassStructural {
-		return
-	}
+	// Touched is checked BEFORE Moved is acted on (Bug 1 fix, diff.go's own
+	// doc comment): a fact whose evidence moved into a hunk this diff
+	// reports must surface as Touched, not silently as Moved-only.
 	if refs := touchedHunks(b.Evidence, byFile); len(refs) > 0 {
 		delta.Touched = append(delta.Touched, Touched{ID: id, Kind: KindNode, Fact: nodeFact(id, b), Hunks: refs})
+		return
+	}
+	if moved {
+		routeMoved(delta, Moved{ID: id, Kind: KindNode, Before: nodeFact(id, b), After: nodeFact(id, h)}, class)
 	}
 }
 
@@ -345,16 +398,27 @@ func diffMatchedEdges(delta *GraphDelta, id string, b, h snapshot.Edge, byFile m
 		return
 	}
 
-	if evidenceIsMoved(nb.Evidence, nh.Evidence) {
-		routeMoved(delta, Moved{ID: id, Kind: KindEdge, Before: edgeFact(id, b), After: edgeFact(id, h)}, class)
+	moved := evidenceIsMoved(nb.Evidence, nh.Evidence)
+
+	// ClassStructural never enters Touched ("Structural Touched is not
+	// counted") — moved-or-nothing is the whole story for it, same as before
+	// the Bug 1 fix.
+	if class == ClassStructural {
+		if moved {
+			routeMoved(delta, Moved{ID: id, Kind: KindEdge, Before: edgeFact(id, b), After: edgeFact(id, h)}, class)
+		}
 		return
 	}
 
-	if class == ClassStructural {
-		return
-	}
+	// Touched is checked BEFORE Moved is acted on (Bug 1 fix, diff.go's own
+	// doc comment): a fact whose evidence moved into a hunk this diff
+	// reports must surface as Touched, not silently as Moved-only.
 	if refs := touchedHunks(b.Evidence, byFile); len(refs) > 0 {
 		delta.Touched = append(delta.Touched, Touched{ID: id, Kind: KindEdge, Fact: edgeFact(id, b), Hunks: refs})
+		return
+	}
+	if moved {
+		routeMoved(delta, Moved{ID: id, Kind: KindEdge, Before: edgeFact(id, b), After: edgeFact(id, h)}, class)
 	}
 }
 
@@ -486,6 +550,13 @@ func evidenceIDSetsEqual(a, b []snapshot.Evidence) bool {
 func touchedHunks(evidence []snapshot.Evidence, byFile map[string][]gitdiff.Hunk) []HunkRef {
 	seen := make(map[HunkRef]bool)
 	var refs []HunkRef
+	addRef := func(h gitdiff.Hunk, file string) {
+		ref := HunkRef{File: file, OldStart: h.OldStart, OldLines: h.OldLines}
+		if !seen[ref] {
+			seen[ref] = true
+			refs = append(refs, ref)
+		}
+	}
 	for _, ev := range evidence {
 		lineStart, lineEnd, _, _ := snapshot.ParseRange(ev.Range)
 		if lineStart == 0 && lineEnd == 0 {
@@ -493,20 +564,27 @@ func touchedHunks(evidence []snapshot.Evidence, byFile map[string][]gitdiff.Hunk
 		}
 		for _, h := range byFile[ev.File] {
 			if h.OldLines == 0 {
-				// Pure insertion: zero-width base range. Nothing in base was
-				// actually touched at a zero-width point (documented
-				// judgment call — see Diff's doc comment).
+				// Pure insertion: a zero-width point conceptually sitting
+				// between base lines OldStart and OldStart+1 (gitdiff.Hunk's
+				// own doc comment). It touches [lineStart, lineEnd] only when
+				// it falls STRICTLY inside — a real evidence line on both
+				// sides of the insertion point — per Diff's doc comment
+				// (task-18-report.md's Bug 1b fix). A boundary insertion
+				// (OldStart < lineStart, or OldStart >= lineEnd) still does
+				// not touch: that includes OldStart == lineEnd, which sits
+				// exactly at the range's own end, and any single-line range
+				// (lineStart == lineEnd), for which no OldStart value can
+				// ever satisfy the strict inequality.
+				if lineStart <= h.OldStart && h.OldStart < lineEnd {
+					addRef(h, ev.File)
+				}
 				continue
 			}
 			hunkEnd := h.OldStart + h.OldLines - 1
 			if lineStart > hunkEnd || h.OldStart > lineEnd {
 				continue // disjoint ranges
 			}
-			ref := HunkRef{File: ev.File, OldStart: h.OldStart, OldLines: h.OldLines}
-			if !seen[ref] {
-				seen[ref] = true
-				refs = append(refs, ref)
-			}
+			addRef(h, ev.File)
 		}
 	}
 	sort.Slice(refs, func(i, j int) bool {
