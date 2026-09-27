@@ -356,6 +356,206 @@ func TestClassify_ChangedContractEdge_IsAFinding(t *testing.T) {
 	}
 }
 
+// --- Bug 2 (task-18-report.md): lifecycle transition inside Changed --------
+//
+// The real scan pipeline never hard-deletes a row it no longer finds — a
+// full rescan soft-deletes it (store/edges.go's MarkStaleEdges: active=0 on
+// the edge, its evidence staled; the node-status equivalent marks Status
+// "stale"). Diff correctly buckets that as Changed (Active/Status are
+// semantic fields, present on both sides), but before this fix
+// changedChanges either mapped it to the wrong Kind (a removed contract fact
+// became ContractChanged, hiding that anything disappeared) or to no Change
+// at all (every other class: the generic handling only ever recognized
+// ClassContract). These tests pin the fix: a lifecycle-shaped Changed fact
+// must get the SAME Kind a genuinely-absent/newly-present fact of the same
+// class would.
+
+// TestClassify_LifecycleRemoved_BehaviorEdge is the exact shape of the
+// reported bug: a CALLS_ENDPOINT edge (ClassBehaviorSync) whose Active flips
+// true->false. Before this fix, changedChanges produced NO Change at all for
+// this — classifyDelta's generic Changed handling only recognized
+// ClassContract — so a removed integration silently vanished from the
+// report.
+func TestClassify_LifecycleRemoved_BehaviorEdge(t *testing.T) {
+	before := snapshot.Edge{ID: "jerry.client->traps:CALLS_ENDPOINT", Type: "CALLS_ENDPOINT", From: "jerry.client", To: "traps", Active: true}
+	after := before
+	after.Active = false
+
+	delta := &GraphDelta{
+		Changed: []Changed{{
+			ID: after.ID, Kind: KindEdge, Fields: []string{"Active"},
+			Before: edgeFact(before.ID, before), After: edgeFact(after.ID, after),
+		}},
+	}
+
+	changes := ClassifyDelta(delta)
+	if len(changes) != 1 {
+		t.Fatalf("ClassifyDelta = %+v, want exactly 1 change (a stale-marked integration must be reported)", changes)
+	}
+	c := changes[0]
+	if c.Kind != IntegrationRemoved {
+		t.Errorf("Change.Kind = %s, want IntegrationRemoved", c.Kind)
+	}
+	if c.SourceID != "jerry.client" || c.Counterpart != "traps" {
+		t.Errorf("Change SourceID/Counterpart = %s/%s, want jerry.client/traps", c.SourceID, c.Counterpart)
+	}
+	if c.Seed != seedBase {
+		t.Errorf("Change.Seed = %s, want base (who depended on it while it was still active)", c.Seed)
+	}
+	if len(c.Facts) != 1 || c.Facts[0].Edge == nil || !c.Facts[0].Edge.Active {
+		t.Errorf("Change.Facts = %+v, want exactly the BASE (still-active) fact", c.Facts)
+	}
+}
+
+// TestClassify_LifecycleAdded_BehaviorEdge is the symmetric restore: Active
+// false->true is treated as IntegrationAdded, seeded from head.
+func TestClassify_LifecycleAdded_BehaviorEdge(t *testing.T) {
+	before := snapshot.Edge{ID: "a->b:CALLS_SERVICE", Type: "CALLS_SERVICE", From: "a", To: "b", Active: false}
+	after := before
+	after.Active = true
+
+	delta := &GraphDelta{
+		Changed: []Changed{{
+			ID: after.ID, Kind: KindEdge, Fields: []string{"Active"},
+			Before: edgeFact(before.ID, before), After: edgeFact(after.ID, after),
+		}},
+	}
+
+	changes := ClassifyDelta(delta)
+	if len(changes) != 1 {
+		t.Fatalf("ClassifyDelta = %+v, want exactly 1 change", changes)
+	}
+	c := changes[0]
+	if c.Kind != IntegrationAdded {
+		t.Errorf("Change.Kind = %s, want IntegrationAdded", c.Kind)
+	}
+	if c.Seed != seedHead {
+		t.Errorf("Change.Seed = %s, want head", c.Seed)
+	}
+	if len(c.Facts) != 1 || c.Facts[0].Edge == nil || !c.Facts[0].Edge.Active {
+		t.Errorf("Change.Facts = %+v, want exactly the HEAD (now-active) fact", c.Facts)
+	}
+}
+
+// TestClassify_LifecycleRemoved_ContractEdge: a Changed EXPOSES_ENDPOINT edge
+// (ClassContract) going Active true->false must be ContractRemoved, not the
+// generic ContractChanged the table's last row would otherwise give every
+// Changed contract fact.
+func TestClassify_LifecycleRemoved_ContractEdge(t *testing.T) {
+	before := snapshot.Edge{ID: "ctrl->ep:EXPOSES_ENDPOINT", Type: "EXPOSES_ENDPOINT", From: "ctrl", To: "ep", Active: true}
+	after := before
+	after.Active = false
+
+	delta := &GraphDelta{
+		Changed: []Changed{{
+			ID: after.ID, Kind: KindEdge, Fields: []string{"Active"},
+			Before: edgeFact(before.ID, before), After: edgeFact(after.ID, after),
+		}},
+	}
+
+	changes := ClassifyDelta(delta)
+	if len(changes) != 1 || changes[0].Kind != ContractRemoved {
+		t.Fatalf("ClassifyDelta = %+v, want exactly 1 ContractRemoved change", changes)
+	}
+}
+
+// TestClassify_LifecycleRemoved_ContractNode: a Changed contract-layer node
+// whose Status flips "active"->"stale" must be ContractRemoved, SourceID the
+// node's own id, SEEDED FROM BASE — the same convention a genuinely-absent
+// contract node's standalone Removed row already uses.
+func TestClassify_LifecycleRemoved_ContractNode(t *testing.T) {
+	before := snapshot.Node{ID: "contract:topic:d:battle-results", Layer: "contract", Type: "topic", Status: "active"}
+	after := before
+	after.Status = "stale"
+
+	delta := &GraphDelta{
+		Changed: []Changed{{
+			ID: after.ID, Kind: KindNode, Fields: []string{"Status"},
+			Before: nodeFact(before.ID, before), After: nodeFact(after.ID, after),
+		}},
+	}
+
+	changes := ClassifyDelta(delta)
+	if len(changes) != 1 {
+		t.Fatalf("ClassifyDelta = %+v, want exactly 1 change", changes)
+	}
+	c := changes[0]
+	if c.Kind != ContractRemoved || c.SourceID != after.ID {
+		t.Errorf("Change = %+v, want ContractRemoved SourceID=%s", c, after.ID)
+	}
+	if c.Seed != seedBase {
+		t.Errorf("Change.Seed = %s, want base", c.Seed)
+	}
+}
+
+// TestClassify_LifecycleAdded_ContractNode: the node-side symmetric restore,
+// "stale" (or "deleted") -> "active" becomes ContractAdded, seeded from head.
+func TestClassify_LifecycleAdded_ContractNode(t *testing.T) {
+	for _, beforeStatus := range []string{"stale", "deleted"} {
+		t.Run(beforeStatus, func(t *testing.T) {
+			before := snapshot.Node{ID: "contract:topic:d:battle-results", Layer: "contract", Type: "topic", Status: beforeStatus}
+			after := before
+			after.Status = "active"
+
+			delta := &GraphDelta{
+				Changed: []Changed{{
+					ID: after.ID, Kind: KindNode, Fields: []string{"Status"},
+					Before: nodeFact(before.ID, before), After: nodeFact(after.ID, after),
+				}},
+			}
+
+			changes := ClassifyDelta(delta)
+			if len(changes) != 1 || changes[0].Kind != ContractAdded || changes[0].Seed != seedHead {
+				t.Fatalf("ClassifyDelta = %+v, want exactly 1 ContractAdded change seeded from head", changes)
+			}
+		})
+	}
+}
+
+// TestClassify_LifecycleIgnoresOtherStatuses: a node Status transition that
+// is neither "active" on one side nor "stale"/"deleted" on the other (here,
+// active -> "unknown") is not a lifecycle transition this function
+// recognizes — it must fall through to the generic ContractChanged handling,
+// not be silently dropped or misreported as a removal.
+func TestClassify_LifecycleIgnoresOtherStatuses(t *testing.T) {
+	before := snapshot.Node{ID: "contract:topic:d:t", Layer: "contract", Type: "topic", Status: "active"}
+	after := before
+	after.Status = "unknown"
+
+	delta := &GraphDelta{
+		Changed: []Changed{{
+			ID: after.ID, Kind: KindNode, Fields: []string{"Status"},
+			Before: nodeFact(before.ID, before), After: nodeFact(after.ID, after),
+		}},
+	}
+
+	changes := ClassifyDelta(delta)
+	if len(changes) != 1 || changes[0].Kind != ContractChanged {
+		t.Fatalf("ClassifyDelta = %+v, want exactly 1 ContractChanged change (not a recognized lifecycle transition)", changes)
+	}
+}
+
+// TestClassify_LifecycleDataAndFlowClassesUnaffected: ClassData/ClassFlow
+// facts have no Added/Removed row in the table at all — a lifecycle flip on
+// one of those must still produce no Change, exactly as before this fix.
+func TestClassify_LifecycleDataAndFlowClassesUnaffected(t *testing.T) {
+	before := snapshot.Edge{ID: "flow->prov:REQUIRES", Type: "REQUIRES", From: "flow", To: "prov", Active: true}
+	after := before
+	after.Active = false
+
+	delta := &GraphDelta{
+		Changed: []Changed{{
+			ID: after.ID, Kind: KindEdge, Fields: []string{"Active"},
+			Before: edgeFact(before.ID, before), After: edgeFact(after.ID, after),
+		}},
+	}
+
+	changes := ClassifyDelta(delta)
+	if len(changes) != 0 {
+		t.Errorf("ClassifyDelta = %+v, want empty (ClassFlow has no Added/Removed row in the table)", changes)
+	}
+}
+
 // TestClassify_MovedNeverClassified: the table never mentions Moved at all
 // (a fact whose evidence attachment changed but whose meaning didn't) — it
 // must never produce a Change regardless of the fact's class.

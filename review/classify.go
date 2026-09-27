@@ -71,13 +71,23 @@ type Change struct {
 //     ("head" for Added, "base" for Removed, "head" for Changed — a Changed
 //     fact exists on both sides, and "head" is the same convention Touched
 //     uses above).
+//   - Changed node or edge whose ONLY semantic difference is a lifecycle
+//     flip — an edge's Active true<->false, or a node's Status live<->stale/
+//     deleted (task-18-report.md's Bug 2 fix: this is how the real scan
+//     pipeline records a removal or restore; it never hard-deletes a row) —
+//     is routed through lifecycleTransition to the SAME Kind a genuinely
+//     absent/newly-present fact of the same class would get
+//     (Integration{Added,Removed} for a behavioral edge,
+//     Contract{Added,Removed} for a contract node or edge), seeded from
+//     whichever side was live, BEFORE the generic rule below ever sees it.
 //   - Changed node or edge of any non-structural class not already covered
-//     by Kind of addition/removal above: if it is ClassContract ->
-//     ContractChanged, SourceID = the fact's own id, Counterpart=""; this is
-//     the same rule as the Changed-node case above, just also reached by a
-//     Changed CONTRACT EDGE (e.g. HAS_FIELD). Otherwise: no Change — it is
-//     already accounted for in GraphDelta.Changed for JSON rendering, but it
-//     is not a review finding.
+//     by Kind of addition/removal above (including the lifecycle rule just
+//     above): if it is ClassContract -> ContractChanged, SourceID = the
+//     fact's own id, Counterpart=""; this is the same rule as the
+//     Changed-node case above, just also reached by a Changed CONTRACT EDGE
+//     (e.g. HAS_FIELD). Otherwise: no Change — it is already accounted for
+//     in GraphDelta.Changed for JSON rendering, but it is not a review
+//     finding.
 //   - Moved is never mentioned by the table and never produces a Change: a
 //     fact whose evidence attachment moved but whose meaning didn't is not a
 //     semantic event.
@@ -298,11 +308,37 @@ func touchedChanges(touched []Touched) []Change {
 // an edge — are baked into the shared ID Changed matches on, so they are
 // identical on both sides of a Changed pair; see diffMatchedNodes/
 // diffMatchedEdges in diff.go, which rely on the same invariant).
+//
+// Before that generic ContractChanged fallback, lifecycleTransition (Bug 2,
+// task-18-report.md) checks for one specific shape of Changed: a fact whose
+// ONLY semantic difference is a soft delete or restore — an edge's Active
+// true->false/false->true, or a node's Status flipping into or out of
+// "stale"/"deleted". The real scan pipeline never hard-deletes a row it no
+// longer finds (chronicle_stale_mark sets active=0/status=stale instead —
+// store/edges.go's MarkStaleEdges), so a genuine removal shows up here, in
+// Changed, not in Removed. Left to the generic handling below, such a fact
+// either got the wrong treatment (ContractChanged, for a contract fact —
+// hiding that a topic/endpoint/model actually disappeared) or NO Change at
+// all (every other class: a removed CALLS_SERVICE/CALLS_ENDPOINT/INJECTS/
+// PUBLISHES_TOPIC/CONSUMES_TOPIC edge was silently dropped, since this
+// function only ever handled ClassContract). lifecycleTransition routes it
+// through the SAME Kind a genuinely-absent fact of the same class would get
+// instead (IntegrationRemoved/ContractRemoved, or the symmetric …Added for a
+// restore) — see its own doc comment for which classes this covers and why.
 func changedChanges(changed []Changed) []Change {
 	var changes []Change
 	for _, c := range changed {
 		class := Classify(c.After)
-		if class == ClassStructural || class != ClassContract {
+		if class == ClassStructural {
+			continue
+		}
+
+		if lc, ok := lifecycleTransition(c, class); ok {
+			changes = append(changes, lc)
+			continue
+		}
+
+		if class != ClassContract {
 			continue
 		}
 		changes = append(changes, Change{
@@ -312,3 +348,107 @@ func changedChanges(changed []Changed) []Change {
 	}
 	return changes
 }
+
+// lifecycleTransition detects a Changed fact whose semantic difference is
+// specifically a soft delete/restore, for exactly the classes
+// standaloneAddedOrRemoved already gives an Added/Removed row to
+// (ClassBehaviorSync/ClassBehaviorAsync edges -> IntegrationAdded/Removed;
+// ClassContract nodes AND edges -> ContractAdded/Removed — this function's
+// own class guard below is what extends the contract row to edges too, e.g.
+// EXPOSES_ENDPOINT). ClassData/ClassFlow facts have no Added/Removed row in
+// the table either, so a lifecycle flip on one of those still produces no
+// Change here, same as before this fix — only the three classes above are
+// even considered.
+//
+// Direction: Active/Status going from "live" to "stale-marked" is treated as
+// Removed, seeded from BASE (Seed: seedBase) — the design spec's own rule
+// (§6: "for removed and changed we count from the base — who depended on the
+// old") applies just as much to a soft removal as a hard one: the fact WAS
+// live in base, so that is the graph impact analysis must walk to find who
+// used to depend on it. The reverse transition (stale-marked back to live)
+// is treated symmetrically as Added, seeded from HEAD (Seed: seedHead),
+// matching "for added and touched we count from head". This reverse case is
+// a judgment call the design brief leaves open (task-18's own instructions):
+// a fact the scan pipeline reactivates plausibly deserves the same
+// "this integration/contract exists again" treatment a freshly-added one
+// gets, and reporting only the removal direction would be a strange,
+// asymmetric reading of "tell me what changed" for a fact this codebase
+// itself models symmetrically (store.UpdateEdgeTrust maps every non-
+// removed/contradicted status back to active=1 with no special casing for
+// "this used to be removed").
+//
+// Node status: "active" counts as live; "stale" or "deleted" counts as
+// removed (deleted-status NODES are normally absent from the snapshot
+// entirely per the snapshot contract spec §4.2 — Diff would see that as a
+// genuine Removed fact, not Changed — but a Changed pair with an explicit
+// Status:"deleted" on one side is treated the same as "stale" here anyway,
+// defensively, rather than silently falling through). "unknown"/
+// "contradicted"/"external" are left alone (fall through to the generic
+// ContractChanged handling, or to no Change for non-contract classes) —
+// neither direction this function's own two rules describe.
+func lifecycleTransition(c Changed, class FactClass) (Change, bool) {
+	if class != ClassBehaviorSync && class != ClassBehaviorAsync && class != ClassContract {
+		return Change{}, false
+	}
+
+	switch {
+	case c.Kind == KindEdge && c.Before.Edge != nil && c.After.Edge != nil:
+		before, after := c.Before.Edge.Active, c.After.Edge.Active
+		switch {
+		case before && !after:
+			return edgeLifecycleChange(c, removedKindFor(class), seedBase), true
+		case !before && after:
+			return edgeLifecycleChange(c, addedKindFor(class), seedHead), true
+		}
+
+	case c.Kind == KindNode && c.Before.Node != nil && c.After.Node != nil:
+		// A node can only reach this class guard as ClassContract:
+		// classifyNode never returns ClassBehaviorSync/ClassBehaviorAsync for
+		// any node, so the outer guard above already pinned class to
+		// ClassContract by the time a node fact gets here.
+		before, after := c.Before.Node.Status, c.After.Node.Status
+		switch {
+		case nodeStatusLive(before) && nodeStatusRemoved(after):
+			return Change{Kind: ContractRemoved, SourceID: c.ID, Seed: seedBase, Facts: []Fact{c.Before}}, true
+		case nodeStatusRemoved(before) && nodeStatusLive(after):
+			return Change{Kind: ContractAdded, SourceID: c.ID, Seed: seedHead, Facts: []Fact{c.After}}, true
+		}
+	}
+	return Change{}, false
+}
+
+// removedKindFor and addedKindFor pick the Added/Removed Kind
+// lifecycleTransition's edge branch reports, mirroring
+// standaloneAddedOrRemoved's own class-to-Kind mapping: a contract edge
+// (e.g. EXPOSES_ENDPOINT) gets Contract{Added,Removed}; a behavioral edge
+// gets Integration{Added,Removed}.
+func removedKindFor(class FactClass) ChangeKind {
+	if class == ClassContract {
+		return ContractRemoved
+	}
+	return IntegrationRemoved
+}
+
+func addedKindFor(class FactClass) ChangeKind {
+	if class == ClassContract {
+		return ContractAdded
+	}
+	return IntegrationAdded
+}
+
+// edgeLifecycleChange builds the Change for an edge lifecycle transition,
+// carrying the fact from whichever side the chosen Seed points at — base's
+// own copy for a Removed-shaped transition (the edge as it was while still
+// live, the same convention a genuine standalone Removed fact uses), head's
+// for an Added-shaped one.
+func edgeLifecycleChange(c Changed, kind ChangeKind, seed string) Change {
+	fact := c.After
+	if seed == seedBase {
+		fact = c.Before
+	}
+	return Change{Kind: kind, SourceID: fact.Edge.From, Counterpart: fact.Edge.To, Seed: seed, Facts: []Fact{fact}}
+}
+
+func nodeStatusLive(status string) bool { return status == "active" }
+
+func nodeStatusRemoved(status string) bool { return status == "stale" || status == "deleted" }
