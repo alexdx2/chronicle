@@ -108,3 +108,19 @@ func TestExtractCmd_FakeRun(t *testing.T) {
 		t.Fatalf("summary = %q", buf.String())
 	}
 }
+
+func TestExtractCmd_UsageWriteFailureKeepsSummary(t *testing.T) {
+	e := newExtractEnv(t)
+	var buf bytes.Buffer
+	code, err := runExtract(context.Background(), &buf, e.g, e.root, e.dir, extractCLIOptions{
+		Base: "HEAD~1", Head: "HEAD", MaxFiles: 1, Concurrency: 2,
+		Model:    "fake:" + filepath.Join("testdata", "extract-fake"),
+		UsageOut: filepath.Join(t.TempDir(), "no-such-dir", "usage.json"),
+	}, noEnv)
+	if code != 1 || err == nil {
+		t.Fatalf("a failed usage write must fail the command: code=%d err=%v", code, err)
+	}
+	if !strings.HasPrefix(buf.String(), "chronicle extract: 1 files, 1 extracted") {
+		t.Fatalf("the summary must be printed before the usage write: %q", buf.String())
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitdiff"
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/manifest"
 )
@@ -46,6 +47,7 @@ type Plan struct {
 	Domain     string     `json:"domain"`
 	Base       string     `json:"base"`
 	Head       string     `json:"head"`
+	MergeBase  string     `json:"merge_base"` // the commit the diff starts from
 	Radius     int        `json:"radius"`
 	Files      []PlanFile `json:"files"` // to read, deterministic order
 	Skipped    []PlanFile `json:"skipped"`
@@ -85,7 +87,19 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	p := &Plan{Domain: in.Domain, Base: in.Base, Head: in.Head, Radius: radius,
 		Files: []PlanFile{}, Skipped: []PlanFile{}}
 
-	diff, err := gitdiff.ChangedFiles(in.RepoRoot, in.Base, in.Head)
+	// Diff from the merge base, the way `chronicle review A...B` does: what
+	// Base changed after Head forked is not this branch's work.
+	headRev := in.Head
+	if headRev == "" {
+		headRev = "HEAD"
+	}
+	mb, err := gitutil.Run(in.RepoRoot, "merge-base", in.Base, headRev)
+	if err != nil {
+		return nil, fmt.Errorf("headless: merge base of %s and %s: %w", in.Base, headRev, err)
+	}
+	p.MergeBase = strings.TrimSpace(mb)
+
+	diff, err := gitdiff.ChangedFiles(in.RepoRoot, p.MergeBase, in.Head)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +283,7 @@ func inScopeSiblings(repoRoot, stem string, scan *manifest.ScanConfig) []string 
 	}
 	var out []string
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), base+".") {
+		if !e.Type().IsRegular() || !strings.HasPrefix(e.Name(), base+".") {
 			continue
 		}
 		rel := dir + e.Name()

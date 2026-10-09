@@ -326,3 +326,40 @@ func TestBuildPlan_BudgetKeepsSmallerLaterFile(t *testing.T) {
 		t.Fatalf("Skipped = %+v", p.Skipped)
 	}
 }
+
+func TestBuildPlan_DiffsFromMergeBase(t *testing.T) {
+	root := newRepo(t)
+	git(t, root, "checkout", "-q", "-b", "feature")
+	write(t, root, "src/a.ts", "export const a = 2;\n")
+	commitAll(t, root, "feature change")
+	git(t, root, "checkout", "-q", "main")
+	write(t, root, "src/c.ts", "export const c = 99;\n") // main moves on after the fork
+	commitAll(t, root, "main change")
+
+	p, err := BuildPlan(PlanInput{G: newGraph(t), RepoRoot: root, Domain: "d", Scan: scan(), Base: "main", Head: "feature"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range p.Files {
+		if f.Path == "src/c.ts" {
+			t.Fatalf("src/c.ts changed on main after the fork, not on the branch: %v", p.Paths())
+		}
+	}
+	if len(p.Files) == 0 || p.Files[0].Path != "src/a.ts" || p.Files[0].Reason != "changed" {
+		t.Fatalf("want src/a.ts first as changed, got %+v", p.Files)
+	}
+	out, err := exec.Command("git", "-C", root, "merge-base", "main", "feature").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.TrimSpace(string(out)); p.MergeBase != want {
+		t.Fatalf("MergeBase = %q, want %q", p.MergeBase, want)
+	}
+}
+
+func TestBuildPlan_MergeBaseFailureIsAnError(t *testing.T) {
+	root := newRepo(t)
+	if _, err := BuildPlan(PlanInput{G: newGraph(t), RepoRoot: root, Domain: "d", Scan: scan(), Base: "no-such-ref", Head: "HEAD"}); err == nil {
+		t.Fatal("an unresolvable base must be an error, not a silent fallback")
+	}
+}

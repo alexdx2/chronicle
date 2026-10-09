@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
@@ -144,6 +145,18 @@ func runExtract(ctx context.Context, w io.Writer, g *graph.Graph, repoRoot, chro
 		HeadSHA: headSHA, Files: files, Backend: backend, Concurrency: opts.Concurrency,
 	})
 	if res != nil {
+		cost := "unknown"
+		if res.CostKnown {
+			cost = fmt.Sprintf("%.4f", res.CostUSD)
+		}
+		fmt.Fprintf(w, "chronicle extract: %d files, %d extracted, %d failed, in=%d out=%d cost=$%s (%s)\n",
+			len(res.Files), res.Extracted, res.Failed, res.Totals.InputTokens, res.Totals.OutputTokens, cost, res.Model)
+		for _, l := range res.Limitations {
+			if strings.HasPrefix(l, "nothing to extract") {
+				fmt.Fprintf(w, "chronicle extract: %s\n", l)
+			}
+		}
+		// After the summary, so a failed write never hides it.
 		if opts.UsageOut != "" {
 			if data, err := json.MarshalIndent(res, "", "  "); err != nil {
 				return 1, fmt.Errorf("chronicle extract: encode usage: %w", err)
@@ -151,12 +164,6 @@ func runExtract(ctx context.Context, w io.Writer, g *graph.Graph, repoRoot, chro
 				return 1, fmt.Errorf("chronicle extract: write usage: %w", err)
 			}
 		}
-		cost := "unknown"
-		if res.CostKnown {
-			cost = fmt.Sprintf("%.4f", res.CostUSD)
-		}
-		fmt.Fprintf(w, "chronicle extract: %d files, %d extracted, %d failed, in=%d out=%d cost=$%s (%s)\n",
-			len(res.Files), res.Extracted, res.Failed, res.Totals.InputTokens, res.Totals.OutputTokens, cost, res.Model)
 	}
 	if runErr != nil {
 		return 1, fmt.Errorf("chronicle extract: %w", runErr)
@@ -175,7 +182,7 @@ func newExtractCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "extract",
 		Short: "Plan and run LLM re-extraction for a git range",
-		Long: `Computes which files an LLM should read for the range --base..--head (changed
+		Long: `Computes which files an LLM should read for the range --base...--head, i.e. from the merge base of the two (changed
 files plus graph neighbours), then re-extracts them through the scan pipeline.
 
 Exit code 0: ok (also for --plan). 1: error. 2: no graph or plan input.
@@ -212,13 +219,13 @@ Exit code 0: ok (also for --plan). 1: error. 2: no graph or plan input.
 	f.BoolVar(&o.PlanOnly, "plan", false, "Print the extraction plan as JSON and exit without calling a model")
 	f.StringVar(&o.PlanFile, "plan-file", "", "Read a plan JSON instead of computing one")
 	f.StringSliceVar(&o.Files, "files", nil, "Explicit file list (overrides plan computation)")
-	f.StringVar(&o.Base, "base", "", "Base git ref (default: origin/main, origin/master, main, master)")
+	f.StringVar(&o.Base, "base", "", "Base git ref (default: origin/main, origin/master, main, master); the diff starts at the merge base of --base and --head, like `chronicle review A...B`")
 	f.StringVar(&o.Head, "head", "HEAD", "Head git ref")
 	f.StringVar(&o.Domain, "domain", "", "Domain key (default: the manifest's only domain)")
 	f.IntVar(&o.Radius, "radius", 1, "Graph neighbour radius")
 	f.IntVar(&o.MaxFiles, "max-files", 80, "Maximum files to read")
 	f.Int64Var(&o.MaxBytes, "max-bytes", 1<<20, "Maximum total bytes to read")
-	f.StringVar(&o.Model, "model", "", "Model spec, e.g. anthropic:<model> (default $CHRONICLE_MODEL or "+defaultExtractModel+")")
+	f.StringVar(&o.Model, "model", "", "Model spec: anthropic:<model>, gemini:<model>, openai:<model>, openrouter:<model>, ollama:<tag> (default $CHRONICLE_MODEL or "+defaultExtractModel+")")
 	f.IntVar(&o.Concurrency, "concurrency", 4, "Parallel model calls")
 	f.StringVar(&o.UsageOut, "usage-out", "", "Write the full run result JSON to this file")
 	return cmd

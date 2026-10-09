@@ -294,6 +294,53 @@ func TestRun_CancelMidWaveKeepsCompletedWork(t *testing.T) {
 	if left, _ := filepath.Glob(filepath.Join(e.root, ".depbot", "scan-outbox", "*", "*")); len(left) != 0 {
 		t.Errorf("outbox not drained: %v", left)
 	}
+	// The completed file keeps its coverage row; the cancelled one has none.
+	cov, err := e.g.Store().ListCoverage("d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := map[string]bool{}
+	for _, c := range cov {
+		covered[c.FilePath] = c.BlobSHA != ""
+	}
+	for _, f := range res.Files {
+		switch f.Status {
+		case "cancelled":
+			if _, ok := covered[f.Path]; ok {
+				t.Errorf("cancelled %s must not have coverage", f.Path)
+			}
+		default:
+			if !covered[f.Path] {
+				t.Errorf("completed %s lost its coverage row on the cancel path: %+v", f.Path, cov)
+			}
+		}
+	}
+}
+
+func TestRun_RerunWithSatisfiedObligationsSaysSo(t *testing.T) {
+	e := newRunEnv(t)
+	in := e.input(llm.NewFake("testdata/fake"), "src/a.ts")
+	first, err := Run(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const msg = "nothing to extract: all files already satisfied for this head"
+	for _, l := range first.Limitations {
+		if l == msg {
+			t.Fatalf("first run did work, must not say %q", msg)
+		}
+	}
+	second, err := Run(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, l := range second.Limitations {
+		found = found || l == msg
+	}
+	if !found {
+		t.Fatalf("second run is a no-op and must say so, limitations = %v", second.Limitations)
+	}
 }
 
 type longErrBackend struct{}

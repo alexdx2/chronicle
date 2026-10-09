@@ -197,6 +197,28 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		summarize(res, in.Backend)
 		return res, err
 	}
+	// Record what was observed (with the blob SHA of the file on disk) so
+	// freshness sees the new blob. Same extractor identity as the MCP paths.
+	// Called per committed wave, so the files a cancelled run did finish keep
+	// their coverage.
+	recordCoverage := func(files []FileUsage, commitErrs []string) error {
+		for _, f := range files {
+			if f.Status == "failed" || f.Status == "provider_error" || f.Status == "cancelled" ||
+				(f.Status == "skipped" && f.Error != "") || commitFailed(commitErrs, f.Path) {
+				continue
+			}
+			blob, _ := gitutil.FileBlobSHA(in.RepoRoot, f.Path)
+			if err := st.UpsertCoverage(store.CoverageRow{
+				DomainKey: in.Domain, FilePath: f.Path, ExtractorID: "chronicle-scan",
+				ExtractorVersion: fmt.Sprintf("fact-schema@%d", store.FactSchemaVersion),
+				Status:           f.Status, BlobSHA: blob,
+			}); err != nil {
+				return fmt.Errorf("headless: record coverage: %w", err)
+			}
+		}
+		return nil
+	}
+	waves := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
@@ -222,6 +244,7 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 					return fail(fmt.Errorf("headless: decode checkout items: %w", err))
 				}
 			}
+			waves++
 			files, waveErr := runWave(ctx, in, b, items, guide, conc, maxTokens)
 			res.Files = append(res.Files, files...)
 			// Always commit what the wave managed to write, even when it
@@ -239,6 +262,9 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			res.Commit.Errors += cr.Errors
 			res.Commit.Dir = cr.Dir
 			res.Commit.ErrorMsgs = append(res.Commit.ErrorMsgs, cr.ErrorMsgs...)
+			if covErr := recordCoverage(files, cr.ErrorMsgs); covErr != nil {
+				return fail(covErr)
+			}
 			if waveErr != nil {
 				return fail(waveErr)
 			}
@@ -252,22 +278,6 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	if cfg, ok := in.Manifest.ScanConfigFor(in.Domain); ok && cfg != nil {
 		includeDev = cfg.IncludeDevDeps
 	}
-	// Record what was observed (with the blob SHA of the file on disk) so
-	// freshness sees the new blob. Same extractor identity as the MCP paths.
-	for _, f := range res.Files {
-		if f.Status == "failed" || f.Status == "provider_error" || f.Status == "cancelled" ||
-			(f.Status == "skipped" && f.Error != "") || commitFailed(res.Commit.ErrorMsgs, f.Path) {
-			continue
-		}
-		blob, _ := gitutil.FileBlobSHA(in.RepoRoot, f.Path)
-		if err := st.UpsertCoverage(store.CoverageRow{
-			DomainKey: in.Domain, FilePath: f.Path, ExtractorID: "chronicle-scan",
-			ExtractorVersion: fmt.Sprintf("fact-schema@%d", store.FactSchemaVersion),
-			Status:           f.Status, BlobSHA: blob,
-		}); err != nil {
-			return nil, fmt.Errorf("headless: record coverage: %w", err)
-		}
-	}
 	if res.Resolve, err = g.ResolveExtractionsWithOptions(in.Domain, rev, graph.ResolveOptions{AllowDegraded: true, IncludeDevDeps: includeDev}); err != nil {
 		return nil, fmt.Errorf("headless: resolve: %w", err)
 	}
@@ -279,6 +289,9 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	}
 
 	summarize(res, in.Backend)
+	if waves == 0 {
+		res.Limitations = append(res.Limitations, "nothing to extract: all files already satisfied for this head")
+	}
 	return res, nil
 }
 
