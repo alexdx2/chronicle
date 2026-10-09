@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/paths"
@@ -22,7 +23,11 @@ type restoreInput struct {
 	GraphPath string // .depbot/graph.jsonl in the worktree (used when At == "")
 	At        string // git rev; "" = the file at GraphPath
 	Force     bool
-	Registry  *registry.Registry
+	// MergeBaseWith, when set, resolves At as `git merge-base <At> <MergeBaseWith>`
+	// before the snapshot lookup, so a restore from a moving branch tip picks a
+	// commit that is an ancestor of the checkout.
+	MergeBaseWith string
+	Registry      *registry.Registry
 }
 
 type restoreResult struct {
@@ -51,7 +56,15 @@ func runGraphRestore(in restoreInput) (restoreResult, error) {
 		src    string
 	)
 	if in.At != "" {
-		v, err := snapshot.ResolveVersion(in.RepoRoot, in.At)
+		at := in.At
+		if in.MergeBaseWith != "" {
+			mb, err := gitutil.Run(in.RepoRoot, "merge-base", in.At, in.MergeBaseWith)
+			if err != nil {
+				return restoreResult{}, fmt.Errorf("merge-base of %s and %s: %w", in.At, in.MergeBaseWith, err)
+			}
+			at = strings.TrimSpace(mb)
+		}
+		v, err := snapshot.ResolveVersion(in.RepoRoot, at)
 		if err != nil {
 			return restoreResult{}, err
 		}
@@ -76,28 +89,47 @@ func runGraphRestore(in restoreInput) (restoreResult, error) {
 		src = in.GraphPath
 	}
 
+	loadPath := in.DBPath
+	replacing := false
 	if _, err := os.Stat(in.DBPath); err == nil {
 		if !in.Force {
 			return restoreResult{}, errDBExists
 		}
-		for _, p := range []string{in.DBPath, in.DBPath + "-wal", in.DBPath + "-shm"} {
+		// Load next to the old database and swap only once the load worked:
+		// a corrupt snapshot must not cost the caller the database it has.
+		replacing = true
+		loadPath = in.DBPath + ".restore-tmp"
+		for _, p := range []string{loadPath, loadPath + "-wal", loadPath + "-shm"} {
 			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 				return restoreResult{}, err
 			}
 		}
 	}
 
-	g, closer, err := snapshot.Load(snap, in.Registry, snapshot.LoadOptions{DBPath: in.DBPath, SkipJournalSync: true})
+	g, closer, err := snapshot.Load(snap, in.Registry, snapshot.LoadOptions{DBPath: loadPath, SkipJournalSync: true})
 	if err != nil {
+		if replacing {
+			for _, p := range []string{loadPath, loadPath + "-wal", loadPath + "-shm"} {
+				os.Remove(p)
+			}
+		}
 		return restoreResult{}, err
 	}
-	defer closer()
+	closed := false
+	defer func() {
+		if !closed {
+			closer()
+		}
+	}()
 
 	revs := make(map[string]int64, len(snap.Header.Domains))
 	for _, d := range snap.Header.Domains {
 		id, _, err := g.Store().ClaimRevision(store.RevisionClaim{
 			DomainKey: d, AfterSHA: commit, TriggerKind: "ci_pipeline", Mode: "full",
-			Metadata: fmt.Sprintf(`{"kind":"restore","seq":%d}`, snap.Header.Seq),
+			// A committed snapshot is, by contract, the state after its last
+			// refresh: the pointer lets refresh's structural phase diff from
+			// the snapshot's commit instead of sweeping the whole repository.
+			Metadata: fmt.Sprintf(`{"kind":"restore","seq":%d,"structural":{"complete":true,"processed":0}}`, snap.Header.Seq),
 		})
 		if err != nil {
 			return restoreResult{}, fmt.Errorf("claiming restore revision for %s: %w", d, err)
@@ -109,6 +141,21 @@ func runGraphRestore(in restoreInput) (restoreResult, error) {
 		return restoreResult{}, err
 	}
 
+	if replacing {
+		// Close (checkpoints the WAL) before the rename, then drop the old
+		// database's sidecars so they are not replayed onto the new file.
+		closer()
+		closed = true
+		for _, p := range []string{in.DBPath + "-wal", in.DBPath + "-shm", loadPath + "-wal", loadPath + "-shm"} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return restoreResult{}, err
+			}
+		}
+		if err := os.Rename(loadPath, in.DBPath); err != nil {
+			return restoreResult{}, err
+		}
+	}
+
 	return restoreResult{
 		Path: src, Seq: snap.Header.Seq, Commit: commit,
 		Domains: snap.Header.Domains, Counts: snap.Header.Counts, Revisions: revs,
@@ -116,7 +163,7 @@ func runGraphRestore(in restoreInput) (restoreResult, error) {
 }
 
 func newGraphRestoreCmd() *cobra.Command {
-	var at string
+	var at, mergeBaseWith string
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "restore",
@@ -155,6 +202,8 @@ Exit codes: 0 restored, 2 no snapshot to restore, 1 any other error.`,
 				At:        at,
 				Force:     force,
 				Registry:  reg,
+
+				MergeBaseWith: mergeBaseWith,
 			})
 			if err != nil {
 				if errors.Is(err, snapshot.ErrNoVersion) || os.IsNotExist(err) {
@@ -169,6 +218,7 @@ Exit codes: 0 restored, 2 no snapshot to restore, 1 any other error.`,
 		},
 	}
 	cmd.Flags().StringVar(&at, "at", "", "git revision to read the snapshot from (default: the working-tree file)")
+	cmd.Flags().StringVar(&mergeBaseWith, "merge-base-with", "", "resolve --at as the merge base of --at and this revision (CI: --at origin/main --merge-base-with HEAD)")
 	cmd.Flags().BoolVar(&force, "force", false, "replace an existing database")
 	return cmd
 }

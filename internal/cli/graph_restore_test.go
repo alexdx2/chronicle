@@ -171,3 +171,88 @@ func TestRunGraphRestore_JournalNotReplayed(t *testing.T) {
 		t.Fatalf("journal events were replayed over the snapshot: %d nodes, want 1", stats.NodeCount)
 	}
 }
+
+func TestRunGraphRestore_LeavesStructuralPointer(t *testing.T) {
+	repo, dbPath, graphPath, reg := seedRepoWithSnapshot(t)
+	os.Remove(dbPath)
+	res, err := runGraphRestore(restoreInput{RepoRoot: repo, DBPath: dbPath, GraphPath: graphPath, Registry: reg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	domain := res.Domains[0]
+	rev, err := st.LatestStructuralRevision(domain)
+	if err != nil || rev == nil || rev.GitAfterSHA != res.Commit {
+		t.Fatalf("restore must leave a structural pointer at %s, got %+v (err %v)", res.Commit, rev, err)
+	}
+	base, sweep, forget := structuralBase(st, repo, domain)
+	if base != res.Commit || sweep || forget != 0 {
+		t.Fatalf("structuralBase = (%q, %v, %d), want (%q, false, 0)", base, sweep, forget, res.Commit)
+	}
+}
+
+func TestRunGraphRestore_MergeBaseWith(t *testing.T) {
+	repo, dbPath, graphPath, reg := seedRepoWithSnapshot(t)
+	gitRun(t, repo, "branch", "-M", "main")
+	fork := strings.TrimSpace(gitCapture(t, repo, "rev-parse", "HEAD"))
+	gitRun(t, repo, "branch", "feature")
+	// main moves on with a newer snapshot commit.
+	if err := os.WriteFile(filepath.Join(repo, "other.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "other.txt")
+	gitRun(t, repo, "commit", "-q", "-m", "main moves")
+	mainTip := strings.TrimSpace(gitCapture(t, repo, "rev-parse", "HEAD"))
+	if mainTip == fork {
+		t.Fatal("setup: main did not advance")
+	}
+	gitRun(t, repo, "checkout", "-q", "feature")
+	os.Remove(dbPath)
+	res, err := runGraphRestore(restoreInput{
+		RepoRoot: repo, DBPath: dbPath, GraphPath: graphPath,
+		At: "main", MergeBaseWith: "HEAD", Registry: reg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Commit != fork {
+		t.Fatalf("commit = %q, want the fork commit %q (not main's tip %q)", res.Commit, fork, mainTip)
+	}
+}
+
+func TestRunGraphRestore_ForceKeepsOldDBWhenLoadFails(t *testing.T) {
+	repo, dbPath, graphPath, reg := seedRepoWithSnapshot(t)
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Decode is lenient, so corrupt the one thing the store itself rejects:
+	// a node status outside the CHECK constraint fails inside snapshot.Load.
+	raw, err := os.ReadFile(graphPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(string(raw), `"status":"active"`, `"status":"bogus"`, 1)
+	if bad == string(raw) {
+		t.Fatalf("test setup: no node status to corrupt in %s", raw)
+	}
+	if err := os.WriteFile(graphPath, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runGraphRestore(restoreInput{RepoRoot: repo, DBPath: dbPath, GraphPath: graphPath, Force: true, Registry: reg}); err == nil {
+		t.Fatal("corrupt snapshot must fail")
+	} else if !strings.Contains(err.Error(), "snapshot: Load") {
+		t.Fatalf("failure must come from snapshot.Load, got %v", err)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("old db must survive a failed restore (err %v)", err)
+	}
+	if _, err := os.Stat(dbPath + ".restore-tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp db must be cleaned up, stat err %v", err)
+	}
+}
