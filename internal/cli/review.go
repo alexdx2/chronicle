@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -8,10 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/review"
+	"github.com/alexdx2/chronicle-core/snapshot"
 	"github.com/spf13/cobra"
 )
 
@@ -126,6 +129,11 @@ type reviewCLIOptions struct {
 	// read from it (freshness judged against Head's tree) instead of from
 	// Head's git history. "" means the ordinary SnapshotSource.
 	HeadSnapshot string
+	// BundlePath, when set, also writes a review bundle (zip) there: both
+	// graph versions, the JSON and Markdown reports, and the optional usage
+	// file at UsagePath.
+	BundlePath string
+	UsagePath  string
 }
 
 // reviewRepoRoot is the absolute directory git questions are asked in.
@@ -186,7 +194,86 @@ func runReview(ctx context.Context, w io.Writer, repoRoot string, opts reviewCLI
 		return 2, "chronicle review: " + err.Error()
 	}
 
+	if opts.BundlePath != "" {
+		if err := writeReviewBundle(ctx, result, repoRoot, opts); err != nil {
+			return 2, "chronicle review: bundle: " + err.Error()
+		}
+	}
+
 	return reviewExitCode(result, opts.FailOn)
+}
+
+// writeReviewBundle packs the review plus both graph versions it compared
+// into opts.BundlePath. Both sides are loaded once more (as renderReview
+// does for diagrams) to get their canonical snapshots; the creation time
+// goes into the manifest only, never into the reports.
+func writeReviewBundle(ctx context.Context, result *review.ReviewResult, repoRoot string, opts reviewCLIOptions) error {
+	baseVG, err := review.SnapshotSource{RepoRoot: repoRoot, Rev: opts.Base}.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("reload base: %w", err)
+	}
+	defer baseVG.Close()
+	headVG, err := headSource(repoRoot, opts).Load(ctx)
+	if err != nil {
+		return fmt.Errorf("reload head: %w", err)
+	}
+	defer headVG.Close()
+
+	encode := func(vg *review.VersionGraph) ([]byte, error) {
+		if vg.Origin == review.OriginMissing || vg.Export == nil {
+			return nil, nil
+		}
+		var buf bytes.Buffer
+		if err := snapshot.Encode(&buf, vg.Export); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+	baseSnap, err := encode(baseVG)
+	if err != nil {
+		return fmt.Errorf("encode base snapshot: %w", err)
+	}
+	headSnap, err := encode(headVG)
+	if err != nil {
+		return fmt.Errorf("encode head snapshot: %w", err)
+	}
+	if headSnap == nil {
+		return fmt.Errorf("head has no graph to bundle")
+	}
+
+	reviewJSON, err := review.RenderJSON(result)
+	if err != nil {
+		return err
+	}
+	mdOpts := opts
+	mdOpts.Format = "markdown"
+	markdown, err := renderReview(ctx, result, repoRoot, mdOpts)
+	if err != nil {
+		return err
+	}
+
+	var usage []byte
+	if opts.UsagePath != "" {
+		if usage, err = os.ReadFile(opts.UsagePath); err != nil {
+			return fmt.Errorf("read --usage: %w", err)
+		}
+	}
+
+	return review.WriteBundle(opts.BundlePath, review.Bundle{
+		Manifest: review.BundleManifest{
+			FormatVersion: review.BundleFormatVersion,
+			Repo:          filepath.Base(repoRoot),
+			BaseRef:       baseVG.Ref, BaseCommit: baseVG.Commit,
+			HeadRef: headVG.Ref, HeadCommit: headVG.Commit,
+			Command:   opts.Command,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		},
+		BaseSnapshot: baseSnap,
+		HeadSnapshot: headSnap,
+		ReviewJSON:   reviewJSON,
+		Markdown:     markdown,
+		UsageJSON:    usage,
+	})
 }
 
 // renderReview renders result per opts.Format. The JSON path is a pure
@@ -324,7 +411,7 @@ func reviewReproCommand(rangeArg, flagBase, flagHead string, workingTree bool, h
 }
 
 func newReviewCmd() *cobra.Command {
-	var flagBase, flagHead, format, out, headSnapshot string
+	var flagBase, flagHead, format, out, headSnapshot, bundle, usage string
 	var workingTree bool
 	var depth int
 	var failOn []string
@@ -378,6 +465,7 @@ neither revision has a Chronicle graph in its history at all).`,
 				Depth: depth, FailOn: failOn,
 				Command:      reviewReproCommand(rangeArg, flagBase, flagHead, workingTree, headSnapshot),
 				HeadSnapshot: headSnapshot,
+				BundlePath:   bundle, UsagePath: usage,
 			}
 
 			code, msg := runReview(context.Background(), os.Stdout, repoRoot, opts)
@@ -395,10 +483,13 @@ neither revision has a Chronicle graph in its history at all).`,
 	cmd.Flags().StringVar(&flagHead, "head", "", "Head git ref (overrides the range's head)")
 	cmd.Flags().BoolVar(&workingTree, "working-tree", false, "Compare against the working tree instead of HEAD (only affects the default, no-argument range)")
 	cmd.Flags().StringVar(&headSnapshot, "head-snapshot", "", "Read the head graph from this snapshot file instead of the head revision's committed graph (freshness is still judged against the head revision's tree)")
+	cmd.Flags().StringVar(&bundle, "bundle", "", "Also write a review bundle (zip: both graphs, JSON and Markdown reports) to this file")
+	cmd.Flags().StringVar(&usage, "usage", "", "Embed this usage JSON file in the --bundle")
 	cmd.Flags().StringVar(&format, "format", "markdown", "Output format: markdown or json")
 	cmd.Flags().StringVar(&out, "out", "", "Write the report to this file instead of stdout")
 	cmd.Flags().IntVar(&depth, "depth", 4, "Impact traversal depth")
 	cmd.Flags().StringSliceVar(&failOn, "fail-on", nil, "Exit 1 if the review finds a match: unknown, affected, changed")
 
+	cmd.AddCommand(newReviewImportCmd())
 	return cmd
 }
