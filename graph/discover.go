@@ -75,6 +75,11 @@ type DiscoverOpts struct {
 	// Only files matching at least one Scope pattern (after manifest include/exclude) are returned.
 	// Empty Scope means no additional filtering.
 	Scope []string
+	// Files is a list of exact repo-relative paths. When non-empty, only these
+	// files are discovered (after manifest include/exclude), with no glob
+	// semantics — paths like src/app/[id]/page.tsx match themselves. It applies
+	// in addition to Scope.
+	Files []string
 }
 
 // DiscoverFilesOpts finds all scannable files using git ls-files + manifest include/exclude rules,
@@ -123,6 +128,20 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 			}
 		}
 		filtered = scoped
+	}
+
+	if len(opts.Files) > 0 {
+		want := make(map[string]bool, len(opts.Files))
+		for _, f := range opts.Files {
+			want[f] = true
+		}
+		var exact []string
+		for _, f := range filtered {
+			if want[f] {
+				exact = append(exact, f)
+			}
+		}
+		filtered = exact
 	}
 
 	// Boundary-first ordering: package/build/deployment/schema files before source

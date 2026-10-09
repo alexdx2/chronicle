@@ -340,3 +340,52 @@ func TestInScope(t *testing.T) {
 		t.Error("src/a.spec.ts should be excluded")
 	}
 }
+
+func TestDiscoverFilesOpts_FilesAreExactPaths(t *testing.T) {
+	g := setupGraphDefaults(t)
+	revID := makeRevision(t, g)
+	tmpDir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tmpDir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	for _, f := range []string{"src/app/[id]/page.tsx", "src/app/i/page.tsx", "src/other.ts"} {
+		p := filepath.Join(tmpDir, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("add", ".")
+	run("commit", "-m", "c")
+	m := &manifest.Manifest{Domains: []manifest.DomainEntry{{Name: "d", Scan: manifest.ScanConfig{Include: []string{"src/**"}}}}}
+
+	// As a Scope glob, [id] is a character class and does not match itself.
+	res, err := g.DiscoverFilesOpts(tmpDir, "d", revID, m, DiscoverOpts{Scope: []string{"src/app/[id]/page.tsx"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range res.Files {
+		if f == "src/app/[id]/page.tsx" {
+			t.Fatal("precondition changed: Scope now matches the literal bracket path")
+		}
+	}
+	// As Files it is an exact path.
+	res, err = g.DiscoverFilesOpts(tmpDir, "d", revID, m, DiscoverOpts{Files: []string{"src/app/[id]/page.tsx", "not/tracked.ts"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Files[0] != "src/app/[id]/page.tsx" {
+		t.Fatalf("Files = %v; want exactly the bracket path", res.Files)
+	}
+}
