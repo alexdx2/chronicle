@@ -184,3 +184,60 @@ func TestReviewImport_MoreThanMaxMarksPublishesUnmarked(t *testing.T) {
 		t.Fatalf("diagram events = %d (err %v), want 1", len(evs), err)
 	}
 }
+
+// A review whose graph did not change has no relationships to diagram: the
+// import still unpacks the bundle, says so, exits clean and publishes nothing.
+func TestReviewImport_NoChangedRelationshipsSkipsDiagram(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	writeReviewManifestCLI(t, dir)
+	svc := snapshot.Node{Kind: "node", ID: "service:service:tomandjerry:arena-api", Layer: "service", Type: "service", Domain: "tomandjerry", Name: "arena-api", Status: "active"}
+	snap := &snapshot.Snapshot{
+		Header: snapshot.Header{Kind: "header", Format: snapshot.Format, Version: snapshot.Version, Seq: 1, FactSchema: snapshot.FactSchema, Domains: []string{"tomandjerry"}},
+		Nodes:  []snapshot.Node{svc},
+	}
+	writeReviewSnapshotCLI(t, dir, snap)
+	writePlainFile(t, dir, "notes.ts", "// v1\n")
+	baseSHA := commitAllCLI(t, dir, "base")
+	writePlainFile(t, dir, "notes.ts", "// v2, comment only\n")
+	headSHA := commitAllCLI(t, dir, "head")
+
+	zipPath := filepath.Join(t.TempDir(), "review.zip")
+	var out bytes.Buffer
+	code, msg := runReview(context.Background(), &out, dir, reviewCLIOptions{
+		Base: baseSHA, Head: headSHA, Format: "markdown", Depth: 4,
+		Command: "chronicle review x..y", BundlePath: zipPath,
+	})
+	if code != 0 {
+		t.Fatalf("runReview exit %d: %s", code, msg)
+	}
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "chronicle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	reg, err := registry.LoadDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chronicle := t.TempDir()
+	var printed bytes.Buffer
+	if err := importReviewBundle(graph.New(st, reg), zipPath, chronicle, &printed); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	unpack := filepath.Join(chronicle, "reviews", baseSHA[:7]+".."+headSHA[:7])
+	if _, err := os.Stat(filepath.Join(unpack, "review.md")); err != nil {
+		t.Errorf("review.md not unpacked: %v", err)
+	}
+	if !strings.Contains(printed.String(), unpack) || !strings.Contains(printed.String(), "no system-level change in this review — nothing to diagram") {
+		t.Errorf("printed = %q", printed.String())
+	}
+	evs, err := st.RecentLiveEvents(live.KindDiagram, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 0 {
+		t.Errorf("diagram events = %d, want 0", len(evs))
+	}
+}

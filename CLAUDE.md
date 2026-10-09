@@ -108,6 +108,40 @@ services/domains), and what the graph does not know (files changed after their l
 `docs/superpowers/specs/2026-09-25-graph-snapshot-contract-design.md` and
 `2026-09-25-review-engine-design.md` (outer repo).
 
+`chronicle graph restore` materialises a committed snapshot into a fresh local database, the first
+step of a CI job that has no scan history. It reads `.depbot/graph.jsonl` from the working tree, or
+from a revision with `--at <rev>`; `--merge-base-with <rev>` resolves `--at` as the merge base of the
+two (CI: `--at origin/main --merge-base-with HEAD`). It refuses to replace an existing database
+unless `--force` is given. It also registers one structural "restore" scan revision per domain
+(trigger `ci_pipeline`, metadata kind `restore`) pinned to the snapshot's commit, so `chronicle
+refresh` diffs from that commit, and it marks the on-disk event journal as consumed.
+
+`chronicle extract` re-extracts with an LLM the files a range touched. It diffs from the merge base
+of `--base` and `--head` (like `review A...B`), adds the graph neighbourhood of the changed files
+within `--radius` (default 1), and caps the read set by `--max-files` (80) and `--max-bytes` (1 MiB).
+`--plan` prints that plan as JSON and calls no model; `--files` and `--plan-file` override it.
+`--model` takes `anthropic:<model>`, `gemini:<model>` or `fake:<dir>` (default `$CHRONICLE_MODEL`,
+else the built-in Anthropic model); keys come from `ANTHROPIC_API_KEY` or `GEMINI_API_KEY`
+(`GOOGLE_API_KEY` also works). Without a key it prints `{"error":...,"skipped":true}` and exits 3,
+so a pipeline can tell "skipped" from "failed". `--usage-out <file>` writes the full run result
+JSON (token usage included).
+
+`chronicle review --head-snapshot <file>` reads the head graph from a snapshot file instead of the
+head revision's committed one (freshness is still judged against the head revision's tree), which is
+how CI reviews a graph it just rebuilt. `--bundle <zip>` also writes a review bundle: both graphs,
+the JSON and Markdown reports, a manifest, and the `--usage` JSON if given. `chronicle review import
+<zip>` unpacks a bundle into `<chronicle dir>/reviews/<base>..<head>/` and publishes its full
+diagram, with the changed and affected marks, to the local dashboard. A review with no changed
+relationships has nothing to diagram: the bundle is still unpacked, nothing is published, exit 0.
+
+CI shape on a merge request: `graph restore --at origin/main --merge-base-with HEAD` → `refresh` →
+`extract` → `graph update` → `review --head-snapshot <fresh graph> --bundle`. On the default branch
+the same update runs, followed by a bot commit of `.depbot/graph.jsonl`. Two properties to keep in
+mind. A restored database carries no journal events, so `journal verify` on it diverges; that is
+expected. And the contents of a merge request's files reach the model, so an MR can influence its
+own review; the facts it can produce are bounded by the fact schema and by resolution against the
+graph, and nothing from them is ever executed.
+
 ## Signal pipeline (scan finalize)
 
 Every `FinalizeIncrementalScan` runs a best-effort post-pass chain

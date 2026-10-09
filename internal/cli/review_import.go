@@ -85,18 +85,22 @@ func importReviewBundle(g *graph.Graph, zipPath, chronicleDir string, w io.Write
 		Graph: headGraph, Export: snap, Origin: review.OriginSnapshot,
 		Close: closeHead,
 	}
+	noChange := len(result.ChangedRelationships()) == 0
 	marksWarning := ""
-	d, err := review.FullDiagram(&result, head)
-	if errors.Is(err, viewmodel.ErrTooManyMarks) {
-		// More marked systems than a view may carry: import the diagram
-		// without marks instead of refusing the whole bundle.
-		d, err = review.FullDiagramUnmarked(&result, head)
-		if err == nil {
-			marksWarning = fmt.Sprintf("; warning: %d marked systems exceed the limit of %d, published without marks", d.MarksDropped, viewmodel.MaxMarks)
+	var d *review.DiagramResult
+	if !noChange {
+		d, err = review.FullDiagram(&result, head)
+		if errors.Is(err, viewmodel.ErrTooManyMarks) {
+			// More marked systems than a view may carry: import the diagram
+			// without marks instead of refusing the whole bundle.
+			d, err = review.FullDiagramUnmarked(&result, head)
+			if err == nil {
+				marksWarning = fmt.Sprintf("; warning: %d marked systems exceed the limit of %d, published without marks", d.MarksDropped, viewmodel.MaxMarks)
+			}
 		}
-	}
-	if err != nil {
-		return fmt.Errorf("build review diagram: %w", err)
+		if err != nil {
+			return fmt.Errorf("build review diagram: %w", err)
+		}
 	}
 
 	dir := filepath.Join(chronicleDir, "reviews", id)
@@ -135,6 +139,11 @@ func importReviewBundle(g *graph.Graph, zipPath, chronicleDir string, w io.Write
 		if err := os.WriteFile(filepath.Join(dir, f.name), f.data, 0o644); err != nil {
 			return err
 		}
+	}
+
+	if noChange {
+		fmt.Fprintf(w, "imported %s; no system-level change in this review — nothing to diagram\n", dir)
+		return nil
 	}
 
 	domain := d.Spec.Scope.Domain

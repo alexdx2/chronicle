@@ -133,6 +133,10 @@ for the instant demo.)
 | `chronicle subgraph X` | The neighborhood around X in one call (trust-truncated) |
 | `chronicle path A B` | How A connects to B |
 | `chronicle diagram` | Architecture diagram from the graph: mermaid + text in the answer, live view in the dashboard |
+| `chronicle graph restore` | Materialise the committed `.depbot/graph.jsonl` into a local database (CI first step) |
+| `chronicle extract` | Plan and run LLM re-extraction of the files a git range touched, plus their graph neighbours |
+| `chronicle review A...B` | Compare two committed graph versions; `--head-snapshot` and `--bundle` for CI |
+| `chronicle review import` | Unpack a review bundle and publish its marked diagram to the local dashboard |
 | `chronicle hook install` | Nudge your AI agent to query the graph before grepping |
 
 New MCP tools for agents: `chronicle_node_search` (resolve a name to a node key), `chronicle_subgraph` (one-call neighborhood), and `chronicle_insights` (hubs, low-trust edges to verify, structural gaps).
