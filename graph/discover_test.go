@@ -327,3 +327,16 @@ func TestDiscoverManifestInfraDomainAndType(t *testing.T) {
 		}
 	}
 }
+
+func TestInScope(t *testing.T) {
+	if InScope("node_modules/x/y.ts", &manifest.ScanConfig{Include: []string{"**"}}) {
+		t.Error("node_modules must be out of scope")
+	}
+	cfg := &manifest.ScanConfig{Include: []string{"src/**"}, Exclude: []string{"**/*.spec.ts"}}
+	if !InScope("src/a.ts", cfg) {
+		t.Error("src/a.ts should be in scope")
+	}
+	if InScope("src/a.spec.ts", cfg) {
+		t.Error("src/a.spec.ts should be excluded")
+	}
+}

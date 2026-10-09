@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -125,5 +126,16 @@ func TestScanNextAction_Phase2SelectAutoFinalizes(t *testing.T) {
 	}
 	if row.Status != "completed" {
 		t.Errorf("expected status=completed, got %s", row.Status)
+	}
+}
+
+func TestExtractionGuide(t *testing.T) {
+	g := setupGraphDefaults(t)
+	plain := g.ExtractionGuide()
+	if !strings.Contains(plain, "fact") {
+		t.Errorf("guide should describe the fact schema: %.80q", plain)
+	}
+	if len(g.ExtractionGuide("nestjs")) <= len(plain) {
+		t.Error("tech pack should lengthen the guide")
 	}
 }

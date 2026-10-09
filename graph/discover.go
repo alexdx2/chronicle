@@ -401,6 +401,13 @@ var alwaysExclude = []string{
 	"**/migrations/**",
 }
 
+// InScope reports whether filePath is inside the manifest scan scope — exactly
+// the filter file discovery applies (always-exclude patterns, then the
+// manifest's include/exclude globs).
+func InScope(filePath string, cfg *manifest.ScanConfig) bool {
+	return shouldInclude(filePath, cfg)
+}
+
 // shouldInclude checks if a file matches the manifest scan config.
 // If no config → include everything (Claude decides per-file).
 // If include patterns exist → file must match at least one.

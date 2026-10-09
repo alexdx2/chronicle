@@ -122,6 +122,13 @@ func (g *Graph) getGuide(key string, tech ...string) string {
 	return guide
 }
 
+// ExtractionGuide returns the phase-1 extraction guide (fact schema, plus tech
+// packs and project packs for the given technologies) that ScanNextAction hands
+// to agents when a batch has no AST facts. Per-project overrides apply.
+func (g *Graph) ExtractionGuide(tech ...string) string {
+	return g.getGuide("guide_fact_schema", tech...)
+}
+
 // ScanProgress tracks extraction progress within a scan run.
 type ScanProgress struct {
 	Total     int `json:"total"`

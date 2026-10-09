@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -111,6 +112,90 @@ func (s *Store) NodeKeysByFilePaths(paths []string) (map[string][]string, error)
 		return nil, fmt.Errorf("NodeKeysByFilePaths evidence rows: %w", err)
 	}
 
+	return result, nil
+}
+
+// FilePathsByNodeKeys is the inverse of NodeKeysByFilePaths: it maps each given
+// node key to the files backing it — the node's own file_path plus every file
+// its evidence cites. Active nodes only; each slice is sorted and deduped, and
+// keys with no files (or no active node) are absent. Read-only.
+func (s *Store) FilePathsByNodeKeys(keys []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(keys))
+	const chunk = 500 // stay under SQLite's host-parameter cap
+	seen := map[string]map[string]bool{}
+	add := func(key, path string) {
+		if path == "" {
+			return
+		}
+		if seen[key] == nil {
+			seen[key] = map[string]bool{}
+		}
+		if !seen[key][path] {
+			seen[key][path] = true
+			result[key] = append(result[key], path)
+		}
+	}
+	collect := func(label, q string, args []any) error {
+		rows, err := s.db.Query(q, args...)
+		if err != nil {
+			return fmt.Errorf("FilePathsByNodeKeys %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var key, path string
+			if err := rows.Scan(&key, &path); err != nil {
+				return fmt.Errorf("FilePathsByNodeKeys %s scan: %w", label, err)
+			}
+			add(key, path)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("FilePathsByNodeKeys %s rows: %w", label, err)
+		}
+		return nil
+	}
+
+	for start := 0; start < len(keys); start += chunk {
+		end := start + chunk
+		if end > len(keys) {
+			end = len(keys)
+		}
+		part := keys[start:end]
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(part)), ",")
+		args := make([]any, len(part))
+		for i, k := range part {
+			args[i] = k
+		}
+
+		// Direct: the file the node is anchored at.
+		directQ := `
+			SELECT node_key, COALESCE(file_path,'')
+			FROM graph_nodes
+			WHERE node_key IN (` + placeholders + `)
+			  AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+			  AND status = 'active'
+		`
+		if err := collect("direct", directQ, args); err != nil {
+			return nil, err
+		}
+
+		// Via evidence: files cited by the node's evidence.
+		evQ := `
+			SELECT DISTINCT n.node_key, e.file_path
+			FROM graph_evidence e
+			JOIN graph_nodes n ON n.node_id = e.node_id
+			WHERE n.node_key IN (` + placeholders + `)
+			  AND e.node_id IS NOT NULL
+			  AND (n.valid_to_revision_id IS NULL OR n.valid_to_revision_id = 0)
+			  AND n.status = 'active'
+		`
+		if err := collect("evidence", evQ, args); err != nil {
+			return nil, err
+		}
+	}
+
+	for k := range result {
+		sort.Strings(result[k])
+	}
 	return result, nil
 }
 

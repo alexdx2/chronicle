@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -103,5 +104,47 @@ func TestKnownFilePathsChunksAndPreservesOrder(t *testing.T) {
 	}
 	if out, err := s.KnownFilePaths(nil); err != nil || out != nil {
 		t.Errorf("no paths, no query: %v %v", out, err)
+	}
+}
+
+func TestFilePathsByNodeKeys_NodeFileAndEvidenceFiles(t *testing.T) {
+	s := openTestStore(t)
+	rev, err := s.CreateRevision("d", "", "aaa", "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "code:provider:d:a/x"
+	if _, err := s.UpsertNode(NodeRow{
+		NodeKey: key, Layer: "code", NodeType: "provider", DomainKey: "d",
+		Name: "x", FilePath: "src/a/x.ts", Status: "active", Metadata: "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nodeID, err := s.GetNodeIDByKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Evidence cites a second file, and repeats the node's own file (dedupe).
+	for _, fp := range []string{"src/a/y.ts", "src/a/x.ts"} {
+		if _, err := s.AddEvidence(EvidenceRow{
+			TargetKind: "node", NodeID: nodeID, SourceKind: "file", FilePath: fp,
+			LineStart: 1, ExtractorID: "test", ExtractorVersion: "1",
+			Confidence: 0.9, EvidenceStatus: "valid", EvidencePolarity: "positive",
+			ValidFromRevisionID: rev, Metadata: "{}",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.FilePathsByNodeKeys([]string{key, "missing:key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"src/a/x.ts", "src/a/y.ts"}
+	if !reflect.DeepEqual(got[key], want) {
+		t.Fatalf("got %v want %v", got[key], want)
+	}
+	if _, ok := got["missing:key"]; ok {
+		t.Fatal("missing key must be absent")
 	}
 }
