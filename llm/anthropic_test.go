@@ -53,7 +53,7 @@ func TestAnthropic_Complete(t *testing.T) {
 	if resp.Text != `{"status":"extracted","facts":[]}` {
 		t.Errorf("text=%q", resp.Text)
 	}
-	if resp.Usage != (Usage{12, 7, 3, 0}) {
+	if resp.Usage != (Usage{InputTokens: 12, OutputTokens: 7, CacheReadTokens: 3}) {
 		t.Errorf("usage=%+v", resp.Usage)
 	}
 	if resp.Model != "claude-haiku-5-5" {

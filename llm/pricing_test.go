@@ -29,3 +29,14 @@ func TestSetPrice(t *testing.T) {
 		t.Fatalf("got %v %v, want 5 true", usd, known)
 	}
 }
+
+func TestCost_PrefersProviderReportedCost(t *testing.T) {
+	usd, known := Cost("unlisted/model", Usage{InputTokens: 1000, CostUSD: 0.0042})
+	if !known || usd != 0.0042 {
+		t.Fatalf("got %v %v", usd, known)
+	}
+	sum := Usage{CostUSD: 0.001}.Add(Usage{CostUSD: 0.002})
+	if sum.CostUSD != 0.003 {
+		t.Fatalf("Add must sum CostUSD: %v", sum.CostUSD)
+	}
+}

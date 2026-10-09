@@ -16,8 +16,12 @@ var (
 	}
 )
 
-// Cost returns USD for u under the price table; known=false (cost 0) for an unlisted model.
+// Cost returns USD for u: the provider-reported cost when the response carried
+// one, else the price table; known=false (cost 0) for an unlisted model.
 func Cost(model string, u Usage) (usd float64, known bool) {
+	if u.CostUSD > 0 {
+		return u.CostUSD, true
+	}
 	priceMu.RLock()
 	p, ok := prices[model]
 	priceMu.RUnlock()

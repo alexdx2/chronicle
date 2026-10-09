@@ -225,7 +225,7 @@ Exit code 0: ok (also for --plan). 1: error. 2: no graph or plan input.
 	f.IntVar(&o.Radius, "radius", 1, "Graph neighbour radius")
 	f.IntVar(&o.MaxFiles, "max-files", 80, "Maximum files to read")
 	f.Int64Var(&o.MaxBytes, "max-bytes", 1<<20, "Maximum total bytes to read")
-	f.StringVar(&o.Model, "model", "", "Model spec: anthropic:<model>, gemini:<model>, fake:<dir> (default $CHRONICLE_MODEL or "+defaultExtractModel+")")
+	f.StringVar(&o.Model, "model", "", "Model spec: anthropic:<model>, gemini:<model>, openai:<model>, openrouter:<model>, ollama:<model>, fake:<dir> (default $CHRONICLE_MODEL or "+defaultExtractModel+")")
 	f.IntVar(&o.Concurrency, "concurrency", 4, "Parallel model calls")
 	f.StringVar(&o.UsageOut, "usage-out", "", "Write the full run result JSON to this file")
 	return cmd

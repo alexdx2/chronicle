@@ -132,9 +132,16 @@ Do not emit local helper imports unless architecturally relevant.
 {"kind":"endpoint","method":"METHOD","target":"PATH"}
 ```
 
-METHOD values: GET | POST | PUT | DELETE | PATCH | WS | Query | Mutation | Subscription
+METHOD values: GET | POST | PUT | DELETE | PATCH | WS | Query | Mutation | Subscription | GRPC
 Use for externally callable entry points: HTTP routes, GraphQL operations, WebSocket handlers, RPC handlers.
 For message consumers, prefer `consumes`.
+
+gRPC / RPC handlers: `method` is the literal `GRPC` (never GET/POST, never the rpc name),
+`target` is `package.Service/Method` as the wire path, e.g.
+`{"kind":"endpoint","method":"GRPC","target":"bookmaker.OddsService/GetOdds"}`.
+Emit it from the file that implements or registers the server. A `.proto` file alone is a
+contract, not a running entry point: do NOT emit `endpoint` for its `rpc` lines, and never
+turn a message name into a REST path.
 
 ## Outbound calls
 

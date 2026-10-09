@@ -120,9 +120,11 @@ refresh` diffs from that commit, and it marks the on-disk event journal as consu
 of `--base` and `--head` (like `review A...B`), adds the graph neighbourhood of the changed files
 within `--radius` (default 1), and caps the read set by `--max-files` (80) and `--max-bytes` (1 MiB).
 `--plan` prints that plan as JSON and calls no model; `--files` and `--plan-file` override it.
-`--model` takes `anthropic:<model>`, `gemini:<model>` or `fake:<dir>` (default `$CHRONICLE_MODEL`,
-else the built-in Anthropic model); keys come from `ANTHROPIC_API_KEY` or `GEMINI_API_KEY`
-(`GOOGLE_API_KEY` also works). Without a key it prints `{"error":...,"skipped":true}` and exits 3,
+`--model` takes `anthropic:<model>`, `gemini:<model>`, `openai:<model>` (any OpenAI-compatible
+server via `OPENAI_BASE_URL`), `openrouter:<model>`, `ollama:<tag>` or `fake:<dir>` (default
+`$CHRONICLE_MODEL`, else the built-in Anthropic model); keys come from `ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY` (`GOOGLE_API_KEY` also works), `OPENAI_API_KEY`, `OPENROUTER_API_KEY`; Ollama needs
+none (`OLLAMA_HOST`). OpenRouter reports the cost of every call, which `usage.json` carries as is. Without a key it prints `{"error":...,"skipped":true}` and exits 3,
 so a pipeline can tell "skipped" from "failed". `--usage-out <file>` writes the full run result
 JSON (token usage included).
 
