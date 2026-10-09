@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/graph"
@@ -225,6 +226,103 @@ func TestBuildPlan_MissingNeighbor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(p.Skipped) != 1 || p.Skipped[0].Path != "src/b.ts" || p.Skipped[0].Reason != "skipped:missing" {
+		t.Fatalf("Skipped = %+v", p.Skipped)
+	}
+}
+
+// seedStemNeighbor adds a node whose file_path is the extensionless stem
+// (src/d) and which injects a, so src/d.* siblings become neighbour candidates.
+func seedStemNeighbor(t *testing.T, g *graph.Graph) {
+	t.Helper()
+	seedNeighbor(t, g, "dx", "src/d")
+}
+
+func seedNeighbor(t *testing.T, g *graph.Graph, name, file string) {
+	t.Helper()
+	rev, err := g.Store().CreateRevision("d", "", "rev-"+name, "manual", "full", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := "code:provider:d:" + name
+	if _, err := g.UpsertNode(validate.NodeInput{NodeKey: k, Layer: "code", NodeType: "provider", DomainKey: "d", Name: name, FilePath: file}, rev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.UpsertEdge(validate.EdgeInput{
+		FromNodeKey: k, ToNodeKey: "code:provider:d:a",
+		EdgeType: "INJECTS", DerivationKind: "hard", FromLayer: "code", ToLayer: "code",
+	}, rev); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// stemRepo: base holds src/d.ts and src/d.spec.ts; only src/a.ts changes.
+func stemRepo(t *testing.T) string {
+	root := newRepo(t)
+	write(t, root, "src/d.ts", "export const d = 1;\n")
+	write(t, root, "src/d.spec.ts", "test('d', () => {});\n")
+	commitAll(t, root, "d")
+	write(t, root, "src/a.ts", "export const a = 2;\n")
+	commitAll(t, root, "change")
+	return root
+}
+
+func TestBuildPlan_StemAmbiguousInScope(t *testing.T) {
+	root := stemRepo(t)
+	g := newGraph(t)
+	seedStemNeighbor(t, g)
+	p, err := BuildPlan(PlanInput{G: g, RepoRoot: root, Domain: "d", Scan: scan(), Base: "HEAD~1", Head: "HEAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.Paths(), []string{"src/a.ts", "src/b.ts"}) {
+		t.Fatalf("Paths = %v", p.Paths())
+	}
+	if len(p.Skipped) != 1 || p.Skipped[0].Path != "src/d" || p.Skipped[0].Reason != "skipped:missing" {
+		t.Fatalf("ambiguous stem must be skipped:missing, got %+v", p.Skipped)
+	}
+}
+
+func TestBuildPlan_StemResolvesWhenSiblingExcluded(t *testing.T) {
+	root := stemRepo(t)
+	g := newGraph(t)
+	seedStemNeighbor(t, g)
+	p, err := BuildPlan(PlanInput{G: g, RepoRoot: root, Domain: "d",
+		Scan: &manifest.ScanConfig{Exclude: []string{"**/*.spec.ts"}}, Base: "HEAD~1", Head: "HEAD"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.Paths(), []string{"src/a.ts", "src/b.ts", "src/d.ts"}) {
+		t.Fatalf("Paths = %v skipped %+v", p.Paths(), p.Skipped)
+	}
+	if got := p.Files[2].Reason; got != "neighbor:code:provider:d:a" {
+		t.Fatalf("reason = %q", got)
+	}
+	if len(p.Skipped) != 0 {
+		t.Fatalf("Skipped = %+v", p.Skipped)
+	}
+}
+
+// A file that overflows MaxBytes is skipped, but a later smaller one still fits.
+func TestBuildPlan_BudgetKeepsSmallerLaterFile(t *testing.T) {
+	root := newRepo(t)
+	write(t, root, "src/big.ts", strings.Repeat("x", 100))
+	write(t, root, "src/small.ts", "12345")
+	commitAll(t, root, "more files")
+	write(t, root, "src/a.ts", "export const a = 2;\n")
+	commitAll(t, root, "change")
+	g := newGraph(t)
+	seedNeighbor(t, g, "big", "src/big.ts")
+	seedNeighbor(t, g, "small", "src/small.ts")
+	// Neighbours by path: b.ts (25 B), big.ts (100 B), small.ts (5 B).
+	// a.ts (20 B) + b.ts = 45 <= 60; big overflows; small (50 total) still fits.
+	p, err := BuildPlan(PlanInput{G: g, RepoRoot: root, Domain: "d", Scan: scan(), Base: "HEAD~1", Head: "HEAD", MaxBytes: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.Paths(), []string{"src/a.ts", "src/b.ts", "src/small.ts"}) {
+		t.Fatalf("Paths = %v skipped %+v", p.Paths(), p.Skipped)
+	}
+	if len(p.Skipped) != 1 || p.Skipped[0].Path != "src/big.ts" || p.Skipped[0].Reason != "skipped:budget" {
 		t.Fatalf("Skipped = %+v", p.Skipped)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/graph"
@@ -180,18 +181,13 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		st, err := os.Stat(filepath.Join(in.RepoRoot, path))
 		if err != nil || st.IsDir() {
 			// Nodes created path-keyed store file_path without its extension.
-			matches, _ := filepath.Glob(filepath.Join(in.RepoRoot, path) + ".*")
+			matches := inScopeSiblings(in.RepoRoot, fp, in.Scan)
 			if len(matches) != 1 {
 				skips = append(skips, skip{fp, "skipped:missing"})
 				continue
 			}
-			rel, rerr := filepath.Rel(in.RepoRoot, matches[0])
-			if rerr != nil {
-				skips = append(skips, skip{fp, "skipped:missing"})
-				continue
-			}
-			path = filepath.ToSlash(rel)
-			if st, err = os.Stat(matches[0]); err != nil || st.IsDir() {
+			path = matches[0]
+			if st, err = os.Stat(filepath.Join(in.RepoRoot, path)); err != nil {
 				skips = append(skips, skip{fp, "skipped:missing"})
 				continue
 			}
@@ -258,5 +254,28 @@ func sortedKeysStr(m map[string]string) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// inScopeSiblings lists the in-scope regular files named <stem>.<ext> next to
+// an extensionless stored path (repo-relative, slash-separated). It compares
+// names directly rather than globbing, so '[' or '*' in a path (Next.js
+// [id] routes) cannot change the match.
+func inScopeSiblings(repoRoot, stem string, scan *manifest.ScanConfig) []string {
+	dir, base := filepath.Split(filepath.ToSlash(stem))
+	entries, err := os.ReadDir(filepath.Join(repoRoot, filepath.FromSlash(dir)))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), base+".") {
+			continue
+		}
+		rel := dir + e.Name()
+		if graph.InScope(rel, scan) {
+			out = append(out, rel)
+		}
+	}
 	return out
 }
