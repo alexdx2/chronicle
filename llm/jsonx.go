@@ -1,10 +1,11 @@
 package llm
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
+	"strings"
 )
 
 var fenceRe = regexp.MustCompile("(?s)```(?:json)?[ \t]*\r?\n?(.*?)```")
@@ -12,32 +13,30 @@ var fenceRe = regexp.MustCompile("(?s)```(?:json)?[ \t]*\r?\n?(.*?)```")
 // ErrNoJSON is returned by ExtractJSON when text holds no complete JSON value.
 var ErrNoJSON = errors.New("llm: no JSON object or array in response")
 
-// ExtractJSON returns the first JSON object or array in text, tolerating
-// ```json fences and prose around it.
+// ErrAmbiguousJSON is returned when more than one JSON value may be present.
+var ErrAmbiguousJSON = errors.New("llm: ambiguous: more than one JSON value")
+
+// ExtractJSON returns the JSON object or array that starts at the first '{' or
+// '[' in text (inside the first ``` fence, if there is one). First-value
+// semantics: later candidates are never tried, so a truncated payload is an
+// error rather than a nested fragment. If the first value decodes but the text
+// after it still contains a '{' or '[', the answer is ambiguous and an error.
 func ExtractJSON(text string) (json.RawMessage, error) {
 	if m := fenceRe.FindStringSubmatch(text); m != nil {
-		if raw, ok := firstValue(m[1]); ok {
-			return raw, nil
-		}
+		text = m[1]
 	}
-	if raw, ok := firstValue(text); ok {
-		return raw, nil
+	start := strings.IndexAny(text, "{[")
+	if start < 0 {
+		return nil, ErrNoJSON
 	}
-	return nil, ErrNoJSON
-}
-
-// firstValue decodes from each '{' or '[' in turn until one yields a complete value.
-func firstValue(s string) (json.RawMessage, bool) {
-	b := []byte(s)
-	for i := 0; i < len(b); i++ {
-		if b[i] != '{' && b[i] != '[' {
-			continue
-		}
-		dec := json.NewDecoder(bytes.NewReader(b[i:]))
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err == nil {
-			return raw, true
-		}
+	dec := json.NewDecoder(strings.NewReader(text[start:]))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("llm: invalid JSON in response: %w", err)
 	}
-	return nil, false
+	rest := text[start+int(dec.InputOffset()):]
+	if strings.ContainsAny(rest, "{[") {
+		return nil, ErrAmbiguousJSON
+	}
+	return raw, nil
 }
