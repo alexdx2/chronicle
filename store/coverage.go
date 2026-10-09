@@ -20,7 +20,8 @@ type CoverageRow struct {
 	Status           string
 	BlobSHA          string
 	// ObservedAt is the UTC RFC 3339 time of the observation. UpsertCoverage
-	// stamps "now" when it is empty; ListCoverage always fills it.
+	// stamps "now" (millisecond resolution, so same-second observations still
+	// order) when it is empty; ListCoverage always fills it.
 	ObservedAt string
 }
 
@@ -33,7 +34,7 @@ func (s *Store) UpsertCoverage(c CoverageRow) error {
 	_, err := s.db.Exec(`
 		INSERT INTO file_coverage
 		  (domain_key, file_path, extractor_id, extractor_version, status, blob_sha, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%SZ','now')))
+		VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now')))
 		ON CONFLICT(domain_key, file_path, extractor_id) DO UPDATE SET
 			extractor_version = excluded.extractor_version,
 			status            = excluded.status,
