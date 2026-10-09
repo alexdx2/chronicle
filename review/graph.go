@@ -202,7 +202,7 @@ func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: blob of %s: %w", snapshot.Path, err)
 	}
-	return buildVersionGraph(s.RepoRoot, "", data, graphPath, snapshot.GraphVersion{Commit: "", Blob: blob}, "", "SnapshotSource")
+	return buildVersionGraph(s.RepoRoot, "", data, graphPath, snapshot.GraphVersion{Commit: "", Blob: blob}, "", "SnapshotSource", false)
 }
 
 // buildVersionGraph is the part of loading shared by every file-backed
@@ -211,7 +211,7 @@ func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
 // Commit and Blob set; Seq is filled from the decoded header. ref is the
 // VersionGraph's Ref and version.Commit its Commit. The graph's store is
 // closed on every error after it is opened.
-func buildVersionGraph(repoRoot, ref string, data []byte, srcPath string, version snapshot.GraphVersion, rev, who string) (*VersionGraph, error) {
+func buildVersionGraph(repoRoot, ref string, data []byte, srcPath string, version snapshot.GraphVersion, rev, who string, skipFreshness bool) (*VersionGraph, error) {
 	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
 	if err != nil {
 		return nil, fmt.Errorf("review: %s.Load: decode %s: %w", who, srcPath, err)
@@ -227,15 +227,18 @@ func buildVersionGraph(repoRoot, ref string, data []byte, srcPath string, versio
 		return nil, fmt.Errorf("review: %s.Load: build graph: %w", who, err)
 	}
 
-	man, err := loadManifestFor(repoRoot)
-	if err != nil {
-		closer()
-		return nil, fmt.Errorf("review: %s.Load: manifest: %w", who, err)
-	}
-	fr, err := snapshot.ComputeFreshness(repoRoot, snap, version, man, rev)
-	if err != nil {
-		closer()
-		return nil, fmt.Errorf("review: %s.Load: freshness: %w", who, err)
+	var fr snapshot.Freshness
+	if !skipFreshness {
+		man, err := loadManifestFor(repoRoot)
+		if err != nil {
+			closer()
+			return nil, fmt.Errorf("review: %s.Load: manifest: %w", who, err)
+		}
+		fr, err = snapshot.ComputeFreshness(repoRoot, snap, version, man, rev)
+		if err != nil {
+			closer()
+			return nil, fmt.Errorf("review: %s.Load: freshness: %w", who, err)
+		}
 	}
 
 	return &VersionGraph{
@@ -279,7 +282,14 @@ func loadManifestFor(repoRoot string) (*manifest.Manifest, error) {
 // re-extracted read as fresh. A missing file at Path is Origin "missing", not
 // an error. Commit is "" when Rev is "" or HEAD of a repository with no commits;
 // any other Rev that does not resolve is an error naming it.
-type FileSource struct{ RepoRoot, Path, Rev string }
+//
+// SkipFreshness returns the VersionGraph with an empty Freshness: no disk walk,
+// no git. For a directory that holds only the snapshot files (a CI neighbour
+// fetched without its source tree) there is nothing to judge freshness against.
+type FileSource struct {
+	RepoRoot, Path, Rev string
+	SkipFreshness       bool
+}
 
 var _ GraphSource = FileSource{}
 
@@ -312,7 +322,7 @@ func (s FileSource) Load(ctx context.Context) (*VersionGraph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("review: FileSource.Load: blob of %s: %w", s.Path, err)
 	}
-	return buildVersionGraph(s.RepoRoot, s.Rev, data, s.Path, snapshot.GraphVersion{Commit: commit, Blob: blob}, s.Rev, "FileSource")
+	return buildVersionGraph(s.RepoRoot, s.Rev, data, s.Path, snapshot.GraphVersion{Commit: commit, Blob: blob}, s.Rev, "FileSource", s.SkipFreshness)
 }
 
 // hasCommits reports whether the repository has at least one commit on any ref.

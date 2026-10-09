@@ -536,3 +536,22 @@ func TestFileSource_Load_UnbornHeadIsNotARevError(t *testing.T) {
 	}
 	vg.Close()
 }
+
+// TestFileSource_Load_SkipFreshness: a directory holding only the snapshot
+// files (no git, no source tree) loads with an empty Freshness.
+func TestFileSource_Load_SkipFreshness(t *testing.T) {
+	dir := t.TempDir()
+	writeManifestT(t, dir)
+	writeFileT(t, dir, ".depbot/graph.jsonl", encodeSnapshotT(t, fileSourceSnap(3, "")))
+	vg, err := FileSource{RepoRoot: dir, Path: filepath.Join(dir, ".depbot", "graph.jsonl"), Rev: "", SkipFreshness: true}.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer vg.Close()
+	if vg.Origin != OriginSnapshot || vg.Graph == nil {
+		t.Fatalf("Origin=%q Graph=%v, want snapshot with a graph", vg.Origin, vg.Graph)
+	}
+	if len(vg.Freshness.Files) != 0 {
+		t.Errorf("Freshness.Files = %d, want 0", len(vg.Freshness.Files))
+	}
+}
