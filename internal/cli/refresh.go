@@ -27,6 +27,8 @@ type refreshOutput struct {
 	*graph.RefreshResult
 	Structural      *graph.StructuralResult `json:"structural,omitempty"`
 	StructuralError string                  `json:"structural_error,omitempty"`
+	// Sweep is set when --sweep widened both phases to every in-scope file.
+	Sweep bool `json:"sweep,omitempty"`
 }
 
 // structuralFn is phase 2 as a package variable so a test can make it fail
@@ -40,6 +42,7 @@ var structuralFn = func(g *graph.Graph, in graph.StructuralInput) (*graph.Struct
 func newRefreshCmd() *cobra.Command {
 	var quiet bool
 	var noStructural bool
+	var sweep bool
 	var structuralBatch int
 	cmd := &cobra.Command{
 		Use:   "refresh",
@@ -58,11 +61,13 @@ claim. Use --no-structural to run phase 1 alone.
 
 Safe to run from a git post-commit hook (see 'chronicle hook install --git').`,
 		Run: func(cmd *cobra.Command, args []string) {
-			runRefresh(quiet, noStructural, structuralBatch)
+			runRefresh(quiet, noStructural, structuralBatch, sweep)
 		},
 	}
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "Minimal output (for git hooks)")
 	cmd.Flags().BoolVar(&noStructural, "no-structural", false, "Skip phase 2 (deterministic structural re-extraction)")
+	cmd.Flags().BoolVar(&sweep, "sweep", false,
+		"Re-verify every in-scope file against HEAD and re-extract structure for all supported files; use after `graph restore` of a snapshot whose coverage may come from another checkout. No model is called. Pair with --structural-batch -1 to do it in one run; without it phase 2 drains in batches as usual.")
 	cmd.Flags().IntVar(&structuralBatch, "structural-batch", 0,
 		fmt.Sprintf("Files phase 2 parses per run (default %d; -1 = no bound). Raise it to drain a first pass or a rules-pack backlog in one go, away from a hook.", graph.DefaultBacklogBatch))
 	return cmd
@@ -70,7 +75,7 @@ Safe to run from a git post-commit hook (see 'chronicle hook install --git').`,
 
 // runRefresh is the command body, extracted so tests can drive both phases
 // without a process.
-func runRefresh(quiet, noStructural bool, structuralBatch int) {
+func runRefresh(quiet, noStructural bool, structuralBatch int, sweep bool) {
 	if notice, linked := linkedWorktreeRefusal(); linked {
 		// A commit in any worktree runs the MAIN checkout's post-commit hook,
 		// so without this a feature branch writes refresh revisions — at its
@@ -93,9 +98,9 @@ func runRefresh(quiet, noStructural bool, structuralBatch int) {
 	}
 	head = strings.TrimSpace(head)
 
-	out := &refreshOutput{}
+	out := &refreshOutput{Sweep: sweep}
 	var quietLine, humanLine string
-	out.RefreshResult, quietLine, humanLine, err = verifyPhase(g, rev.DomainKey, rev.GitAfterSHA, head)
+	out.RefreshResult, quietLine, humanLine, err = verifyPhase(g, rev.DomainKey, rev.GitAfterSHA, head, sweep)
 	if err != nil {
 		outputError(err)
 	}
@@ -109,7 +114,7 @@ func runRefresh(quiet, noStructural bool, structuralBatch int) {
 	// verification above is already recorded.
 	var structuralErr error
 	if !noStructural {
-		out.Structural, structuralErr = structuralPhase(g, rev.DomainKey, head, structuralBatch)
+		out.Structural, structuralErr = structuralPhase(g, rev.DomainKey, head, structuralBatch, sweep)
 		if structuralErr != nil {
 			out.StructuralError = structuralErr.Error()
 		}
@@ -150,13 +155,25 @@ func runRefresh(quiet, noStructural bool, structuralBatch int) {
 // quietLine is what a hook says (empty = stay silent), humanLine is the one
 // sentence the no-op case prints instead of JSON, and a non-empty one means the
 // verification phase has nothing JSON-worthy to report.
-func verifyPhase(g *graph.Graph, domainKey, base, head string) (*graph.RefreshResult, string, string, error) {
-	touchedAll, deletedAll, err := refreshDiffFiles(base, head)
+//
+// sweep replaces the diff with the whole repo: every tracked in-scope file at
+// HEAD is re-verified, and every path with a coverage row that HEAD no longer
+// carries counts as deleted. The base still only names where the pointer moves
+// from; the pointer moves to HEAD as always.
+func verifyPhase(g *graph.Graph, domainKey, base, head string, sweep bool) (*graph.RefreshResult, string, string, error) {
+	var touchedAll, deletedAll, changed, deleted []string
+	var err error
+	if sweep {
+		touchedAll, deletedAll, err = sweepFiles(g.Store(), domainKey)
+		changed, deleted = touchedAll, deletedAll
+	} else {
+		touchedAll, deletedAll, err = refreshDiffFiles(base, head)
+		changed = filterRefreshable(touchedAll)
+		deleted = filterRefreshable(deletedAll)
+	}
 	if err != nil {
 		return nil, "", "", err
 	}
-	changed := filterRefreshable(touchedAll)
-	deleted := filterRefreshable(deletedAll)
 
 	if len(changed) == 0 && len(deleted) == 0 {
 		// Nothing this phase can check mechanically — and two very different
@@ -200,17 +217,69 @@ func verifyPhase(g *graph.Graph, domainKey, base, head string) (*graph.RefreshRe
 		return nil, "", "", err
 	}
 	line := ""
-	if len(res.PendingSemantic) > 0 {
+	if sweep {
+		line = fmt.Sprintf("chronicle refresh: swept %d files", len(changed))
+		if len(res.PendingSemantic) > 0 {
+			line += fmt.Sprintf(", %d need rescan", len(res.PendingSemantic))
+		}
+	} else if len(res.PendingSemantic) > 0 {
 		line = fmt.Sprintf("chronicle refresh: %d files re-verified, %d need rescan",
 			res.ChangedFiles, len(res.PendingSemantic))
 	}
 	return res, line, "", nil
 }
 
+// sweepFiles is the sweep's changed set: every git-tracked file at HEAD inside
+// the domain's scan scope (not only the ones a tree-sitter extractor supports),
+// and as deleted every path the domain holds a coverage row for that HEAD no
+// longer carries.
+func sweepFiles(s *store.Store, domainKey string) (touched, deleted []string, err error) {
+	gitDir := repoDirForGit()
+	out, err := gitutil.RunRaw(gitDir, "-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", "-z", "HEAD")
+	if err != nil {
+		return nil, nil, fmt.Errorf("sweep: git ls-tree HEAD: %w", err)
+	}
+	cfg := domainScanConfig(domainKey)
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" && graph.InScope(p, cfg) {
+			touched = append(touched, p)
+		}
+	}
+	cov, err := s.ListCoverage(domainKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	var covPaths []string
+	for _, c := range cov {
+		covPaths = append(covPaths, c.FilePath)
+	}
+	_, gone, err := splitByPresenceAtHead(gitDir, dedupePaths(covPaths))
+	if err != nil {
+		return nil, nil, err
+	}
+	return touched, gone, nil
+}
+
+// domainScanConfig is the manifest's scan config for the domain, or nil (only
+// the always-exclude patterns apply) when the manifest does not name it.
+func domainScanConfig(domainKey string) *manifest.ScanConfig {
+	m, err := manifest.LoadFile(manifestPath)
+	if err != nil {
+		return nil
+	}
+	for _, d := range m.Domains {
+		if d.Key == domainKey || d.Name == domainKey {
+			cfg := d.Scan
+			return &cfg
+		}
+	}
+	return nil
+}
+
 // structuralPhase re-extracts the structure of everything that changed since
 // the structural pointer (not since the verification one — they move apart on
 // purpose) and hands graph.StructuralRefresh the files and the reader.
-func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.StructuralResult, error) {
+func structuralPhase(g *graph.Graph, domainKey, head string, batch int, forceSweep bool) (*graph.StructuralResult, error) {
 	gitDir := repoDirForGit()
 	in := graph.StructuralInput{
 		DomainKey:    domainKey,
@@ -227,6 +296,12 @@ func structuralPhase(g *graph.Graph, domainKey, head string, batch int) (*graph.
 	}
 
 	base, sweep, forgetAfter := structuralBase(g.Store(), gitDir, domainKey)
+	if forceSweep {
+		// --sweep: whatever the pointers say, every supported in-scope file is
+		// re-extracted. The pointer-forgetting fallback is moot — nothing is
+		// diffed — so the records it would drop are simply overwritten.
+		base, sweep, forgetAfter = "", true, 0
+	}
 	var forgotten []string
 	if forgetAfter > 0 {
 		// The pointer was earned on a branch this checkout cannot reach; the

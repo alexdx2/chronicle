@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/extract/rules"
+	"github.com/alexdx2/chronicle-core/extract/structural"
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/registry"
@@ -1098,5 +1101,102 @@ export class XService {
 		if len(parts) == 4 && parts[1] != n.NodeType {
 			t.Errorf("node %s says node_type=%q", n.NodeKey, n.NodeType)
 		}
+	}
+}
+
+// --sweep: a snapshot restored with coverage recorded in another checkout must
+// heal in one run. Both files carry a bogus blob; after the sweep each carries
+// the blob HEAD actually holds, with no model in the loop.
+func TestRefresh_Sweep_HealsStaleCoverage(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	writeCommit(t, dir, "src/b.service.ts", srvSource+"// b\n", "second service")
+
+	s := openRepoStore(t, dir)
+	for _, f := range []string{"src/a.service.ts", "src/b.service.ts"} {
+		if err := s.UpsertCoverage(store.CoverageRow{
+			DomainKey: "d", FilePath: f, ExtractorID: structural.ExtractorID,
+			ExtractorVersion: "x", Status: "extracted", BlobSHA: "deadbeef",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	out := runRefreshIn(t, dir, "--sweep", "--structural-batch=-1")
+	var res struct {
+		Sweep      bool `json:"sweep"`
+		Structural struct {
+			Processed int `json:"Processed"`
+		} `json:"structural"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if !res.Sweep {
+		t.Errorf("result must say sweep: true, got:\n%s", out)
+	}
+
+	s = openRepoStore(t, dir)
+	defer s.Close()
+	cov, err := s.ListCoverage("d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	healed := 0
+	for _, c := range cov {
+		if c.ExtractorID != structural.ExtractorID {
+			continue
+		}
+		want, err := gitutil.FileBlobSHA(dir, c.FilePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.BlobSHA != want {
+			t.Errorf("%s: blob %q, want HEAD's %q", c.FilePath, c.BlobSHA, want)
+		}
+		healed++
+	}
+	if healed != 2 {
+		t.Errorf("want 2 healed coverage rows, got %d (%+v)", healed, cov)
+	}
+	if res.Structural.Processed != 2 {
+		t.Errorf("structural processed %d, want 2:\n%s", res.Structural.Processed, out)
+	}
+}
+
+// A coverage row for a path HEAD no longer has is a deleted file to a sweep:
+// reported as such, and its evidence stale-marked.
+func TestRefresh_Sweep_DeletedCoverageMarked(t *testing.T) {
+	dir, _ := structuralRepo(t)
+	const gone = "src/gone.service.ts"
+	seedEvidenceFor(t, dir, gone)
+	s := openRepoStore(t, dir)
+	if err := s.UpsertCoverage(store.CoverageRow{
+		DomainKey: "d", FilePath: gone, ExtractorID: "test",
+		ExtractorVersion: "1", Status: "extracted", BlobSHA: "deadbeef",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	out := runRefreshIn(t, dir, "--sweep", "--structural-batch=-1")
+	var res struct {
+		DeletedFiles int `json:"deleted_files"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	if res.DeletedFiles != 1 {
+		t.Errorf("deleted_files = %d, want 1:\n%s", res.DeletedFiles, out)
+	}
+
+	s = openRepoStore(t, dir)
+	defer s.Close()
+	var status string
+	if err := s.QueryRowScan(`SELECT evidence_status FROM graph_evidence WHERE file_path = 'src/gone.service.ts'`, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "stale" {
+		t.Errorf("evidence on the vanished file is %q, want stale", status)
 	}
 }
