@@ -1,12 +1,10 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,21 +17,6 @@ type gemini struct {
 	model, apiKey, base string
 	http                *http.Client
 	sleep               func(time.Duration) // test hook; nil means a context-aware timer
-}
-
-func (g *gemini) wait(ctx context.Context, d time.Duration) error {
-	if g.sleep != nil {
-		g.sleep(d)
-		return ctx.Err()
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }
 
 // stripURL removes the request URL (which carries the API key) from transport errors.
@@ -79,47 +62,14 @@ func (g *gemini) Complete(ctx context.Context, req Request) (Response, error) {
 	}
 	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", g.base, g.model, url.QueryEscape(g.apiKey))
 
-	backoff := []time.Duration{time.Second, 3 * time.Second}
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			if err := g.wait(ctx, backoff[attempt-1]); err != nil {
-				return Response{}, err
-			}
-		}
-		raw, status, err := g.post(ctx, endpoint, body)
-		if err != nil {
-			if ctx.Err() != nil {
-				return Response{}, ctx.Err()
-			}
-			lastErr = fmt.Errorf("llm: gemini: %w", stripURL(err))
-			continue
-		}
-		if status == http.StatusTooManyRequests || status >= 500 {
-			lastErr = fmt.Errorf("llm: gemini: status %d: %s", status, snippet(raw))
-			continue
-		}
-		if status < 200 || status > 299 {
-			return Response{}, fmt.Errorf("llm: gemini: status %d: %s", status, snippet(raw))
-		}
-		return g.parse(raw)
-	}
-	return Response{}, lastErr
-}
-
-func (g *gemini) post(ctx context.Context, endpoint string, body []byte) ([]byte, int, error) {
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	raw, status, err := postJSON(ctx, g.http, g.sleep, "gemini", endpoint, nil, body)
 	if err != nil {
-		return nil, 0, stripURL(err)
+		return Response{}, err
 	}
-	r.Header.Set("Content-Type", "application/json")
-	resp, err := g.http.Do(r)
-	if err != nil {
-		return nil, 0, err
+	if status < 200 || status > 299 {
+		return Response{}, fmt.Errorf("llm: gemini: status %d: %s", status, snippet(raw))
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	return raw, resp.StatusCode, err
+	return g.parse(raw)
 }
 
 func (g *gemini) parse(raw []byte) (Response, error) {

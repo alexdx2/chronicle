@@ -59,7 +59,7 @@ func TestGemini_RetriesOn429(t *testing.T) {
 	if _, err := b.Complete(context.Background(), Request{User: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 2 || len(slept) != 1 || slept[0] != time.Second {
+	if calls != 2 || len(slept) != 1 || slept[0] != 5*time.Second {
 		t.Errorf("calls=%d slept=%v", calls, slept)
 	}
 }
