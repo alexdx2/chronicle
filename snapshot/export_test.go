@@ -483,3 +483,56 @@ func TestFromStore_EncodeFillsHeaderCounts(t *testing.T) {
 	// for: Header.Counts matches Nodes/Edges/Terms/Coverage's real lengths
 	// once Encode has run.
 }
+
+// A restored snapshot writes coverage under one domain, a later run under the
+// file's real domain: the newer observation must be the one exported, and the
+// extractor must appear once.
+func TestFromStore_CoveragePrefersNewestObservationAcrossDomains(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer s.Close()
+	for _, r := range []store.CoverageRow{
+		{DomainKey: "a", FilePath: "src/b.ts", ExtractorID: "chronicle-scan", ExtractorVersion: "v1", Status: "extracted", BlobSHA: "stale", ObservedAt: "2026-10-01T00:00:00Z"},
+		{DomainKey: "b", FilePath: "src/b.ts", ExtractorID: "chronicle-scan", ExtractorVersion: "v1", Status: "extracted", BlobSHA: "fresh", ObservedAt: "2026-10-09T00:00:00Z"},
+	} {
+		if err := s.UpsertCoverage(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap, err := FromStore(s, ExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Coverage) != 1 {
+		t.Fatalf("coverage = %+v, want one record", snap.Coverage)
+	}
+	c := snap.Coverage[0]
+	if c.Blob != "fresh" || len(c.Extractors) != 1 {
+		t.Fatalf("coverage = %+v, want blob fresh and a single extractor entry", c)
+	}
+}
+
+func TestFromStore_CoverageTieOnTimeTakesTheRowWithABlob(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer s.Close()
+	for _, r := range []store.CoverageRow{
+		{DomainKey: "a", FilePath: "src/b.ts", ExtractorID: "chronicle-scan", Status: "extracted", BlobSHA: "", ObservedAt: "2026-10-09T00:00:00Z"},
+		{DomainKey: "b", FilePath: "src/b.ts", ExtractorID: "chronicle-scan", Status: "extracted", BlobSHA: "kept", ObservedAt: "2026-10-09T00:00:00Z"},
+	} {
+		if err := s.UpsertCoverage(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap, err := FromStore(s, ExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Coverage) != 1 || snap.Coverage[0].Blob != "kept" {
+		t.Fatalf("coverage = %+v, want blob kept", snap.Coverage)
+	}
+}

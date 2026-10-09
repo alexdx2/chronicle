@@ -84,6 +84,7 @@ type LoadOptions struct {
 //     the flow layer's edges and — because it always re-adds an edge's
 //     derive-flows evidence, whether or not the edge already existed — their
 //     evidence too.
+//
 //  2. RecalculateAllTrust then recomputes confidence/freshness/trust_score
 //     for every node and edge from whatever evidence is now present,
 //     matching the original graph's values for anything with surviving
@@ -412,14 +413,35 @@ func loadAliasesTermsCoverage(st *store.Store, s *Snapshot, nodeIDs map[string]i
 	// for a domain-less snapshot); ListCoverage("") — what the next
 	// FromStore reads back — spans every domain regardless, so this choice
 	// does not affect what a later export sees.
+	//
+	// With several domains, the row goes under the domain of a node that lives
+	// in that file, so the restored database matches what scans and refreshes
+	// write later (they upsert under the file's real domain); a file no node
+	// claims falls back to the first header domain.
 	coverageDomain := ""
 	if len(s.Header.Domains) > 0 {
 		coverageDomain = s.Header.Domains[0]
 	}
+	var fileDomain map[string]string
+	if len(s.Header.Domains) > 1 {
+		fileDomain = make(map[string]string, len(s.Nodes))
+		for _, n := range s.Nodes {
+			if n.File == "" || n.Domain == "" {
+				continue
+			}
+			if prev, ok := fileDomain[n.File]; !ok || n.Domain < prev {
+				fileDomain[n.File] = n.Domain // deterministic when a file spans domains
+			}
+		}
+	}
 	for _, c := range s.Coverage {
+		domain := coverageDomain
+		if d, ok := fileDomain[c.Path]; ok {
+			domain = d
+		}
 		for _, ext := range c.Extractors {
 			if err := st.UpsertCoverage(store.CoverageRow{
-				DomainKey:        coverageDomain,
+				DomainKey:        domain,
 				FilePath:         c.Path,
 				ExtractorID:      ext.ID,
 				ExtractorVersion: ext.Version,

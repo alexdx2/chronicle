@@ -636,3 +636,44 @@ func findSnapEdge(s *Snapshot, id string) *Edge {
 	}
 	return nil
 }
+
+// With several domains, a coverage row lands under the domain of the node
+// that lives in the file — the domain later runs upsert under — not under the
+// first header domain.
+func TestLoad_CoverageLandsUnderTheFilesDomain(t *testing.T) {
+	reg := testRegistry(t)
+	node := func(domain, name, file string) Node {
+		return Node{
+			Kind: "node", ID: "code:provider:" + domain + ":" + name, Layer: "code", Type: "provider",
+			Domain: domain, Name: name, File: file, Status: "active",
+		}
+	}
+	snap := &Snapshot{
+		Header: Header{Kind: "header", Format: Format, Version: Version, FactSchema: FactSchema, Domains: []string{"a", "b"}},
+		Nodes:  []Node{node("a", "A", "src/a.ts"), node("b", "B", "src/b.ts")},
+		Coverage: []Coverage{
+			{Kind: "coverage", Path: "src/a.ts", Blob: "blobA", Extractors: []ExtractorRun{{ID: "chronicle-scan", Version: "v", Status: "extracted"}}},
+			{Kind: "coverage", Path: "src/b.ts", Blob: "blobB", Extractors: []ExtractorRun{{ID: "chronicle-scan", Version: "v", Status: "extracted"}}},
+			{Kind: "coverage", Path: "src/orphan.ts", Blob: "blobO", Extractors: []ExtractorRun{{ID: "chronicle-scan", Version: "v", Status: "extracted"}}},
+		},
+	}
+	g, closer, err := Load(snap, reg, LoadOptions{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer closer()
+	rows, err := g.Store().ListCoverage("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.FilePath] = r.DomainKey
+	}
+	want := map[string]string{"src/a.ts": "a", "src/b.ts": "b", "src/orphan.ts": "a"}
+	for p, d := range want {
+		if got[p] != d {
+			t.Errorf("coverage for %s under domain %q, want %q (all: %v)", p, got[p], d, got)
+		}
+	}
+}

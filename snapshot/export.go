@@ -303,28 +303,52 @@ func formatRange(e store.EvidenceRow) string {
 // canonical Coverage record per file path — the canonical format has no
 // domain field on Coverage, so a file's coverage is project-wide, not
 // per-domain. ListCoverage("") orders rows by (file_path, extractor_id), so
-// rows for the same path already arrive contiguous and already
-// extractor-sorted; grouping relies on that order instead of re-sorting,
-// which is what keeps this deterministic without a map. Blob is the first
-// non-empty blob seen for the path: every extractor that last looked at a
-// file is expected to have seen the same content, so any one of them is
-// representative — see the task report for the disagreement case this
-// doesn't try to adjudicate.
+// rows for the same path already arrive contiguous and extractor-sorted;
+// grouping relies on that order instead of re-sorting, which keeps this
+// deterministic.
+//
+// The same (path, extractor) can have a row per domain — a restored snapshot
+// writes under one domain and a later run under the file's real one. The
+// newest observation wins (ties: the row that has a blob), and the path emits
+// one ExtractorRun per extractor. Path Blob is the blob of the best row
+// across extractors by the same rule.
 func groupCoverage(rows []store.CoverageRow) []Coverage {
+	better := func(a, b store.CoverageRow) bool { // is a better than b?
+		if a.ObservedAt != b.ObservedAt {
+			return a.ObservedAt > b.ObservedAt
+		}
+		return a.BlobSHA != "" && b.BlobSHA == ""
+	}
 	var out []Coverage
-	for _, r := range rows {
-		if len(out) == 0 || out[len(out)-1].Path != r.FilePath {
-			out = append(out, Coverage{Kind: "coverage", Path: r.FilePath})
+	for i := 0; i < len(rows); {
+		j := i
+		for j < len(rows) && rows[j].FilePath == rows[i].FilePath {
+			j++
 		}
-		cur := &out[len(out)-1]
-		if cur.Blob == "" {
-			cur.Blob = r.BlobSHA
+		cov := Coverage{Kind: "coverage", Path: rows[i].FilePath}
+		var best *store.CoverageRow
+		for k := i; k < j; {
+			m := k
+			for m < j && rows[m].ExtractorID == rows[k].ExtractorID {
+				m++
+			}
+			pick := &rows[k]
+			for n := k + 1; n < m; n++ {
+				if better(rows[n], *pick) {
+					pick = &rows[n]
+				}
+			}
+			cov.Extractors = append(cov.Extractors, ExtractorRun{
+				ID: pick.ExtractorID, Version: pick.ExtractorVersion, Status: pick.Status,
+			})
+			if best == nil || better(*pick, *best) {
+				best = pick
+			}
+			k = m
 		}
-		cur.Extractors = append(cur.Extractors, ExtractorRun{
-			ID:      r.ExtractorID,
-			Version: r.ExtractorVersion,
-			Status:  r.Status,
-		})
+		cov.Blob = best.BlobSHA
+		out = append(out, cov)
+		i = j
 	}
 	return out
 }
