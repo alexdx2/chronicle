@@ -134,6 +134,144 @@ func commitScanOutboxTool() mcp.Tool {
 	)
 }
 
+// OutboxCommitResult is the outcome of CommitScanOutbox. The JSON names are
+// the chronicle_commit_scan_outbox tool's result keys.
+type OutboxCommitResult struct {
+	// Field order is alphabetical by JSON key: the handler used to marshal a
+	// map, so this keeps its output byte-identical.
+	Deduped     int      `json:"deduped"`
+	Dir         string   `json:"dir"`
+	ErrorMsgs   []string `json:"error_msgs"`
+	Errors      int      `json:"errors"`
+	Imported    int      `json:"imported"`
+	RowsWritten int      `json:"rows_written"`
+}
+
+// CommitScanOutbox imports every artifact in <chronicleDir>/scan-outbox/<revisionID>/
+// for domain and satisfies obligations. It depends only on its arguments (no
+// request context, no paths globals) so the MCP handler and a headless CLI
+// share one commit path.
+func CommitScanOutbox(g *graph.Graph, chronicleDir, domain string, revisionID int64, removeAfter bool) (*OutboxCommitResult, error) {
+	outboxDir := filepath.Join(chronicleDir, "scan-outbox", fmt.Sprintf("%d", revisionID))
+	entries, err := os.ReadDir(outboxDir)
+	if err != nil {
+		return nil, fmt.Errorf("read outbox %s: %w", outboxDir, err)
+	}
+
+	// Load manifest tech list for AST rule selection (best-effort; empty → defaults).
+	var manifestTech []string
+	if m, err := manifest.LoadFile(filepath.Join(chronicleDir, "chronicle.domain.yaml")); err == nil {
+		manifestTech = m.Tech
+	}
+
+	imported := 0
+	rowsWritten := 0
+	deduped := 0
+	errors := 0
+	var errMsgs []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(outboxDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			errors++
+			continue
+		}
+
+		ext, err := parseOutboxArtifact(data)
+		if err != nil {
+			errors++
+			errMsgs = append(errMsgs, entry.Name()+": invalid json: "+err.Error())
+			continue
+		}
+		if ext.FilePath == "" || ext.Status == "" {
+			errors++
+			errMsgs = append(errMsgs, entry.Name()+": missing file_path or status")
+			continue
+		}
+		factsJSON, err := factsJSONString(ext.Facts)
+		if err != nil {
+			errors++
+			errMsgs = append(errMsgs, ext.FilePath+": "+err.Error())
+			continue
+		}
+
+		// Phase-2 flow artifacts are saved under role="flow" and skip the
+		// AST merge: prepended AST import facts used to flip the artifact's
+		// primary kind to "import", making the dedup match the phase-1 row
+		// and silently discard the flow facts (otopoint field finding).
+		// Detection must PARSE the facts — agents write pretty-printed JSON
+		// (`"kind": "flow"` with a space), a compact substring check misses it.
+		isFlow := hasFlowFacts(factsJSON)
+
+		// Merge server-side AST facts with LLM facts for TypeScript and Prisma files.
+		// This ensures deterministic AST imports/from_type are present regardless of
+		// extractor model quality (evidence-first principle).
+		if ext.Status == "extracted" && !isFlow {
+			factsJSON, ext.FromType = graph.MergeASTFactsJSON(ext.FilePath, factsJSON, ext.FromType, manifestTech)
+		}
+
+		errMsg := ext.ErrorMessage
+		if errMsg == "" {
+			errMsg = ext.Error
+		}
+		dom := domain
+		if ext.Domain != "" {
+			dom = ext.Domain
+		}
+
+		role := "single"
+		switch {
+		case isFlow:
+			role = "flow"
+		case ext.VoteGroup != "":
+			role = "llm_vote"
+		}
+		_, written, err := g.Store().SaveExtractionWithOutcome(revisionID, dom, ext.FilePath, ext.Status, ext.FromType, factsJSON, errMsg, role, ext.VoteGroup, ext.VoteIndex)
+		if err != nil {
+			errors++
+			if len(errMsgs) < 3 {
+				errMsgs = append(errMsgs, ext.FilePath+": "+err.Error())
+			}
+			continue
+		}
+		if written {
+			rowsWritten++
+		} else {
+			deduped++
+		}
+
+		_ = g.SatisfyFileObligation(revisionID, ext.FilePath)
+		_ = g.Store().SatisfyObligation(revisionID, "scan_file", ext.FilePath)
+		_ = g.Store().SatisfyObligation(revisionID, "trace_flow", ext.FilePath)
+		if ext.ObligationID > 0 {
+			_ = g.Store().SatisfyObligationByID(ext.ObligationID)
+		}
+
+		if removeAfter {
+			_ = os.Remove(path)
+		}
+		imported++
+	}
+
+	if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
+		for i := 0; i < imported; i++ {
+			g.Store().IncrementScanRunExtracted(run.RunID)
+		}
+	}
+
+	return &OutboxCommitResult{
+		Imported:    imported,
+		RowsWritten: rowsWritten,
+		Deduped:     deduped,
+		Errors:      errors,
+		Dir:         outboxDir,
+		ErrorMsgs:   errMsgs,
+	}, nil
+}
+
 func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
@@ -147,124 +285,11 @@ func commitScanOutboxHandler(g *graph.Graph) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("domain and revision_id are required")), nil
 		}
 
-		outboxDir := filepath.Join(paths.DirAt(graph.ProjectRoot()), "scan-outbox", fmt.Sprintf("%d", revisionID))
-		entries, err := os.ReadDir(outboxDir)
+		res, err := CommitScanOutbox(g, paths.DirAt(graph.ProjectRoot()), domain, revisionID, removeAfter)
 		if err != nil {
-			return errorResult(fmt.Errorf("read outbox %s: %w", outboxDir, err)), nil
+			return errorResult(err), nil
 		}
-
-		// Load manifest tech list for AST rule selection (best-effort; empty → defaults).
-		var manifestTech []string
-		if m, err := manifest.LoadFile(filepath.Join(paths.Dir(), "chronicle.domain.yaml")); err == nil {
-			manifestTech = m.Tech
-		}
-
-		imported := 0
-		rowsWritten := 0
-		deduped := 0
-		errors := 0
-		var errMsgs []string
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			path := filepath.Join(outboxDir, entry.Name())
-			data, err := os.ReadFile(path)
-			if err != nil {
-				errors++
-				continue
-			}
-
-			ext, err := parseOutboxArtifact(data)
-			if err != nil {
-				errors++
-				errMsgs = append(errMsgs, entry.Name()+": invalid json: "+err.Error())
-				continue
-			}
-			if ext.FilePath == "" || ext.Status == "" {
-				errors++
-				errMsgs = append(errMsgs, entry.Name()+": missing file_path or status")
-				continue
-			}
-			factsJSON, err := factsJSONString(ext.Facts)
-			if err != nil {
-				errors++
-				errMsgs = append(errMsgs, ext.FilePath+": "+err.Error())
-				continue
-			}
-
-			// Phase-2 flow artifacts are saved under role="flow" and skip the
-			// AST merge: prepended AST import facts used to flip the artifact's
-			// primary kind to "import", making the dedup match the phase-1 row
-			// and silently discard the flow facts (otopoint field finding).
-			// Detection must PARSE the facts — agents write pretty-printed JSON
-			// (`"kind": "flow"` with a space), a compact substring check misses it.
-			isFlow := hasFlowFacts(factsJSON)
-
-			// Merge server-side AST facts with LLM facts for TypeScript and Prisma files.
-			// This ensures deterministic AST imports/from_type are present regardless of
-			// extractor model quality (evidence-first principle).
-			if ext.Status == "extracted" && !isFlow {
-				factsJSON, ext.FromType = graph.MergeASTFactsJSON(ext.FilePath, factsJSON, ext.FromType, manifestTech)
-			}
-
-			errMsg := ext.ErrorMessage
-			if errMsg == "" {
-				errMsg = ext.Error
-			}
-			dom := domain
-			if ext.Domain != "" {
-				dom = ext.Domain
-			}
-
-			role := "single"
-			switch {
-			case isFlow:
-				role = "flow"
-			case ext.VoteGroup != "":
-				role = "llm_vote"
-			}
-			_, written, err := g.Store().SaveExtractionWithOutcome(revisionID, dom, ext.FilePath, ext.Status, ext.FromType, factsJSON, errMsg, role, ext.VoteGroup, ext.VoteIndex)
-			if err != nil {
-				errors++
-				if len(errMsgs) < 3 {
-					errMsgs = append(errMsgs, ext.FilePath+": "+err.Error())
-				}
-				continue
-			}
-			if written {
-				rowsWritten++
-			} else {
-				deduped++
-			}
-
-			_ = g.SatisfyFileObligation(revisionID, ext.FilePath)
-			_ = g.Store().SatisfyObligation(revisionID, "scan_file", ext.FilePath)
-			_ = g.Store().SatisfyObligation(revisionID, "trace_flow", ext.FilePath)
-			if ext.ObligationID > 0 {
-				_ = g.Store().SatisfyObligationByID(ext.ObligationID)
-			}
-
-			if removeAfter {
-				_ = os.Remove(path)
-			}
-			imported++
-		}
-
-		if run, _ := g.Store().GetActiveScanRun(domain); run != nil {
-			for i := 0; i < imported; i++ {
-				g.Store().IncrementScanRunExtracted(run.RunID)
-			}
-		}
-
-		return jsonResult(map[string]any{
-			"imported":     imported,
-			"rows_written": rowsWritten,
-			"deduped":      deduped,
-			"errors":       errors,
-			"dir":          outboxDir,
-			"error_msgs":   errMsgs,
-		}), nil
+		return jsonResult(res), nil
 	}
 }
 
