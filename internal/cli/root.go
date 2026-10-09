@@ -71,6 +71,7 @@ func NewRootCmd() *cobra.Command {
 		newMCPCmd(),
 		newImpactCmd(),
 		newReviewCmd(),
+		newExtractCmd(),
 		newAdminCmd(),
 		newAliasCmd(),
 		newJournalCmd(),
