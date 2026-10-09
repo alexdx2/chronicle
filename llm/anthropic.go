@@ -44,6 +44,9 @@ func (a *anthropicBackend) Complete(ctx context.Context, req Request) (Response,
 	if resp.StopReason == anthropic.StopReasonRefusal {
 		return Response{}, fmt.Errorf("llm: anthropic refused the request (category %q)", resp.StopDetails.Category)
 	}
+	if resp.StopReason == anthropic.StopReasonMaxTokens {
+		return Response{}, fmt.Errorf("llm: anthropic: output truncated (max_tokens)")
+	}
 	var sb strings.Builder
 	for _, block := range resp.Content {
 		if tb, ok := block.AsAny().(anthropic.TextBlock); ok {

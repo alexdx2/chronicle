@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,6 +94,60 @@ func TestGemini_NoRetryOn400(t *testing.T) {
 	b.sleep = func(time.Duration) {}
 	_, err := b.Complete(context.Background(), Request{User: "x"})
 	if err == nil || !strings.Contains(err.Error(), "400") || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func geminiServe(t *testing.T, resp string) *gemini {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(resp)) }))
+	t.Cleanup(srv.Close)
+	return NewGemini("m", "k").(*gemini).WithBaseURL(srv.URL)
+}
+
+func TestGemini_ResponseProblems(t *testing.T) {
+	cases := map[string]struct{ body, want string }{
+		"blocked":   {`{"promptFeedback":{"blockReason":"PROHIBITED_CONTENT"}}`, "prompt blocked: PROHIBITED_CONTENT"},
+		"safety":    {`{"candidates":[{"finishReason":"SAFETY","content":{"parts":[]}}]}`, "SAFETY"},
+		"truncated": {`{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"{\"a\""}]}}]}`, "output truncated (MAX_TOKENS)"},
+		"empty":     {`{"candidates":[{"finishReason":"STOP","content":{"parts":[]}}]}`, "STOP"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := geminiServe(t, c.body).Complete(context.Background(), Request{User: "x"})
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err=%v want %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestGemini_TransportErrorDoesNotLeakKey(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	base := srv.URL
+	srv.Close() // unreachable
+	b := NewGemini("m", "SECRET-KEY").(*gemini).WithBaseURL(base)
+	b.sleep = func(time.Duration) {}
+	_, err := b.Complete(context.Background(), Request{User: "x"})
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if strings.Contains(err.Error(), "SECRET-KEY") || strings.Contains(err.Error(), "key=") {
+		t.Fatalf("key leaked: %v", err)
+	}
+}
+
+func TestGemini_BackoffHonoursCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Error(w, "slow", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	b := NewGemini("m", "k").(*gemini).WithBaseURL(srv.URL)
+	b.sleep = func(time.Duration) { cancel() }
+	_, err := b.Complete(ctx, Request{User: "x"})
+	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("err=%v calls=%d", err, calls)
 	}
 }

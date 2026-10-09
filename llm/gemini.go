@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,13 +18,37 @@ const geminiDefaultBase = "https://generativelanguage.googleapis.com"
 type gemini struct {
 	model, apiKey, base string
 	http                *http.Client
-	sleep               func(time.Duration)
+	sleep               func(time.Duration) // test hook; nil means a context-aware timer
+}
+
+func (g *gemini) wait(ctx context.Context, d time.Duration) error {
+	if g.sleep != nil {
+		g.sleep(d)
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// stripURL removes the request URL (which carries the API key) from transport errors.
+func stripURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 // NewGemini returns a Backend over the Gemini generateContent REST API.
 func NewGemini(model, apiKey string) Backend {
 	return &gemini{model: model, apiKey: apiKey, base: geminiDefaultBase,
-		http: &http.Client{Timeout: 5 * time.Minute}, sleep: time.Sleep}
+		http: &http.Client{Timeout: 5 * time.Minute}}
 }
 
 // WithBaseURL overrides the API base URL (tests).
@@ -58,14 +83,16 @@ func (g *gemini) Complete(ctx context.Context, req Request) (Response, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			g.sleep(backoff[attempt-1])
+			if err := g.wait(ctx, backoff[attempt-1]); err != nil {
+				return Response{}, err
+			}
 		}
 		raw, status, err := g.post(ctx, endpoint, body)
 		if err != nil {
 			if ctx.Err() != nil {
 				return Response{}, ctx.Err()
 			}
-			lastErr = fmt.Errorf("llm: gemini: %w", err)
+			lastErr = fmt.Errorf("llm: gemini: %w", stripURL(err))
 			continue
 		}
 		if status == http.StatusTooManyRequests || status >= 500 {
@@ -83,7 +110,7 @@ func (g *gemini) Complete(ctx context.Context, req Request) (Response, error) {
 func (g *gemini) post(ctx context.Context, endpoint string, body []byte) ([]byte, int, error) {
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, stripURL(err)
 	}
 	r.Header.Set("Content-Type", "application/json")
 	resp, err := g.http.Do(r)
@@ -98,8 +125,12 @@ func (g *gemini) post(ctx context.Context, endpoint string, body []byte) ([]byte
 func (g *gemini) parse(raw []byte) (Response, error) {
 	var out struct {
 		Candidates []struct {
-			Content gemContent `json:"content"`
+			Content      gemContent `json:"content"`
+			FinishReason string     `json:"finishReason"`
 		} `json:"candidates"`
+		PromptFeedback struct {
+			BlockReason string `json:"blockReason"`
+		} `json:"promptFeedback"`
 		Usage struct {
 			Prompt int `json:"promptTokenCount"`
 			Cand   int `json:"candidatesTokenCount"`
@@ -109,12 +140,25 @@ func (g *gemini) parse(raw []byte) (Response, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return Response{}, fmt.Errorf("llm: gemini: decode response: %w", err)
 	}
+	if len(out.Candidates) == 0 && out.PromptFeedback.BlockReason != "" {
+		return Response{}, fmt.Errorf("llm: gemini: prompt blocked: %s", out.PromptFeedback.BlockReason)
+	}
 	if len(out.Candidates) == 0 {
 		return Response{}, fmt.Errorf("llm: gemini: no candidates in response: %s", snippet(raw))
 	}
 	var sb strings.Builder
 	for _, p := range out.Candidates[0].Content.Parts {
 		sb.WriteString(p.Text)
+	}
+	finish := out.Candidates[0].FinishReason
+	if finish == "MAX_TOKENS" {
+		return Response{}, errors.New("llm: gemini: output truncated (MAX_TOKENS)")
+	}
+	if finish == "SAFETY" || finish == "RECITATION" || finish == "OTHER" || sb.Len() == 0 {
+		if finish == "" {
+			finish = "none"
+		}
+		return Response{}, fmt.Errorf("llm: gemini: no usable output (finishReason %s)", finish)
 	}
 	return Response{
 		Text:  sb.String(),

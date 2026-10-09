@@ -40,6 +40,9 @@ func TestAnthropic_Complete(t *testing.T) {
 		t.Errorf("max_tokens=%v", body["max_tokens"])
 	}
 	sys := body["system"].([]any)[0].(map[string]any)
+	if sys["cache_control"] == nil {
+		t.Errorf("system block lacks cache_control: %v", sys)
+	}
 	if sys["text"] != "SYS" {
 		t.Errorf("system=%v", sys)
 	}
@@ -67,5 +70,17 @@ func TestAnthropic_Refusal(t *testing.T) {
 	_, err := NewAnthropic("m", "k", option.WithBaseURL(srv.URL)).Complete(context.Background(), Request{User: "x"})
 	if err == nil || !strings.Contains(err.Error(), "refus") || !strings.Contains(err.Error(), "cyber") {
 		t.Fatalf("want refusal error naming category, got %v", err)
+	}
+}
+
+func TestAnthropic_MaxTokensTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"{\"a\""}],"stop_reason":"max_tokens","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+	_, err := NewAnthropic("m", "k", option.WithBaseURL(srv.URL)).Complete(context.Background(), Request{User: "x"})
+	if err == nil || !strings.Contains(err.Error(), "truncated (max_tokens)") {
+		t.Fatalf("err=%v", err)
 	}
 }
