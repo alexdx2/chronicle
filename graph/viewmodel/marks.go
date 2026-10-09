@@ -1,6 +1,7 @@
 package viewmodel
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -90,12 +91,24 @@ func CleanText(s string) string {
 // so that when two distinct keys trim to the same string, the collision
 // error is deterministic instead of silently picking whichever key
 // iteration happened to visit last.
+// ErrTooManyMarks is what NormalizeMarks returns (errors.Is) when a view
+// carries more than MaxMarks marks.
+var ErrTooManyMarks = errors.New("too many marks")
+
+type tooManyMarksError struct{ got int }
+
+func (e tooManyMarksError) Error() string {
+	return fmt.Sprintf("marks: at most %d per view (got %d)", MaxMarks, e.got)
+}
+
+func (tooManyMarksError) Is(target error) bool { return target == ErrTooManyMarks }
+
 func NormalizeMarks(in map[string]Mark) (map[string]Mark, error) {
 	if len(in) == 0 {
 		return nil, nil
 	}
 	if len(in) > MaxMarks {
-		return nil, fmt.Errorf("marks: at most %d per view (got %d)", MaxMarks, len(in))
+		return nil, tooManyMarksError{got: len(in)}
 	}
 	keys := make([]string, 0, len(in))
 	for key := range in {

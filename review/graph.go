@@ -277,8 +277,8 @@ func loadManifestFor(repoRoot string) (*manifest.Manifest, error) {
 // In CI this lets the head be the snapshot the pipeline just built while
 // freshness is judged against the revision's own tree, so files the pipeline
 // re-extracted read as fresh. A missing file at Path is Origin "missing", not
-// an error. Commit is "" when Rev is "" or Rev does not resolve (a repository
-// with no commits).
+// an error. Commit is "" when Rev is "" or HEAD of a repository with no commits;
+// any other Rev that does not resolve is an error naming it.
 type FileSource struct{ RepoRoot, Path, Rev string }
 
 var _ GraphSource = FileSource{}
@@ -298,8 +298,14 @@ func (s FileSource) Load(ctx context.Context) (*VersionGraph, error) {
 
 	commit := ""
 	if s.Rev != "" {
-		if out, rpErr := gitutil.Output(s.RepoRoot, "rev-parse", "--verify", "--end-of-options", s.Rev+"^{commit}"); rpErr == nil {
+		out, rpErr := gitutil.Run(s.RepoRoot, "rev-parse", "--verify", "--end-of-options", s.Rev+"^{commit}")
+		switch {
+		case rpErr == nil:
 			commit = out
+		case s.Rev == "HEAD" && !hasCommits(s.RepoRoot):
+			// A repository with no commits yet: nothing to resolve, Commit stays "".
+		default:
+			return nil, fmt.Errorf("review: FileSource.Load: revision %q does not resolve to a commit: %w", s.Rev, rpErr)
 		}
 	}
 	blob, err := gitutil.BlobSHA(s.RepoRoot, data)
@@ -307,4 +313,10 @@ func (s FileSource) Load(ctx context.Context) (*VersionGraph, error) {
 		return nil, fmt.Errorf("review: FileSource.Load: blob of %s: %w", s.Path, err)
 	}
 	return buildVersionGraph(s.RepoRoot, s.Rev, data, s.Path, snapshot.GraphVersion{Commit: commit, Blob: blob}, s.Rev, "FileSource")
+}
+
+// hasCommits reports whether the repository has at least one commit on any ref.
+func hasCommits(repoRoot string) bool {
+	out, err := gitutil.Run(repoRoot, "rev-list", "-n", "1", "--all")
+	return err == nil && out != ""
 }

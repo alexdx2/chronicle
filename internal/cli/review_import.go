@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -84,7 +85,16 @@ func importReviewBundle(g *graph.Graph, zipPath, chronicleDir string, w io.Write
 		Graph: headGraph, Export: snap, Origin: review.OriginSnapshot,
 		Close: closeHead,
 	}
+	marksWarning := ""
 	d, err := review.FullDiagram(&result, head)
+	if errors.Is(err, viewmodel.ErrTooManyMarks) {
+		// More marked systems than a view may carry: import the diagram
+		// without marks instead of refusing the whole bundle.
+		d, err = review.FullDiagramUnmarked(&result, head)
+		if err == nil {
+			marksWarning = fmt.Sprintf("; warning: %d marked systems exceed the limit of %d, published without marks", d.MarksDropped, viewmodel.MaxMarks)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("build review diagram: %w", err)
 	}
@@ -131,11 +141,15 @@ func importReviewBundle(g *graph.Graph, zipPath, chronicleDir string, w io.Write
 	if domain == "" && len(snap.Header.Domains) > 0 {
 		domain = snap.Header.Domains[0]
 	}
-	warning := ""
+	warning := marksWarning
 	if view, verr := viewmodel.BuildView(g.Store(), d.Spec); verr != nil {
-		warning = fmt.Sprintf("; warning: could not check the diagram against this database: %v", verr)
+		warning += fmt.Sprintf("; warning: could not check the diagram against this database: %v", verr)
 	} else if n := len(view.Missing); n > 0 {
-		warning = fmt.Sprintf("; warning: %d of %d marked nodes are not in this database — scan this branch or open the bundle's head snapshot", n, len(d.Spec.Marks))
+		total, label := len(d.Spec.Marks), "marked"
+		if total == 0 { // published without marks: count the diagram's own nodes
+			total, label = len(d.Spec.Scope.Nodes)+len(d.Spec.Pin), "diagram"
+		}
+		warning += fmt.Sprintf("; warning: %d of %d %s nodes are not in this database — scan this branch or open the bundle's head snapshot", n, total, label)
 	}
 	if _, err := live.PublishDiagram(g.Store(), "review-import", live.Diagram{
 		Title:  "Chronicle review " + id,

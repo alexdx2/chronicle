@@ -494,3 +494,45 @@ func TestReview_HeadFromFile_ChangedFileFresh(t *testing.T) {
 		t.Errorf("no changed finding; findings=%+v", result.Findings)
 	}
 }
+
+// A typo'd Rev must be an error naming it, not a silent Commit == "".
+func TestFileSource_Load_UnresolvableRevIsAnError(t *testing.T) {
+	dir := initGitRepoT(t)
+	scopedManifestFileT(t, dir, "src/**")
+	writeFileT(t, dir, "src/a.ts", "v1\n")
+	commitAllT(t, dir, "code")
+	snapPath := filepath.Join(t.TempDir(), "built.jsonl")
+	if err := os.WriteFile(snapPath, []byte(encodeSnapshotT(t, fileSourceSnap(1, "x"))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := FileSource{RepoRoot: dir, Path: snapPath, Rev: "no-such-branch"}.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no-such-branch") {
+		t.Fatalf("err = %v, want one naming the revision", err)
+	}
+}
+
+// A repository with no commits has no HEAD to resolve: that must not be
+// reported as an unresolvable revision. (The freshness pass that follows still
+// needs a tree, so with coverage in the file Load fails there, exactly as it
+// did before the revision check existed; this pins only the rev-parse step.)
+func TestFileSource_Load_UnbornHeadIsNotARevError(t *testing.T) {
+	dir := initGitRepoT(t)
+	scopedManifestFileT(t, dir, "src/**")
+	snapPath := filepath.Join(t.TempDir(), "built.jsonl")
+	if err := os.WriteFile(snapPath, []byte(encodeSnapshotT(t, fileSourceSnap(1, "x"))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vg, err := FileSource{RepoRoot: dir, Path: snapPath, Rev: "HEAD"}.Load(context.Background())
+	if err != nil && strings.Contains(err.Error(), "does not resolve to a commit") {
+		t.Fatalf("an unborn HEAD is not a typo'd revision: %v", err)
+	}
+	if err == nil {
+		vg.Close()
+	}
+	// A missing file on an unborn HEAD is Origin "missing", as before.
+	vg, err = FileSource{RepoRoot: dir, Path: filepath.Join(dir, "nope.jsonl"), Rev: "HEAD"}.Load(context.Background())
+	if err != nil || vg.Origin != OriginMissing {
+		t.Fatalf("missing file on an unborn HEAD: origin %v err %v", vg, err)
+	}
+	vg.Close()
+}

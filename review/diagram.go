@@ -44,6 +44,9 @@ type DiagramResult struct {
 	Spec      viewmodel.ViewSpec
 	Mermaid   string
 	Truncated int
+	// MarksDropped is the number of marked systems left unmarked by
+	// FullDiagramUnmarked; 0 otherwise.
+	MarksDropped int
 }
 
 // severityMarkKind maps a ReviewFinding's Severity to the viewmodel Mark
@@ -324,7 +327,7 @@ func missingPinCount(v *viewmodel.View, nodeKeys, pinKeys []string) int {
 // differ in maxNodes, and because a future caller might legitimately want
 // the MaxNodes-only count back — but nothing in this package constructs one
 // with foldMissing:false today.
-func buildDiagram(r *ReviewResult, head *VersionGraph, maxNodes int, foldMissing bool) (*DiagramResult, error) {
+func buildDiagram(r *ReviewResult, head *VersionGraph, maxNodes int, foldMissing, dropMarks bool) (*DiagramResult, error) {
 	changed := r.ChangedRelationships()
 	if len(changed) == 0 {
 		return nil, fmt.Errorf("review: buildDiagram: no changed relationships to diagram")
@@ -351,6 +354,11 @@ func buildDiagram(r *ReviewResult, head *VersionGraph, maxNodes int, foldMissing
 		Pin:      pinKeys,
 		Marks:    systemMarks(kept),
 	}
+	marksDropped := 0
+	if dropMarks {
+		marksDropped = len(spec.Marks)
+		spec.Marks = nil
+	}
 
 	view, err := viewmodel.BuildView(head.Graph.Store(), spec)
 	if err != nil {
@@ -365,7 +373,7 @@ func buildDiagram(r *ReviewResult, head *VersionGraph, maxNodes int, foldMissing
 	return &DiagramResult{
 		Spec:      spec,
 		Mermaid:   viewmodel.RenderMermaid(view),
-		Truncated: truncated,
+		Truncated: truncated, MarksDropped: marksDropped,
 	}, nil
 }
 
@@ -379,7 +387,7 @@ func CompactDiagram(r *ReviewResult, head *VersionGraph, o DiagramOptions) (*Dia
 	if maxNodes <= 0 {
 		maxNodes = defaultMaxNodes
 	}
-	return buildDiagram(r, head, maxNodes, true)
+	return buildDiagram(r, head, maxNodes, true, false)
 }
 
 // FullDiagram renders the same view CompactDiagram does, with no MaxNodes
@@ -401,5 +409,13 @@ func CompactDiagram(r *ReviewResult, head *VersionGraph, o DiagramOptions) (*Dia
 // diagram that silently under-reports would defeat the point of asking for
 // it.
 func FullDiagram(r *ReviewResult, head *VersionGraph) (*DiagramResult, error) {
-	return buildDiagram(r, head, math.MaxInt, true)
+	return buildDiagram(r, head, math.MaxInt, true, false)
+}
+
+// FullDiagramUnmarked is FullDiagram without the per-system marks, for the
+// case where there are more marked systems than a view may carry
+// (viewmodel.ErrTooManyMarks): the diagram still shows every system, just
+// unmarked. MarksDropped reports how many marks were left out.
+func FullDiagramUnmarked(r *ReviewResult, head *VersionGraph) (*DiagramResult, error) {
+	return buildDiagram(r, head, math.MaxInt, true, true)
 }
