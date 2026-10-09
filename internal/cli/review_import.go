@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/graph/viewmodel"
 	"github.com/alexdx2/chronicle-core/live"
 	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/review"
@@ -44,6 +46,12 @@ func shortCommit(c string) string {
 	return c
 }
 
+var bundleCommitRe = regexp.MustCompile(`^[0-9a-f]{4,64}$`)
+
+// validBundleCommit accepts an empty commit or a hex one: the manifest is
+// untrusted and the commits become a directory name.
+func validBundleCommit(c string) bool { return c == "" || bundleCommitRe.MatchString(c) }
+
 // importReviewBundle unpacks the bundle at zipPath into
 // <chronicleDir>/reviews/<base7>..<head7>/ and publishes its full diagram as
 // a live event on g's store.
@@ -51,6 +59,9 @@ func importReviewBundle(g *graph.Graph, zipPath, chronicleDir string, w io.Write
 	b, err := review.ReadBundle(zipPath)
 	if err != nil {
 		return err
+	}
+	if !validBundleCommit(b.Manifest.BaseCommit) || !validBundleCommit(b.Manifest.HeadCommit) {
+		return fmt.Errorf("review import: invalid commit in bundle manifest")
 	}
 	id := shortCommit(b.Manifest.BaseCommit) + ".." + shortCommit(b.Manifest.HeadCommit)
 
@@ -116,9 +127,15 @@ func importReviewBundle(g *graph.Graph, zipPath, chronicleDir string, w io.Write
 		}
 	}
 
-	domain := ""
-	if len(snap.Header.Domains) > 0 {
+	domain := d.Spec.Scope.Domain
+	if domain == "" && len(snap.Header.Domains) > 0 {
 		domain = snap.Header.Domains[0]
+	}
+	warning := ""
+	if view, verr := viewmodel.BuildView(g.Store(), d.Spec); verr != nil {
+		warning = fmt.Sprintf("; warning: could not check the diagram against this database: %v", verr)
+	} else if n := len(view.Missing); n > 0 {
+		warning = fmt.Sprintf("; warning: %d of %d marked nodes are not in this database — scan this branch or open the bundle's head snapshot", n, len(d.Spec.Marks))
 	}
 	if _, err := live.PublishDiagram(g.Store(), "review-import", live.Diagram{
 		Title:  "Chronicle review " + id,
@@ -131,6 +148,6 @@ func importReviewBundle(g *graph.Graph, zipPath, chronicleDir string, w io.Write
 		return fmt.Errorf("publish review diagram: %w", err)
 	}
 
-	fmt.Fprintf(w, "imported %s; open the dashboard with: chronicle admin\n", dir)
+	fmt.Fprintf(w, "imported %s; open the dashboard with: chronicle admin%s\n", dir, warning)
 	return nil
 }

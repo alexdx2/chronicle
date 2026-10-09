@@ -2,6 +2,9 @@ package review
 
 import (
 	"archive/zip"
+	"bytes"
+	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -88,5 +91,63 @@ func TestBundle_RejectsNewerFormat(t *testing.T) {
 	_, err := ReadBundle(path)
 	if err == nil || !strings.Contains(err.Error(), "newer") {
 		t.Fatalf("ReadBundle err = %v, want a newer-format error", err)
+	}
+}
+
+func TestBundle_RejectsOversizedEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b.zip")
+	in := sampleBundle()
+	in.Markdown = strings.Repeat("x", 5000)
+	if err := WriteBundle(path, in); err != nil {
+		t.Fatal(err)
+	}
+	old := bundleEntryLimit
+	bundleEntryLimit = 2000
+	defer func() { bundleEntryLimit = old }()
+	_, err := ReadBundle(path)
+	if err == nil || !strings.Contains(err.Error(), "review.md exceeds") {
+		t.Fatalf("ReadBundle err = %v, want an overflow error for review.md", err)
+	}
+}
+
+func TestBundle_IgnoresUnsafeEntryNames(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sub", "b.zip")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBundle(path, sampleBundle()); err != nil {
+		t.Fatal(err)
+	}
+	// Re-pack with an extra traversal entry.
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, f := range zr.File {
+		w, _ := zw.Create(f.Name)
+		rc, _ := f.Open()
+		io.Copy(w, rc)
+		rc.Close()
+	}
+	zr.Close()
+	w, _ := zw.Create("../evil")
+	w.Write([]byte("evil"))
+	zw.Close()
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := ReadBundle(path)
+	if err != nil {
+		t.Fatalf("ReadBundle: %v", err)
+	}
+	if !reflect.DeepEqual(*out, sampleBundle()) {
+		t.Errorf("bundle changed by the extra entry")
+	}
+	if _, err := os.Stat(filepath.Join(root, "evil")); err == nil {
+		t.Error("../evil was created")
 	}
 }

@@ -23,7 +23,7 @@ const (
 )
 
 // bundleEntryLimit caps how much one zip entry may inflate to when read.
-const bundleEntryLimit = 256 << 20
+var bundleEntryLimit int64 = 256 << 20
 
 // BundleManifest describes how and from what a bundle was produced. The
 // creation timestamp lives only here, never in the review markdown/JSON.
@@ -130,7 +130,7 @@ func ReadBundle(path string) (*Bundle, error) {
 		if err != nil {
 			return nil, true, fmt.Errorf("review: bundle entry %s: %w", name, err)
 		}
-		if len(data) > bundleEntryLimit {
+		if int64(len(data)) > bundleEntryLimit {
 			return nil, true, fmt.Errorf("review: bundle entry %s exceeds %d bytes", name, bundleEntryLimit)
 		}
 		return data, true, nil

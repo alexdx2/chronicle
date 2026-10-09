@@ -72,6 +72,9 @@ func TestReviewImport_PublishesDiagram(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(unpack, "review.md")); err != nil {
 		t.Errorf("review.md not unpacked: %v", err)
 	}
+	if !strings.Contains(printed.String(), "warning: ") || !strings.Contains(printed.String(), "marked nodes are not in this database") {
+		t.Errorf("printed = %q, want the missing-nodes warning (store lacks the head's nodes)", printed.String())
+	}
 	if !strings.Contains(printed.String(), unpack) || !strings.Contains(printed.String(), "chronicle admin") {
 		t.Errorf("printed = %q", printed.String())
 	}
@@ -85,5 +88,33 @@ func TestReviewImport_PublishesDiagram(t *testing.T) {
 	}
 	if evs[0].Source != "review-import" || !strings.Contains(string(evs[0].Payload), "Chronicle review "+id) {
 		t.Errorf("event = %+v", evs[0])
+	}
+}
+
+func TestReviewImport_RejectsTraversalCommit(t *testing.T) {
+	tmp := t.TempDir()
+	zipPath := filepath.Join(tmp, "evil.zip")
+	if err := review.WriteBundle(zipPath, review.Bundle{
+		Manifest:     review.BundleManifest{BaseCommit: "../../a", HeadCommit: "abcdef1"},
+		HeadSnapshot: []byte("x"), ReviewJSON: []byte("{}"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(tmp, "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	reg, _ := registry.LoadDefaults()
+	chronicle := filepath.Join(tmp, "chr")
+	err = importReviewBundle(graph.New(st, reg), zipPath, chronicle, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "invalid commit in bundle manifest") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, serr := os.Stat(chronicle); serr == nil {
+		t.Error("something was written under the chronicle dir")
+	}
+	if _, serr := os.Stat(filepath.Join(tmp, "a")); serr == nil {
+		t.Error("something was written outside reviews/")
 	}
 }
