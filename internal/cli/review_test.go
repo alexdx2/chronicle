@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/snapshot"
 )
 
@@ -326,5 +327,80 @@ func TestNewReviewCmd_Registered(t *testing.T) {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("chronicle review is missing its --%s flag", name)
 		}
+	}
+}
+
+// TestRunReview_WorkingTree_NoProjectFlag: without --project, paths.Root()
+// is "" and used to reach ComputeFreshness("") ("walk working tree: open :
+// no such file"). The command's root now comes from the absolute git dir.
+func TestRunReview_WorkingTree_NoProjectFlag(t *testing.T) {
+	dir, baseSHA, _ := buildReviewFixtureRepo(t)
+
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	paths.SetProjectRoot("")
+	paths.SetGitDir("")
+	t.Cleanup(func() {
+		_ = os.Chdir(prev)
+		paths.SetProjectRoot("")
+		paths.SetGitDir("")
+	})
+
+	root, err := reviewRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code, stderrMsg := runReview(context.Background(), &out, root, reviewCLIOptions{
+		Base: baseSHA, Head: "", Format: "markdown", Depth: 4,
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderrMsg)
+	}
+	if strings.Contains(stderrMsg, "walk working tree") {
+		t.Errorf("stderr = %q, must not contain the working-tree walk error", stderrMsg)
+	}
+	if !strings.Contains(out.String(), "### Chronicle review") {
+		t.Errorf("stdout = %q, want the normal report heading", out.String())
+	}
+}
+
+// TestRunReview_HeadSnapshotFlag: --head-snapshot replaces the head graph
+// with the given file; its seq shows in the provenance line.
+func TestRunReview_HeadSnapshotFlag(t *testing.T) {
+	dir, baseSHA, headSHA := buildReviewFixtureRepo(t)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".depbot", "graph.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.Header.Seq = 9
+	var buf bytes.Buffer
+	if err := snapshot.Encode(&buf, snap); err != nil {
+		t.Fatal(err)
+	}
+	snapPath := filepath.Join(t.TempDir(), "built.jsonl")
+	if err := os.WriteFile(snapPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	code, stderrMsg := runReview(context.Background(), &out, dir, reviewCLIOptions{
+		Base: baseSHA, Head: headSHA, Format: "markdown", Depth: 4, HeadSnapshot: snapPath,
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderrMsg)
+	}
+	if !strings.Contains(out.String(), "Graph v9") {
+		t.Errorf("stdout = %q, want the provenance line to carry head seq 9", out.String())
 	}
 }

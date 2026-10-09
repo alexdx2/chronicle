@@ -324,3 +324,173 @@ func TestSnapshotSource_Load_CanceledContext(t *testing.T) {
 		t.Errorf("Load: err = %v, want it to wrap context.Canceled", err)
 	}
 }
+
+// --- FileSource.Load ------------------------------------------------------
+
+// fileSourceSnap builds a one-coverage-entry snapshot over src/a.ts.
+func fileSourceSnap(seq int, blob string, edges ...snapshot.Edge) *snapshot.Snapshot {
+	return &snapshot.Snapshot{
+		Header: snapshot.Header{Kind: "header", Format: snapshot.Format, Version: snapshot.Version, Seq: seq, FactSchema: snapshot.FactSchema, Domains: []string{"d"}},
+		Nodes: []snapshot.Node{
+			{Kind: "node", ID: "service:service:d:svca", Layer: "service", Type: "service", Domain: "d", Name: "svcA", Status: "active"},
+			{Kind: "node", ID: "service:service:d:svcb", Layer: "service", Type: "service", Domain: "d", Name: "svcB", Status: "active"},
+		},
+		Edges:    edges,
+		Coverage: []snapshot.Coverage{{Kind: "coverage", Path: "src/a.ts", Blob: blob, Extractors: []snapshot.ExtractorRun{{ID: "fact-schema", Version: "fact-schema@1", Status: "ok"}}}},
+	}
+}
+
+// scopedManifestFileT writes a manifest scoped to one include pattern.
+func scopedManifestFileT(t *testing.T, dir, pattern string) {
+	t.Helper()
+	writeFileT(t, dir, ".depbot/chronicle.domain.yaml", ""+
+		"domains:\n"+
+		"  - name: d\n"+
+		"    scan:\n"+
+		"      include:\n"+
+		"        - \""+pattern+"\"\n")
+}
+
+// TestFileSource_Load_FreshAgainstRev: a snapshot read from an arbitrary
+// path is judged against Rev's tree, and Commit is the resolved Rev.
+func TestFileSource_Load_FreshAgainstRev(t *testing.T) {
+	dir := initGitRepoT(t)
+	scopedManifestFileT(t, dir, "src/**")
+	writeFileT(t, dir, "src/a.ts", "v1\n")
+	blob, err := gitutil.FileBlobSHA(dir, "src/a.ts")
+	if err != nil {
+		t.Fatalf("FileBlobSHA: %v", err)
+	}
+	headSHA := commitAllT(t, dir, "code")
+
+	snapPath := filepath.Join(t.TempDir(), "built.jsonl")
+	if err := os.WriteFile(snapPath, []byte(encodeSnapshotT(t, fileSourceSnap(7, blob))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vg, err := FileSource{RepoRoot: dir, Path: snapPath, Rev: "HEAD"}.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer vg.Close()
+
+	if vg.Origin != OriginSnapshot {
+		t.Fatalf("Origin = %q, want %q", vg.Origin, OriginSnapshot)
+	}
+	if vg.Commit != headSHA {
+		t.Errorf("Commit = %q, want resolved HEAD %q", vg.Commit, headSHA)
+	}
+	if vg.Ref != "HEAD" {
+		t.Errorf("Ref = %q, want HEAD", vg.Ref)
+	}
+	if vg.Version.Seq != 7 {
+		t.Errorf("Version.Seq = %d, want 7", vg.Version.Seq)
+	}
+	if len(vg.Freshness.Files) == 0 {
+		t.Fatal("Freshness.Files is empty")
+	}
+	for _, f := range vg.Freshness.Files {
+		if f.State != snapshot.Fresh {
+			t.Errorf("file %s state = %v, want Fresh", f.Path, f.State)
+		}
+	}
+}
+
+// TestFileSource_Load_MissingFile: no file at Path is Origin "missing", not an error.
+func TestFileSource_Load_MissingFile(t *testing.T) {
+	dir := initGitRepoT(t)
+	vg, err := FileSource{RepoRoot: dir, Path: filepath.Join(dir, "nope.jsonl"), Rev: "HEAD"}.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if vg.Origin != OriginMissing {
+		t.Errorf("Origin = %q, want %q", vg.Origin, OriginMissing)
+	}
+	if vg.Close == nil {
+		t.Fatal("Close is nil")
+	}
+	vg.Close()
+}
+
+// TestFileSource_Load_WorkingTreeRev: Rev "" judges freshness against the
+// working tree and leaves Commit empty, even in a repo with no commits.
+func TestFileSource_Load_WorkingTreeRev(t *testing.T) {
+	dir := initGitRepoT(t)
+	scopedManifestFileT(t, dir, "src/**")
+	writeFileT(t, dir, "src/a.ts", "v1\n")
+	blob, err := gitutil.FileBlobSHA(dir, "src/a.ts")
+	if err != nil {
+		t.Fatalf("FileBlobSHA: %v", err)
+	}
+	snapPath := filepath.Join(t.TempDir(), "built.jsonl")
+	if err := os.WriteFile(snapPath, []byte(encodeSnapshotT(t, fileSourceSnap(1, blob))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vg, err := FileSource{RepoRoot: dir, Path: snapPath}.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer vg.Close()
+	if vg.Origin != OriginSnapshot || vg.Commit != "" {
+		t.Errorf("Origin=%q Commit=%q, want snapshot and empty commit", vg.Origin, vg.Commit)
+	}
+	for _, f := range vg.Freshness.Files {
+		if f.State != snapshot.Fresh {
+			t.Errorf("file %s state = %v, want Fresh", f.Path, f.State)
+		}
+	}
+}
+
+// TestReview_HeadFromFile_ChangedFileFresh: the head is a snapshot file
+// that re-extracted src/a.ts after HEAD's committed graph went stale, so
+// Review reports the graph change and no Unknown finding for that file.
+func TestReview_HeadFromFile_ChangedFileFresh(t *testing.T) {
+	dir := initGitRepoT(t)
+	scopedManifestFileT(t, dir, "src/**")
+	writeFileT(t, dir, "src/a.ts", "v1\n")
+	blob1, err := gitutil.FileBlobSHA(dir, "src/a.ts")
+	if err != nil {
+		t.Fatalf("FileBlobSHA: %v", err)
+	}
+	writeFileT(t, dir, ".depbot/graph.jsonl", encodeSnapshotT(t, fileSourceSnap(1, blob1)))
+	baseSHA := commitAllT(t, dir, "base")
+
+	writeFileT(t, dir, "src/a.ts", "v2\n")
+	blob2, err := gitutil.FileBlobSHA(dir, "src/a.ts")
+	if err != nil {
+		t.Fatalf("FileBlobSHA: %v", err)
+	}
+	commitAllT(t, dir, "change a.ts")
+
+	edge := snapshot.Edge{
+		Kind: "edge", ID: "service:service:d:svca->service:service:d:svcb:CALLS_SERVICE", Type: "CALLS_SERVICE",
+		From: "service:service:d:svca", To: "service:service:d:svcb", Active: true, Derivation: "hard",
+		Evidence: []snapshot.Evidence{{File: "src/a.ts", Range: "1-1", Extractor: "fact-schema"}},
+	}
+	snapPath := filepath.Join(t.TempDir(), "head.jsonl")
+	if err := os.WriteFile(snapPath, []byte(encodeSnapshotT(t, fileSourceSnap(2, blob2, edge))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Review(context.Background(), ReviewInput{
+		BaseSource: SnapshotSource{RepoRoot: dir, Rev: baseSHA},
+		HeadSource: FileSource{RepoRoot: dir, Path: snapPath, Rev: "HEAD"},
+		RepoRoot:   dir,
+		Depth:      4,
+	})
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	changed := 0
+	for _, f := range result.Findings {
+		if f.Severity == SeverityUnknown && f.File == "src/a.ts" {
+			t.Errorf("unexpected unknown finding for src/a.ts: %+v", f)
+		}
+		if f.Severity == SeverityChanged {
+			changed++
+		}
+	}
+	if changed == 0 {
+		t.Errorf("no changed finding; findings=%+v", result.Findings)
+	}
+}

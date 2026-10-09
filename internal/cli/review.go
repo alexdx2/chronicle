@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitdiff"
@@ -121,6 +122,26 @@ type reviewCLIOptions struct {
 	// Command is the reproduction command shown in a Markdown report's
 	// footer (MarkdownOptions.Command) — e.g. "chronicle review main...HEAD".
 	Command string
+	// HeadSnapshot is the --head-snapshot file: when set, the head graph is
+	// read from it (freshness judged against Head's tree) instead of from
+	// Head's git history. "" means the ordinary SnapshotSource.
+	HeadSnapshot string
+}
+
+// reviewRepoRoot is the absolute directory git questions are asked in.
+// paths.Root() is "" unless --project is passed, which would reach
+// ComputeFreshness("") and fail with "walk working tree: open"; GitDir()
+// falls back to ".", which Abs pins to the current directory.
+func reviewRepoRoot() (string, error) {
+	return filepath.Abs(paths.GitDir())
+}
+
+// headSource is the GraphSource for the head side of a review.
+func headSource(repoRoot string, opts reviewCLIOptions) review.GraphSource {
+	if opts.HeadSnapshot != "" {
+		return review.FileSource{RepoRoot: repoRoot, Path: opts.HeadSnapshot, Rev: opts.Head}
+	}
+	return review.SnapshotSource{RepoRoot: repoRoot, Rev: opts.Head}
 }
 
 // runReview is chronicle review's testable core: no cobra, no os.Exit. It
@@ -136,7 +157,7 @@ type reviewCLIOptions struct {
 func runReview(ctx context.Context, w io.Writer, repoRoot string, opts reviewCLIOptions) (exitCode int, stderrMsg string) {
 	in := review.ReviewInput{
 		BaseSource: review.SnapshotSource{RepoRoot: repoRoot, Rev: opts.Base},
-		HeadSource: review.SnapshotSource{RepoRoot: repoRoot, Rev: opts.Head},
+		HeadSource: headSource(repoRoot, opts),
 		RepoRoot:   repoRoot,
 		Depth:      opts.Depth,
 	}
@@ -199,7 +220,7 @@ func renderReview(ctx context.Context, result *review.ReviewResult, repoRoot str
 	// Compact/Full) — skip the second load entirely rather than load it only
 	// to immediately discard it.
 	if result.Base.Origin != review.OriginMissing && result.Head.Origin != review.OriginMissing {
-		headVG, err := (review.SnapshotSource{RepoRoot: repoRoot, Rev: opts.Head}).Load(ctx)
+		headVG, err := headSource(repoRoot, opts).Load(ctx)
 		if err != nil {
 			return "", fmt.Errorf("reload head for diagrams: %w", err)
 		}
@@ -300,7 +321,7 @@ func reviewReproCommand(rangeArg, flagBase, flagHead string, workingTree bool) s
 }
 
 func newReviewCmd() *cobra.Command {
-	var flagBase, flagHead, format, out string
+	var flagBase, flagHead, format, out, headSnapshot string
 	var workingTree bool
 	var depth int
 	var failOn []string
@@ -336,7 +357,11 @@ neither revision has a Chronicle graph in its history at all).`,
 			if len(args) == 1 {
 				rangeArg = args[0]
 			}
-			repoRoot := paths.Root()
+			repoRoot, err := reviewRepoRoot()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "chronicle review: resolve repository root: "+err.Error())
+				os.Exit(2)
+			}
 
 			base, head, err := parseRange(repoRoot, rangeArg, flagBase, flagHead, workingTree)
 			if err != nil {
@@ -348,7 +373,8 @@ neither revision has a Chronicle graph in its history at all).`,
 				Base: base, Head: head,
 				Format: format, OutPath: out,
 				Depth: depth, FailOn: failOn,
-				Command: reviewReproCommand(rangeArg, flagBase, flagHead, workingTree),
+				Command:      reviewReproCommand(rangeArg, flagBase, flagHead, workingTree),
+				HeadSnapshot: headSnapshot,
 			}
 
 			code, msg := runReview(context.Background(), os.Stdout, repoRoot, opts)
@@ -365,6 +391,7 @@ neither revision has a Chronicle graph in its history at all).`,
 	cmd.Flags().StringVar(&flagBase, "base", "", "Base git ref (overrides the range's base)")
 	cmd.Flags().StringVar(&flagHead, "head", "", "Head git ref (overrides the range's head)")
 	cmd.Flags().BoolVar(&workingTree, "working-tree", false, "Compare against the working tree instead of HEAD (only affects the default, no-argument range)")
+	cmd.Flags().StringVar(&headSnapshot, "head-snapshot", "", "Read the head graph from this snapshot file instead of the head revision's committed graph (freshness is still judged against the head revision's tree)")
 	cmd.Flags().StringVar(&format, "format", "markdown", "Output format: markdown or json")
 	cmd.Flags().StringVar(&out, "out", "", "Write the report to this file instead of stdout")
 	cmd.Flags().IntVar(&depth, "depth", 4, "Impact traversal depth")

@@ -260,3 +260,75 @@ func loadRegistryFor(repoRoot string) (*registry.Registry, error) {
 func loadManifestFor(repoRoot string) (*manifest.Manifest, error) {
 	return manifest.LoadFile(filepath.Join(repoRoot, ".depbot", "chronicle.domain.yaml"))
 }
+
+// FileSource loads a graph version from a snapshot file on disk instead of git history.
+// Rev names the revision whose tree the freshness is computed against ("" = working tree);
+// Commit is set to the resolved Rev so gitdiff can diff base..head.
+//
+// In CI this lets the head be the snapshot the pipeline just built while
+// freshness is judged against the revision's own tree, so files the pipeline
+// re-extracted read as fresh. A missing file at Path is Origin "missing", not
+// an error. Commit is "" when Rev is "" or Rev does not resolve (a repository
+// with no commits).
+type FileSource struct{ RepoRoot, Path, Rev string }
+
+var _ GraphSource = FileSource{}
+
+// Load implements GraphSource.
+func (s FileSource) Load(ctx context.Context) (*VersionGraph, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(s.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &VersionGraph{Ref: s.Rev, Origin: OriginMissing, Close: noopClose}, nil
+		}
+		return nil, fmt.Errorf("review: FileSource.Load: read %s: %w", s.Path, err)
+	}
+
+	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
+	if err != nil {
+		return nil, fmt.Errorf("review: FileSource.Load: decode %s: %w", s.Path, err)
+	}
+
+	commit := ""
+	if s.Rev != "" {
+		if out, rpErr := gitutil.Output(s.RepoRoot, "rev-parse", "--verify", "--end-of-options", s.Rev+"^{commit}"); rpErr == nil {
+			commit = out
+		}
+	}
+	blob, err := gitutil.BlobSHA(s.RepoRoot, data)
+	if err != nil {
+		return nil, fmt.Errorf("review: FileSource.Load: blob of %s: %w", s.Path, err)
+	}
+	version := snapshot.GraphVersion{Commit: commit, Blob: blob, Seq: snap.Header.Seq}
+
+	reg, err := loadRegistryFor(s.RepoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("review: FileSource.Load: registry: %w", err)
+	}
+	g, closer, err := snapshot.Load(snap, reg, snapshot.LoadOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("review: FileSource.Load: build graph: %w", err)
+	}
+
+	man, err := loadManifestFor(s.RepoRoot)
+	if err != nil {
+		closer()
+		return nil, fmt.Errorf("review: FileSource.Load: manifest: %w", err)
+	}
+	fr, err := snapshot.ComputeFreshness(s.RepoRoot, snap, version, man, s.Rev)
+	if err != nil {
+		closer()
+		return nil, fmt.Errorf("review: FileSource.Load: freshness: %w", err)
+	}
+
+	return &VersionGraph{
+		Ref: s.Rev, Commit: commit,
+		Graph: g, Export: snap,
+		Version: version, Freshness: fr,
+		Origin: OriginSnapshot,
+		Close:  closer,
+	}, nil
+}
