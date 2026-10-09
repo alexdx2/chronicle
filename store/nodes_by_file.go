@@ -180,7 +180,7 @@ func (s *Store) FilePathsByNodeKeys(keys []string) (map[string][]string, error) 
 
 		// Via evidence: files cited by the node's evidence.
 		evQ := `
-			SELECT DISTINCT n.node_key, e.file_path
+			SELECT DISTINCT n.node_key, COALESCE(e.file_path,'')
 			FROM graph_evidence e
 			JOIN graph_nodes n ON n.node_id = e.node_id
 			WHERE n.node_key IN (` + placeholders + `)

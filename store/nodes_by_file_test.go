@@ -136,6 +136,16 @@ func TestFilePathsByNodeKeys_NodeFileAndEvidenceFiles(t *testing.T) {
 		}
 	}
 
+	// Path-less evidence (manual resolution, signal rows) stores file_path NULL.
+	if _, err := s.AddEvidence(EvidenceRow{
+		TargetKind: "node", NodeID: nodeID, SourceKind: "manual_resolution",
+		ExtractorID: "test", ExtractorVersion: "1",
+		Confidence: 0.9, EvidenceStatus: "valid", EvidencePolarity: "positive",
+		ValidFromRevisionID: rev, Metadata: "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	got, err := s.FilePathsByNodeKeys([]string{key, "missing:key"})
 	if err != nil {
 		t.Fatal(err)
