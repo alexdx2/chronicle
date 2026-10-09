@@ -404,3 +404,67 @@ func (s *Store) applyJournalEvent(ev flushedEvent) error {
 		return fmt.Errorf("unknown event kind %q", ev.Kind)
 	}
 }
+
+// MarkJournalConsumed records every event in eventsDir/*.jsonl as already
+// applied without applying it, so sync-on-open will not replay them. It is
+// the cursor move for a database that was filled from a snapshot: the
+// snapshot supersedes whatever the journal on disk says. Lamport floor is
+// raised like in ReplayJournal so later local events sort after these.
+func (s *Store) MarkJournalConsumed(eventsDir string) error {
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("MarkJournalConsumed: %w", err)
+	}
+	return s.WithTx(func(tx *Store) error {
+		var maxLamport int64
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+				continue
+			}
+			domain := strings.TrimSuffix(e.Name(), ".jsonl")
+			f, err := os.Open(filepath.Join(eventsDir, e.Name()))
+			if err != nil {
+				return err
+			}
+			sc := bufio.NewScanner(f)
+			sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+			for sc.Scan() {
+				line := strings.TrimSpace(sc.Text())
+				if line == "" {
+					continue
+				}
+				var ev flushedEvent
+				if err := json.Unmarshal([]byte(line), &ev); err != nil {
+					f.Close()
+					return fmt.Errorf("MarkJournalConsumed: bad line in %s: %w", e.Name(), err)
+				}
+				if ev.Lamport > maxLamport {
+					maxLamport = ev.Lamport
+				}
+				if _, err := tx.db.Exec(`
+					INSERT OR IGNORE INTO journal_applied_events (event_id, domain_key, lamport, actor, kind, applied_at)
+					VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
+					ev.EventID, domain, ev.Lamport, ev.Actor, ev.Kind); err != nil {
+					f.Close()
+					return fmt.Errorf("MarkJournalConsumed record: %w", err)
+				}
+			}
+			f.Close()
+			if err := sc.Err(); err != nil {
+				return err
+			}
+		}
+		if maxLamport > 0 {
+			if _, err := tx.db.Exec(`
+				INSERT INTO journal_state (actor, last_lamport) VALUES (?, ?)
+				ON CONFLICT(actor) DO UPDATE SET last_lamport = MAX(last_lamport, excluded.last_lamport)`,
+				s.actorOrDefault(), maxLamport); err != nil {
+				return fmt.Errorf("MarkJournalConsumed lamport floor: %w", err)
+			}
+		}
+		return nil
+	})
+}

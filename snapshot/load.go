@@ -32,6 +32,13 @@ type LoadOptions struct {
 	// row via ListNodes hit exactly that error). A throwaway on-disk file in
 	// os.MkdirTemp has no such split-brain risk and is just as disposable.
 	DBPath string
+
+	// SkipJournalSync opens the store without the sync-on-open replay of the
+	// .depbot/events journal next to DBPath. Set it when restoring into a
+	// project directory whose journal predates the snapshot: replaying it
+	// under the loaded graph would add facts the snapshot does not contain.
+	// The caller should then call Store.MarkJournalConsumed.
+	SkipJournalSync bool
 }
 
 // Load builds a fresh SQLite-backed store from s and returns the *graph.Graph
@@ -121,7 +128,11 @@ func Load(s *Snapshot, reg *registry.Registry, opt LoadOptions) (*graph.Graph, f
 		dbPath = filepath.Join(dir, "chronicle.db")
 	}
 
-	st, err := store.Open(dbPath)
+	openStore := store.Open
+	if opt.SkipJournalSync {
+		openStore = store.OpenWithoutJournalSync
+	}
+	st, err := openStore(dbPath)
 	if err != nil {
 		if tempDir != "" {
 			os.RemoveAll(tempDir)

@@ -60,6 +60,18 @@ func (s *Store) SetJournaling(on bool) {
 }
 
 func Open(dbPath string) (*Store, error) {
+	return open(dbPath, true)
+}
+
+// OpenWithoutJournalSync is Open minus the sync-on-open replay of
+// .depbot/events/*.jsonl. It exists for callers that fill a fresh database
+// from another source of truth (snapshot restore) and must not have stale
+// journal events applied underneath it; they then call MarkJournalConsumed.
+func OpenWithoutJournalSync(dbPath string) (*Store, error) {
+	return open(dbPath, false)
+}
+
+func open(dbPath string, syncJournal bool) (*Store, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("creating db directory: %w", err)
@@ -107,11 +119,13 @@ func Open(dbPath string) (*Store, error) {
 	// so only foreign/merged events replay. The replay path is journal-
 	// suppressed — synced events do not re-journal. Best-effort: a sync
 	// failure must not fail Open.
-	if res, err := s.SyncJournal(); err != nil {
-		fmt.Fprintf(os.Stderr, "chronicle: journal sync on open failed: %v\n", err)
-	} else if res.Applied > 0 {
-		s.journalSyncApplied = res.Applied
-		fmt.Fprintf(os.Stderr, "chronicle: journal sync applied %d merged events\n", res.Applied)
+	if syncJournal {
+		if res, err := s.SyncJournal(); err != nil {
+			fmt.Fprintf(os.Stderr, "chronicle: journal sync on open failed: %v\n", err)
+		} else if res.Applied > 0 {
+			s.journalSyncApplied = res.Applied
+			fmt.Fprintf(os.Stderr, "chronicle: journal sync applied %d merged events\n", res.Applied)
+		}
 	}
 
 	return s, nil
