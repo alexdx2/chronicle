@@ -404,3 +404,27 @@ func TestRunReview_HeadSnapshotFlag(t *testing.T) {
 		t.Errorf("stdout = %q, want the provenance line to carry head seq 9", out.String())
 	}
 }
+
+// TestRunReview_FooterReproducesHeadSnapshot: the footer's reproduce command
+// carries --head-snapshot and the path as given, or it would not reproduce
+// the report's bytes.
+func TestRunReview_FooterReproducesHeadSnapshot(t *testing.T) {
+	dir, baseSHA, headSHA := buildReviewFixtureRepo(t)
+	snapPath := filepath.Join(dir, ".depbot", "graph.jsonl")
+
+	cmd := reviewReproCommand("", baseSHA, headSHA, false, snapPath)
+	var out bytes.Buffer
+	code, stderrMsg := runReview(context.Background(), &out, dir, reviewCLIOptions{
+		Base: baseSHA, Head: headSHA, Format: "markdown", Depth: 4,
+		HeadSnapshot: snapPath, Command: cmd,
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d; stderr=%q", code, stderrMsg)
+	}
+	if want := "--head-snapshot " + snapPath; !strings.Contains(out.String(), want) {
+		t.Errorf("footer lacks %q; output=%q", want, out.String())
+	}
+	if got := reviewReproCommand("", "", "", false, ""); strings.Contains(got, "--head-snapshot") {
+		t.Errorf("repro command without the flag = %q, must not mention it", got)
+	}
+}

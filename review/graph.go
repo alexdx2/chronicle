@@ -198,39 +198,48 @@ func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: read %s: %w", graphPath, err)
 	}
 
-	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
-	if err != nil {
-		return nil, fmt.Errorf("review: SnapshotSource.Load: decode %s: %w", graphPath, err)
-	}
-
 	blob, err := gitutil.FileBlobSHA(s.RepoRoot, snapshot.Path)
 	if err != nil {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: blob of %s: %w", snapshot.Path, err)
 	}
-	version := snapshot.GraphVersion{Commit: "", Blob: blob, Seq: snap.Header.Seq}
+	return buildVersionGraph(s.RepoRoot, "", data, graphPath, snapshot.GraphVersion{Commit: "", Blob: blob}, "", "SnapshotSource")
+}
 
-	reg, err := loadRegistryFor(s.RepoRoot)
+// buildVersionGraph is the part of loading shared by every file-backed
+// source: decode data (read from srcPath) -> registry -> snapshot.Load ->
+// manifest -> ComputeFreshness against rev -> assembly. version arrives with
+// Commit and Blob set; Seq is filled from the decoded header. ref is the
+// VersionGraph's Ref and version.Commit its Commit. The graph's store is
+// closed on every error after it is opened.
+func buildVersionGraph(repoRoot, ref string, data []byte, srcPath string, version snapshot.GraphVersion, rev, who string) (*VersionGraph, error) {
+	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
 	if err != nil {
-		return nil, fmt.Errorf("review: SnapshotSource.Load: registry: %w", err)
+		return nil, fmt.Errorf("review: %s.Load: decode %s: %w", who, srcPath, err)
+	}
+	version.Seq = snap.Header.Seq
+
+	reg, err := loadRegistryFor(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("review: %s.Load: registry: %w", who, err)
 	}
 	g, closer, err := snapshot.Load(snap, reg, snapshot.LoadOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("review: SnapshotSource.Load: build graph: %w", err)
+		return nil, fmt.Errorf("review: %s.Load: build graph: %w", who, err)
 	}
 
-	man, err := loadManifestFor(s.RepoRoot)
+	man, err := loadManifestFor(repoRoot)
 	if err != nil {
 		closer()
-		return nil, fmt.Errorf("review: SnapshotSource.Load: manifest: %w", err)
+		return nil, fmt.Errorf("review: %s.Load: manifest: %w", who, err)
 	}
-
-	fr, err := snapshot.ComputeFreshness(s.RepoRoot, snap, version, man, "")
+	fr, err := snapshot.ComputeFreshness(repoRoot, snap, version, man, rev)
 	if err != nil {
 		closer()
-		return nil, fmt.Errorf("review: SnapshotSource.Load: freshness: %w", err)
+		return nil, fmt.Errorf("review: %s.Load: freshness: %w", who, err)
 	}
 
 	return &VersionGraph{
+		Ref: ref, Commit: version.Commit,
 		Graph: g, Export: snap,
 		Version: version, Freshness: fr,
 		Origin: OriginSnapshot,
@@ -287,11 +296,6 @@ func (s FileSource) Load(ctx context.Context) (*VersionGraph, error) {
 		return nil, fmt.Errorf("review: FileSource.Load: read %s: %w", s.Path, err)
 	}
 
-	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
-	if err != nil {
-		return nil, fmt.Errorf("review: FileSource.Load: decode %s: %w", s.Path, err)
-	}
-
 	commit := ""
 	if s.Rev != "" {
 		if out, rpErr := gitutil.Output(s.RepoRoot, "rev-parse", "--verify", "--end-of-options", s.Rev+"^{commit}"); rpErr == nil {
@@ -302,33 +306,5 @@ func (s FileSource) Load(ctx context.Context) (*VersionGraph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("review: FileSource.Load: blob of %s: %w", s.Path, err)
 	}
-	version := snapshot.GraphVersion{Commit: commit, Blob: blob, Seq: snap.Header.Seq}
-
-	reg, err := loadRegistryFor(s.RepoRoot)
-	if err != nil {
-		return nil, fmt.Errorf("review: FileSource.Load: registry: %w", err)
-	}
-	g, closer, err := snapshot.Load(snap, reg, snapshot.LoadOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("review: FileSource.Load: build graph: %w", err)
-	}
-
-	man, err := loadManifestFor(s.RepoRoot)
-	if err != nil {
-		closer()
-		return nil, fmt.Errorf("review: FileSource.Load: manifest: %w", err)
-	}
-	fr, err := snapshot.ComputeFreshness(s.RepoRoot, snap, version, man, s.Rev)
-	if err != nil {
-		closer()
-		return nil, fmt.Errorf("review: FileSource.Load: freshness: %w", err)
-	}
-
-	return &VersionGraph{
-		Ref: s.Rev, Commit: commit,
-		Graph: g, Export: snap,
-		Version: version, Freshness: fr,
-		Origin: OriginSnapshot,
-		Close:  closer,
-	}, nil
+	return buildVersionGraph(s.RepoRoot, s.Rev, data, s.Path, snapshot.GraphVersion{Commit: commit, Blob: blob}, s.Rev, "FileSource")
 }

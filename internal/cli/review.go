@@ -303,7 +303,7 @@ func reviewExitCode(result *review.ReviewResult, failOn []string) (exitCode int,
 // reviewReproCommand builds the reproduction command shown in a Markdown
 // report's footer, reflecting what the user actually typed rather than the
 // resolved base/head (a resolved SHA is not something a human would retype).
-func reviewReproCommand(rangeArg, flagBase, flagHead string, workingTree bool) string {
+func reviewReproCommand(rangeArg, flagBase, flagHead string, workingTree bool, headSnapshot string) string {
 	parts := []string{"chronicle", "review"}
 	if rangeArg != "" {
 		parts = append(parts, rangeArg)
@@ -316,6 +316,9 @@ func reviewReproCommand(rangeArg, flagBase, flagHead string, workingTree bool) s
 	}
 	if workingTree {
 		parts = append(parts, "--working-tree")
+	}
+	if headSnapshot != "" {
+		parts = append(parts, "--head-snapshot", headSnapshot)
 	}
 	return strings.Join(parts, " ")
 }
@@ -373,7 +376,7 @@ neither revision has a Chronicle graph in its history at all).`,
 				Base: base, Head: head,
 				Format: format, OutPath: out,
 				Depth: depth, FailOn: failOn,
-				Command:      reviewReproCommand(rangeArg, flagBase, flagHead, workingTree),
+				Command:      reviewReproCommand(rangeArg, flagBase, flagHead, workingTree, headSnapshot),
 				HeadSnapshot: headSnapshot,
 			}
 
