@@ -1,0 +1,170 @@
+package headless
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/alexdx2/chronicle-core/llm"
+)
+
+func TestTechForFile(t *testing.T) {
+	all := []string{"nestjs", "prisma", "kafka", "typescript", "dotnet", "mycustom"}
+	cases := map[string][]string{
+		"svc/main.go":          {"kafka", "mycustom"},
+		"src/a.ts":             {"nestjs", "prisma", "kafka", "typescript", "mycustom"},
+		"prisma/schema.prisma": {"prisma", "kafka", "mycustom"},
+		"Api/Program.cs":       {"kafka", "dotnet", "mycustom"},
+		"web/Page.TSX":         {"nestjs", "prisma", "kafka", "typescript", "mycustom"},
+		"src/main/Orders.java": {"kafka", "mycustom"},
+		"schema/q.graphql":     {"kafka", "mycustom"},
+	}
+	for path, want := range cases {
+		if got := techForFile(path, all); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: got %v want %v", path, got, want)
+		}
+	}
+}
+
+func TestSplitLines(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&b, "line %03d\n", i) // 9 bytes
+	}
+	src := []byte(b.String())
+	parts := splitLines(src, 100)
+	if len(parts) < 9 {
+		t.Fatalf("parts = %d", len(parts))
+	}
+	var joined []byte
+	for _, p := range parts {
+		if len(p) > 100 {
+			t.Fatalf("part of %d bytes exceeds the budget", len(p))
+		}
+		if p[len(p)-1] != '\n' {
+			t.Fatalf("part does not end at a line boundary: %q", p[len(p)-5:])
+		}
+		joined = append(joined, p...)
+	}
+	if string(joined) != string(src) {
+		t.Fatal("chunks do not rebuild the file")
+	}
+	if got := splitLines(src, 0); len(got) != 1 {
+		t.Fatal("no budget must keep the file whole")
+	}
+	long := []byte(strings.Repeat("é", 50)) // one 100-byte line, 2-byte runes
+	for _, p := range splitLines(long, 7) {
+		if !strings.HasPrefix(string(p), "é") || len(p)%2 != 0 {
+			t.Fatalf("cut inside a rune: %q", p)
+		}
+	}
+}
+
+func TestFileBudget(t *testing.T) {
+	req := llm.Request{System: strings.Repeat("s", 9000), User: strings.Repeat("u", 300)}
+	if fileBudget(0, req) != 0 {
+		t.Fatal("no window means no budget")
+	}
+	// (16384 - 2048 - (9300+reserve)/3) tokens at 3 chars each
+	if got, want := fileBudget(16384, req), (16384-2048-(9300+partLabelReserve)/3)*3; got != want {
+		t.Fatalf("budget = %d want %d", got, want)
+	}
+	if got := fileBudget(4096, req); got != minChunkBytes {
+		t.Fatalf("an overfull window must floor at %d, got %d", minChunkBytes, got)
+	}
+}
+
+// windowBackend answers every request with one fact named after the part, and
+// records the prompts it saw.
+type windowBackend struct {
+	window int
+	mu     sync.Mutex
+	reqs   []llm.Request
+}
+
+func (*windowBackend) Name() string         { return "win" }
+func (*windowBackend) Model() string        { return "win" }
+func (w *windowBackend) ContextWindow() int { return w.window }
+func (w *windowBackend) Complete(_ context.Context, r llm.Request) (llm.Response, error) {
+	w.mu.Lock()
+	w.reqs = append(w.reqs, r)
+	n := len(w.reqs)
+	w.mu.Unlock()
+	return llm.Response{Text: fmt.Sprintf(`{"status":"extracted","facts":[{"kind":"model","name":"M%d"}]}`, n)}, nil
+}
+
+func TestRun_LongFileIsSplitToFitTheWindow(t *testing.T) {
+	e := newRunEnv(t)
+	body := strings.Repeat("export const filler = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';\n", 400) // ~27 KB
+	write(t, e.root, "src/long.ts", body)
+	commitAll(t, e.root, "long")
+	wb := &windowBackend{window: 8000}
+	res, err := Run(context.Background(), e.input(wb, "src/long.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wb.reqs) < 2 {
+		t.Fatalf("a 27 KB file in an 8k window must be split, got %d request(s)", len(wb.reqs))
+	}
+	for i, r := range wb.reqs {
+		if est := (len(r.System) + len(r.User)) / charsPerToken; est+outputReserve > wb.window {
+			t.Errorf("request %d is ~%d tokens, window %d", i, est, wb.window)
+		}
+		if !strings.HasPrefix(r.User, "File: src/long.ts\n") {
+			t.Errorf("request %d lost the File: first line (the fake backend keys on it)", i)
+		}
+		if !strings.Contains(r.User, fmt.Sprintf("(part %d of %d", i+1, len(wb.reqs))) {
+			t.Errorf("request %d is not labelled as a part: %.120q", i, r.User)
+		}
+	}
+	f := res.Files[0]
+	if f.Status != "extracted" || f.Error != "" {
+		t.Fatalf("file = %+v", f)
+	}
+	rows, _ := e.g.Store().ListExtractions(res.RevisionID, "d")
+	var facts []map[string]string
+	_ = json.Unmarshal([]byte(rows[0].FactsJSON), &facts)
+	if len(facts) != len(wb.reqs) {
+		t.Fatalf("want one merged fact per part (%d), got %s", len(wb.reqs), rows[0].FactsJSON)
+	}
+}
+
+func TestRun_ShortFileIsNotSplit(t *testing.T) {
+	e := newRunEnv(t)
+	wb := &windowBackend{window: 16384}
+	if _, err := Run(context.Background(), e.input(wb, "src/a.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if len(wb.reqs) != 1 || strings.Contains(wb.reqs[0].User, "(part ") {
+		t.Fatalf("reqs = %d", len(wb.reqs))
+	}
+}
+
+func TestRun_GuideFollowsFileLanguage(t *testing.T) {
+	e := newRunEnv(t)
+	e.m.Tech = []string{"typescript", "dotnet"}
+	write(t, e.root, "src/svc.cs", "class A {}\n")
+	commitAll(t, e.root, "cs")
+	wb := &windowBackend{}
+	if _, err := Run(context.Background(), e.input(wb, "src/a.ts", "src/svc.cs")); err != nil {
+		t.Fatal(err)
+	}
+	sys := map[string]string{}
+	for _, r := range wb.reqs {
+		first, _, _ := strings.Cut(r.User, "\n")
+		sys[first] = r.System
+	}
+	ts, cs := sys["File: src/a.ts"], sys["File: src/svc.cs"]
+	if ts == "" || cs == "" {
+		t.Fatalf("missing prompts: %v", len(sys))
+	}
+	if strings.Contains(ts, "ASP.NET") == strings.Contains(cs, "ASP.NET") && len(ts) == len(cs) {
+		t.Fatal(".ts and .cs got the same guide")
+	}
+	if !(len(cs) > len(ts)) {
+		t.Logf("ts guide %d bytes, cs guide %d bytes", len(ts), len(cs))
+	}
+}

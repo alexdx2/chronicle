@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,6 +16,16 @@ import (
 // is ~3k tokens; the rest is the file. Ollama's own default (4096) silently
 // truncates the prompt from the front, which drops the fact schema.
 const ollamaNumCtx = 16384
+
+// ollamaCtxEnv overrides the window (tokens) for machines with memory to spare.
+const ollamaCtxEnv = "CHRONICLE_OLLAMA_NUM_CTX"
+
+func ollamaWindow() int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(ollamaCtxEnv))); err == nil && v >= 4096 {
+		return v
+	}
+	return ollamaNumCtx
+}
 
 // ollama is a Backend over Ollama's native /api/chat. The native API is used
 // instead of the OpenAI-compatible /v1 because only it accepts think:false;
@@ -46,6 +58,10 @@ func ollamaBase(host string) string {
 func (o *ollama) Name() string  { return "ollama" }
 func (o *ollama) Model() string { return o.model }
 
+// ContextWindow is the hard per-call token window: the prompt and the answer
+// share it, and Ollama truncates an overlong prompt from the front.
+func (o *ollama) ContextWindow() int { return ollamaWindow() }
+
 func (o *ollama) Complete(ctx context.Context, req Request) (Response, error) {
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
@@ -59,7 +75,7 @@ func (o *ollama) Complete(ctx context.Context, req Request) (Response, error) {
 		"options": map[string]any{
 			"temperature": 0,
 			"num_predict": maxTokens,
-			"num_ctx":     ollamaNumCtx,
+			"num_ctx":     ollamaWindow(),
 		},
 		"messages": []map[string]string{
 			{"role": "system", "content": req.System},

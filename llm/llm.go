@@ -57,3 +57,11 @@ var (
 	ErrNoKey   = errors.New("llm: no API key in environment")
 	ErrBadSpec = errors.New("llm: bad model spec, want provider:model")
 )
+
+// WindowedBackend is implemented by backends with a hard per-call token window
+// (local runtimes). Callers keep the prompt plus the answer inside it instead of
+// letting the runtime silently drop the start of the prompt. Cloud backends do
+// not implement it.
+type WindowedBackend interface {
+	ContextWindow() int
+}

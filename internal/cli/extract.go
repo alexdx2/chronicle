@@ -23,17 +23,18 @@ const defaultExtractModel = "anthropic:claude-haiku-5-5"
 
 // extractCLIOptions bundles chronicle extract's flags.
 type extractCLIOptions struct {
-	PlanOnly    bool
-	PlanFile    string   // read a plan JSON instead of computing one
-	Files       []string // explicit list; overrides plan computation
-	Base, Head  string   // Head default "HEAD"
-	Domain      string
-	Radius      int
-	MaxFiles    int
-	MaxBytes    int64
-	Model       string // default: $CHRONICLE_MODEL or defaultExtractModel
-	Concurrency int
-	UsageOut    string // "" = summary line only
+	PlanOnly      bool
+	PlanFile      string   // read a plan JSON instead of computing one
+	Files         []string // explicit list; overrides plan computation
+	Base, Head    string   // Head default "HEAD"
+	Domain        string
+	Radius        int
+	MaxFiles      int
+	MaxBytes      int64
+	Model         string // default: $CHRONICLE_MODEL or defaultExtractModel
+	Concurrency   int
+	ContextWindow int
+	UsageOut      string // "" = summary line only
 }
 
 // runExtract is chronicle extract's testable core. It returns the process exit
@@ -142,7 +143,7 @@ func runExtract(ctx context.Context, w io.Writer, g *graph.Graph, repoRoot, chro
 
 	res, runErr := headless.Run(ctx, headless.RunInput{
 		G: g, RepoRoot: repoRoot, ChronicleDir: chronicleDir, Domain: domain, Manifest: m,
-		HeadSHA: headSHA, Files: files, Backend: backend, Concurrency: opts.Concurrency,
+		HeadSHA: headSHA, Files: files, Backend: backend, Concurrency: opts.Concurrency, ContextWindow: opts.ContextWindow,
 	})
 	if res != nil {
 		cost := "unknown"
@@ -227,6 +228,7 @@ Exit code 0: ok (also for --plan). 1: error. 2: no graph or plan input.
 	f.Int64Var(&o.MaxBytes, "max-bytes", 1<<20, "Maximum total bytes to read")
 	f.StringVar(&o.Model, "model", "", "Model spec: anthropic:<model>, gemini:<model>, openai:<model>, openrouter:<model>, ollama:<model>, fake:<dir> (default $CHRONICLE_MODEL or "+defaultExtractModel+")")
 	f.IntVar(&o.Concurrency, "concurrency", 4, "Parallel model calls")
+	f.IntVar(&o.ContextWindow, "context-window", 0, "Token window to fit each request into, splitting long files into parts (0 = the backend's own: ollama 16384, cloud none)")
 	f.StringVar(&o.UsageOut, "usage-out", "", "Write the full run result JSON to this file")
 	return cmd
 }

@@ -45,6 +45,9 @@ type RunInput struct {
 	// Larger files, and files with a NUL byte in their first 8 KiB, become
 	// "skipped" artifacts without an LLM call.
 	MaxFileBytes int64
+	// ContextWindow overrides the backend's token window (0 -> ask the backend;
+	// cloud backends have none). Files that do not fit are sent in parts.
+	ContextWindow int
 }
 
 const (
@@ -190,7 +193,7 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		}
 	}
 
-	guide := g.ExtractionGuide(in.Manifest.Tech...)
+	guide := newGuideSet(g, in.Manifest.Tech)
 	wantOutbox := filepath.Join(in.ChronicleDir, "scan-outbox", fmt.Sprintf("%d", rev))
 	// fail returns the partial result together with the error.
 	fail := func(err error) (*RunResult, error) {
@@ -336,7 +339,7 @@ func commitFailed(msgs []string, path string) bool {
 
 // runWave extracts one checkout batch with a bounded worker pool and writes
 // one outbox artifact per item.
-func runWave(ctx context.Context, in RunInput, b graph.CheckoutBatch, items []graph.CheckoutItem, guide string, conc, maxTokens int) ([]FileUsage, error) {
+func runWave(ctx context.Context, in RunInput, b graph.CheckoutBatch, items []graph.CheckoutItem, guide *guideSet, conc, maxTokens int) ([]FileUsage, error) {
 	out := make([]FileUsage, len(items))
 	for i, it := range items {
 		out[i] = FileUsage{Path: it.FilePath, Status: "cancelled"}
@@ -400,7 +403,7 @@ func readSource(path string, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
-func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item graph.CheckoutItem, guide string, maxTokens int) (FileUsage, error) {
+func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item graph.CheckoutItem, guide *guideSet, maxTokens int) (FileUsage, error) {
 	start := time.Now()
 	fu := FileUsage{Path: item.FilePath}
 	art := map[string]any{
@@ -441,34 +444,48 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 				}
 			}
 		}
-		req := BuildPrompt(guide, item.FilePath, content, cands)
+		sys := guide.For(item.FilePath)
+		req := BuildPrompt(sys, item.FilePath, content, cands)
 		req.MaxTokens = maxTokens
-		firstUser := req.User
-		var parsed *parsedAnswer
-		var lastText string
-		for attempt := 0; attempt < 2 && parsed == nil && fu.Status == ""; attempt++ {
-			resp, err := in.Backend.Complete(ctx, req)
-			fu.Usage = fu.Usage.Add(resp.Usage)
-			if err != nil {
-				if ctx.Err() != nil {
-					// Cut short by cancellation: not a model failure, no artifact.
+		window := in.ContextWindow
+		if wb, ok := in.Backend.(llm.WindowedBackend); ok && window == 0 {
+			window = wb.ContextWindow()
+		}
+		// A backend with a hard window gets the file in pieces that fit it;
+		// otherwise the runtime would drop the start of the prompt (the schema).
+		chunks := [][]byte{content}
+		if budget := fileBudget(window, BuildPrompt(sys, item.FilePath, nil, cands)); budget > 0 {
+			chunks = splitLines(content, budget)
+		}
+		var answers []*parsedAnswer
+		for ci, chunk := range chunks {
+			creq := req
+			if len(chunks) > 1 {
+				chunkCands := cands
+				if ci > 0 {
+					chunkCands = nil // the deterministic list belongs to the whole file; send it once
+				}
+				creq = BuildPrompt(sys, item.FilePath, chunk, chunkCands)
+				creq.MaxTokens = maxTokens
+				creq.User = strings.Replace(creq.User, "File: "+item.FilePath+"\n",
+					fmt.Sprintf("File: %s\n(part %d of %d of a long file: extract only what appears in this part)\n", item.FilePath, ci+1, len(chunks)), 1)
+			}
+			a, failed := askModel(ctx, in.Backend, creq, &fu)
+			if failed != "" {
+				if failed == "cancelled" {
 					fu.Status = "cancelled"
 					fu.DurationMS = time.Since(start).Milliseconds()
 					return fu, nil
 				}
-				fail("provider_error", err.Error())
+				fail(fu.Status, failed)
+				answers = nil
 				break
 			}
-			lastText = resp.Text
-			a, perr := parseAnswer(resp.Text)
-			if perr == nil {
-				parsed = a
-				break
-			}
-			req.User = firstUser + "\n\nYour previous answer was not the required JSON object (" + perr.Error() + "). Answer again with only the JSON object."
-			if attempt == 1 {
-				fail("failed", truncate(lastText, 2000))
-			}
+			answers = append(answers, a)
+		}
+		var parsed *parsedAnswer
+		if len(answers) == len(chunks) && fu.Status == "" {
+			parsed = mergeAnswers(answers)
 		}
 		if parsed != nil {
 			fu.Status = parsed.Status
@@ -484,6 +501,34 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 		return fu, err
 	}
 	return fu, writeAtomic(graph.OutboxArtifactPath(b.OutboxDir, item.FilePath), data)
+}
+
+// askModel sends one request, retrying once when the answer is not the required
+// JSON. It returns the parsed answer, or a non-empty failure message. fu.Status
+// is set to "provider_error" or "failed" accordingly; the failure "cancelled"
+// means the context ended and the file is not a model failure.
+func askModel(ctx context.Context, b llm.Backend, req llm.Request, fu *FileUsage) (*parsedAnswer, string) {
+	firstUser := req.User
+	var lastText string
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := b.Complete(ctx, req)
+		fu.Usage = fu.Usage.Add(resp.Usage)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, "cancelled"
+			}
+			fu.Status = "provider_error"
+			return nil, err.Error()
+		}
+		lastText = resp.Text
+		a, perr := parseAnswer(resp.Text)
+		if perr == nil {
+			return a, ""
+		}
+		req.User = firstUser + "\n\nYour previous answer was not the required JSON object (" + perr.Error() + "). Answer again with only the JSON object."
+	}
+	fu.Status = "failed"
+	return nil, truncate(lastText, 2000)
 }
 
 // writeAtomic writes data to path via a temp file and rename so the commit
