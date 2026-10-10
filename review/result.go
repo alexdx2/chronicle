@@ -44,6 +44,8 @@ type Verdict struct {
 	SystemsAffected, Repositories                                          int
 	IntegrationsAdded, DependenciesRemoved, ContractsChanged, UnknownFiles int
 	NoSystemChange                                                         bool
+	// Learned counts facts whose evidence lies wholly outside the diff.
+	Learned int
 }
 
 // ReviewResult is Review's answer: where base/head came from, the verdict
@@ -174,6 +176,7 @@ func verdictFrom(findings []ReviewFinding) Verdict {
 		}
 	}
 
+	v.Learned = len((&ReviewResult{Findings: findings}).LearnedFacts())
 	v.NoSystemChange = v.UnknownFiles == 0 && len(changed) == 0 && len(affected) == 0
 	return v
 }
@@ -272,8 +275,11 @@ func Review(ctx context.Context, in ReviewInput) (*ReviewResult, error) {
 	}
 
 	delta := Diff(base, head, hunks)
-	changes := ClassifyDelta(delta)
-	findings := Analyze(changes, makeQuerier(base), makeQuerier(head), depth)
+	codeDelta, learned := partitionLearned(delta, changedFiles)
+	changes := ClassifyDelta(codeDelta)
+	baseQ, headQ := makeQuerier(base), makeQuerier(head)
+	findings := Analyze(changes, baseQ, headQ, depth)
+	findings = append(findings, learnedFindings(learned, baseQ, headQ)...)
 	findings = append(findings, unknownFindings(changedFiles, base.Freshness, head.Freshness)...)
 
 	result := &ReviewResult{

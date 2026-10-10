@@ -175,6 +175,33 @@ func renderNoSystemChange(r *ReviewResult, o MarkdownOptions) string {
 		b.WriteString("\n")
 		b.WriteString(sec)
 	}
+	if sec := learnedSection(r, resolveMaxRows(o.MaxRows)); sec != "" {
+		b.WriteString("\n")
+		b.WriteString(sec)
+	}
+	return b.String()
+}
+
+// learnedSection is the collapsed "Graph learned N facts" block: facts whose
+// evidence lives only in files this merge request did not touch.
+func learnedSection(r *ReviewResult, maxRows int) string {
+	learned := r.LearnedFacts()
+	if len(learned) == 0 {
+		return ""
+	}
+	rows := make([]mdRow, 0, len(learned))
+	for _, f := range learned {
+		phrase := escapeText(f.System.Name)
+		if len(f.Facts) > 0 {
+			phrase = evidenceFactPhrase(f, f.Facts[0])
+		}
+		rows = append(rows, mdRow{phrase, escapeText(f.File)})
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "<details>\n<summary>Graph learned %d facts while re-reading neighbours (not part of this change)</summary>\n\n", len(learned))
+	b.WriteString("These files did not change in this merge request; the graph simply knows them better now.\n\n")
+	b.WriteString(mdTable([]string{"Fact", "File"}, rows, maxRows))
+	b.WriteString("\n</details>\n")
 	return b.String()
 }
 
@@ -244,6 +271,11 @@ func renderNormal(r *ReviewResult, o MarkdownOptions) (string, error) {
 
 	if sec := changedRelationshipsSection(r, maxRows); sec != "" {
 		b.WriteString("### Changed system relationships\n\n")
+		b.WriteString(sec)
+		b.WriteString("\n")
+	}
+
+	if sec := learnedSection(r, maxRows); sec != "" {
 		b.WriteString(sec)
 		b.WriteString("\n")
 	}

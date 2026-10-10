@@ -43,6 +43,9 @@ const (
 	ReasonBaseStaleFile        = "base_stale_file"
 	ReasonHeadMissingGraph     = "head_missing_graph"
 	ReasonBaseMissingGraph     = "base_missing_graph"
+	// ReasonLearnedOutsideDiff marks a top-level Informational finding: a
+	// fact whose evidence files are all outside the diff.
+	ReasonLearnedOutsideDiff = "learned_outside_diff"
 )
 
 // ReviewFinding is one node of the tree Analyze (and Review's own
