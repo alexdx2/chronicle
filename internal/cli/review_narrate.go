@@ -74,9 +74,6 @@ func runNarrate(ctx context.Context, w io.Writer, opts narrateOptions, env func(
 	}
 	if opts.UsageOut != "" {
 		cost, known := llm.Cost(backend.Model(), resp.Usage)
-		if resp.Usage.CostUSD > 0 {
-			cost, known = resp.Usage.CostUSD, true
-		}
 		u := map[string]any{"model": backend.Name() + ":" + backend.Model(), "usage": resp.Usage, "cost_usd": cost, "cost_known": known}
 		b, _ := json.MarshalIndent(u, "", "  ")
 		if err := os.WriteFile(opts.UsageOut, append(b, '\n'), 0o644); err != nil {
