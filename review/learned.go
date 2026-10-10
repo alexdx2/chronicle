@@ -1,6 +1,8 @@
 package review
 
 import (
+	"sort"
+
 	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/snapshot"
 )
@@ -61,20 +63,28 @@ func partitionLearned(d *GraphDelta, changed []gitdiff.ChangedFile) (code *Graph
 		StructuralChanged: d.StructuralChanged,
 	}
 	ld := &GraphDelta{}
-	for _, f := range d.Added {
-		if isLearned(factFiles(f)) {
-			ld.Added = append(ld.Added, f)
-		} else {
-			code.Added = append(code.Added, f)
+	// A merge pair (edge + its new/removed target node) is one unit: it is
+	// learned only if both members are, otherwise the whole pair stays code.
+	split := func(facts []Fact) (c, l []Fact) {
+		partner := make(map[int]int)
+		for _, p := range mergePairs(facts, map[int]bool{}) {
+			partner[p.edge], partner[p.node] = p.node, p.edge
 		}
-	}
-	for _, f := range d.Removed {
-		if isLearned(factFiles(f)) {
-			ld.Removed = append(ld.Removed, f)
-		} else {
-			code.Removed = append(code.Removed, f)
+		for i, f := range facts {
+			learnedFact := isLearned(factFiles(f))
+			if j, ok := partner[i]; ok {
+				learnedFact = learnedFact && isLearned(factFiles(facts[j]))
+			}
+			if learnedFact {
+				l = append(l, f)
+			} else {
+				c = append(c, f)
+			}
 		}
+		return c, l
 	}
+	code.Added, ld.Added = split(d.Added)
+	code.Removed, ld.Removed = split(d.Removed)
 	for _, c := range d.Changed {
 		if isLearned(appendUnique(factFiles(c.Before), factFiles(c.After)...)) {
 			ld.Changed = append(ld.Changed, c)
@@ -93,7 +103,23 @@ func partitionLearned(d *GraphDelta, changed []gitdiff.ChangedFile) (code *Graph
 		}
 		learned = append(learned, LearnedFact{Change: ch, File: files[0], Files: files})
 	}
+	sort.SliceStable(learned, func(i, j int) bool {
+		if learned[i].File != learned[j].File {
+			return learned[i].File < learned[j].File
+		}
+		return learnedText(learned[i]) < learnedText(learned[j])
+	})
 	return code, learned
+}
+
+// learnedText is the sort key of a learned fact within one file: the kind,
+// then the ids of its facts.
+func learnedText(l LearnedFact) string {
+	s := string(l.Change.Kind)
+	for _, f := range l.Change.Facts {
+		s += "|" + f.ID
+	}
+	return s
 }
 
 // factFiles lists the distinct, non-empty evidence files of one fact.

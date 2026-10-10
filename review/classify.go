@@ -154,21 +154,9 @@ func mergeNewNodeWithEdge(facts []Fact, consumed map[int]bool, addedSide bool) [
 	}
 
 	var changes []Change
-	for i, f := range facts {
-		if consumed[i] || f.Kind != KindEdge || f.Edge == nil {
-			continue
-		}
+	for _, p := range mergePairs(facts, consumed) {
+		f, node := facts[p.edge], facts[p.node]
 		edgeType := f.Edge.Type
-		if edgeType != "PUBLISHES_TOPIC" && edgeType != "EXPOSES_ENDPOINT" {
-			continue
-		}
-
-		j, node, ok := findUnconsumedNode(facts, consumed, f.Edge.To)
-		if !ok {
-			continue
-		}
-		consumed[i] = true
-		consumed[j] = true
 
 		kind := IntegrationAdded
 		switch {
@@ -189,6 +177,35 @@ func mergeNewNodeWithEdge(facts []Fact, consumed map[int]bool, addedSide bool) [
 		})
 	}
 	return changes
+}
+
+// mergePair is one PUBLISHES_TOPIC / EXPOSES_ENDPOINT edge and its target
+// node, by index into the facts slice they were found in.
+type mergePair struct{ edge, node int }
+
+// mergePairs finds the edge+node pairs the merge rule folds into one Change,
+// marking both indexes consumed. It is the single source of that pairing:
+// mergeNewNodeWithEdge classifies with it and partitionLearned keeps each
+// pair together with it, so the two cannot drift.
+func mergePairs(facts []Fact, consumed map[int]bool) []mergePair {
+	var pairs []mergePair
+	for i, f := range facts {
+		if consumed[i] || f.Kind != KindEdge || f.Edge == nil {
+			continue
+		}
+		edgeType := f.Edge.Type
+		if edgeType != "PUBLISHES_TOPIC" && edgeType != "EXPOSES_ENDPOINT" {
+			continue
+		}
+		j, _, ok := findUnconsumedNode(facts, consumed, f.Edge.To)
+		if !ok {
+			continue
+		}
+		consumed[i] = true
+		consumed[j] = true
+		pairs = append(pairs, mergePair{edge: i, node: j})
+	}
+	return pairs
 }
 
 // findUnconsumedNode looks in facts for an unconsumed KindNode fact whose ID
