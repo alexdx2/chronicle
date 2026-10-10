@@ -161,7 +161,7 @@ skipped with a warning.
 `snapshot.ResolveVersion` / `ResolveVersionWith(repoRoot, rev, ResolveOptions{IncludeHeads, Verifier})`
 is candidate-first. With no `chronicle/graphs/*` refs and no requested head refs it goes straight to
 the in-tree history and never loads the trust list. Otherwise it collects candidates from the chain
-refs (remote-tracking twins first) without signature checks, orders them by position in
+refs (a local chain ref is ignored when its remote-tracking twin exists) without signature checks, orders them by position in
 `git rev-list --topo-order <rev>`, then ref order, then distance from the tip (a requested head ranks
 first at its own sha), and verifies signatures only for chain candidates, one at a time, until one is
 trusted. Heads named in `IncludeHeads` are accepted without signature checks (CLI: `graph show` /
@@ -170,15 +170,15 @@ fallback. `graph show` JSON carries `source`, `code_sha`, `snapshot_id`, `ref`, 
 `chronicle doctor` prints a "graph publications" section.
 
 Trust: `snapshot.LoadVerifier` is fail-closed. It reads `publishers` from the manifest at the origin
-default branch (origin/HEAD, then origin/main, then local main, then HEAD, the last only when there is
-no `origin` remote), never from the working tree; it errors if that branch cannot be determined or
-does not resolve. Only when the manifest is absent or has no publishers does it return TrustAll (with
+default branch (origin/HEAD, then refs/remotes/origin/main; if an `origin` remote exists but neither
+resolves, it errors (fail-closed); only without an `origin` remote does it fall back to local `main`,
+then `HEAD`), never from the working tree. Only when the manifest is absent or has no publishers does it return TrustAll (with
 a warning). With publishers, only chain commits with a good SSH signature from `allowed_signers`
 count. Heads are never signed. `Verifier.GitArgs()` supplies `gpg.ssh.allowedSignersFile` /
 `revocationFile`, and signatures are checked through `git log` with `%G?`.
 
 `snapshot.ContentID(graph, domain, types)` is the content identity (sha256 over the re-encoded graph
-with `Seq=0`, manifest, types); it errors on input without a snapshot header and must be computed from
+with `Seq=0`, manifest, types); it errors on input without a snapshot header or with an unrecognized format, and must be computed from
 exported files, not from a store.
 
 ## Signal pipeline (scan finalize)
