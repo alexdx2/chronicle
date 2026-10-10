@@ -10,38 +10,158 @@ import (
 	"github.com/alexdx2/chronicle-core/gitdiff"
 )
 
-// GraphVersion identifies one point in a repository's history at which
-// .depbot/graph.jsonl carried a particular snapshot: the commit that last
-// changed the file (in the history of some revision), that commit's git blob
-// of the file, and the snapshot's own Header.Seq as of that commit.
-//
-// Named GraphVersion, not Version: this package already exports Version as
-// the snapshot FORMAT's own major version constant (format.go) — the same
-// name for this, a wholly different concept (a resolved point in a
-// repository's commit history), would not even compile (they collide as the
-// same package-level identifier), let alone read clearly side by side with
-// Header.Version.
+// GraphVersion identifies one graph version: the commit whose tree holds
+// .depbot/graph.jsonl (a PUBLICATION commit on chronicle/graphs/* or
+// chronicle/heads/*, or — in the fallback — an in-tree commit of the code
+// branch), that commit's blob of the file, and the snapshot's Header.Seq.
+// CodeSha, SnapshotID, Ref, Signature and Source are filled only when the
+// version came from a publication (spec §3.2, §7); they are zero in the
+// fallback, where Commit itself is the code commit.
 type GraphVersion struct {
-	Commit string // commit that last changed .depbot/graph.jsonl in the history of Rev (git log -1 --format=%H rev -- path)
-	Blob   string // git blob of the file at Commit
-	Seq    int    // Header.Seq at Commit
+	Commit string
+	Blob   string
+	Seq    int
+
+	CodeSha    string
+	SnapshotID string
+	Ref        string
+	Signature  SignatureStatus
+	Source     string // "chain" | "head" | "tree"
 }
 
-// ErrNoVersion reports that no commit in the requested revision's history
-// ever touched .depbot/graph.jsonl — there is no graph version to resolve.
-// This is the ordinary, expected answer for a revision that predates the
-// graph being adopted at all, not a failure of the git plumbing itself.
+// ResolveOptions tunes ResolveVersionWith.
+type ResolveOptions struct {
+	// IncludeHeads lists code shas whose chronicle/heads/<sha> publication
+	// may be used. Heads carry no signature (spec §4.2), so a local core
+	// uses only its OWN head, and only when asked.
+	IncludeHeads []string
+	// Verifier overrides LoadVerifier(repoRoot). nil = load and close one.
+	Verifier *Verifier
+}
+
+// ErrNoVersion: no publication in the history of rev and no commit in that
+// history ever touched .depbot/graph.jsonl.
 var ErrNoVersion = errors.New("no graph version in history of this revision")
 
-// ResolveVersion finds the nearest ancestor of rev (rev itself included) that
-// last changed .depbot/graph.jsonl, and reads that commit's Header.Seq via a
-// cheap header-only read (ReadHeader) rather than a full Decode.
-//
-// Every git invocation here follows gitdiff.go's own established convention:
-// exec.Command("git", "-C", repoRoot, ...), with rev passed behind
-// --end-of-options so a revision string that looks like a flag (or is
-// exactly "-") is never parsed as one — see lastCommitTouching and blobAt.
+// ResolveVersion is ResolveVersionWith with default options.
 func ResolveVersion(repoRoot, rev string) (GraphVersion, error) {
+	return ResolveVersionWith(repoRoot, rev, ResolveOptions{})
+}
+
+// ResolveVersionWith finds the graph version for rev (spec §7):
+//  1. the publication map (code sha → trusted publication) over every
+//     chronicle/graphs/* ref (remote twins first) plus the requested heads;
+//  2. the first commit of `git rev-list rev` that has an entry;
+//  3. fallback: the in-tree history (`git log -1 rev -- .depbot/graph.jsonl`),
+//     for repositories that still commit snapshots to the code branch.
+func ResolveVersionWith(repoRoot, rev string, opt ResolveOptions) (GraphVersion, error) {
+	pubs, _, err := PublicationMap(repoRoot, opt)
+	if err != nil {
+		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
+	}
+	if len(pubs) > 0 {
+		out, err := runGit(repoRoot, "rev-list", "--end-of-options", rev)
+		if err != nil {
+			return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: rev-list %s: %w", rev, err)
+		}
+		for _, sha := range strings.Split(strings.TrimSpace(out), "\n") {
+			if p, ok := pubs[sha]; ok {
+				return versionFromPublication(repoRoot, p)
+			}
+		}
+	}
+	return resolveInTree(repoRoot, rev)
+}
+
+// PublicationMap builds code sha → winning publication. Within one ref the
+// publication closest to the tip wins; across refs, a requested head beats
+// any chain (it describes exactly that sha); among chains the first ref in
+// ChainRefs order wins (remote twins before local). Warnings list skipped
+// commits: malformed trailers, and — in VerifySigned mode — unsigned or
+// foreign-signed commits.
+func PublicationMap(repoRoot string, opt ResolveOptions) (map[string]Publication, []string, error) {
+	v := opt.Verifier
+	if v == nil {
+		loaded, err := LoadVerifier(repoRoot)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer loaded.Close()
+		v = loaded
+	}
+	var warns []string
+	warns = append(warns, v.Warnings...)
+	verify := v.Mode == VerifySigned
+	result := map[string]Publication{}
+
+	refs, err := ChainRefs(repoRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, ref := range refs {
+		pubs, w, err := listPublications(repoRoot, ref, v.GitArgs(), verify)
+		if err != nil {
+			return nil, nil, err
+		}
+		warns = append(warns, w...)
+		for _, p := range pubs { // tip first: the first seen per code sha is the closest to the tip
+			if !v.Trusted(p) {
+				warns = append(warns, fmt.Sprintf("%s: %s: signature %s — not a trusted publication", ref, p.Commit, p.Signature))
+				continue
+			}
+			if _, seen := result[p.CodeSha]; !seen {
+				result[p.CodeSha] = p
+			}
+		}
+	}
+	for _, sha := range opt.IncludeHeads {
+		local, remote := HeadRef(sha)
+		for _, ref := range []string{remote, local} {
+			if _, err := runGit(repoRoot, "rev-parse", "--verify", "-q", "--end-of-options", ref); err != nil {
+				continue
+			}
+			pubs, w, err := listPublications(repoRoot, ref, nil, false) // heads are never signed
+			if err != nil {
+				return nil, nil, err
+			}
+			warns = append(warns, w...)
+			if len(pubs) > 0 && pubs[0].CodeSha == sha {
+				p := pubs[0]
+				p.Signature = SigUnchecked
+				result[sha] = p // own head beats the chain
+				break
+			}
+		}
+	}
+	return result, warns, nil
+}
+
+func versionFromPublication(repoRoot string, p Publication) (GraphVersion, error) {
+	blob, err := blobAt(repoRoot, p.Commit, Path)
+	if err != nil {
+		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: blob of %s at publication %s: %w", Path, p.Commit, err)
+	}
+	data, err := gitdiff.Show(repoRoot, p.Commit, Path)
+	if err != nil {
+		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: read %s at publication %s: %w", Path, p.Commit, err)
+	}
+	h, err := ReadHeader(bytes.NewReader(data))
+	if err != nil {
+		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: header at %s: %w", p.Commit, err)
+	}
+	source := "chain"
+	if strings.HasPrefix(p.Ref, HeadRefPrefix) || strings.HasPrefix(p.Ref, RemoteHeadRefPrefix) {
+		source = "head"
+	}
+	return GraphVersion{
+		Commit: p.Commit, Blob: blob, Seq: h.Seq,
+		CodeSha: p.CodeSha, SnapshotID: p.SnapshotID, Ref: p.Ref, Signature: p.Signature, Source: source,
+	}, nil
+}
+
+// resolveInTree is the pre-publication behaviour, kept verbatim as the
+// fallback for repositories whose snapshots live in the code branch.
+func resolveInTree(repoRoot, rev string) (GraphVersion, error) {
 	commit, err := lastCommitTouching(repoRoot, rev, Path)
 	if err != nil {
 		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
@@ -49,12 +169,10 @@ func ResolveVersion(repoRoot, rev string) (GraphVersion, error) {
 	if commit == "" {
 		return GraphVersion{}, ErrNoVersion
 	}
-
 	blob, err := blobAt(repoRoot, commit, Path)
 	if err != nil {
 		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: blob of %s at %s: %w", Path, commit, err)
 	}
-
 	data, err := gitdiff.Show(repoRoot, commit, Path)
 	if err != nil {
 		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: read %s at %s: %w", Path, commit, err)
@@ -63,8 +181,7 @@ func ResolveVersion(repoRoot, rev string) (GraphVersion, error) {
 	if err != nil {
 		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: header at %s: %w", commit, err)
 	}
-
-	return GraphVersion{Commit: commit, Blob: blob, Seq: h.Seq}, nil
+	return GraphVersion{Commit: commit, Blob: blob, Seq: h.Seq, Source: "tree"}, nil
 }
 
 // AtCommit loads the full graph snapshot recorded at v.Commit: `git show
