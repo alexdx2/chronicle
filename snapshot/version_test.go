@@ -191,6 +191,10 @@ func TestResolveVersion_VerifySignedIgnoresUnsignedAndForeign(t *testing.T) {
 	pSigned := publishT(t, repo, ChainRefPrefix+"main", c1, "main", key, gS, m, false)
 	publishT(t, repo, ChainRefPrefix+"main", c1, "main", foreignKey, gF, m, true)
 	publishT(t, repo, ChainRefPrefix+"main", c1, "main", "", gU, m, true)
+	tip := captureGitT(t, repo, "rev-parse", ChainRefPrefix+"main")
+	tipTree := captureGitT(t, repo, "rev-parse", tip+"^{tree}")
+	junk := captureGitEnvT(t, repo, os.Environ(), "commit-tree", tipTree, "-p", tip, "-m", "junk")
+	runGitT(t, repo, "update-ref", ChainRefPrefix+"main", junk)
 	v, err := ResolveVersion(repo, c1)
 	if err != nil {
 		t.Fatal(err)
@@ -202,12 +206,13 @@ func TestResolveVersion_VerifySignedIgnoresUnsignedAndForeign(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(warns) < 2 {
-		t.Fatalf("unsigned and foreign-signed commits must each be reported: %v", warns)
+	all := strings.Join(warns, "\n")
+	if len(warns) < 3 || !strings.Contains(all, "not a trusted publication") || !strings.Contains(all, "has no Chronicle trailers") {
+		t.Fatalf("unsigned, foreign-signed and trailer-less commits must each be reported: %v", warns)
 	}
 }
 
-func TestResolveVersion_VerifySignedNoTrustedPublicationFallsBack(t *testing.T) {
+func TestResolveVersion_VerifySignedNoTrustedPublicationIsNoVersion(t *testing.T) {
 	_, signer := sshKeyT(t, "ci@test")
 	repo := initGitRepoT(t)
 	setOriginDefaultT(t, repo, "publishers:\n  allowed_signers: |\n    "+signer+"\n")
@@ -227,9 +232,8 @@ func TestResolveVersion_MalformedTrailerSkipped(t *testing.T) {
 	good := publishT(t, repo, ChainRefPrefix+"main", c1, "main", "", g, m, false)
 	// Malformed: Code-Sha is garbage — hand-build the commit on top of the chain.
 	tree := captureGitT(t, repo, "rev-parse", good+"^{tree}")
-	bad := captureGitEnvT(t, repo, os.Environ(), "commit-tree", tree, "-p", good, "-m", "junk\n\n"+TrailerCodeSha+": not-a-sha\n"+TrailerSnapshotID+": "+strings.Repeat("0", 64)+"\n")
 	plain := captureGitEnvT(t, repo, os.Environ(), "commit-tree", tree, "-p", good, "-m", "junk")
-	bad = captureGitEnvT(t, repo, os.Environ(), "commit-tree", tree, "-p", plain, "-m", "junk\n\n"+TrailerCodeSha+": not-a-sha\n"+TrailerSnapshotID+": "+strings.Repeat("0", 64)+"\n")
+	bad := captureGitEnvT(t, repo, os.Environ(), "commit-tree", tree, "-p", plain, "-m", "junk\n\n"+TrailerCodeSha+": not-a-sha\n"+TrailerSnapshotID+": "+strings.Repeat("0", 64)+"\n")
 	runGitT(t, repo, "update-ref", ChainRefPrefix+"main", bad)
 	v, err := ResolveVersion(repo, c1)
 	if err != nil {
@@ -264,12 +268,38 @@ func TestResolveVersion_MergeHistoryTwoChains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// rev-list from the merge commit lists first parent (m1) before second parent (r1).
-	if v.Commit != pM {
-		t.Fatalf("nearest publication on a merge follows rev-list order (first parent first): %+v (release pub %s)", v, pR)
+	// git --topo-order guarantees parents after children, not first-parent-first:
+	// either child publication may win, the base publication never may.
+	if v.Commit != pM && v.Commit != pR {
+		t.Fatalf("merge must resolve to one of the two child publications, never the base: %+v (main %s, release %s)", v, pM, pR)
+	}
+	again, _ := ResolveVersion(repo, merge)
+	if again.Commit != v.Commit {
+		t.Fatalf("resolution must be deterministic: %s then %s", v.Commit, again.Commit)
+	}
+	if mv, _ := ResolveVersion(repo, m1); mv.Commit != pM {
+		t.Fatalf("main sha resolves to its own chain: %+v", mv)
 	}
 	rv, _ := ResolveVersion(repo, r1)
 	if rv.Commit != pR {
 		t.Fatalf("release sha resolves to its own chain: %+v", rv)
+	}
+}
+
+func TestResolveVersion_OriginWithoutDefaultStillResolvesInTree(t *testing.T) {
+	repo := initGitRepoT(t)
+	g, m := graphFilesT(t, 1, "A")
+	writeFileT(t, repo, ".depbot/graph.jsonl", string(g))
+	writeFileT(t, repo, ".depbot/chronicle.domain.yaml", string(m))
+	runGitT(t, repo, "add", "-f", ".depbot")
+	runGitT(t, repo, "commit", "-q", "-m", "snapshot in tree")
+	graphCommit := captureGitT(t, repo, "rev-parse", "HEAD")
+	runGitT(t, repo, "remote", "add", "origin", "/dev/null")
+	v, err := ResolveVersion(repo, "HEAD")
+	if err != nil {
+		t.Fatalf("a repo without publication refs must not need a verifier: %v", err)
+	}
+	if v.Commit != graphCommit || v.Source != "tree" {
+		t.Fatalf("%+v", v)
 	}
 }

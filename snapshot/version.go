@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitdiff"
@@ -48,29 +49,131 @@ func ResolveVersion(repoRoot, rev string) (GraphVersion, error) {
 	return ResolveVersionWith(repoRoot, rev, ResolveOptions{})
 }
 
-// ResolveVersionWith finds the graph version for rev (spec §7):
-//  1. the publication map (code sha → trusted publication) over every
-//     chronicle/graphs/* ref (remote twins first) plus the requested heads;
-//  2. the first commit of `git rev-list rev` that has an entry;
-//  3. fallback: the in-tree history (`git log -1 rev -- .depbot/graph.jsonl`),
+// ResolveVersionWith finds the graph version for rev (spec §7), candidates
+// first so that signature checks are paid only for the winner:
+//  1. collect the chronicle/graphs/* refs (remote twins first) and the
+//     requested heads that exist; with none, go straight to the fallback
+//     without ever loading a verifier;
+//  2. `git rev-list --topo-order rev` gives every ancestor a position;
+//  3. unverified publications whose code sha is an ancestor become candidates,
+//     ordered by (position, ref order, distance from the tip); a requested
+//     head beats the chains for its own sha;
+//  4. the verifier is loaded and candidates are walked in order: heads are
+//     accepted as is, chain candidates are signature-checked in VerifySigned
+//     mode and the first trusted one wins;
+//  5. no winner: the in-tree history (`git log -1 rev -- .depbot/graph.jsonl`),
 //     for repositories that still commit snapshots to the code branch.
 func ResolveVersionWith(repoRoot, rev string, opt ResolveOptions) (GraphVersion, error) {
-	pubs, _, err := PublicationMap(repoRoot, opt)
+	chains, err := ChainRefs(repoRoot)
 	if err != nil {
 		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
 	}
-	if len(pubs) > 0 {
-		out, err := runGit(repoRoot, "rev-list", "--end-of-options", rev)
+	heads := existingHeadRefs(repoRoot, opt.IncludeHeads)
+	if len(chains) == 0 && len(heads) == 0 {
+		return resolveInTree(repoRoot, rev)
+	}
+
+	out, err := runGit(repoRoot, "rev-list", "--topo-order", "--end-of-options", rev)
+	if err != nil {
+		return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: rev-list %s: %w", rev, err)
+	}
+	pos := map[string]int{}
+	for i, sha := range strings.Fields(out) {
+		pos[sha] = i
+	}
+
+	type cand struct {
+		p        Publication
+		pos      int
+		refOrder int
+		head     bool
+	}
+	var cands []cand
+	var warns []string
+	for ri, ref := range chains {
+		pubs, w, err := listPublications(repoRoot, ref, nil, false)
 		if err != nil {
-			return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: rev-list %s: %w", rev, err)
+			return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
 		}
-		for _, sha := range strings.Split(strings.TrimSpace(out), "\n") {
-			if p, ok := pubs[sha]; ok {
-				return versionFromPublication(repoRoot, p)
+		warns = append(warns, w...)
+		for _, p := range pubs {
+			if at, ok := pos[p.CodeSha]; ok {
+				cands = append(cands, cand{p: p, pos: at, refOrder: ri})
 			}
 		}
 	}
+	for sha, ref := range heads {
+		pubs, w, err := listPublications(repoRoot, ref, nil, false)
+		if err != nil {
+			return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
+		}
+		warns = append(warns, w...)
+		at, ok := pos[sha]
+		if !ok || len(pubs) == 0 {
+			continue
+		}
+		if pubs[0].CodeSha != sha {
+			warns = append(warns, fmt.Sprintf("%s: head publication describes %s, not %s — skipped", ref, pubs[0].CodeSha, sha))
+			continue
+		}
+		p := pubs[0]
+		p.Signature = SigUnchecked
+		cands = append(cands, cand{p: p, pos: at, refOrder: -1, head: true})
+	}
+	sort.SliceStable(cands, func(i, j int) bool {
+		a, b := cands[i], cands[j]
+		if a.pos != b.pos {
+			return a.pos < b.pos
+		}
+		if a.refOrder != b.refOrder {
+			return a.refOrder < b.refOrder
+		}
+		return a.p.Distance < b.p.Distance
+	})
+	if len(cands) == 0 {
+		return resolveInTree(repoRoot, rev)
+	}
+
+	v := opt.Verifier
+	if v == nil {
+		loaded, err := LoadVerifier(repoRoot)
+		if err != nil {
+			return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
+		}
+		defer loaded.Close()
+		v = loaded
+	}
+	for _, c := range cands {
+		p := c.p
+		if !c.head && v.Mode == VerifySigned {
+			code, err := runGit(repoRoot, append(v.GitArgs(), "log", "-1", "--format=%G?", "--end-of-options", p.Commit)...)
+			if err != nil {
+				return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: verify %s: %w", p.Commit, err)
+			}
+			p.Signature = signatureFromCode(strings.TrimSpace(code))
+		}
+		if !v.Trusted(p) {
+			continue
+		}
+		return versionFromPublication(repoRoot, p)
+	}
 	return resolveInTree(repoRoot, rev)
+}
+
+// existingHeadRefs maps each requested code sha to the head ref that exists
+// for it (remote-tracking first, then local).
+func existingHeadRefs(repoRoot string, shas []string) map[string]string {
+	heads := map[string]string{}
+	for _, sha := range shas {
+		local, remote := HeadRef(sha)
+		for _, ref := range []string{remote, local} {
+			if _, err := runGit(repoRoot, "rev-parse", "--verify", "-q", "--end-of-options", ref); err == nil {
+				heads[sha] = ref
+				break
+			}
+		}
+	}
+	return heads
 }
 
 // PublicationMap builds code sha → winning publication. Within one ref the
@@ -80,6 +183,13 @@ func ResolveVersionWith(repoRoot, rev string, opt ResolveOptions) (GraphVersion,
 // commits: malformed trailers, and — in VerifySigned mode — unsigned or
 // foreign-signed commits.
 func PublicationMap(repoRoot string, opt ResolveOptions) (map[string]Publication, []string, error) {
+	refs, err := ChainRefs(repoRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(refs) == 0 && len(existingHeadRefs(repoRoot, opt.IncludeHeads)) == 0 {
+		return map[string]Publication{}, nil, nil // no publications: no verifier needed
+	}
 	v := opt.Verifier
 	if v == nil {
 		loaded, err := LoadVerifier(repoRoot)
@@ -94,10 +204,6 @@ func PublicationMap(repoRoot string, opt ResolveOptions) (map[string]Publication
 	verify := v.Mode == VerifySigned
 	result := map[string]Publication{}
 
-	refs, err := ChainRefs(repoRoot)
-	if err != nil {
-		return nil, nil, err
-	}
 	for _, ref := range refs {
 		pubs, w, err := listPublications(repoRoot, ref, v.GitArgs(), verify)
 		if err != nil {
