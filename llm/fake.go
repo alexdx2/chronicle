@@ -11,7 +11,7 @@ import (
 type fakeBackend struct{ dir string }
 
 // NewFake returns a backend that answers from fixture files in dir. The first
-// line of Request.User must be "File: <path>"; the reply is
+// line of Request.User must be "File: <path>" (or "Review: <commit>", file Review__<commit>.json); the reply is
 // <dir>/<path with "/" replaced by "__">.json, else <dir>/default.json.
 func NewFake(dir string) Backend { return fakeBackend{dir: dir} }
 
@@ -23,9 +23,15 @@ func (f fakeBackend) Complete(ctx context.Context, req Request) (Response, error
 		return Response{}, err
 	}
 	first, _, _ := strings.Cut(req.User, "\n")
-	path, ok := strings.CutPrefix(strings.TrimRight(first, "\r"), "File: ")
+	first = strings.TrimRight(first, "\r")
+	path, ok := strings.CutPrefix(first, "File: ")
 	if !ok {
-		return Response{}, fmt.Errorf("fake: first line of user prompt must be %q, got %q", "File: <path>", first)
+		// Narration requests are keyed by the head commit: Review__<commit>.json.
+		commit, isReview := strings.CutPrefix(first, "Review: ")
+		if !isReview {
+			return Response{}, fmt.Errorf("fake: first line of user prompt must be %q or %q, got %q", "File: <path>", "Review: <commit>", first)
+		}
+		path = "Review__" + commit
 	}
 	data, err := os.ReadFile(filepath.Join(f.dir, strings.ReplaceAll(path, "/", "__")+".json"))
 	if os.IsNotExist(err) {

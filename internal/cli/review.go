@@ -491,5 +491,6 @@ neither revision has a Chronicle graph in its history at all).`,
 	cmd.Flags().StringSliceVar(&failOn, "fail-on", nil, "Exit 1 if the review finds a match: unknown, affected, changed")
 
 	cmd.AddCommand(newReviewImportCmd())
+	cmd.AddCommand(newReviewNarrateCmd())
 	return cmd
 }

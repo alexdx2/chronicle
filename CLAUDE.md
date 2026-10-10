@@ -136,6 +136,13 @@ the JSON and Markdown reports, a manifest, and the `--usage` JSON if given. `chr
 diagram, with the changed and affected marks, to the local dashboard. A review with no changed
 relationships has nothing to diagram: the bundle is still unpacked, nothing is published, exit 0.
 
+`chronicle review narrate --review <review.json> [--changed <file>] [--model ...] [--max-words 120] [--out <file>] [--usage-out <file>]`
+asks a model to read the deterministic review and write one short paragraph: what the change means, what may be
+affected, what to test. It is the only model-written part of the MR comment, and the output says so (heading
+"What this means (model's reading)" plus a footer naming the model); the tables stay the facts. Cost is about
+1-5 cents per call. Same `--model` resolution and exit codes as `extract` (3 = no key, prints `skipped`); CI treats
+a failure as optional. The `fake:` backend keys fixtures by `Review: <head commit>` (`Review__<commit>.json`).
+
 CI shape on a merge request: `graph restore --at origin/main --merge-base-with HEAD` → `refresh` →
 `extract` → `graph update` → `review --head-snapshot <fresh graph> --bundle`. On the default branch
 the same update runs, followed by a bot commit of `.depbot/graph.jsonl`. Two properties to keep in
