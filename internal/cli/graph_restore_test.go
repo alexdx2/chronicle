@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -254,5 +255,86 @@ func TestRunGraphRestore_ForceKeepsOldDBWhenLoadFails(t *testing.T) {
 	}
 	if _, err := os.Stat(dbPath + ".restore-tmp"); !os.IsNotExist(err) {
 		t.Fatalf("temp db must be cleaned up, stat err %v", err)
+	}
+}
+
+// publishChainT writes a minimal chain publication for codeSha on ref (tree:
+// only .depbot/graph.jsonl + chronicle.domain.yaml) and returns its sha.
+func publishChainT(t *testing.T, repo, ref, codeSha string, graph, man []byte) string {
+	t.Helper()
+	git := func(env []string, args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), env...)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	scratch := t.TempDir()
+	env := []string{"GIT_INDEX_FILE=" + filepath.Join(t.TempDir(), "index")}
+	for name, data := range map[string][]byte{".depbot/graph.jsonl": graph, ".depbot/chronicle.domain.yaml": man} {
+		f := filepath.Join(scratch, filepath.Base(name))
+		if err := os.WriteFile(f, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		blob := git(nil, "hash-object", "-w", f)
+		git(env, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+name)
+	}
+	tree := git(env, "write-tree")
+	id, err := snapshot.ContentID(graph, man, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := "chronicle snapshot for " + codeSha + "\n\n" +
+		snapshot.TrailerSnapshotID + ": " + id + "\n" +
+		snapshot.TrailerCodeSha + ": " + codeSha + "\n" +
+		snapshot.TrailerCodeRef + ": refs/heads/main\n" +
+		snapshot.TrailerSchema + ": 1\n"
+	c := git(nil, "commit-tree", tree, "-m", msg)
+	git(nil, "update-ref", ref, c)
+	return c
+}
+
+func TestRunGraphRestore_PublicationPinsCodeCommit(t *testing.T) {
+	src, _, graphPath, reg := seedRepoWithSnapshot(t)
+	graph, err := os.ReadFile(graphPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = src
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q")
+	gitRun(t, repo, "config", "user.email", "t@example.com")
+	gitRun(t, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "a.go")
+	gitRun(t, repo, "commit", "-q", "-m", "code")
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := strings.TrimSpace(string(out))
+	pub := publishChainT(t, repo, "refs/heads/chronicle/graphs/main", code, graph, []byte("domains:\n  d: {name: D}\n"))
+
+	db := filepath.Join(t.TempDir(), "chronicle.db")
+	res, err := runGraphRestore(restoreInput{RepoRoot: repo, DBPath: db, At: code, Registry: reg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Commit != code || res.Publication != pub {
+		t.Fatalf("commit=%s publication=%s, want %s / %s", res.Commit, res.Publication, code, pub)
+	}
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rev, err := st.LatestScanRevision("")
+	if err != nil || rev == nil || rev.GitAfterSHA != code {
+		t.Fatalf("restore revision must pin code commit %s, got %+v (err %v)", code, rev, err)
 	}
 }

@@ -31,12 +31,15 @@ type restoreInput struct {
 }
 
 type restoreResult struct {
-	Path      string           `json:"path"`
-	Seq       int              `json:"seq"`
-	Commit    string           `json:"commit"` // commit the snapshot was taken from (At resolved) or HEAD
-	Domains   []string         `json:"domains"`
-	Counts    snapshot.Counts  `json:"counts"`
-	Revisions map[string]int64 `json:"revisions"` // domain → restore revision id
+	Path   string `json:"path"`
+	Seq    int    `json:"seq"`
+	Commit string `json:"commit"` // CODE commit the snapshot describes (At resolved) or HEAD
+	// Publication is the chronicle/graphs|heads/* commit that holds the graph
+	// when it was not found in the code tree; empty for in-tree versions.
+	Publication string           `json:"publication,omitempty"`
+	Domains     []string         `json:"domains"`
+	Counts      snapshot.Counts  `json:"counts"`
+	Revisions   map[string]int64 `json:"revisions"` // domain → restore revision id
 }
 
 var errDBExists = errors.New("database already exists — pass --force to replace it")
@@ -53,6 +56,7 @@ func runGraphRestore(in restoreInput) (restoreResult, error) {
 	var (
 		snap   *snapshot.Snapshot
 		commit string
+		pub    string
 		src    string
 	)
 	if in.At != "" {
@@ -72,7 +76,13 @@ func runGraphRestore(in restoreInput) (restoreResult, error) {
 		if err != nil {
 			return restoreResult{}, err
 		}
+		// A publication commit's tree holds only .depbot/ files: the revision
+		// must pin the code commit the graph describes, or refresh diffs the
+		// code against a tree that has none.
 		commit = v.Commit
+		if v.CodeSha != "" {
+			commit, pub = v.CodeSha, v.Commit
+		}
 		src = in.At
 	} else {
 		data, err := os.ReadFile(in.GraphPath)
@@ -157,7 +167,7 @@ func runGraphRestore(in restoreInput) (restoreResult, error) {
 	}
 
 	return restoreResult{
-		Path: src, Seq: snap.Header.Seq, Commit: commit,
+		Path: src, Seq: snap.Header.Seq, Commit: commit, Publication: pub,
 		Domains: snap.Header.Domains, Counts: snap.Header.Counts, Revisions: revs,
 	}, nil
 }

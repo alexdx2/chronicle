@@ -197,10 +197,16 @@ func ComputeFreshness(repoRoot string, snap *Snapshot, graphVer GraphVersion, ma
 	// first, so this is purely additive: it only changes behavior for a
 	// GraphVersion no caller before Task 9 ever produced.
 	var changedSince []string
-	if graphVer.Commit != "" {
-		changedFiles, err := gitdiff.ChangedFiles(repoRoot, graphVer.Commit, rev)
+	// A publication's Commit holds only .depbot/ files; the code anchor is
+	// the code commit it describes (CodeSha). In-tree versions have none.
+	anchor := graphVer.Commit
+	if graphVer.CodeSha != "" {
+		anchor = graphVer.CodeSha
+	}
+	if anchor != "" {
+		changedFiles, err := gitdiff.ChangedFiles(repoRoot, anchor, rev)
 		if err != nil {
-			return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: changes since %s: %w", graphVer.Commit, err)
+			return Freshness{}, fmt.Errorf("snapshot: ComputeFreshness: changes since %s: %w", anchor, err)
 		}
 		changedSince = make([]string, 0, len(changedFiles))
 		for _, c := range changedFiles {
