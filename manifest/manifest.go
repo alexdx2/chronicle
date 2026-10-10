@@ -84,12 +84,29 @@ type ServiceEntry struct {
 	Role string `yaml:"role,omitempty"`
 }
 
+// Publishers lists the SSH public keys whose signatures make a commit on a
+// chronicle/graphs/* branch a trusted graph publication (spec §4.2). The
+// list is read from the DEFAULT BRANCH tip of origin, never from the
+// working tree — see snapshot.LoadVerifier.
+type Publishers struct {
+	// AllowedSigners is in git's allowed_signers format: one
+	// `<principal> [options] <keytype> <base64>` per line; options such as
+	// valid-after/valid-before are passed through to git untouched. Keys
+	// are never removed from this list (spec §4.2: eternal chains).
+	AllowedSigners string `yaml:"allowed_signers,omitempty"`
+	// Revoked is the content of a gpg.ssh.revocationFile (ssh-keygen KRL, or
+	// one revoked public key per line). A revoked key is untrusted for every
+	// commit regardless of time.
+	Revoked string `yaml:"revoked,omitempty"`
+}
+
 type Manifest struct {
 	Domains          []DomainEntry  `yaml:"-"` // custom unmarshal: supports both list and map formats
 	Tech             []string       `yaml:"tech,omitempty"`
 	Infrastructure   []InfraEntry   `yaml:"infrastructure,omitempty"`
 	Services         []ServiceEntry `yaml:"services,omitempty"`
 	InstructionPacks []string       `yaml:"instruction_packs,omitempty"`
+	Publishers       *Publishers    `yaml:"publishers,omitempty"`
 }
 
 // UnmarshalYAML handles two domain formats:
@@ -103,6 +120,7 @@ func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
 		Infrastructure   []InfraEntry   `yaml:"infrastructure,omitempty"`
 		Services         []ServiceEntry `yaml:"services,omitempty"`
 		InstructionPacks []string       `yaml:"instruction_packs,omitempty"`
+		Publishers       *Publishers    `yaml:"publishers,omitempty"`
 	}
 	if err := value.Decode(&raw); err != nil {
 		return err
@@ -112,6 +130,7 @@ func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
 	m.Infrastructure = raw.Infrastructure
 	m.Services = raw.Services
 	m.InstructionPacks = raw.InstructionPacks
+	m.Publishers = raw.Publishers
 
 	if raw.Domains.Kind == 0 {
 		return nil // no domains field
@@ -175,6 +194,22 @@ func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
 	default:
 		return fmt.Errorf("domains must be a list or map, got YAML kind %d", raw.Domains.Kind)
 	}
+}
+
+// HasPublishers reports whether at least one real signer line is
+// configured — blank lines and `#` comments do not count. Absent or
+// comment-only publishers put the repository in OSS trust-all mode.
+func (m *Manifest) HasPublishers() bool {
+	if m == nil || m.Publishers == nil {
+		return false
+	}
+	for _, line := range strings.Split(m.Publishers.AllowedSigners, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			return true
+		}
+	}
+	return false
 }
 
 // InferServices returns explicit services if defined, otherwise derives them
