@@ -15,6 +15,15 @@ func encodeT(t *testing.T, s *Snapshot) []byte {
 	return buf.Bytes()
 }
 
+func mustContentID(t *testing.T, graph, domain, types []byte) string {
+	t.Helper()
+	id, err := ContentID(graph, domain, types)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func twoNodeSnapshot(seq int) *Snapshot {
 	return &Snapshot{
 		Header: Header{Kind: "header", Format: Format, Version: Version, Seq: seq, Domains: []string{"d"}, FactSchema: FactSchema},
@@ -45,7 +54,7 @@ func TestContentID_IgnoresSeq(t *testing.T) {
 
 func TestContentID_IgnoresRecordOrder(t *testing.T) {
 	canon := encodeT(t, twoNodeSnapshot(1))
-	a, _ := ContentID(canon, nil, nil)
+	a := mustContentID(t, canon, nil, nil)
 	// Encode writes header, then node lines sorted by ID (A before B). Swap the
 	// two node lines by hand so the input file is genuinely out of order.
 	lines := bytes.SplitAfter(canon, []byte("\n"))
@@ -64,12 +73,12 @@ func TestContentID_IgnoresRecordOrder(t *testing.T) {
 }
 
 func TestContentID_ChangesWithContent(t *testing.T) {
-	a, _ := ContentID(encodeT(t, twoNodeSnapshot(1)), []byte("x"), nil)
+	a := mustContentID(t, encodeT(t, twoNodeSnapshot(1)), []byte("x"), nil)
 	changed := twoNodeSnapshot(1)
 	changed.Nodes[0].Name = "Renamed"
-	b, _ := ContentID(encodeT(t, changed), []byte("x"), nil)
-	c, _ := ContentID(encodeT(t, twoNodeSnapshot(1)), []byte("y"), nil)
-	d, _ := ContentID(encodeT(t, twoNodeSnapshot(1)), []byte("x"), []byte("types: {}"))
+	b := mustContentID(t, encodeT(t, changed), []byte("x"), nil)
+	c := mustContentID(t, encodeT(t, twoNodeSnapshot(1)), []byte("y"), nil)
+	d := mustContentID(t, encodeT(t, twoNodeSnapshot(1)), []byte("x"), []byte("types: {}"))
 	if a == b || a == c || a == d {
 		t.Fatalf("content change did not change the id: %s %s %s %s", a, b, c, d)
 	}
@@ -77,8 +86,8 @@ func TestContentID_ChangesWithContent(t *testing.T) {
 
 func TestContentID_NilAndEmptyTypesEqual(t *testing.T) {
 	g := encodeT(t, twoNodeSnapshot(1))
-	a, _ := ContentID(g, []byte("m"), nil)
-	b, _ := ContentID(g, []byte("m"), []byte{})
+	a := mustContentID(t, g, []byte("m"), nil)
+	b := mustContentID(t, g, []byte("m"), []byte{})
 	if a != b {
 		t.Fatal("nil and empty types must hash the same")
 	}
@@ -100,14 +109,20 @@ func TestContentID_ToleratedBadLineIgnored(t *testing.T) {
 	}
 }
 
-func TestContentID_BinaryGarbageIsTolerated(t *testing.T) {
-	// Decode tolerates "\x00\x01" as warnings rather than failing, so ContentID
-	// returns an id for it. Pinned here so a change in Decode is noticed.
-	id, err := ContentID([]byte("\x00\x01"), nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestContentID_HeaderlessInputErrors(t *testing.T) {
+	nodeOnly := []byte(`{"kind":"node","id":"code:class:d:A","domain":"d","name":"A","layer":"code","type":"class"}` + "\n")
+	cases := map[string][]byte{
+		"nil":       nil,
+		"garbage":   []byte("\x00\x01"),
+		"node-only": nodeOnly,
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(id) {
-		t.Fatalf("not 64 lowercase hex: %q", id)
+	for name, graph := range cases {
+		id, err := ContentID(graph, nil, nil)
+		if err == nil {
+			t.Errorf("%s: expected an error, got id %q", name, id)
+		}
+		if id != "" {
+			t.Errorf("%s: expected empty id on error, got %q", name, id)
+		}
 	}
 }

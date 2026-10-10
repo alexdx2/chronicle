@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -17,12 +18,19 @@ import (
 // record and key order and recomputes Counts, so the bytes hashed here are
 // the canonical form regardless of how the input file was assembled.
 // Tolerated Decode warnings (bad_json, unknown_kind, ...) drop the offending
-// line exactly like every other reader does; a file that cannot be read at
-// all is an error.
+// line exactly like every other reader does. Input without a snapshot header
+// (empty, binary garbage, node lines only) is an error: it must not yield a
+// valid-looking id, since ContentID is compared at a trust boundary.
 func ContentID(graph, domain, types []byte) (string, error) {
 	snap, _, err := Decode(bytes.NewReader(graph), DefaultLimits())
 	if err != nil {
 		return "", fmt.Errorf("snapshot: ContentID: %w", err)
+	}
+	if snap == nil || snap.Header.Kind != "header" {
+		return "", errors.New("snapshot: ContentID: no snapshot header in graph.jsonl")
+	}
+	if snap.Header.Format != Format {
+		return "", fmt.Errorf("snapshot: ContentID: unrecognized format %q (want %q)", snap.Header.Format, Format)
 	}
 	snap.Header.Seq = 0
 	var canon bytes.Buffer
