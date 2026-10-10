@@ -155,6 +155,7 @@ func runGraphUpdate(st *store.Store, reg *registry.Registry, graphPath string, c
 
 func newGraphStatusCmd() *cobra.Command {
 	var workingTree, jsonOut bool
+	var includeHead string
 	cmd := &cobra.Command{
 		Use:   "status [<rev>]",
 		Short: "Report per-file graph freshness as of a revision (default HEAD)",
@@ -191,7 +192,7 @@ Prints the non-fresh files as text by default, or the full report with
 				return fmt.Errorf("load manifest: %w", err)
 			}
 
-			result, warnings, err := runGraphStatus(paths.GitDir(), man, rev, workingTree)
+			result, warnings, err := runGraphStatusWith(paths.GitDir(), man, rev, workingTree, includeHead)
 			if err != nil {
 				if errors.Is(err, snapshot.ErrNoVersion) {
 					label := rev
@@ -214,6 +215,7 @@ Prints the non-fresh files as text by default, or the full report with
 	}
 	cmd.Flags().BoolVar(&workingTree, "working-tree", false, "Compare the working tree on disk instead of a git commit")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Machine-readable full freshness report")
+	cmd.Flags().StringVar(&includeHead, "include-head", "", "Also consider the MR-head publication for this code sha")
 	return cmd
 }
 
@@ -235,6 +237,11 @@ Prints the non-fresh files as text by default, or the full report with
 // <rev> != HEAD, reporting the wrong Graph and an incomplete ChangedSince
 // (fixed 2026-09-26 — see task-5-report.md's fix-round-1 section).
 func runGraphStatus(repoRoot string, man *manifest.Manifest, rev string, workingTree bool) (snapshot.Freshness, []snapshot.Warning, error) {
+	return runGraphStatusWith(repoRoot, man, rev, workingTree, "")
+}
+
+// runGraphStatusWith is runGraphStatus with an optional --include-head sha.
+func runGraphStatusWith(repoRoot string, man *manifest.Manifest, rev string, workingTree bool, includeHead string) (snapshot.Freshness, []snapshot.Warning, error) {
 	graphRev := rev
 	if graphRev == "" {
 		graphRev = "HEAD"
@@ -244,7 +251,7 @@ func runGraphStatus(repoRoot string, man *manifest.Manifest, rev string, working
 		scanRev = ""
 	}
 
-	version, err := snapshot.ResolveVersion(repoRoot, graphRev)
+	version, err := snapshot.ResolveVersionWith(repoRoot, graphRev, resolveOptsFor(includeHead))
 	if err != nil {
 		return snapshot.Freshness{}, nil, err
 	}
@@ -287,19 +294,30 @@ func printWarnings(warnings []snapshot.Warning) {
 // would `chronicle graph status` be comparing against here" without
 // printing the whole snapshot.
 type graphShowResult struct {
-	Commit  string          `json:"commit"`
-	Blob    string          `json:"blob"`
-	Seq     int             `json:"seq"`
-	Counts  snapshot.Counts `json:"counts"`
-	Domains []string        `json:"domains"`
+	Commit     string          `json:"commit"`
+	Blob       string          `json:"blob"`
+	Seq        int             `json:"seq"`
+	Counts     snapshot.Counts `json:"counts"`
+	Domains    []string        `json:"domains"`
+	Source     string          `json:"source"`                // "chain" | "head" | "tree"
+	CodeSha    string          `json:"code_sha,omitempty"`    // code commit the graph describes (publications only)
+	SnapshotID string          `json:"snapshot_id,omitempty"` // content identity (publications only)
+	Ref        string          `json:"ref,omitempty"`         // chronicle ref the publication was found on
+	Signature  string          `json:"signature,omitempty"`   // good | none | bad | untrusted | unchecked
 }
 
 func newGraphShowCmd() *cobra.Command {
+	var includeHead string
 	cmd := &cobra.Command{
 		Use:   "show <rev>",
 		Short: "Show the graph version resolved at a revision",
 		Long: `Resolve the nearest graph.jsonl version in <rev>'s history and print its
-identity and contents summary: {commit, blob, seq, counts, domains}.
+identity and contents summary: {commit, blob, seq, counts, domains, source, ...}.
+
+"source" says where the version came from: "chain" (a signed publication on
+chronicle/graphs/*), "head" (your own MR head, with --include-head), "tree"
+(a snapshot committed in the code branch). Publications also report code_sha,
+snapshot_id, ref and signature.
 
 Exits 1 with "no graph version in history of <rev>" (not a panic, not a Go
 stack trace) when no commit reachable from <rev> ever committed
@@ -309,7 +327,7 @@ stack trace) when no commit reachable from <rev> ever committed
 			cmd.SilenceUsage = true
 			rev := args[0]
 
-			result, warnings, err := runGraphShow(paths.GitDir(), rev)
+			result, warnings, err := runGraphShowWith(paths.GitDir(), rev, includeHead)
 			if err != nil {
 				if errors.Is(err, snapshot.ErrNoVersion) {
 					return noVersionMessage(rev)
@@ -321,12 +339,26 @@ stack trace) when no commit reachable from <rev> ever committed
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&includeHead, "include-head", "", "Also consider the MR-head publication for this code sha")
 	return cmd
 }
 
 // runGraphShow is the testable core of `chronicle graph show`.
 func runGraphShow(repoRoot, rev string) (graphShowResult, []snapshot.Warning, error) {
-	version, err := snapshot.ResolveVersion(repoRoot, rev)
+	return runGraphShowWith(repoRoot, rev, "")
+}
+
+// resolveOptsFor turns a --include-head sha into resolve options.
+func resolveOptsFor(includeHead string) snapshot.ResolveOptions {
+	if includeHead == "" {
+		return snapshot.ResolveOptions{}
+	}
+	return snapshot.ResolveOptions{IncludeHeads: []string{includeHead}}
+}
+
+// runGraphShowWith is runGraphShow with an optional --include-head sha.
+func runGraphShowWith(repoRoot, rev, includeHead string) (graphShowResult, []snapshot.Warning, error) {
+	version, err := snapshot.ResolveVersionWith(repoRoot, rev, resolveOptsFor(includeHead))
 	if err != nil {
 		return graphShowResult{}, nil, err
 	}
@@ -335,11 +367,16 @@ func runGraphShow(repoRoot, rev string) (graphShowResult, []snapshot.Warning, er
 		return graphShowResult{}, nil, fmt.Errorf("load graph at %s: %w", version.Commit, err)
 	}
 	result := graphShowResult{
-		Commit:  version.Commit,
-		Blob:    version.Blob,
-		Seq:     version.Seq,
-		Counts:  snap.Header.Counts,
-		Domains: snap.Header.Domains,
+		Commit:     version.Commit,
+		Blob:       version.Blob,
+		Seq:        version.Seq,
+		Counts:     snap.Header.Counts,
+		Domains:    snap.Header.Domains,
+		Source:     version.Source,
+		CodeSha:    version.CodeSha,
+		SnapshotID: version.SnapshotID,
+		Ref:        version.Ref,
+		Signature:  string(version.Signature),
 	}
 	return result, warnings, nil
 }

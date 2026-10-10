@@ -119,3 +119,27 @@ func TestDoctorCleanState(t *testing.T) {
 		t.Fatalf("doctor must list registered agents:\n%s", out.String())
 	}
 }
+
+func TestPublicationReport_NoPublishersWarnsOnce(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q", "-b", "main")
+	writePlainFile(t, repo, "f", "1")
+	commitAllCLI(t, repo, "c")
+	var out bytes.Buffer
+	publicationReport(repo, &out)
+	s := out.String()
+	if !strings.Contains(s, "publishers") || !strings.Contains(s, "trusting every") {
+		t.Fatalf("doctor must warn about missing publishers: %q", s)
+	}
+	if !strings.Contains(s, "no chronicle/graphs/* publications") {
+		t.Fatalf("doctor must say there are no publications: %q", s)
+	}
+}
+
+func TestPublicationReport_NotAGitRepoIsSilent(t *testing.T) {
+	var out bytes.Buffer
+	publicationReport(t.TempDir(), &out)
+	if out.Len() != 0 {
+		t.Fatalf("non-git directory must print nothing: %q", out.String())
+	}
+}

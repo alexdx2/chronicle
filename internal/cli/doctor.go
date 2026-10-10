@@ -11,7 +11,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/internal/wiring"
+	"github.com/alexdx2/chronicle-core/paths"
+	"github.com/alexdx2/chronicle-core/snapshot"
 	"github.com/spf13/cobra"
 )
 
@@ -60,7 +63,55 @@ func runDoctor(agentFilter []string, out io.Writer) error {
 			fmt.Fprintf(out, "           (re-running clears this alert; deleting %s manually also works)\n", journalPath)
 		}
 	}
+	publicationReport(paths.GitDir(), out)
 	return nil
+}
+
+// publicationReport prints the state of graph publications (spec 4.2, 7):
+// trust mode, trusted publication count per chronicle/graphs/* ref, and
+// every warning the publication map produced. Silent outside a git
+// repository; a verifier error is shown as one "!" line and never aborts
+// doctor.
+func publicationReport(repoRoot string, out io.Writer) {
+	if _, err := gitutil.Run(repoRoot, "rev-parse", "--git-dir"); err != nil {
+		return
+	}
+	v, err := snapshot.LoadVerifier(repoRoot)
+	if err != nil {
+		fmt.Fprintf(out, "\ngraph publications:\n  ! %v\n", err)
+		return
+	}
+	defer v.Close()
+	fmt.Fprintf(out, "\ngraph publications:\n")
+	switch v.Mode {
+	case snapshot.VerifySigned:
+		fmt.Fprintf(out, "  trust: signed by publishers in %s\n", v.Source)
+	default:
+		fmt.Fprintf(out, "  trust: no publishers configured, trusting every chronicle/graphs/* commit\n")
+	}
+	refs, err := snapshot.ChainRefs(repoRoot)
+	if err != nil {
+		fmt.Fprintf(out, "  ! %v\n", err)
+		return
+	}
+	if len(refs) == 0 {
+		fmt.Fprintf(out, "  no chronicle/graphs/* publications in this clone\n")
+	}
+	pubs, warns, err := snapshot.PublicationMap(repoRoot, snapshot.ResolveOptions{Verifier: v})
+	if err != nil {
+		fmt.Fprintf(out, "  ! %v\n", err)
+		return
+	}
+	perRef := map[string]int{}
+	for _, p := range pubs {
+		perRef[p.Ref]++
+	}
+	for _, ref := range refs {
+		fmt.Fprintf(out, "  %s: %d trusted publication(s)\n", ref, perRef[ref])
+	}
+	for _, w := range warns {
+		fmt.Fprintf(out, "  ! %s\n", w)
+	}
 }
 
 // reattachCommandFor maps a journal's agent to the real CLI command that

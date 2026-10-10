@@ -623,3 +623,24 @@ func TestPrintWarnings_EmptyPrintsNothing(t *testing.T) {
 		t.Errorf("printWarnings(nil) wrote %q, want nothing", out)
 	}
 }
+
+func TestRunGraphShow_ReportsPublicationIdentity(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q", "-b", "main")
+	writePlainFile(t, repo, "f", "1")
+	commitAllCLI(t, repo, "code")
+	// Fallback result on a plain repository: Source "tree", identity fields empty.
+	writeGraphFixture(t, repo, 1, []string{"d"}, nil)
+	commitAllCLI(t, repo, "snapshot in tree")
+	res, _, err := runGraphShow(repo, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Source != "tree" || res.CodeSha != "" || res.SnapshotID != "" {
+		t.Fatalf("in-tree snapshot: %+v", res)
+	}
+	res2, _, err := runGraphShowWith(repo, "HEAD", "")
+	if err != nil || res2.Commit != res.Commit || res2.Source != res.Source {
+		t.Fatalf("runGraphShowWith: %+v %v", res2, err)
+	}
+}
