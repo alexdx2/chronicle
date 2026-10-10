@@ -124,15 +124,59 @@ func TestPublicationReport_NoPublishersWarnsOnce(t *testing.T) {
 	repo := t.TempDir()
 	gitRun(t, repo, "init", "-q", "-b", "main")
 	writePlainFile(t, repo, "f", "1")
-	commitAllCLI(t, repo, "c")
+	c := commitAllCLI(t, repo, "c")
+	gitRun(t, repo, "update-ref", "refs/heads/chronicle/graphs/main", c)
 	var out bytes.Buffer
 	publicationReport(repo, &out)
 	s := out.String()
-	if !strings.Contains(s, "publishers") || !strings.Contains(s, "trusting every") {
+	if !strings.Contains(s, "no publishers configured") {
 		t.Fatalf("doctor must warn about missing publishers: %q", s)
 	}
+	if n := strings.Count(s, "trusting every"); n != 1 {
+		t.Fatalf("TrustAll warning must print exactly once, got %d: %q", n, s)
+	}
+}
+
+func TestPublicationReport_NoRefsSkipsTrustList(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q", "-b", "main")
+	writePlainFile(t, repo, "f", "1")
+	commitAllCLI(t, repo, "c")
+	gitRun(t, repo, "remote", "add", "origin", "/dev/null") // origin, but no default branch known
+	var out bytes.Buffer
+	publicationReport(repo, &out)
+	s := out.String()
 	if !strings.Contains(s, "no chronicle/graphs/* publications") {
-		t.Fatalf("doctor must say there are no publications: %q", s)
+		t.Fatalf("expected the no-publications line: %q", s)
+	}
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "  !") {
+			t.Fatalf("no refs must mean no trust-list errors: %q", s)
+		}
+	}
+}
+
+func TestPublicationReport_RefsWithUnknownDefaultBranchWarns(t *testing.T) {
+	repo := t.TempDir()
+	gitRun(t, repo, "init", "-q", "-b", "main")
+	writePlainFile(t, repo, "f", "1")
+	c := commitAllCLI(t, repo, "c")
+	gitRun(t, repo, "remote", "add", "origin", "/dev/null")
+	gitRun(t, repo, "update-ref", "refs/heads/chronicle/graphs/main", c)
+	var out bytes.Buffer
+	publicationReport(repo, &out)
+	s := out.String()
+	n := 0
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "  ! ") {
+			n++
+			if !strings.Contains(line, "cannot determine origin default branch") {
+				t.Fatalf("unexpected warning line: %q", line)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one '  ! ' line, got %d: %q", n, s)
 	}
 }
 

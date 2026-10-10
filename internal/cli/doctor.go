@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/internal/wiring"
@@ -76,6 +77,16 @@ func publicationReport(repoRoot string, out io.Writer) {
 	if _, err := gitutil.Run(repoRoot, "rev-parse", "--git-dir"); err != nil {
 		return
 	}
+	refs, err := snapshot.ChainRefs(repoRoot)
+	if err != nil {
+		fmt.Fprintf(out, "\ngraph publications:\n  ! %v\n", err)
+		return
+	}
+	if len(refs) == 0 {
+		// No publications: the trust list is irrelevant, do not load it.
+		fmt.Fprintf(out, "\ngraph publications:\n  no chronicle/graphs/* publications in this clone\n")
+		return
+	}
 	v, err := snapshot.LoadVerifier(repoRoot)
 	if err != nil {
 		fmt.Fprintf(out, "\ngraph publications:\n  ! %v\n", err)
@@ -88,14 +99,6 @@ func publicationReport(repoRoot string, out io.Writer) {
 		fmt.Fprintf(out, "  trust: signed by publishers in %s\n", v.Source)
 	default:
 		fmt.Fprintf(out, "  trust: no publishers configured, trusting every chronicle/graphs/* commit\n")
-	}
-	refs, err := snapshot.ChainRefs(repoRoot)
-	if err != nil {
-		fmt.Fprintf(out, "  ! %v\n", err)
-		return
-	}
-	if len(refs) == 0 {
-		fmt.Fprintf(out, "  no chronicle/graphs/* publications in this clone\n")
 	}
 	pubs, warns, err := snapshot.PublicationMap(repoRoot, snapshot.ResolveOptions{Verifier: v})
 	if err != nil {
@@ -110,6 +113,9 @@ func publicationReport(repoRoot string, out io.Writer) {
 		fmt.Fprintf(out, "  %s: %d trusted publication(s)\n", ref, perRef[ref])
 	}
 	for _, w := range warns {
+		if v.Mode == snapshot.TrustAll && strings.Contains(w, "trusting every") {
+			continue // the trust line above already says it
+		}
 		fmt.Fprintf(out, "  ! %s\n", w)
 	}
 }

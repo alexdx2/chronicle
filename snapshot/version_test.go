@@ -322,3 +322,46 @@ func TestResolveVersion_IncludedHeadInVerifySignedMode(t *testing.T) {
 		t.Fatalf("an included head is accepted without a signature in VerifySigned mode: %+v %v", v, err)
 	}
 }
+
+// TestPublicationMapAgreesWithResolveVersion pins the seam between the two
+// resolvers (spec §7): remote-tracking refs first, and within a ref the
+// trusted publication closest to the tip wins.
+func TestPublicationMapAgreesWithResolveVersion(t *testing.T) {
+	key, signer := sshKeyT(t, "ci@test")
+	repo := initGitRepoT(t)
+	setOriginDefaultT(t, repo, "publishers:\n  allowed_signers: |\n    "+signer+"\n")
+	c1 := codeCommitT(t, repo, "f", "1", "c1")
+	c2 := codeCommitT(t, repo, "f", "2", "c2")
+	c3 := codeCommitT(t, repo, "f", "3", "c3")
+	chain := ChainRefPrefix + "main"
+	_, m := graphFilesT(t, 1, "x")
+	g := func(name string) []byte { b, _ := graphFilesT(t, 1, name); return b }
+
+	publishT(t, repo, chain, c1, "main", key, g("C1"), m, false)
+	publishT(t, repo, chain, c2, "main", "", g("C2-UNSIGNED"), m, false)
+	publishT(t, repo, chain, c2, "main", key, g("C2-SIGNED"), m, false)
+	publishT(t, repo, chain, c3, "main", key, g("C3-FIRST"), m, false)
+	publishT(t, repo, chain, c3, "main", key, g("C3-FORCED"), m, true)
+	publishT(t, repo, RemoteChainRefPrefix+"release-1", c1, "release-1", key, g("C1-REMOTE"), m, false)
+
+	pm, _, err := PublicationMap(repo, ResolveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, sha := range map[string]string{"c1": c1, "c2": c2, "c3": c3} {
+		v, err := ResolveVersion(repo, sha)
+		if err != nil {
+			t.Fatalf("%s: ResolveVersion: %v", name, err)
+		}
+		p, ok := pm[sha]
+		if !ok {
+			t.Fatalf("%s: PublicationMap has no entry", name)
+		}
+		if p.Commit != v.Commit {
+			t.Errorf("%s: PublicationMap=%s (%s) ResolveVersion=%s (%s)", name, p.Commit, p.Ref, v.Commit, v.Ref)
+		}
+	}
+	if !strings.HasPrefix(pm[c1].Ref, RemoteChainRefPrefix) {
+		t.Errorf("c1 must resolve through the remote twin first, got %s", pm[c1].Ref)
+	}
+}

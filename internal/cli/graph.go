@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/manifest"
@@ -251,7 +252,11 @@ func runGraphStatusWith(repoRoot string, man *manifest.Manifest, rev string, wor
 		scanRev = ""
 	}
 
-	version, err := snapshot.ResolveVersionWith(repoRoot, graphRev, resolveOptsFor(includeHead))
+	ropt, err := resolveOptsFor(includeHead)
+	if err != nil {
+		return snapshot.Freshness{}, nil, err
+	}
+	version, err := snapshot.ResolveVersionWith(repoRoot, graphRev, ropt)
 	if err != nil {
 		return snapshot.Freshness{}, nil, err
 	}
@@ -349,16 +354,25 @@ func runGraphShow(repoRoot, rev string) (graphShowResult, []snapshot.Warning, er
 }
 
 // resolveOptsFor turns a --include-head sha into resolve options.
-func resolveOptsFor(includeHead string) snapshot.ResolveOptions {
+func resolveOptsFor(includeHead string) (snapshot.ResolveOptions, error) {
 	if includeHead == "" {
-		return snapshot.ResolveOptions{}
+		return snapshot.ResolveOptions{}, nil
 	}
-	return snapshot.ResolveOptions{IncludeHeads: []string{includeHead}}
+	if !fullShaRE.MatchString(includeHead) {
+		return snapshot.ResolveOptions{}, fmt.Errorf("--include-head must be a full commit sha (40 or 64 lowercase hex), got %q", includeHead)
+	}
+	return snapshot.ResolveOptions{IncludeHeads: []string{includeHead}}, nil
 }
+
+var fullShaRE = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // runGraphShowWith is runGraphShow with an optional --include-head sha.
 func runGraphShowWith(repoRoot, rev, includeHead string) (graphShowResult, []snapshot.Warning, error) {
-	version, err := snapshot.ResolveVersionWith(repoRoot, rev, resolveOptsFor(includeHead))
+	ropt, err := resolveOptsFor(includeHead)
+	if err != nil {
+		return graphShowResult{}, nil, err
+	}
+	version, err := snapshot.ResolveVersionWith(repoRoot, rev, ropt)
 	if err != nil {
 		return graphShowResult{}, nil, err
 	}
