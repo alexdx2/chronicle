@@ -42,29 +42,51 @@ type Verifier struct {
 // DefaultBranchRef is the ref whose manifest is the trust authority: the
 // branch origin/HEAD points to, else refs/remotes/origin/main, else
 // refs/heads/main, else HEAD. The working tree is never the authority.
-func DefaultBranchRef(repoRoot string) string {
+// The HEAD fallback is allowed only when the repository has no origin
+// remote; with an origin but no resolvable default it is an error (fail
+// closed), never a silent fall back to local state.
+func DefaultBranchRef(repoRoot string) (string, error) {
 	if out, err := runGit(repoRoot, "symbolic-ref", "-q", "refs/remotes/origin/HEAD"); err == nil {
 		if ref := strings.TrimSpace(out); strings.HasPrefix(ref, "refs/remotes/origin/") {
-			return ref
+			return ref, nil
 		}
 	}
-	for _, ref := range []string{"refs/remotes/origin/main", "refs/heads/main"} {
-		if _, err := runGit(repoRoot, "rev-parse", "--verify", "-q", "--end-of-options", ref); err == nil {
-			return ref
-		}
+	if _, err := runGit(repoRoot, "rev-parse", "--verify", "-q", "--end-of-options", "refs/remotes/origin/main"); err == nil {
+		return "refs/remotes/origin/main", nil
 	}
-	return "HEAD"
+	if _, err := runGit(repoRoot, "remote", "get-url", "origin"); err == nil {
+		return "", fmt.Errorf("snapshot: cannot determine origin default branch for %s: fetch it or run git remote set-head origin -a", repoRoot)
+	}
+	if _, err := runGit(repoRoot, "rev-parse", "--verify", "-q", "--end-of-options", "refs/heads/main"); err == nil {
+		return "refs/heads/main", nil
+	}
+	return "HEAD", nil
 }
 
 // LoadVerifier reads publishers from the manifest at DefaultBranchRef.
-// A missing manifest or a manifest without publishers yields TrustAll.
+// Only a manifest that is cleanly absent from a resolved default ref, or one
+// without publishers, yields TrustAll. Every other failure is an error.
 func LoadVerifier(repoRoot string) (*Verifier, error) {
-	ref := DefaultBranchRef(repoRoot)
-	data, err := gitdiff.Show(repoRoot, ref, ManifestPath)
+	ref, err := DefaultBranchRef(repoRoot)
 	if err != nil {
-		// No manifest at the default branch: OSS mode.
+		return nil, err
+	}
+	if _, err := runGit(repoRoot, "rev-parse", "--verify", "-q", "--end-of-options", ref+"^{commit}"); err != nil {
+		return nil, fmt.Errorf("snapshot: LoadVerifier: default branch %s does not resolve: %w", ref, err)
+	}
+	// ref resolves to a commit, so ls-tree succeeding with empty output means
+	// the path is absent; any ls-tree failure is a real git error.
+	listed, err := runGit(repoRoot, "ls-tree", "--name-only", ref, "--", ManifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot: LoadVerifier: look up %s at %s: %w", ManifestPath, ref, err)
+	}
+	if strings.TrimSpace(listed) == "" {
 		return &Verifier{Mode: TrustAll, Warnings: []string{
 			fmt.Sprintf("no %s at %s: trusting every chronicle/graphs/* commit (configure publishers for a team)", ManifestPath, ref)}}, nil
+	}
+	data, err := gitdiff.Show(repoRoot, ref, ManifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot: LoadVerifier: %w", err)
 	}
 	man, err := manifest.Load(data)
 	if err != nil {

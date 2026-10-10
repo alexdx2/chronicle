@@ -95,8 +95,17 @@ func publicationMsg(codeSha, snapID, codeRef, base string, force bool) string {
 
 // setOriginDefaultT writes a manifest with the given publishers block onto a
 // fake origin default branch refs/remotes/origin/main and points origin/HEAD at it.
+// addOriginT configures an origin remote (once).
+func addOriginT(t *testing.T, repo string) {
+	t.Helper()
+	if captureGitAllowFailT(t, repo, "remote", "get-url", "origin") == "" {
+		runGitT(t, repo, "remote", "add", "origin", "/dev/null")
+	}
+}
+
 func setOriginDefaultT(t *testing.T, repo, publishersYAML string) {
 	t.Helper()
+	addOriginT(t, repo)
 	writeFileT(t, repo, ".depbot/chronicle.domain.yaml", "domains:\n  d: {name: D}\n"+publishersYAML)
 	runGitT(t, repo, "add", "-f", ".depbot/chronicle.domain.yaml")
 	c := signedCommitT(t, repo, "", "manifest on origin default")
@@ -169,7 +178,7 @@ func TestLoadVerifier_WorkingTreeManifestIgnored(t *testing.T) {
 func TestLoadVerifier_RevokedFileWhenConfigured(t *testing.T) {
 	_, signer := sshKeyT(t, "ci@test")
 	repo := initGitRepoT(t)
-	setOriginDefaultT(t, repo, "publishers:\n  allowed_signers: |\n    "+signer+"\n  revoked: |\n    "+strings.Join(strings.Fields(signer)[2:], " ")+"\n")
+	setOriginDefaultT(t, repo, "publishers:\n  allowed_signers: |\n    "+signer+"\n  revoked: |\n    "+strings.Join(strings.Fields(signer)[2:4], " ")+"\n")
 	v, err := LoadVerifier(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -182,22 +191,92 @@ func TestLoadVerifier_RevokedFileWhenConfigured(t *testing.T) {
 
 func TestDefaultBranchRef(t *testing.T) {
 	repo := initGitRepoT(t)
-	if got := DefaultBranchRef(repo); got != "HEAD" {
-		t.Fatalf("empty repo without origin: want HEAD, got %s", got)
+	if got, err := DefaultBranchRef(repo); err != nil || got != "HEAD" {
+		t.Fatalf("empty repo without origin: want HEAD, got %s, %v", got, err)
 	}
 	writeFileT(t, repo, "f", "1")
 	runGitT(t, repo, "add", "f")
 	runGitT(t, repo, "commit", "-q", "-m", "c")
-	if got := DefaultBranchRef(repo); got != "refs/heads/main" {
-		t.Fatalf("local main only: want refs/heads/main, got %s", got)
+	if got, err := DefaultBranchRef(repo); err != nil || got != "refs/heads/main" {
+		t.Fatalf("local main only: want refs/heads/main, got %s, %v", got, err)
 	}
 	runGitT(t, repo, "update-ref", "refs/remotes/origin/main", captureGitT(t, repo, "rev-parse", "HEAD"))
-	if got := DefaultBranchRef(repo); got != "refs/remotes/origin/main" {
-		t.Fatalf("origin/main present: got %s", got)
+	if got, err := DefaultBranchRef(repo); err != nil || got != "refs/remotes/origin/main" {
+		t.Fatalf("origin/main present: got %s, %v", got, err)
 	}
 	runGitT(t, repo, "update-ref", "refs/remotes/origin/trunk", captureGitT(t, repo, "rev-parse", "HEAD"))
 	runGitT(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
-	if got := DefaultBranchRef(repo); got != "refs/remotes/origin/trunk" {
-		t.Fatalf("origin/HEAD wins: got %s", got)
+	if got, err := DefaultBranchRef(repo); err != nil || got != "refs/remotes/origin/trunk" {
+		t.Fatalf("origin/HEAD wins: got %s, %v", got, err)
+	}
+}
+
+func TestLoadVerifier_UnresolvableDefaultErrors(t *testing.T) {
+	repo := initGitRepoT(t)
+	writeFileT(t, repo, "f", "1")
+	runGitT(t, repo, "add", "f")
+	runGitT(t, repo, "commit", "-q", "-m", "c")
+	addOriginT(t, repo)
+	runGitT(t, repo, "update-ref", "refs/remotes/origin/feature", captureGitT(t, repo, "rev-parse", "HEAD"))
+	if got, err := DefaultBranchRef(repo); err == nil {
+		t.Fatalf("origin without a default branch must error, got %s", got)
+	}
+	if v, err := LoadVerifier(repo); err == nil {
+		t.Fatalf("LoadVerifier must propagate the error, got %+v", v)
+	}
+}
+
+func TestLoadVerifier_ManifestAbsentIsTrustAll(t *testing.T) {
+	repo := initGitRepoT(t)
+	addOriginT(t, repo)
+	writeFileT(t, repo, "f", "1")
+	runGitT(t, repo, "add", "f")
+	c := signedCommitT(t, repo, "", "no manifest")
+	runGitT(t, repo, "update-ref", "refs/remotes/origin/main", c)
+	runGitT(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	v, err := LoadVerifier(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	if v.Mode != TrustAll || len(v.Warnings) != 1 || !strings.Contains(v.Warnings[0], "no .depbot/chronicle.domain.yaml") {
+		t.Fatalf("absent manifest ⇒ TrustAll with warning: %+v", v)
+	}
+}
+
+func TestLoadVerifier_MalformedManifestErrors(t *testing.T) {
+	repo := initGitRepoT(t)
+	addOriginT(t, repo)
+	writeFileT(t, repo, ".depbot/chronicle.domain.yaml", "domains: [\n")
+	runGitT(t, repo, "add", "-f", ".depbot/chronicle.domain.yaml")
+	c := signedCommitT(t, repo, "", "bad manifest")
+	runGitT(t, repo, "update-ref", "refs/remotes/origin/main", c)
+	runGitT(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	if v, err := LoadVerifier(repo); err == nil {
+		t.Fatalf("malformed manifest must error, got %+v", v)
+	}
+}
+
+func TestLoadVerifier_NotARepoErrors(t *testing.T) {
+	if v, err := LoadVerifier(t.TempDir()); err == nil {
+		t.Fatalf("not a repository must error, got %+v", v)
+	}
+}
+
+func TestVerifier_CloseRemovesFiles(t *testing.T) {
+	_, signer := sshKeyT(t, "ci@test")
+	repo := initGitRepoT(t)
+	setOriginDefaultT(t, repo, "publishers:\n  allowed_signers: |\n    "+signer+"\n")
+	v, err := LoadVerifier(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(v.allowedPath)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("allowed_signers must exist with mode 0600: %v %v", st, err)
+	}
+	v.Close()
+	if _, err := os.Stat(v.allowedPath); !os.IsNotExist(err) {
+		t.Fatalf("Close must remove the files: %v", err)
 	}
 }
