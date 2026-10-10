@@ -62,6 +62,8 @@ type FileUsage struct {
 	Usage      llm.Usage `json:"usage"`
 	DurationMS int64     `json:"duration_ms"`
 	Error      string    `json:"error,omitempty"`
+	// Dropped counts facts removed by sanitizeFacts (schema rules the model broke).
+	Dropped int `json:"dropped_facts,omitempty"`
 }
 
 // RunResult summarizes a headless run.
@@ -486,6 +488,7 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 		var parsed *parsedAnswer
 		if len(answers) == len(chunks) && fu.Status == "" {
 			parsed = mergeAnswers(answers)
+			parsed.Facts, fu.Dropped = sanitizeFacts(item.FilePath, content, parsed.Facts)
 		}
 		if parsed != nil {
 			fu.Status = parsed.Status

@@ -115,7 +115,7 @@ Rules:
 ```
 
 `injects` = this file receives a dependency through DI / constructor / provider injection.
-`provides` = this file/module declares it provides/exports/registers a service.
+`provides` = this module/container registers a provider or controller (a `@Module` providers/controllers array, a DI container). Exporting a function or class from an ordinary file is NOT providing.
 
 ## Imports
 
@@ -224,6 +224,27 @@ DO NOT emit `dependency` from source code files — a source-level import is an 
 
 `produces` = publishes/emits/sends a message, event, or queue item.
 `consumes` = handles/subscribes to/receives a message or event.
+
+# Precision rules
+
+A wrong fact poisons the graph more than a missing one. Each rule below targets a mistake models make often.
+
+- `injects`: a provider/service object this code receives from outside: constructor or field injection, `@Inject`,
+  a DI container, a service passed into a constructor or factory (Go, Python, Java, TS alike). NOT a bag of
+  callbacks (`deps: FooDeps` whose members are functions), an imported function (`readForm`, `getDb`) or a constant.
+- `calls_service`: a method called on a service/provider/client OBJECT: an injected field (`this.decisions.review()`
+  => `to` = `DecisionService`), an imported client, an SDK client. NOT a plain function call (`getDb()`,
+  `readForm(req)`), NOT a callback taken from a parameter bag (`deps.finalize()`), NOT a library utility.
+  When unsure, omit it.
+- `model` / `enum`: only where the file DEFINES a persisted schema: Prisma, GraphQL, proto, ORM entity classes, DDL.
+  A TypeScript `type`, `interface`, zod schema, DTO, row or state type is NOT a model.
+- `uses_model`: a model that exists in the data layer, reached through an ORM or database client. NOT a row, state or
+  DTO type, and not a name that only appears in a comment.
+- `provides`: module / DI-container registration only. NOT the exported functions or classes of an ordinary file.
+- `produces` / `consumes`: message brokers, queues, event buses and topics only. NOT SDK calls, file writes,
+  database writes or HTTP.
+- `endpoint`: an inbound route this file serves. An outbound absolute URL is `http_call`, never `endpoint`.
+- A file of pure logic with no external effects has no facts: return `no_runtime_architecture` with an empty list.
 
 # File classification
 
