@@ -102,23 +102,29 @@ func ResolveVersionWith(repoRoot, rev string, opt ResolveOptions) (GraphVersion,
 			}
 		}
 	}
-	for sha, ref := range heads {
-		pubs, w, err := listPublications(repoRoot, ref, nil, false)
-		if err != nil {
-			return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
-		}
-		warns = append(warns, w...)
+	for sha, refs := range heads {
 		at, ok := pos[sha]
-		if !ok || len(pubs) == 0 {
+		if !ok {
 			continue
 		}
-		if pubs[0].CodeSha != sha {
-			warns = append(warns, fmt.Sprintf("%s: head publication describes %s, not %s — skipped", ref, pubs[0].CodeSha, sha))
-			continue
+		for _, ref := range refs { // remote-tracking first, then local
+			pubs, w, err := listPublications(repoRoot, ref, nil, false)
+			if err != nil {
+				return GraphVersion{}, fmt.Errorf("snapshot: ResolveVersion: %w", err)
+			}
+			warns = append(warns, w...)
+			if len(pubs) == 0 {
+				continue
+			}
+			if pubs[0].CodeSha != sha {
+				warns = append(warns, fmt.Sprintf("%s: head publication describes %s, not %s — skipped", ref, pubs[0].CodeSha, sha))
+				continue
+			}
+			p := pubs[0]
+			p.Signature = SigUnchecked
+			cands = append(cands, cand{p: p, pos: at, refOrder: -1, head: true})
+			break
 		}
-		p := pubs[0]
-		p.Signature = SigUnchecked
-		cands = append(cands, cand{p: p, pos: at, refOrder: -1, head: true})
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
 		a, b := cands[i], cands[j]
@@ -152,7 +158,7 @@ func ResolveVersionWith(repoRoot, rev string, opt ResolveOptions) (GraphVersion,
 			}
 			p.Signature = signatureFromCode(strings.TrimSpace(code))
 		}
-		if !v.Trusted(p) {
+		if !c.head && !v.Trusted(p) {
 			continue
 		}
 		return versionFromPublication(repoRoot, p)
@@ -160,16 +166,15 @@ func ResolveVersionWith(repoRoot, rev string, opt ResolveOptions) (GraphVersion,
 	return resolveInTree(repoRoot, rev)
 }
 
-// existingHeadRefs maps each requested code sha to the head ref that exists
-// for it (remote-tracking first, then local).
-func existingHeadRefs(repoRoot string, shas []string) map[string]string {
-	heads := map[string]string{}
+// existingHeadRefs maps each requested code sha to the head refs that exist
+// for it, remote-tracking first, then local.
+func existingHeadRefs(repoRoot string, shas []string) map[string][]string {
+	heads := map[string][]string{}
 	for _, sha := range shas {
 		local, remote := HeadRef(sha)
 		for _, ref := range []string{remote, local} {
 			if _, err := runGit(repoRoot, "rev-parse", "--verify", "-q", "--end-of-options", ref); err == nil {
-				heads[sha] = ref
-				break
+				heads[sha] = append(heads[sha], ref)
 			}
 		}
 	}

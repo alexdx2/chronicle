@@ -303,3 +303,22 @@ func TestResolveVersion_OriginWithoutDefaultStillResolvesInTree(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+func TestResolveVersion_IncludedHeadInVerifySignedMode(t *testing.T) {
+	key, signer := sshKeyT(t, "ci@test")
+	repo := initGitRepoT(t)
+	setOriginDefaultT(t, repo, "publishers:\n  allowed_signers: |\n    "+signer+"\n")
+	c1 := codeCommitT(t, repo, "f", "1", "c1")
+	gChain, m := graphFilesT(t, 1, "CHAIN")
+	gHead, _ := graphFilesT(t, 1, "HEAD")
+	pChain := publishT(t, repo, ChainRefPrefix+"main", c1, "main", key, gChain, m, false)
+	pHead := publishT(t, repo, HeadRefPrefix+c1, c1, "merge-request/1", "", gHead, m, false)
+	v, err := ResolveVersion(repo, c1)
+	if err != nil || v.Commit != pChain {
+		t.Fatalf("default resolution uses the signed chain: %+v %v", v, err)
+	}
+	v, err = ResolveVersionWith(repo, c1, ResolveOptions{IncludeHeads: []string{c1}})
+	if err != nil || v.Commit != pHead || v.Source != "head" {
+		t.Fatalf("an included head is accepted without a signature in VerifySigned mode: %+v %v", v, err)
+	}
+}
