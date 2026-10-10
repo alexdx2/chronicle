@@ -96,6 +96,16 @@ func parseLogRecords(out, ref string) ([]Publication, []string) {
 			warns = append(warns, fmt.Sprintf("%s: record %d: expected 8 fields, got %d", ref, i, len(f)))
 			continue
 		}
+		multi := false
+		for _, v := range f[2:] {
+			if strings.Contains(strings.TrimSpace(v), "\n") {
+				multi = true
+			}
+		}
+		if multi {
+			warns = append(warns, fmt.Sprintf("%s: %s: duplicated or multi-line trailer", ref, strings.TrimSpace(f[0])))
+			continue
+		}
 		p := Publication{
 			Commit: strings.TrimSpace(f[0]), Ref: ref,
 			CodeSha: strings.TrimSpace(f[2]), SnapshotID: strings.TrimSpace(f[3]),

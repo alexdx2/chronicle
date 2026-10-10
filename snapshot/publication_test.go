@@ -97,3 +97,15 @@ func TestChainRefs_RemoteTwinFirstLocalSkipped(t *testing.T) {
 		t.Fatalf("got %v want %v", refs, want)
 	}
 }
+
+func TestParseLogRecords_DuplicateTrailerSkipped(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	out := logLine("7777777777777777777777777777777777777777", "G", sha, strings.Repeat("0", 64), "main", "", "7", "true\nfalse")
+	pubs, warns := parseLogRecords(out, ChainRefPrefix+"main")
+	if len(pubs) != 0 {
+		t.Fatalf("a record with a duplicated trailer must be skipped, not parsed with a guessed value: %+v", pubs)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "duplicated or multi-line trailer") {
+		t.Fatalf("want one duplicated-trailer warning, got %v", warns)
+	}
+}
