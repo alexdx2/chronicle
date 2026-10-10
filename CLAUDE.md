@@ -151,6 +151,36 @@ expected. And the contents of a merge request's files reach the model, so an MR 
 own review; the facts it can produce are bounded by the fact schema and by resolution against the
 graph, and nothing from them is ever executed.
 
+**Graph publications (team mode, spec 2026-10-10-team-chronicle-server-design.md).** Besides the
+in-tree `.depbot/graph.jsonl`, a graph version can live as a *publication commit* on a branch
+`chronicle/graphs/<code-branch>` (one commit per published snapshot, trailers `Chronicle-Code-Sha`,
+`Chronicle-Snapshot-Id`, `Chronicle-Code-Ref`, `Chronicle-Base`, `Chronicle-Schema`, `Chronicle-Force`)
+or `chronicle/heads/<code-sha>` (one MR head). Records with duplicated or multi-line trailers are
+skipped with a warning.
+
+`snapshot.ResolveVersion` / `ResolveVersionWith(repoRoot, rev, ResolveOptions{IncludeHeads, Verifier})`
+is candidate-first. With no `chronicle/graphs/*` refs and no requested head refs it goes straight to
+the in-tree history and never loads the trust list. Otherwise it collects candidates from the chain
+refs (remote-tracking twins first) without signature checks, orders them by position in
+`git rev-list --topo-order <rev>`, then ref order, then distance from the tip (a requested head ranks
+first at its own sha), and verifies signatures only for chain candidates, one at a time, until one is
+trusted. Heads named in `IncludeHeads` are accepted without signature checks (CLI: `graph show` /
+`graph status --include-head <sha>`). If no candidate is accepted, the in-tree history is the
+fallback. `graph show` JSON carries `source`, `code_sha`, `snapshot_id`, `ref`, `signature`;
+`chronicle doctor` prints a "graph publications" section.
+
+Trust: `snapshot.LoadVerifier` is fail-closed. It reads `publishers` from the manifest at the origin
+default branch (origin/HEAD, then origin/main, then local main, then HEAD, the last only when there is
+no `origin` remote), never from the working tree; it errors if that branch cannot be determined or
+does not resolve. Only when the manifest is absent or has no publishers does it return TrustAll (with
+a warning). With publishers, only chain commits with a good SSH signature from `allowed_signers`
+count. Heads are never signed. `Verifier.GitArgs()` supplies `gpg.ssh.allowedSignersFile` /
+`revocationFile`, and signatures are checked through `git log` with `%G?`.
+
+`snapshot.ContentID(graph, domain, types)` is the content identity (sha256 over the re-encoded graph
+with `Seq=0`, manifest, types); it errors on input without a snapshot header and must be computed from
+exported files, not from a store.
+
 ## Signal pipeline (scan finalize)
 
 Every `FinalizeIncrementalScan` runs a best-effort post-pass chain
