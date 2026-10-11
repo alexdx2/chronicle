@@ -72,6 +72,7 @@ func NewRootCmd() *cobra.Command {
 		newImpactCmd(),
 		newReviewCmd(),
 		newExtractCmd(),
+		newScanCmd(),
 		newAdminCmd(),
 		newAliasCmd(),
 		newJournalCmd(),
@@ -190,10 +191,19 @@ func refuseWrite(notice string, quiet bool) {
 	outputError(errors.New(notice))
 }
 
-func openGraph() *graph.Graph {
+func openGraph() *graph.Graph { return openGraphWith(true) }
+
+// openGraphWith is openGraph; skeleton=false leaves a missing manifest alone
+// (only the directory is created), for the one command that bootstraps its own
+// (scan --full) and must see the repository without a placeholder manifest.
+func openGraphWith(skeleton bool) *graph.Graph {
 	resolveWorktreeGraph()
 	resolveDefaults()
-	ensureDepbotDir()
+	if skeleton {
+		ensureDepbotDir()
+	} else {
+		os.MkdirAll(filepath.Dir(dbPath), 0755)
+	}
 
 	s, err := store.Open(dbPath)
 	if err != nil {
