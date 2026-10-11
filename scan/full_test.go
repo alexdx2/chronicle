@@ -423,3 +423,41 @@ func containsStr(list []string, want string) bool {
 	}
 	return false
 }
+
+// A tracked file that is not a regular file of the working copy (symlink,
+// submodule, one that cannot be statted) is not sent, and not silent: it is in
+// the report's Skipped with its reason.
+func TestFullScan_IrregularFilesAreReportedSkipped(t *testing.T) {
+	e := newScanRepoT(t, fiveFiles(), true)
+	if err := os.Symlink("f1.ts", filepath.Join(e.root, "src", "link.ts")); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, e.root, "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("ab", 20)+",src/sub")
+	if err := os.MkdirAll(filepath.Join(e.root, "src", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, e.root, "add", "src/link.ts")
+	gitT(t, e.root, "commit", "-q", "-m", "irregular")
+	if err := os.Remove(filepath.Join(e.root, "src", "f5.ts")); err != nil { // tracked, gone from disk
+		t.Fatal(err)
+	}
+	b := &countingBackend{}
+	rep, err := FullScan(context.Background(), e.g, fullOpts(e, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	why := map[string]string{}
+	for _, s := range rep.Skipped {
+		why[s.Path] = s.Error
+	}
+	if len(rep.Skipped) != 3 || !strings.Contains(why["src/link.ts"], "symlink") ||
+		!strings.Contains(why["src/sub"], "submodule") || !strings.Contains(why["src/f5.ts"], "cannot stat") {
+		t.Fatalf("Skipped = %+v", rep.Skipped)
+	}
+	if b.total() != 4 || b.callsFor("src/link.ts") != 0 || b.callsFor("src/sub") != 0 {
+		t.Fatalf("calls = %v", b.calls)
+	}
+	if len(rep.Failed) != 0 || !rep.Complete {
+		t.Fatalf("a skip is not a failure: failed %+v complete %v", rep.Failed, rep.Complete)
+	}
+}

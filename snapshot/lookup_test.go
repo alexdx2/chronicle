@@ -240,9 +240,31 @@ func TestLookup_UnknownShaWithoutCloneStillExact(t *testing.T) {
 	}
 }
 
+// A repo with no snapshots at all is answered without touching git: the code
+// repository need not exist, and no step leaves a warning.
+func TestLookup_EmptyStoreAnswersWithoutGit(t *testing.T) {
+	notGit := t.TempDir()
+	a, err := snapshot.Lookup(context.Background(), snapshot.NewMemStore(), notGit,
+		snapshot.LookupQuery{Repo: "r", Sha: storetest.Sha(1), TargetBranch: "main"}, snapshot.LookupConfig{})
+	if !errors.Is(err, snapshot.ErrNoSnapshot) {
+		t.Fatalf("got %v", err)
+	}
+	if len(a.Warnings) != 0 {
+		t.Fatalf("git ran: warnings %v", a.Warnings)
+	}
+	// and the same directory does produce a git warning once there is something to walk
+	st := snapshot.NewMemStore()
+	putAt(t, st, storetest.Sha(2), "a")
+	a, err = snapshot.Lookup(context.Background(), st, notGit, snapshot.LookupQuery{Repo: "r", Sha: storetest.Sha(1)}, snapshot.LookupConfig{})
+	if !errors.Is(err, snapshot.ErrNoSnapshot) || !hasWarning(a.Warnings, "ancestor step skipped") {
+		t.Fatalf("control: %v %v", err, a.Warnings)
+	}
+}
+
 func TestLookup_BadInputs(t *testing.T) {
 	h := graph(t)
 	st := snapshot.NewMemStore()
+	putAt(t, st, storetest.Sha(9), "x") // a store with nothing is answered before any step runs
 	if _, err := lookup(t, st, h, snapshot.LookupQuery{Sha: "--x"}, snapshot.LookupConfig{}); !errors.Is(err, snapshot.ErrBadSha) {
 		t.Fatalf("got %v", err)
 	}

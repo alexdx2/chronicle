@@ -65,8 +65,11 @@ type BuildResult struct {
 	Incremental  bool
 	ChangedFiles int // files sent to extraction
 	Failed       []FailedFile
-	Limitations  []string
-	Metrics      []FileMetric
+	// Skipped are in-scope files that were not scanned on purpose (too large,
+	// binary, a symlink, a submodule, not readable), each with its reason.
+	Skipped     []FailedFile
+	Limitations []string
+	Metrics     []FileMetric
 	// Partial: files failed extraction, so the snapshot has known gaps.
 	Partial bool
 }
@@ -99,7 +102,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	buildMu.Lock()
 	defer buildMu.Unlock()
 
-	res := &BuildResult{CodeSha: in.Sha, Failed: []FailedFile{}, Limitations: []string{}, Metrics: []FileMetric{}}
+	res := &BuildResult{CodeSha: in.Sha, Failed: []FailedFile{}, Skipped: []FailedFile{}, Limitations: []string{}, Metrics: []FileMetric{}}
 	if err := ctx.Err(); err != nil {
 		return res, err
 	}
@@ -221,6 +224,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	}
 	if rep != nil {
 		res.Failed = append(res.Failed, rep.Failed...)
+		res.Skipped = append(res.Skipped, rep.Skipped...)
 		res.Metrics = append(res.Metrics, rep.Metrics...)
 		res.Limitations = append(res.Limitations, rep.Limitations...)
 		for _, d := range rep.Domains {
@@ -385,7 +389,7 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		if multi && r.m.DomainForFile(p) != d.Key {
 			continue
 		}
-		if fi, err := os.Lstat(filepath.Join(r.o.RepoRoot, filepath.FromSlash(p))); err != nil || !fi.Mode().IsRegular() {
+		if r.skipIrregular(p) {
 			continue
 		}
 		seen[p] = true

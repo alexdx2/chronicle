@@ -535,3 +535,34 @@ func TestBuildSnapshot_CommittedDatabaseIsNotBuildState(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 }
+
+// The incremental path reports a changed file it cannot send (a committed
+// symlink) in Skipped too.
+func TestBuildSnapshot_IncrementalReportsSkippedSymlink(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, fiveFiles())
+	first, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), &countingBackend{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Skipped) != 0 {
+		t.Fatalf("first.Skipped = %+v", first.Skipped)
+	}
+	if err := os.Symlink("f1.ts", repo+"/src/link.ts"); err != nil {
+		t.Fatal(err)
+	}
+	writeT(t, repo, "src/f2.ts", "export const f2 = 22;\n")
+	c2 := commitAllT(t, repo, "c2")
+	b := &countingBackend{}
+	in := buildIn(repo, c2, t.TempDir(), b)
+	in.Base = &Base{CodeSha: c1, Files: first.Files}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Incremental || b.total() != 1 || b.callsFor("src/f2.ts") != 1 {
+		t.Fatalf("incremental %v calls %v", res.Incremental, b.calls)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Path != "src/link.ts" || !strings.Contains(res.Skipped[0].Error, "symlink") {
+		t.Fatalf("Skipped = %+v", res.Skipped)
+	}
+}

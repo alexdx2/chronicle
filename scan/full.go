@@ -276,14 +276,36 @@ func (r *fullRun) inScopeFiles(d manifest.DomainEntry, cfg *manifest.ScanConfig,
 		if multi && r.m.DomainForFile(p) != d.Key {
 			continue
 		}
-		// Only regular files: headless reads with os.ReadFile, which follows a
-		// tracked symlink out of the working copy.
-		if fi, err := os.Lstat(filepath.Join(r.o.RepoRoot, filepath.FromSlash(p))); err != nil || !fi.Mode().IsRegular() {
+		if r.skipIrregular(p) {
 			continue
 		}
 		list = append(list, p)
 	}
 	return list, nil
+}
+
+// skipIrregular says whether the in-scope path p is not a regular file of the
+// working copy, and if so records it in the report's Skipped with the reason
+// (it is an intentional skip, not a failure, but never silent). Only regular
+// files are sent: headless reads with os.ReadFile, which follows a tracked
+// symlink out of the working copy, and a submodule is a directory.
+func (r *fullRun) skipIrregular(p string) bool {
+	fi, err := os.Lstat(filepath.Join(r.o.RepoRoot, filepath.FromSlash(p)))
+	var why string
+	switch {
+	case err != nil:
+		why = "cannot stat: " + err.Error()
+	case fi.Mode().IsRegular():
+		return false
+	case fi.Mode()&os.ModeSymlink != 0:
+		why = "symlink: not followed"
+	case fi.IsDir():
+		why = "directory or submodule: not scanned"
+	default:
+		why = "not a regular file (" + fi.Mode().Type().String() + ")"
+	}
+	r.rep.Skipped = append(r.rep.Skipped, FailedFile{Path: p, Error: why})
+	return true
 }
 
 // extract runs the headless pipeline over todo and folds the per-file outcomes

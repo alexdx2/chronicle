@@ -92,6 +92,11 @@ func Lookup(ctx context.Context, st Store, codeRepo string, q LookupQuery, cfg L
 	if err != nil {
 		return LookupAnswer{}, err
 	}
+	if len(entries) == 0 {
+		// Nothing to find: no step can succeed, and git (rev-list, rev-parse)
+		// need not be run, nor the code repository exist.
+		return LookupAnswer{}, fmt.Errorf("%w (repo %s, sha %s)", ErrNoSnapshot, q.Repo, q.Sha)
+	}
 	bySha := make(map[string]Entry, len(entries))
 	for _, e := range entries {
 		bySha[e.CodeSha] = e
