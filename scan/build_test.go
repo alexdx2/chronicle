@@ -453,3 +453,85 @@ func TestBuildWithStore_FailedFilesAreNotPutUnlessPartialAllowed(t *testing.T) {
 		t.Fatalf("allow partial: %+v %+v %v puts %d", pr, res, err, len(st.puts))
 	}
 }
+
+func TestBuildSnapshot_FullPathSkipsCommittedSymlinks(t *testing.T) {
+	outside := t.TempDir() + "/secret.ts"
+	if err := os.WriteFile(outside, []byte("export const secret = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := newCodeRepoT(t, fiveFiles())
+	if err := os.Symlink(outside, repo+"/src/x.ts"); err != nil {
+		t.Fatal(err)
+	}
+	sha := commitAllT(t, repo, "symlink")
+	b := &countingBackend{}
+	res, err := BuildSnapshot(context.Background(), buildIn(repo, sha, t.TempDir(), b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.callsFor("src/x.ts") != 0 || b.total() != 5 || res.ChangedFiles != 5 {
+		t.Fatalf("symlink sent to the model: calls %v changed %d", b.calls, res.ChangedFiles)
+	}
+}
+
+func TestBuildWithStore_FallbackToFullRecordsNoBase(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, fiveFiles())
+	seed, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), &countingBackend{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeT(t, repo, "src/f1.ts", "export const f1 = 11;\n")
+	c2 := commitAllT(t, repo, "c2")
+	st := &captureStore{MemStore: snapshot.NewMemStore()}
+	in := buildIn(repo, c2, t.TempDir(), &countingBackend{})
+	in.Base = &Base{CodeSha: strings.Repeat("cd", 20), Files: seed.Files} // not in the repository
+	_, res, err := BuildWithStore(context.Background(), st, in, StoreBuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Incremental {
+		t.Fatal("expected the fallback to a full scan")
+	}
+	if got := st.puts[0].Base; got != "" {
+		t.Fatalf("PutOptions.Base = %q after a full-scan fallback, want empty", got)
+	}
+}
+
+func TestBuildSnapshot_SymlinkedManifestIsRefused(t *testing.T) {
+	secret := t.TempDir() + "/secret.yaml"
+	if err := os.WriteFile(secret, []byte("token: hunter2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, _ := newCodeRepoT(t, fiveFiles())
+	if err := os.MkdirAll(repo+"/.depbot", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, repo+"/.depbot/chronicle.domain.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	sha := commitAllT(t, repo, "linked manifest")
+	b := &countingBackend{}
+	res, err := BuildSnapshot(context.Background(), buildIn(repo, sha, t.TempDir(), b))
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+	if res == nil || len(res.Files.Domain) != 0 || b.total() != 0 {
+		t.Fatalf("the linked file leaked or the scan ran: %+v calls %d", res, b.total())
+	}
+	if got, _ := os.ReadFile(secret); string(got) != "token: hunter2\n" {
+		t.Fatalf("the link target was written through: %q", got)
+	}
+}
+
+func TestBuildSnapshot_CommittedDatabaseIsNotBuildState(t *testing.T) {
+	files := fiveFiles()
+	files[".depbot/chronicle.db"] = "this is not a sqlite database"
+	repo, sha := newCodeRepoT(t, files)
+	res, err := BuildSnapshot(context.Background(), buildIn(repo, sha, t.TempDir(), &countingBackend{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ChangedFiles != 5 || len(res.Files.Graph) == 0 {
+		t.Fatalf("result = %+v", res)
+	}
+}

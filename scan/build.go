@@ -449,7 +449,11 @@ func BuildWithStore(ctx context.Context, st snapshot.Store, in BuildInput, so St
 		return snapshot.PutResult{}, res, fmt.Errorf("%w: %d files failed extraction", ErrIncomplete, len(res.Failed))
 	}
 	po := so.Put
-	if po.Base == "" {
+	// A build that fell back to a full scan (the base commit was missing) has
+	// no base to record.
+	if !res.Incremental {
+		po.Base = ""
+	} else if po.Base == "" {
 		po.Base = baseID
 	}
 	if po.Producer == "" {

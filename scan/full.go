@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -272,6 +274,11 @@ func (r *fullRun) inScopeFiles(d manifest.DomainEntry, cfg *manifest.ScanConfig,
 			continue
 		}
 		if multi && r.m.DomainForFile(p) != d.Key {
+			continue
+		}
+		// Only regular files: headless reads with os.ReadFile, which follows a
+		// tracked symlink out of the working copy.
+		if fi, err := os.Lstat(filepath.Join(r.o.RepoRoot, filepath.FromSlash(p))); err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
 		list = append(list, p)
