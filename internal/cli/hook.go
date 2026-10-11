@@ -14,6 +14,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/internal/wiring"
 	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/scan"
 	"github.com/alexdx2/chronicle-core/store"
 	"github.com/spf13/cobra"
 )
@@ -318,12 +319,8 @@ func touchRateMarker() {
 	}
 }
 
-func shortSHA(sha string) string {
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
-}
+// shortSHA is scan.ShortSHA — the one copy of the truncation.
+var shortSHA = scan.ShortSHA
 
 func installGitPostCommit() error {
 	base := repoDirForGit()
