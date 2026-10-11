@@ -346,3 +346,36 @@ func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 		t.Fatalf("plans = %+v", plans.plans)
 	}
 }
+
+func TestBuildSnapshot_RetryPathThroughSymlinkedDirIsSkipped(t *testing.T) {
+	repo, _, _, base := partialBase(t)
+	// Later commit turns src/link into a symlink to a directory outside the
+	// clone, which holds a file of the retried name.
+	outside := t.TempDir()
+	writeT(t, outside, "x.ts", "export const secret = 1;\n")
+	if err := os.Symlink(outside, filepath.Join(repo, "src", "link")); err != nil {
+		t.Fatal(err)
+	}
+	c3 := commitAllT(t, repo, "c3")
+
+	b := &countingBackend{}
+	in := buildIn(repo, c3, t.TempDir(), b)
+	in.Base = base
+	in.RetryPaths = []string{"src/link/x.ts", "", ".", "src/link"}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.callsFor("src/link/x.ts") != 0 || b.callsFor("src/link") != 0 {
+		t.Fatalf("a path outside the tree reached the model: %v", b.calls)
+	}
+	var found bool
+	for _, s := range res.Skipped {
+		if s.Path == "src/link/x.ts" && strings.Contains(s.Error, "retry") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("src/link/x.ts not listed as skipped: %+v", res.Skipped)
+	}
+}

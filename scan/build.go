@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -483,16 +485,37 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 			add(f.Path)
 		}
 	}
-	// Files that failed in a partial base are retried although unchanged. One
-	// that is gone (or is not a local path) is no longer anyone's business.
-	for _, p := range retry {
-		if p = filepath.ToSlash(filepath.Clean(filepath.FromSlash(p))); !filepath.IsLocal(filepath.FromSlash(p)) {
-			continue
+	// Files that failed in a partial base are retried although unchanged. The
+	// paths come from an older snapshot, so each is checked against the tree
+	// being built: only a tracked regular blob at HEAD qualifies (a directory
+	// that has since become a symlink must not lead the read out of the clone).
+	if len(retry) > 0 {
+		modes, err := trackedModes(r.o.RepoRoot)
+		if err != nil {
+			return err
 		}
-		if _, err := os.Lstat(filepath.Join(r.o.RepoRoot, filepath.FromSlash(p))); err != nil {
-			continue
+		for _, raw := range retry {
+			p := path.Clean(filepath.ToSlash(raw))
+			if raw == "" || p == "." || !filepath.IsLocal(filepath.FromSlash(p)) {
+				continue // not a path inside the tree
+			}
+			switch mode, ok := modes[p]; {
+			case ok && (mode == "100644" || mode == "100755"):
+				add(p)
+			case ok:
+				if !seen[p] {
+					seen[p] = true
+					r.rep.Skipped = append(r.rep.Skipped, FailedFile{Path: p, Error: "retry: not a regular file (mode " + mode + ")"})
+				}
+			default:
+				// Not tracked at HEAD. Gone is nobody's business; anything that
+				// still resolves (e.g. through a symlinked directory) is reported.
+				if _, err := os.Lstat(filepath.Join(r.o.RepoRoot, filepath.FromSlash(p))); err == nil && !seen[p] {
+					seen[p] = true
+					r.rep.Skipped = append(r.rep.Skipped, FailedFile{Path: p, Error: "retry: not a tracked regular file at HEAD"})
+				}
+			}
 		}
-		add(p)
 	}
 
 	// A resumed build has some of these covered already.
@@ -517,6 +540,26 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	dr.UnmatchedHTTPCalls = len(unmatched)
 	r.unmatched += len(unmatched)
 	return ctx.Err()
+}
+
+// trackedModes maps every path tracked at HEAD of root to its git file mode
+// (100644/100755 regular, 120000 symlink, 160000 submodule).
+func trackedModes(root string) (map[string]string, error) {
+	out, err := gitutil.RunRaw(root, "-c", "core.quotePath=false", "ls-files", "-s", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("scan: list tracked files: %w", err)
+	}
+	modes := map[string]string{}
+	for _, rec := range strings.Split(out, "\x00") {
+		meta, p, ok := strings.Cut(rec, "\t")
+		if !ok {
+			continue
+		}
+		if mode, _, _ := strings.Cut(meta, " "); mode != "" {
+			modes[p] = mode
+		}
+	}
+	return modes, nil
 }
 
 // StoreBuildOptions steer BuildWithStore.
