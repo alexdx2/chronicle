@@ -36,6 +36,17 @@ type FullOptions struct {
 	NoExtract     bool // structural pass only
 	// OnFiles is called after each committed wave with that wave's metrics.
 	OnFiles func([]FileMetric)
+	// OnPlan is called once per domain, after the files to send are known and
+	// before the first request to the model.
+	OnPlan func(Plan)
+}
+
+// Plan is what a domain's scan is about to do, for progress reporting.
+type Plan struct {
+	Domain         string
+	InScope        int // files to consider (a full scan: the scan scope; an incremental one: the changed and retried files)
+	AlreadyCovered int // of them, covered at the same blob (a restored build state included)
+	ToSend         int // going to the model
 }
 
 // FailedFile is a file the scan could not finish, or deliberately passed over.
@@ -209,38 +220,21 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	dr.InScope = len(list)
 
 	st := r.g.Store()
-	cov, err := st.ListCoverage(d.Key)
+	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, list)
 	if err != nil {
-		return fmt.Errorf("scan: list coverage: %w", err)
-	}
-	covered := map[string]string{} // path -> blob sha of a finished chronicle-scan observation
-	for _, c := range cov {
-		if c.ExtractorID == scanExtractorID && c.ExtractorVersion == scanExtractorVersion() {
-			covered[c.FilePath] = c.BlobSHA
-		}
-	}
-	var todo, done []string
-	for _, p := range list {
-		blob, berr := gitutil.FileBlobSHA(r.o.RepoRoot, p)
-		if want, ok := covered[p]; ok && berr == nil && want == blob {
-			done = append(done, p)
-		} else {
-			todo = append(todo, p)
-		}
+		return err
 	}
 	dr.AlreadyCovered = len(done)
 	dr.Sent = len(todo)
-
-	// The pipeline counts a failed file's artifact as a satisfied obligation, so
-	// on a revision that already exists for this head only the obligations of
-	// really covered files may survive; otherwise a rerun would silently skip
-	// the files that failed.
-	if rev, rerr := st.GetRevisionBySHA(d.Key, r.head); rerr == nil {
-		if _, derr := st.DeleteScanFileObligationsForRevision(rev.RevisionID, done); derr != nil {
-			return fmt.Errorf("scan: reopen revision %d: %w", rev.RevisionID, derr)
+	if err := reopenObligations(st, d.Key, r.head, done); err != nil {
+		return err
+	}
+	if r.o.OnPlan != nil {
+		send := len(todo)
+		if r.o.NoExtract {
+			send = 0
 		}
-	} else if !errors.Is(rerr, store.ErrNotFound) {
-		return fmt.Errorf("scan: look up revision at %s: %w", ShortSHA(r.head), rerr)
+		r.o.OnPlan(Plan{Domain: d.Key, InScope: len(list), AlreadyCovered: len(done), ToSend: send})
 	}
 
 	switch {
@@ -259,6 +253,48 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	dr.UnmatchedHTTPCalls = len(unmatched)
 	r.unmatched += len(unmatched)
 	return ctx.Err()
+}
+
+// pendingFiles splits candidates into the files the model still has to see
+// (todo) and those a finished chronicle-scan observation already covers at the
+// file's current blob (done). Order is kept.
+func pendingFiles(st *store.Store, domainKey, root string, candidates []string) (todo, done []string, err error) {
+	cov, err := st.ListCoverage(domainKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("scan: list coverage: %w", err)
+	}
+	covered := map[string]string{} // path -> blob sha of a finished chronicle-scan observation
+	for _, c := range cov {
+		if c.ExtractorID == scanExtractorID && c.ExtractorVersion == scanExtractorVersion() {
+			covered[c.FilePath] = c.BlobSHA
+		}
+	}
+	for _, p := range candidates {
+		blob, berr := gitutil.FileBlobSHA(root, p)
+		if want, ok := covered[p]; ok && berr == nil && want == blob {
+			done = append(done, p)
+		} else {
+			todo = append(todo, p)
+		}
+	}
+	return todo, done, nil
+}
+
+// reopenObligations: the pipeline counts a failed file's artifact as a
+// satisfied obligation, so on a revision that already exists for head only the
+// obligations of really covered files (done) may survive; otherwise a rerun
+// would silently skip the files that failed.
+func reopenObligations(st *store.Store, domainKey, head string, done []string) error {
+	rev, err := st.GetRevisionBySHA(domainKey, head)
+	switch {
+	case err == nil:
+		if _, derr := st.DeleteScanFileObligationsForRevision(rev.RevisionID, done); derr != nil {
+			return fmt.Errorf("scan: reopen revision %d: %w", rev.RevisionID, derr)
+		}
+	case !errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("scan: look up revision at %s: %w", ShortSHA(head), err)
+	}
+	return nil
 }
 
 // inScopeFiles lists tracked files inside the domain's scan scope (and, with

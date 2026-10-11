@@ -53,6 +53,21 @@ type BuildInput struct {
 	// files (the result is then marked Partial). Without it such a build is
 	// not stored and BuildWithStore returns ErrIncomplete.
 	AllowPartial bool
+	// StateDir, when set, is a persistent directory for this build (this Sha
+	// from this Base): a copy of the working database, the manifest when the
+	// bootstrap generated it, and state.json. BuildSnapshot saves it after each
+	// committed wave and on every exit, and a later call for the same sha and
+	// base starts from it, so a restart redoes no covered file. State of another
+	// build, or unusable state, is discarded (said in Limitations). The caller
+	// removes the directory once the snapshot is stored.
+	StateDir string
+	// OnPlan is called once per domain, before the first request to the model.
+	OnPlan func(Plan)
+	// RetryPaths are files that failed in a partial Base. An incremental build
+	// sends them to the model although they did not change since the base (when
+	// still present, regular and in scope). Ignored by a full scan, which sends
+	// everything not yet covered anyway.
+	RetryPaths []string
 }
 
 // BuildResult is what BuildSnapshot produced. On error it is the partial
@@ -151,8 +166,33 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	depDir := filepath.Join(wt, filepath.Dir(snapshot.ManifestPath))
 	manPath := filepath.Join(wt, filepath.FromSlash(snapshot.ManifestPath))
 	typesPath := filepath.Join(wt, filepath.FromSlash(snapshot.TypesPath))
-	if err := prepareConfigFiles(depDir, manPath, typesPath, base, projectPath, wt); err != nil {
+	// The saved state of an earlier attempt at this very build: its database
+	// and a manifest the bootstrap generated then (the one thing the tree and
+	// the base cannot give back).
+	baseSha := ""
+	if base != nil {
+		baseSha = base.CodeSha
+	}
+	var restored bool
+	if in.StateDir != "" {
+		had := stateHasContent(in.StateDir)
+		var rerr error
+		restored, rerr = restoreState(in.StateDir, wt, in.Sha, baseSha)
+		switch {
+		case rerr != nil:
+			res.Limitations = append(res.Limitations, "build state not restored: "+rerr.Error())
+		case had && !restored:
+			res.Limitations = append(res.Limitations, "discarded unusable build state")
+		}
+	}
+	manifestGenerated, err := prepareConfigFiles(depDir, manPath, typesPath, base, projectPath, wt)
+	if err != nil {
 		return res, err
+	}
+	if restored {
+		if _, serr := os.Stat(filepath.Join(in.StateDir, stateManifest)); serr == nil {
+			manifestGenerated = true
+		}
 	}
 
 	// 3. The graph: the base restored (with the same restore revision that
@@ -167,15 +207,32 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 		return res, fmt.Errorf("scan: load registry: %w", err)
 	}
 	dbPath := filepath.Join(depDir, "chronicle.db")
-	// A database committed in the tree is not this build's state.
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		_ = os.Remove(dbPath + suffix)
+	// A database committed in the tree is not this build's state; the restored
+	// one is.
+	if !restored {
+		removeDB(dbPath)
 	}
 	var (
 		g       *graph.Graph
 		baseSeq int
 	)
-	if base != nil {
+	if restored {
+		// The database already holds the base graph and the work done on it;
+		// only the base's sequence number is still needed for the export.
+		if base != nil {
+			snap, _, derr := snapshot.Decode(bytes.NewReader(base.Files.Graph), snapshot.DefaultLimits())
+			if derr != nil {
+				return res, fmt.Errorf("scan: decode base graph: %w", derr)
+			}
+			baseSeq = snap.Header.Seq
+		}
+		s, serr := store.OpenWithoutJournalSync(dbPath)
+		if serr != nil {
+			return res, fmt.Errorf("scan: open restored database: %w", serr)
+		}
+		defer s.Close()
+		g = graph.New(s, registryV)
+	} else if base != nil {
 		snap, _, derr := snapshot.Decode(bytes.NewReader(base.Files.Graph), snapshot.DefaultLimits())
 		if derr != nil {
 			return res, fmt.Errorf("scan: decode base graph: %w", derr)
@@ -207,10 +264,35 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	// The journal is for the live working copy; this database is a build artifact.
 	g.Store().SetJournaling(false)
 
+	// The build state is saved after each wave and once more on the way out,
+	// whatever the outcome. This defer runs before the database is closed and
+	// the working copy removed (those were deferred earlier).
+	onFiles := in.OnFiles
+	if in.StateDir != "" {
+		checkpoint := func() error {
+			return checkpointState(in.StateDir, wt, in.Sha, baseSha, g.Store(), manifestGenerated)
+		}
+		defer func() {
+			if err := checkpoint(); err != nil {
+				res.Limitations = append(res.Limitations, "build state not saved: "+err.Error())
+			}
+		}()
+		var ckptWarned bool
+		onFiles = func(ms []FileMetric) {
+			if in.OnFiles != nil {
+				in.OnFiles(ms)
+			}
+			if err := checkpoint(); err != nil && !ckptWarned {
+				ckptWarned = true
+				res.Limitations = append(res.Limitations, "build state not saved: "+err.Error())
+			}
+		}
+	}
+
 	// 4/5. Scan.
 	opts := FullOptions{
 		RepoRoot: wt, ProjectPath: projectPath, Backend: in.Backend, Concurrency: in.Concurrency,
-		ContextWindow: in.ContextWindow, FileTimeout: in.FileTimeout, OnFiles: in.OnFiles,
+		ContextWindow: in.ContextWindow, FileTimeout: in.FileTimeout, OnFiles: onFiles, OnPlan: in.OnPlan,
 	}
 	var (
 		rep    *FullReport
@@ -220,7 +302,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 		rep, runErr = FullScan(ctx, g, opts)
 	} else {
 		res.Incremental, res.BaseSha = true, base.CodeSha
-		rep, runErr = incrementalScan(ctx, g, opts, base.CodeSha, manPath)
+		rep, runErr = incrementalScan(ctx, g, opts, base.CodeSha, manPath, in.RetryPaths)
 	}
 	if rep != nil {
 		res.Failed = append(res.Failed, rep.Failed...)
@@ -281,44 +363,46 @@ func regularFile(path string) (data []byte, exists bool, err error) {
 
 // prepareConfigFiles leaves the manifest (and, when there is one, the types
 // file) of the commit being built in the working copy: from its tree, else
-// from the base, else a bootstrap for the manifest.
-func prepareConfigFiles(depDir, manPath, typesPath string, base *Base, projectPath, wt string) error {
+// from the base, else a bootstrap for the manifest. generated says the
+// manifest is the bootstrap's (neither the tree nor the base had one).
+func prepareConfigFiles(depDir, manPath, typesPath string, base *Base, projectPath, wt string) (generated bool, err error) {
 	if fi, err := os.Lstat(depDir); err == nil && !fi.IsDir() {
-		return fmt.Errorf("scan: %s in the tree is not a directory", filepath.Base(depDir))
+		return false, fmt.Errorf("scan: %s in the tree is not a directory", filepath.Base(depDir))
 	}
 	if err := os.MkdirAll(depDir, 0o755); err != nil {
-		return err
+		return false, err
 	}
 	_, haveMan, err := regularFile(manPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	switch {
 	case haveMan:
 	case base != nil && len(base.Files.Domain) > 0:
 		if err := os.WriteFile(manPath, base.Files.Domain, 0o644); err != nil {
-			return err
+			return false, err
 		}
 	default:
 		if _, err := BootstrapManifest(BootstrapInput{RepoRoot: wt, ProjectPath: projectPath}); err != nil {
-			return err
+			return false, err
 		}
+		generated = true
 	}
 	_, haveTypes, err := regularFile(typesPath)
 	if err != nil {
-		return err
+		return generated, err
 	}
 	if !haveTypes && base != nil && len(base.Files.Types) > 0 {
-		return os.WriteFile(typesPath, base.Files.Types, 0o644)
+		return generated, os.WriteFile(typesPath, base.Files.Types, 0o644)
 	}
-	return nil
+	return generated, nil
 }
 
 // incrementalScan brings a restored base graph to HEAD of o.RepoRoot: per
 // domain the deterministic phases, then extraction of the files that changed
 // between the base commit and HEAD (and only those). Like FullScan, the report
 // is returned even with an error.
-func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha, manPath string) (*FullReport, error) {
+func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha, manPath string, retry []string) (*FullReport, error) {
 	rep := &FullReport{Domains: []DomainReport{}, Failed: []FailedFile{}, Skipped: []FailedFile{}, Metrics: []FileMetric{}, Limitations: []string{}}
 	if o.Concurrency <= 0 {
 		o.Concurrency = 2
@@ -345,7 +429,7 @@ func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha
 		if runErr = ctx.Err(); runErr != nil {
 			break
 		}
-		if runErr = run.incrementalDomain(ctx, d, baseSha, changed, len(m.Domains) > 1); runErr != nil {
+		if runErr = run.incrementalDomain(ctx, d, baseSha, changed, retry, len(m.Domains) > 1); runErr != nil {
 			break
 		}
 	}
@@ -354,7 +438,7 @@ func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha
 	return rep, runErr
 }
 
-func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry, baseSha string, changed []gitdiff.ChangedFile, multi bool) error {
+func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry, baseSha string, changed []gitdiff.ChangedFile, retry []string, multi bool) error {
 	if !r.started {
 		r.started = true
 		r.structuralOK = true
@@ -380,22 +464,50 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 
 	cfg := d.Scan
 	seen := map[string]bool{}
-	var todo []string
-	for _, f := range changed {
-		p := f.Path // a rename reports its new path
-		if f.Status == "D" || seen[p] || !graph.InScope(p, &cfg) {
-			continue
+	var candidates []string
+	add := func(p string) {
+		if seen[p] || !graph.InScope(p, &cfg) {
+			return
 		}
 		if multi && r.m.DomainForFile(p) != d.Key {
-			continue
+			return
 		}
 		if r.skipIrregular(p) {
-			continue
+			return
 		}
 		seen[p] = true
-		todo = append(todo, p)
+		candidates = append(candidates, p)
 	}
-	dr.InScope, dr.Sent = len(todo), len(todo)
+	for _, f := range changed {
+		if f.Status != "D" { // a rename reports its new path
+			add(f.Path)
+		}
+	}
+	// Files that failed in a partial base are retried although unchanged. One
+	// that is gone (or is not a local path) is no longer anyone's business.
+	for _, p := range retry {
+		if p = filepath.ToSlash(filepath.Clean(filepath.FromSlash(p))); !filepath.IsLocal(filepath.FromSlash(p)) {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(r.o.RepoRoot, filepath.FromSlash(p))); err != nil {
+			continue
+		}
+		add(p)
+	}
+
+	// A resumed build has some of these covered already.
+	st := r.g.Store()
+	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates)
+	if err != nil {
+		return err
+	}
+	dr.InScope, dr.AlreadyCovered, dr.Sent = len(candidates), len(done), len(todo)
+	if err := reopenObligations(st, d.Key, r.head, done); err != nil {
+		return err
+	}
+	if r.o.OnPlan != nil {
+		r.o.OnPlan(Plan{Domain: d.Key, InScope: len(candidates), AlreadyCovered: len(done), ToSend: len(todo)})
+	}
 	if len(todo) > 0 {
 		if err := r.extract(ctx, d, todo, &dr); err != nil {
 			return err
