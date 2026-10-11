@@ -87,6 +87,9 @@ func Run(t *testing.T, h Harness) {
 		if !r.Created || r.Kept || r.Warning != "" {
 			t.Fatalf("first Put: %+v", r)
 		}
+		if r.Entry.Repo != "r1" || r.Entry.CodeSha != Sha(1) {
+			t.Fatalf("Put entry Repo/CodeSha = %q/%q, want r1/%s", r.Entry.Repo, r.Entry.CodeSha, Sha(1))
+		}
 		if r.Entry.SnapshotID != mustID(t, f) {
 			t.Fatalf("SnapshotID %s, want %s", r.Entry.SnapshotID, mustID(t, f))
 		}
