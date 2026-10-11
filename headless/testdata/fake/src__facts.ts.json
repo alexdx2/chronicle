@@ -1,0 +1,1 @@
+{"status":"extracted","from_type":"provider","facts":[{"kind":"injects","from":"A","from_type":"provider","to":"B"},{"kind":"injects","from":"A","from_type":"provider","to":"C"}]}

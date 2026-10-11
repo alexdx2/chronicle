@@ -48,6 +48,13 @@ type RunInput struct {
 	// ContextWindow overrides the backend's token window (0 -> ask the backend;
 	// cloud backends have none). Files that do not fit are sent in parts.
 	ContextWindow int
+	// FileTimeout bounds the model time spent on one file (0 = no limit). A
+	// file that exceeds it becomes "failed" with an error starting "timeout:";
+	// the run goes on. Cancellation of the parent context is not a timeout.
+	FileTimeout time.Duration
+	// OnFiles, when set, is called after each committed wave (at most
+	// graph.ServerMaxWave files) and after the wave's coverage was recorded.
+	OnFiles func([]FileUsage)
 }
 
 const (
@@ -64,6 +71,12 @@ type FileUsage struct {
 	Error      string    `json:"error,omitempty"`
 	// Dropped counts facts removed by sanitizeFacts (schema rules the model broke).
 	Dropped int `json:"dropped_facts,omitempty"`
+	// Bytes is the size of the source sent to the model (0 for files never read).
+	Bytes int64 `json:"bytes,omitempty"`
+	// Parts is the number of window parts the file was sent in (1 = whole).
+	Parts int `json:"parts,omitempty"`
+	// Facts is the number of facts left after sanitizeFacts.
+	Facts int `json:"facts,omitempty"`
 }
 
 // RunResult summarizes a headless run.
@@ -270,6 +283,9 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			if covErr := recordCoverage(files, cr.ErrorMsgs); covErr != nil {
 				return fail(covErr)
 			}
+			if in.OnFiles != nil {
+				in.OnFiles(files)
+			}
 			if waveErr != nil {
 				return fail(waveErr)
 			}
@@ -435,6 +451,7 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 	case err != nil:
 		fail("failed", "read: "+err.Error())
 	default:
+		fu.Bytes = int64(len(content))
 		var cands []deterministic.Candidate
 		if item.DeterministicCandidatesPath != "" {
 			if data, err := os.ReadFile(item.DeterministicCandidatesPath); err == nil {
@@ -459,6 +476,12 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 		if budget := fileBudget(window, BuildPrompt(sys, item.FilePath, nil, cands)); budget > 0 {
 			chunks = splitLines(content, budget)
 		}
+		fu.Parts = len(chunks)
+		fctx, cancel := ctx, context.CancelFunc(func() {})
+		if in.FileTimeout > 0 {
+			fctx, cancel = context.WithTimeout(ctx, in.FileTimeout)
+		}
+		defer cancel()
 		var answers []*parsedAnswer
 		for ci, chunk := range chunks {
 			creq := req
@@ -472,8 +495,14 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 				creq.User = strings.Replace(creq.User, "File: "+item.FilePath+"\n",
 					fmt.Sprintf("File: %s\n(part %d of %d of a long file: extract only what appears in this part)\n", item.FilePath, ci+1, len(chunks)), 1)
 			}
-			a, failed := askModel(ctx, in.Backend, creq, &fu)
+			a, failed := askModel(fctx, in.Backend, creq, &fu)
 			if failed != "" {
+				if failed == "cancelled" && ctx.Err() == nil && fctx.Err() != nil {
+					// The file's own limit ended, not the run.
+					fail("failed", fmt.Sprintf("timeout: no answer within %s", in.FileTimeout))
+					answers = nil
+					break
+				}
 				if failed == "cancelled" {
 					fu.Status = "cancelled"
 					fu.DurationMS = time.Since(start).Milliseconds()
@@ -489,6 +518,7 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 		if len(answers) == len(chunks) && fu.Status == "" {
 			parsed = mergeAnswers(answers)
 			parsed.Facts, fu.Dropped = sanitizeFacts(item.FilePath, content, parsed.Facts)
+			fu.Facts = countFacts(parsed.Facts)
 		}
 		if parsed != nil {
 			fu.Status = parsed.Status
@@ -504,6 +534,15 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 		return fu, err
 	}
 	return fu, writeAtomic(graph.OutboxArtifactPath(b.OutboxDir, item.FilePath), data)
+}
+
+// countFacts returns the number of elements of a JSON array of facts.
+func countFacts(raw json.RawMessage) int {
+	var fs []json.RawMessage
+	if json.Unmarshal(raw, &fs) != nil {
+		return 0
+	}
+	return len(fs)
 }
 
 // askModel sends one request, retrying once when the answer is not the required

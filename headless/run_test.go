@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -401,5 +402,139 @@ func TestRun_DuplicateFilesRunOnce(t *testing.T) {
 	res, err := Run(context.Background(), e.input(llm.NewFake("testdata/fake"), "src/a.ts", "src/a.ts"))
 	if err != nil || len(res.Files) != 1 {
 		t.Fatalf("err %v files %+v", err, res.Files)
+	}
+}
+
+// slowFileBackend answers from the fake fixtures, except for src/slow.ts, whose
+// call hangs until the context ends. onSlow, when set, runs once the call has
+// started.
+type slowFileBackend struct {
+	inner  llm.Backend
+	onSlow func()
+	calls  atomic.Int64
+}
+
+func (b *slowFileBackend) Name() string  { return "fake" }
+func (b *slowFileBackend) Model() string { return "fake" }
+func (b *slowFileBackend) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	b.calls.Add(1)
+	if strings.HasPrefix(req.User, "File: src/slow.ts\n") {
+		if b.onSlow != nil {
+			b.onSlow()
+		}
+		<-ctx.Done()
+		return llm.Response{}, ctx.Err()
+	}
+	return b.inner.Complete(ctx, req)
+}
+
+func TestRun_FileTimeoutMarksFileFailedAndContinues(t *testing.T) {
+	e := newRunEnv(t)
+	write(t, e.root, "src/slow.ts", "export const slow = 1;\n")
+	commitAll(t, e.root, "slow")
+	b := &slowFileBackend{inner: llm.NewFake("testdata/fake")}
+	in := e.input(b, "src/a.ts", "src/slow.ts")
+	in.FileTimeout = 80 * time.Millisecond
+	res, err := Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("a per-file timeout must not fail the run: %v", err)
+	}
+	var slow, fast *FileUsage
+	for i := range res.Files {
+		switch res.Files[i].Path {
+		case "src/slow.ts":
+			slow = &res.Files[i]
+		case "src/a.ts":
+			fast = &res.Files[i]
+		}
+	}
+	if slow == nil || slow.Status != "failed" || !strings.HasPrefix(slow.Error, "timeout:") {
+		t.Fatalf("slow = %+v", slow)
+	}
+	if fast == nil || fast.Status != "extracted" {
+		t.Fatalf("fast = %+v", fast)
+	}
+	if res.Failed != 1 {
+		t.Fatalf("failed = %d, want 1", res.Failed)
+	}
+}
+
+func TestRun_ParentCancelIsNotATimeout(t *testing.T) {
+	e := newRunEnv(t)
+	write(t, e.root, "src/slow.ts", "export const slow = 1;\n")
+	commitAll(t, e.root, "slow")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := &slowFileBackend{inner: llm.NewFake("testdata/fake"), onSlow: cancel}
+	in := e.input(b, "src/a.ts", "src/slow.ts")
+	in.FileTimeout = time.Minute // a limit is set, but the parent ends first
+	res, err := Run(ctx, in)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	for _, f := range res.Files {
+		if strings.HasPrefix(f.Error, "timeout:") {
+			t.Fatalf("parent cancellation reported as a file timeout: %+v", f)
+		}
+		if f.Path == "src/slow.ts" && f.Status != "cancelled" {
+			t.Fatalf("slow = %+v, want cancelled", f)
+		}
+	}
+}
+
+func TestRun_FileMetricsBytesPartsFacts(t *testing.T) {
+	e := newRunEnv(t)
+	const factsSrc = "export class A { constructor(b: B, c: C) {} }\n"
+	write(t, e.root, "src/facts.ts", factsSrc)
+	write(t, e.root, "src/big.ts", strings.Repeat("// padding line to make the file long enough to split\n", 400))
+	commitAll(t, e.root, "metrics")
+
+	res, err := Run(context.Background(), e.input(llm.NewFake("testdata/fake"), "src/facts.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := res.Files[0]
+	if f.Status != "extracted" || f.Bytes != int64(len(factsSrc)) || f.Parts != 1 || f.Facts != 2 {
+		t.Fatalf("facts.ts = %+v; want extracted, %d bytes, 1 part, 2 facts", f, len(factsSrc))
+	}
+
+	in := e.input(llm.NewFake("testdata/fake"), "src/big.ts")
+	in.ContextWindow = 4096
+	res, err = Run(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := res.Files[0]; f.Parts <= 1 || f.Bytes < 20000 {
+		t.Fatalf("big.ts = %+v; want several parts of a 20 KB file", f)
+	}
+}
+
+func TestRun_OnFilesCalledPerWaveAfterCoverage(t *testing.T) {
+	e := newRunEnv(t)
+	var calls, seen int
+	in := e.input(llm.NewFake("testdata/fake"), "src/a.ts", "src/arr.ts", "src/bad.ts")
+	in.OnFiles = func(files []FileUsage) {
+		calls++
+		seen += len(files)
+		cov, err := e.g.Store().ListCoverage("d")
+		if err != nil {
+			t.Errorf("ListCoverage: %v", err)
+		}
+		have := map[string]bool{}
+		for _, c := range cov {
+			have[c.FilePath] = true
+		}
+		for _, f := range files {
+			if f.Status == "extracted" && !have[f.Path] {
+				t.Errorf("OnFiles saw %s before its coverage was recorded", f.Path)
+			}
+		}
+	}
+	res, err := Run(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls == 0 || seen != len(res.Files) {
+		t.Fatalf("calls %d, files seen %d, result files %d", calls, seen, len(res.Files))
 	}
 }
