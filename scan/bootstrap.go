@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -28,8 +29,15 @@ type BootstrapInput struct {
 type BootstrapResult struct {
 	Path    string
 	Created bool
-	// Domain is the domain key (for an existing manifest, its first domain).
+	// Domain is the key of the chosen domain. For an existing manifest it is
+	// the domain whose key equals DomainKey(project path) when there is one,
+	// otherwise the smallest key (the manifest package yields map-format
+	// domains in no fixed order, so "first" would be arbitrary).
 	Domain string
+	// DomainName is that domain's name. manifest.ScanConfigFor matches by name,
+	// not key, so callers pass DomainName to it. For a generated manifest it
+	// equals Domain.
+	DomainName string
 	// Tech is the manifest's tech list, created or existing.
 	Tech []string
 }
@@ -97,7 +105,7 @@ func BootstrapManifest(in BootstrapInput) (BootstrapResult, error) {
 	mpath := filepath.Join(in.RepoRoot, ".depbot", "chronicle.domain.yaml")
 
 	if _, err := os.Stat(mpath); err == nil {
-		return loadExisting(mpath)
+		return loadExisting(mpath, DomainKey(projectPathOrDir(in)))
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return BootstrapResult{}, fmt.Errorf("scan: stat manifest %s: %w", mpath, err)
 	}
@@ -113,19 +121,15 @@ func BootstrapManifest(in BootstrapInput) (BootstrapResult, error) {
 		}
 	}
 
-	pp := in.ProjectPath
-	if pp == "" {
-		pp = filepath.Base(filepath.Clean(in.RepoRoot))
-	}
-	key := DomainKey(pp)
+	key := DomainKey(projectPathOrDir(in))
 	include, tech := classify(in.RepoRoot, files)
 
 	var buf bytes.Buffer
 	// ScanConfigFor matches domains by name, so the name is the normalized key,
 	// not the raw project path.
 	err = bootstrapTmpl.Execute(&buf, map[string]any{
-		"Key":     key,
-		"Name":    key,
+		"Key":     strconv.Quote(key), // quoted: a key such as null or 123 must stay a string
+		"Name":    strconv.Quote(key),
 		"Include": include,
 		"Exclude": bootstrapExclude,
 		"Tech":    tech,
@@ -156,15 +160,31 @@ func BootstrapManifest(in BootstrapInput) (BootstrapResult, error) {
 	if err := os.Rename(tmp.Name(), mpath); err != nil {
 		return BootstrapResult{}, fmt.Errorf("scan: install manifest %s: %w", mpath, err)
 	}
-	return BootstrapResult{Path: mpath, Created: true, Domain: key, Tech: tech}, nil
+	return BootstrapResult{Path: mpath, Created: true, Domain: key, DomainName: key, Tech: tech}, nil
 }
 
-func loadExisting(mpath string) (BootstrapResult, error) {
+// projectPathOrDir is the project path, or the repository directory's name.
+func projectPathOrDir(in BootstrapInput) string {
+	if in.ProjectPath != "" {
+		return in.ProjectPath
+	}
+	return filepath.Base(filepath.Clean(in.RepoRoot))
+}
+
+func loadExisting(mpath, wantKey string) (BootstrapResult, error) {
 	m, err := manifest.LoadFile(mpath)
 	if err != nil {
 		return BootstrapResult{}, fmt.Errorf("scan: existing manifest %s is invalid, not overwriting: %w", mpath, err)
 	}
-	return BootstrapResult{Path: mpath, Domain: m.Domains[0].Key, Tech: m.Tech}, nil
+	chosen := m.Domains[0]
+	for _, d := range m.Domains[1:] {
+		switch {
+		case chosen.Key == wantKey:
+		case d.Key == wantKey || d.Key < chosen.Key:
+			chosen = d
+		}
+	}
+	return BootstrapResult{Path: mpath, Domain: chosen.Key, DomainName: chosen.Name, Tech: m.Tech}, nil
 }
 
 // classify derives the include globs and the tech list from tracked files.

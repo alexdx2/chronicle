@@ -57,7 +57,7 @@ func TestBootstrapManifest_NestPrismaRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Created || res.Domain != "platform-billing" || res.Path != manifestPathOf(root) {
+	if !res.Created || res.Domain != "platform-billing" || res.DomainName != "platform-billing" || res.Path != manifestPathOf(root) {
 		t.Fatalf("result = %+v", res)
 	}
 	want := []string{"typescript", "nestjs", "prisma"}
@@ -164,6 +164,63 @@ func TestBootstrapManifest_NeverOverwrites(t *testing.T) {
 	got, _ = os.ReadFile(manifestPathOf(bad))
 	if string(got) != "domains: [\n" {
 		t.Fatalf("invalid manifest touched: %q", got)
+	}
+}
+
+func TestBootstrapManifest_ExistingMultiDomainIsStable(t *testing.T) {
+	existing := "domains:\n  zeta:\n    name: Zeta Service\n  mine:\n    name: Mine Service\n  alpha:\n    name: Alpha\ntech: [go]\n"
+	root := bootRepo(t, map[string]string{"main.go": "package main\n", ".depbot/chronicle.domain.yaml": existing})
+
+	// No domain matches the project key: the smallest key wins.
+	for i := 0; i < 20; i++ {
+		res, err := BootstrapManifest(BootstrapInput{RepoRoot: root, ProjectPath: "p/q"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Created || res.Domain != "alpha" || res.DomainName != "Alpha" {
+			t.Fatalf("run %d: %+v", i, res)
+		}
+	}
+	// A domain keyed like the project wins, and DomainName resolves in ScanConfigFor.
+	m, err := manifest.LoadFile(manifestPathOf(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		res, err := BootstrapManifest(BootstrapInput{RepoRoot: root, ProjectPath: "Mine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Domain != "mine" || res.DomainName != "Mine Service" {
+			t.Fatalf("run %d: %+v", i, res)
+		}
+		if _, ok := m.ScanConfigFor(res.DomainName); !ok {
+			t.Fatalf("ScanConfigFor(%q) not found", res.DomainName)
+		}
+		if _, ok := m.ScanConfigFor(res.Domain); ok {
+			t.Fatal("key unexpectedly resolves; the test no longer shows why DomainName exists")
+		}
+	}
+}
+
+func TestBootstrapManifest_YAMLSpecialKeysStayStrings(t *testing.T) {
+	for _, pp := range []string{"null", "NULL", "true", "123", "off"} {
+		root := bootRepo(t, map[string]string{"main.go": "package main\n"})
+		res, err := BootstrapManifest(BootstrapInput{RepoRoot: root, ProjectPath: pp})
+		if err != nil {
+			t.Fatalf("%s: %v", pp, err)
+		}
+		m, err := manifest.LoadFile(res.Path)
+		if err != nil {
+			t.Fatalf("%s: generated manifest does not load: %v", pp, err)
+		}
+		want := strings.ToLower(pp)
+		if res.Domain != want || res.DomainName != want || m.Domains[0].Key != want || m.Domains[0].Name != want {
+			t.Fatalf("%s: result %+v domain %+v", pp, res, m.Domains[0])
+		}
+		if _, ok := m.ScanConfigFor(res.DomainName); !ok {
+			t.Fatalf("%s: ScanConfigFor fails", pp)
+		}
 	}
 }
 
