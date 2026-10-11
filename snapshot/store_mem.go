@@ -23,7 +23,14 @@ type MemStore struct {
 }
 
 func NewMemStore() *MemStore {
-	return &MemStore{now: func() time.Time { return time.Now().UTC().Truncate(time.Second) }, data: map[string]map[string]*memItem{}}
+	return NewMemStoreClock(func() time.Time { return time.Now().UTC() })
+}
+
+// NewMemStoreClock is NewMemStore with an injectable clock, so tests can move
+// time without sleeping. CreatedAt is truncated to the second, like the
+// durable backends.
+func NewMemStoreClock(now func() time.Time) *MemStore {
+	return &MemStore{now: func() time.Time { return now().UTC().Truncate(time.Second) }, data: map[string]map[string]*memItem{}}
 }
 
 func (m *MemStore) Kind() string { return "memory" }

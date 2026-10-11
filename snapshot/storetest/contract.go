@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"testing"
 	"time"
 
@@ -23,6 +22,9 @@ type Harness struct {
 	// Tamper corrupts the stored files of (repo, codeSha) behind the Store's
 	// back. nil skips the TamperedFilesRejected check.
 	Tamper func(t *testing.T, st snapshot.Store, repo, codeSha string)
+	// Advance moves the backend's clock forward by at least d, so that the
+	// next Put gets a later CreatedAt second. nil means a real sleep of d.
+	Advance func(t *testing.T, st snapshot.Store, d time.Duration)
 }
 
 const sampleDomain = "domains:\n  d: {name: D}\n"
@@ -207,25 +209,28 @@ func Run(t *testing.T, h Harness) {
 
 	t.Run("ListOrder", func(t *testing.T) {
 		st := h.New(t)
-		for i := 1; i <= 3; i++ {
-			mustPut(t, st, "r1", Sha(i), Sample(fmt.Sprintf("s%d", i)), snapshot.PutOptions{})
+		advance := func() {
+			if h.Advance != nil {
+				h.Advance(t, st, 1100*time.Millisecond)
+			} else {
+				time.Sleep(1100 * time.Millisecond)
+			}
 		}
+		// Sha(3) goes in first, then the clock moves past a second boundary;
+		// Sha(1) and Sha(2) share a later second. The order is CreatedAt
+		// first and CodeSha within a tie: [3, 1, 2]. A backend sorting by
+		// CodeSha alone would answer [1, 2, 3].
+		mustPut(t, st, "r1", Sha(3), Sample("s3"), snapshot.PutOptions{})
+		advance()
+		mustPut(t, st, "r1", Sha(1), Sample("s1"), snapshot.PutOptions{})
+		mustPut(t, st, "r1", Sha(2), Sample("s2"), snapshot.PutOptions{})
 		l, err := st.List(ctx, "r1")
 		if err != nil || len(l) != 3 {
 			t.Fatalf("List: %v %v", l, err)
 		}
-		// Timestamps may tie at second resolution; the order is (CreatedAt, CodeSha).
-		if !sort.SliceIsSorted(l, func(i, j int) bool {
-			if !l[i].CreatedAt.Equal(l[j].CreatedAt) {
-				return l[i].CreatedAt.Before(l[j].CreatedAt)
-			}
-			return l[i].CodeSha < l[j].CodeSha
-		}) {
-			t.Fatalf("List not ordered by (CreatedAt, CodeSha): %+v", l)
-		}
-		for i, e := range l {
-			if e.CodeSha != Sha(i+1) {
-				t.Fatalf("entry %d is %s, want %s (puts happened in this order)", i, e.CodeSha, Sha(i+1))
+		for i, want := range []string{Sha(3), Sha(1), Sha(2)} {
+			if l[i].CodeSha != want {
+				t.Fatalf("entry %d is %s, want %s; list: %+v", i, l[i].CodeSha, want, l)
 			}
 		}
 	})

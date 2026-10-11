@@ -2,14 +2,20 @@ package snapshot_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/alexdx2/chronicle-core/snapshot"
 	"github.com/alexdx2/chronicle-core/snapshot/storetest"
 )
 
 func TestMemStore_Contract(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	storetest.Run(t, storetest.Harness{
-		New: func(t *testing.T) snapshot.Store { return snapshot.NewMemStore() },
+		New: func(t *testing.T) snapshot.Store {
+			now = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+			return snapshot.NewMemStoreClock(func() time.Time { return now })
+		},
+		Advance: func(t *testing.T, st snapshot.Store, d time.Duration) { now = now.Add(d) },
 	})
 }
 
