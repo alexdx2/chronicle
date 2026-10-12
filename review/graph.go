@@ -135,6 +135,12 @@ func LoadGraphContext(ctx context.Context, s *snapshot.Snapshot, reg *registry.R
 	}
 	ch := make(chan result, 1)
 	go func() {
+		// a panic here would kill the process; on the caller's stack it used to be recoverable
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- result{err: fmt.Errorf("graph load panicked: %v", r)}
+			}
+		}()
 		g, closer, err := snapshotLoad(s, reg, opt)
 		ch <- result{g, closer, err}
 	}()

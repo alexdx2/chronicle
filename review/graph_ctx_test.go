@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,5 +135,17 @@ func TestSnapshotSource_LoadHonoursContextDuringBuild(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("SnapshotSource.Load waited %s", d)
+	}
+}
+
+func TestLoadGraphContext_PanicBecomesError(t *testing.T) {
+	old := snapshotLoad
+	snapshotLoad = func(*snapshot.Snapshot, *registry.Registry, snapshot.LoadOptions) (*graph.Graph, func() error, error) {
+		panic("boom")
+	}
+	defer func() { snapshotLoad = old }()
+	_, _, err := LoadGraphContext(context.Background(), &snapshot.Snapshot{}, nil, snapshot.LoadOptions{})
+	if err == nil || !strings.Contains(err.Error(), "graph load panicked: boom") {
+		t.Fatalf("want panic error, got %v", err)
 	}
 }
