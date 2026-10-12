@@ -104,25 +104,54 @@ type SnapshotSource struct {
 
 var _ GraphSource = SnapshotSource{}
 
-// Load implements GraphSource. ctx is honored minimally: Load checks
-// ctx.Err() once, up front, as a cheap courtesy so an already-canceled
-// context is never acted on — but nothing it calls (ResolveVersion,
-// AtCommit, snapshot.Load, ComputeFreshness; all synchronous git-subprocess
-// or SQLite calls) accepts a context to cancel deeper down, and inventing
-// cancellation plumbing for calls that don't support it would be
-// speculative work this task doesn't need. A future remote/federation
-// source is where ctx would actually have somewhere to go.
+// Load implements GraphSource. Building the graph stops waiting when ctx
+// ends (see LoadGraphContext); ctx is also checked up front and between
+// the decode, build and freshness steps. Git calls (ResolveVersion,
+// AtCommit, ComputeFreshness) and the tree walk are still not interruptible.
 func (s SnapshotSource) Load(ctx context.Context) (*VersionGraph, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: %w", err)
 	}
 	if s.Rev == "" {
-		return s.loadWorkingTree()
+		return s.loadWorkingTree(ctx)
 	}
-	return s.loadAtRev()
+	return s.loadAtRev(ctx)
 }
 
-func (s SnapshotSource) loadAtRev() (*VersionGraph, error) {
+// snapshotLoad is snapshot.Load; tests replace it to simulate a slow build.
+var snapshotLoad = snapshot.Load
+
+// LoadGraphContext is snapshot.Load that stops waiting when ctx ends. snapshot.Load takes no context (it is a series of
+// synchronous SQLite batches), so the build runs in its own goroutine; when ctx wins, that goroutine is left to finish and
+// its graph is closed (and its temporary directory removed) the moment it does.
+func LoadGraphContext(ctx context.Context, s *snapshot.Snapshot, reg *registry.Registry, opt snapshot.LoadOptions) (*graph.Graph, func() error, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, fmt.Errorf("review: load graph: %w", err)
+	}
+	type result struct {
+		g      *graph.Graph
+		closer func() error
+		err    error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		g, closer, err := snapshotLoad(s, reg, opt)
+		ch <- result{g, closer, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.g, r.closer, r.err
+	case <-ctx.Done():
+		go func() { // the build cannot be interrupted; release what it produced as soon as it is done
+			if r := <-ch; r.closer != nil {
+				_ = r.closer()
+			}
+		}()
+		return nil, nil, fmt.Errorf("review: load graph: %w", ctx.Err())
+	}
+}
+
+func (s SnapshotSource) loadAtRev(ctx context.Context) (*VersionGraph, error) {
 	version, err := snapshot.ResolveVersion(s.RepoRoot, s.Rev)
 	if err != nil {
 		if errors.Is(err, snapshot.ErrNoVersion) {
@@ -144,7 +173,7 @@ func (s SnapshotSource) loadAtRev() (*VersionGraph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: registry: %w", err)
 	}
-	g, closer, err := snapshot.Load(snap, reg, snapshot.LoadOptions{})
+	g, closer, err := LoadGraphContext(ctx, snap, reg, snapshot.LoadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: build graph: %w", err)
 	}
@@ -153,6 +182,10 @@ func (s SnapshotSource) loadAtRev() (*VersionGraph, error) {
 	if err != nil {
 		closer()
 		return nil, fmt.Errorf("review: SnapshotSource.Load: manifest: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		closer()
+		return nil, fmt.Errorf("review: SnapshotSource.Load: %w", err)
 	}
 	fr, err := snapshot.ComputeFreshness(s.RepoRoot, snap, version, man, s.Rev)
 	if err != nil {
@@ -188,7 +221,7 @@ func (s SnapshotSource) loadAtRev() (*VersionGraph, error) {
 // done here, since it would reintroduce a dependency on HEAD existing at
 // all (see TestSnapshotSource_Load_WorkingTree_NoCommits) for a value nothing
 // in this package currently consumes.
-func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
+func (s SnapshotSource) loadWorkingTree(ctx context.Context) (*VersionGraph, error) {
 	graphPath := filepath.Join(s.RepoRoot, snapshot.Path)
 	data, err := os.ReadFile(graphPath)
 	if err != nil {
@@ -202,7 +235,7 @@ func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: blob of %s: %w", snapshot.Path, err)
 	}
-	return buildVersionGraph(s.RepoRoot, "", data, graphPath, snapshot.GraphVersion{Commit: "", Blob: blob}, "", "SnapshotSource", false)
+	return buildVersionGraph(ctx, s.RepoRoot, "", data, graphPath, snapshot.GraphVersion{Commit: "", Blob: blob}, "", "SnapshotSource", false)
 }
 
 // buildVersionGraph is the part of loading shared by every file-backed
@@ -211,10 +244,13 @@ func (s SnapshotSource) loadWorkingTree() (*VersionGraph, error) {
 // Commit and Blob set; Seq is filled from the decoded header. ref is the
 // VersionGraph's Ref and version.Commit its Commit. The graph's store is
 // closed on every error after it is opened.
-func buildVersionGraph(repoRoot, ref string, data []byte, srcPath string, version snapshot.GraphVersion, rev, who string, skipFreshness bool) (*VersionGraph, error) {
+func buildVersionGraph(ctx context.Context, repoRoot, ref string, data []byte, srcPath string, version snapshot.GraphVersion, rev, who string, skipFreshness bool) (*VersionGraph, error) {
 	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
 	if err != nil {
 		return nil, fmt.Errorf("review: %s.Load: decode %s: %w", who, srcPath, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("review: %s.Load: %w", who, err)
 	}
 	version.Seq = snap.Header.Seq
 
@@ -222,13 +258,17 @@ func buildVersionGraph(repoRoot, ref string, data []byte, srcPath string, versio
 	if err != nil {
 		return nil, fmt.Errorf("review: %s.Load: registry: %w", who, err)
 	}
-	g, closer, err := snapshot.Load(snap, reg, snapshot.LoadOptions{})
+	g, closer, err := LoadGraphContext(ctx, snap, reg, snapshot.LoadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("review: %s.Load: build graph: %w", who, err)
 	}
 
 	var fr snapshot.Freshness
 	if !skipFreshness {
+		if err := ctx.Err(); err != nil {
+			closer()
+			return nil, fmt.Errorf("review: %s.Load: %w", who, err)
+		}
 		man, err := loadManifestFor(repoRoot)
 		if err != nil {
 			closer()
@@ -322,7 +362,7 @@ func (s FileSource) Load(ctx context.Context) (*VersionGraph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("review: FileSource.Load: blob of %s: %w", s.Path, err)
 	}
-	return buildVersionGraph(s.RepoRoot, s.Rev, data, s.Path, snapshot.GraphVersion{Commit: commit, Blob: blob}, s.Rev, "FileSource", s.SkipFreshness)
+	return buildVersionGraph(ctx, s.RepoRoot, s.Rev, data, s.Path, snapshot.GraphVersion{Commit: commit, Blob: blob}, s.Rev, "FileSource", s.SkipFreshness)
 }
 
 // hasCommits reports whether the repository has at least one commit on any ref.
