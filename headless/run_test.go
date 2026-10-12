@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -536,5 +537,39 @@ func TestRun_OnFilesCalledPerWaveAfterCoverage(t *testing.T) {
 	}
 	if calls == 0 || seen != len(res.Files) {
 		t.Fatalf("calls %d, files seen %d, result files %d", calls, seen, len(res.Files))
+	}
+}
+
+func TestRun_OnFileDoneBeforeWaveCommit(t *testing.T) {
+	e := newRunEnv(t)
+	var mu sync.Mutex
+	done := map[string]string{}
+	var doneAtFirstOnFiles int
+	in := e.input(llm.NewFake("testdata/fake"), "src/a.ts", "src/arr.ts", "src/bad.ts")
+	in.OnFileDone = func(path, status string) {
+		mu.Lock()
+		defer mu.Unlock()
+		done[path] = status
+	}
+	first := true
+	in.OnFiles = func(files []FileUsage) {
+		mu.Lock()
+		defer mu.Unlock()
+		if first {
+			first = false
+			doneAtFirstOnFiles = len(done)
+		}
+	}
+	res, err := Run(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != len(res.Files) || doneAtFirstOnFiles != len(res.Files) {
+		t.Fatalf("OnFileDone saw %d files (%d before the first commit callback), result has %d", len(done), doneAtFirstOnFiles, len(res.Files))
+	}
+	for _, f := range res.Files {
+		if done[f.Path] != f.Status {
+			t.Errorf("%s: OnFileDone status %q, result %q", f.Path, done[f.Path], f.Status)
+		}
 	}
 }

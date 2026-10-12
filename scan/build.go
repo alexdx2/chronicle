@@ -51,6 +51,10 @@ type BuildInput struct {
 	Producer      string        // "" -> "chronicle-scan"
 	// OnFiles is called after each committed wave (at most 40 files).
 	OnFiles func([]FileMetric)
+	// OnFileDone is called as soon as a file's extraction finishes (any
+	// status), before the wave is committed; progress only, the metrics still
+	// come through OnFiles. It may be called concurrently.
+	OnFileDone func(path, status string)
 	// AllowPartial lets BuildWithStore put a snapshot whose build has failed
 	// files (the result is then marked Partial). Without it such a build is
 	// not stored and BuildWithStore returns ErrIncomplete.
@@ -294,7 +298,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	// 4/5. Scan.
 	opts := FullOptions{
 		RepoRoot: wt, ProjectPath: projectPath, Backend: in.Backend, Concurrency: in.Concurrency,
-		ContextWindow: in.ContextWindow, FileTimeout: in.FileTimeout, OnFiles: onFiles, OnPlan: in.OnPlan,
+		ContextWindow: in.ContextWindow, FileTimeout: in.FileTimeout, OnFiles: onFiles, OnFileDone: in.OnFileDone, OnPlan: in.OnPlan,
 	}
 	var (
 		rep    *FullReport

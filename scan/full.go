@@ -36,6 +36,9 @@ type FullOptions struct {
 	NoExtract     bool // structural pass only
 	// OnFiles is called after each committed wave with that wave's metrics.
 	OnFiles func([]FileMetric)
+	// OnFileDone is called when a file's extraction finishes, before its wave
+	// is committed (progress only; may be called concurrently).
+	OnFileDone func(path, status string)
 	// OnPlan is called once per domain, after the files to send are known and
 	// before the first request to the model.
 	OnPlan func(Plan)
@@ -352,6 +355,7 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 		G: r.g, RepoRoot: r.o.RepoRoot, ChronicleDir: paths.DirAt(r.o.RepoRoot), Domain: d.Key, Manifest: r.m,
 		HeadSHA: r.head, Files: todo, Backend: r.o.Backend, Concurrency: r.o.Concurrency,
 		ContextWindow: r.o.ContextWindow, FileTimeout: r.o.FileTimeout,
+		OnFileDone: r.o.OnFileDone,
 		OnFiles: func(fs []headless.FileUsage) {
 			ms := MetricsFrom(model, fs, time.Now())
 			r.rep.Metrics = append(r.rep.Metrics, ms...)

@@ -55,6 +55,12 @@ type RunInput struct {
 	// OnFiles, when set, is called after each committed wave (at most
 	// graph.ServerMaxWave files) and after the wave's coverage was recorded.
 	OnFiles func([]FileUsage)
+	// OnFileDone, when set, is called as soon as one file's extraction has
+	// finished (any status), before its wave is committed, so a progress
+	// display advances per file. It is for progress only: coverage and metrics
+	// still go through OnFiles per committed wave. It is called concurrently
+	// from the extraction workers and must be safe for that and quick.
+	OnFileDone func(path, status string)
 }
 
 const (
@@ -371,6 +377,9 @@ func runWave(ctx context.Context, in RunInput, b graph.CheckoutBatch, items []gr
 			defer wg.Done()
 			for i := range jobs {
 				out[i], errs[i] = extractItem(ctx, in, b, items[i], guide, maxTokens)
+				if in.OnFileDone != nil {
+					in.OnFileDone(out[i].Path, out[i].Status)
+				}
 			}
 		}()
 	}

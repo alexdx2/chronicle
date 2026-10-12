@@ -461,3 +461,25 @@ func TestFullScan_IrregularFilesAreReportedSkipped(t *testing.T) {
 		t.Fatalf("a skip is not a failure: failed %+v complete %v", rep.Failed, rep.Complete)
 	}
 }
+
+func TestFullScan_OnFileDoneReportsEveryFileBeforeItsWave(t *testing.T) {
+	e := newScanRepoT(t, fiveFiles(), true)
+	var mu sync.Mutex
+	done := map[string]string{}
+	atWave := -1
+	o := fullOpts(e, &countingBackend{})
+	o.OnFileDone = func(p, st string) { mu.Lock(); done[p] = st; mu.Unlock() }
+	o.OnFiles = func(ms []FileMetric) {
+		mu.Lock()
+		defer mu.Unlock()
+		if atWave < 0 {
+			atWave = len(done)
+		}
+	}
+	if _, err := FullScan(context.Background(), e.g, o); err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 5 || atWave != 5 {
+		t.Fatalf("OnFileDone files = %d, seen before first wave callback = %d; want 5/5", len(done), atWave)
+	}
+}
