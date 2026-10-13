@@ -8,7 +8,7 @@ import (
 	"fmt"
 )
 
-// ContentID is the content identity of a snapshot (spec §3.1): sha256 over
+// ContentIDFiles is the content identity of a snapshot (spec §3.1): sha256 over
 // the canonical graph.jsonl re-encoded with Header.Seq = 0, then the domain
 // manifest bytes, then the types bytes (empty when absent), separated by
 // 0x1f. Two publications of the same graph share one ContentID whatever
@@ -21,6 +21,10 @@ import (
 // line exactly like every other reader does. Input without a snapshot header
 // (empty, binary garbage, node lines only) is an error: it must not yield a
 // valid-looking id, since ContentID is compared at a trust boundary.
+//
+// The 0x1f separator assumes the manifest, types and profile bytes contain no
+// raw 0x1f: JSON (profile) cannot carry one unescaped and YAML practically
+// never does.
 //
 // For a version 2 graph the profile bytes are appended after types, again
 // separated by 0x1f (always present, possibly empty); version 1 graphs hash

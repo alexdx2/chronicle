@@ -167,3 +167,20 @@ func TestContentID_HeaderlessInputErrors(t *testing.T) {
 		}
 	}
 }
+
+// A version 1 snapshot keeps the identity it had before profile.json existed.
+// The id below was computed outside this code:
+// sha256(canonical graph (seq 0) | 0x1f | domain | 0x1f | types).
+func TestContentID_LegacyV1GoldenID(t *testing.T) {
+	const want = "d6ae50f266027dc0db6978445e4eedf81903a5fb3bc44e91767f3535b2958864"
+	graph := []byte(`{"kind":"header","format":"chronicle-graph","version":1,"seq":7,"domains":["d"],"fact_schema":1,"counts":{"node":1}}` + "\n" +
+		`{"kind":"node","id":"code:class:d:A","layer":"code","type":"class","domain":"d","name":"A"}` + "\n")
+	domain, types := []byte("domains: {d: {}}\n"), []byte("types: {}\n")
+	got, err := ContentIDFiles(Files{Graph: graph, Domain: domain, Types: types, Profile: []byte(`{"ignored":true}`)})
+	if err != nil || got != want {
+		t.Fatalf("ContentIDFiles = %s, %v; want %s", got, err, want)
+	}
+	if got, err := ContentID(graph, domain, types); err != nil || got != want {
+		t.Fatalf("ContentID = %s, %v; want %s", got, err, want)
+	}
+}

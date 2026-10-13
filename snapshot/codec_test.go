@@ -183,6 +183,9 @@ func TestDecode_UnknownMajorVersion(t *testing.T) {
 	if !strings.Contains(err.Error(), "version 3") {
 		t.Fatalf("expected error to mention %q, got: %v", "version 3", err)
 	}
+	if !strings.Contains(err.Error(), "(want 1 or 2)") {
+		t.Fatalf("the error must name the readable versions, got: %v", err)
+	}
 }
 
 func TestDecode_Hostile(t *testing.T) {

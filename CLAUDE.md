@@ -188,7 +188,14 @@ deterministic seed, with `seed_reason`) -> packs catalog (project > fleet > buil
 extraction by layers (contracts, structure, integrations, tests) -> layer checks. The coverage version of an
 extracted file is `fact-schema@N+packs:<hash>` (hash over the applied packs' `id@version`), so changing a pack
 makes only the files it covers stale. `.depbot/profile.json` is the fourth snapshot file (technologies, deps
-publishes/depends, packs, checks, scope source, `seeded`); the snapshot format version is 2 (v1 is still read).
+publishes/depends, packs, checks, scope source, `seeded`, limitations); the snapshot format version is 2 (v1 is still read).
+An incremental build inherits the previous profile (and its manifest) when the profile model fails or is off. With a model
+window (Ollama and other local backends) the profile prompt shrinks to fit: inventory samples first, then repeated
+dependencies, then dependency lines, and what was dropped is stated in `limitations`.
+
+Snapshot format version 2 is written by every exporter from this change on, so a repository with a committed v1
+`graph.jsonl` sees one spurious `chronicle graph update --check` mismatch: after upgrading core run
+`chronicle graph update` once and commit the result; `graph update --check` fails until then.
 
 ## Signal pipeline (scan finalize)
 
