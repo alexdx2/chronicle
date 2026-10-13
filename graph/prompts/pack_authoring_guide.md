@@ -20,7 +20,7 @@ Every pack is a markdown file with this structure:
 # FRAMEWORK_NAME EXTRACTION RULES
 
 ## Match
-match: ext=[.ext1,.ext2]; always=[.ext1]; contains=[token1, token2]
+match: ext=.ext1,.ext2; always=.ext1; contains=token1, token2
 Load this pack when:
 - [file extensions, build files, imports, decorators that indicate this technology]
 - [be specific — list concrete filenames, extensions, import paths, or patterns]
@@ -73,6 +73,10 @@ Start it with ONE machine-readable line; the scan system reads it, the checklist
 ```
 match: ext=.cs,.csproj; contains=Confluent.Kafka, IProducer, IConsumer
 ```
+
+The line is parsed by a program, not read by a person: write it exactly in this shape, as the first line
+under the `## Match` heading, plain text — no bullet, no backticks, no bold, no brackets around the values.
+A pack without this line is rejected.
 
 - `ext=` lists the file extensions the pack is about, comma separated, with the dot.
 - `contains=` lists literal tokens (no regex, case-sensitive, written exactly as they appear in code). When
@@ -137,7 +141,7 @@ CRITICAL: Your pack MUST follow these rules:
 1. Read 3-5 representative files that use the framework
 2. Identify patterns: routes, DI, models, events, services
 3. Write the pack following the structure above
-4. Start with the `## Match` section — be concrete
+4. Write the `## Match` section first and start it with the `match:` line — be concrete
 5. Map each pattern to a core fact kind
 6. Add a "Do NOT extract" section
 7. Save with `chronicle_save_custom_pack(id="<tech-name>", content=<pack>)`
@@ -153,6 +157,7 @@ discovered in future scans.
 # DJANGO EXTRACTION RULES
 
 ## Match
+match: ext=.py; contains=django.
 Load this pack when:
 - Files import from django.* (django.http, django.views, django.db)
 - manage.py exists in the project root
@@ -211,6 +216,7 @@ DRF ViewSets:
 # SPRING BOOT EXTRACTION RULES
 
 ## Match
+match: ext=.java,.kt; contains=org.springframework
 Load this pack when:
 - pom.xml or build.gradle lists spring-boot dependencies
 - Files import from org.springframework.*

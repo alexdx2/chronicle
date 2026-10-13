@@ -315,6 +315,13 @@ func TestBuildSnapshot_ProfileFileCarriesChecksAndPacks(t *testing.T) {
 	if len(pf.Checks) != 5 || len(pf.Packs) == 0 {
 		t.Fatalf("checks=%d packs=%+v", len(pf.Checks), pf.Packs)
 	}
+	// The coverage check must see the files this very domain sent: a full
+	// scan that extracted files is never "no files sent to the model".
+	for _, c := range pf.Checks {
+		if c.Layer == "coverage" && (c.Status != CheckOK || !strings.Contains(c.Detail, " files failed")) {
+			t.Fatalf("coverage check = %+v (changed files %d)", c, res.ChangedFiles)
+		}
+	}
 }
 
 // The first incremental build over a base without profile.json has no model

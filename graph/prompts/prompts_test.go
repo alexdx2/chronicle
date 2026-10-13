@@ -117,6 +117,15 @@ Some extraction rules here.`
 	}
 }
 
+func TestExtractMatchSection_HeadingCaseAndLevel(t *testing.T) {
+	for _, c := range []string{"# P\n\n## match\nmatch: ext=.cs\n\n## Rules\nr", "# P\n\n### Match\nmatch: ext=.cs\n\n## Rules\nr", "# P\n\n## MATCH\nmatch: ext=.cs\n"} {
+		m := ExtractMatchSection(c)
+		if !strings.Contains(m, "match: ext=.cs") || strings.Contains(m, "Rules") {
+			t.Errorf("%q: section %q", c, m)
+		}
+	}
+}
+
 func TestExtractMatchSection_NoMatchSection(t *testing.T) {
 	content := `# MY PACK
 

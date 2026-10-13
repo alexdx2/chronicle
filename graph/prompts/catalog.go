@@ -85,7 +85,8 @@ func MatchExts(match string) []string {
 // when the section has no match: line with at least one recognised key.
 func ParseMatchLine(section string) (exts, always, contains []string, ok bool) {
 	for _, line := range strings.Split(section, "\n") {
-		key, rest, found := strings.Cut(strings.TrimSpace(line), ":")
+		line = undecorate(line)
+		key, rest, found := strings.Cut(line, ":")
 		if !found || strings.ToLower(strings.TrimSpace(key)) != "match" {
 			continue
 		}
@@ -95,22 +96,25 @@ func ParseMatchLine(section string) (exts, always, contains []string, ok bool) {
 			if !found {
 				continue
 			}
-			switch strings.ToLower(strings.TrimSpace(k)) {
+			k = strings.ToLower(strings.TrimSpace(k))
+			switch k {
 			case "ext", "always", "contains":
 				recognised = true
+			default:
+				continue
 			}
 			for _, tok := range strings.Split(v, ",") {
-				tok = strings.TrimSpace(tok)
+				tok = strings.Trim(strings.TrimSpace(tok), "[]\"'")
 				if tok == "" {
 					continue
 				}
-				switch strings.ToLower(strings.TrimSpace(k)) {
+				switch k {
 				case "ext", "always":
 					tok = strings.ToLower(tok)
 					if !strings.HasPrefix(tok, ".") {
 						tok = "." + tok
 					}
-					if strings.ToLower(strings.TrimSpace(k)) == "ext" {
+					if k == "ext" {
 						exts = append(exts, tok)
 					} else {
 						always = append(always, tok)
@@ -126,6 +130,16 @@ func ParseMatchLine(section string) (exts, always, contains []string, ok bool) {
 		return exts, always, contains, true
 	}
 	return nil, nil, nil, false
+}
+
+// undecorate strips the markdown a model wraps a match: line in — list
+// bullets, inline code, bold — so "- **match:** `ext=.cs`" reads as
+// "match: ext=.cs". Tokens inside keep their case and punctuation.
+func undecorate(line string) string {
+	line = strings.NewReplacer("`", "", "**", "", "__", "").Replace(line)
+	line = strings.TrimSpace(line)
+	line = strings.TrimLeft(line, "-*+> \t")
+	return strings.TrimSpace(line)
 }
 
 func firstHeading(content string) string {

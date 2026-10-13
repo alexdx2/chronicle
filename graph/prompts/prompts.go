@@ -71,8 +71,8 @@ type Pack struct {
 // TechPack describes a technology instruction pack with its match section.
 type TechPack struct {
 	ID      string `json:"id"`
-	Match   string `json:"match"`   // extracted from ## Match section
-	Content string `json:"-"`       // full content (loaded on demand)
+	Match   string `json:"match"` // extracted from ## Match section
+	Content string `json:"-"`     // full content (loaded on demand)
 }
 
 // PackSelection is the result of matching packs for a project.
@@ -156,8 +156,11 @@ func init() {
 // ExtractMatchSection pulls the "## Match" section from a pack's markdown.
 // Returns everything between "## Match" and the next "##" heading (or end of section).
 func ExtractMatchSection(content string) string {
-	const marker = "## Match"
-	idx := strings.Index(content, marker)
+	// The heading is matched without regard to case or level ("## match",
+	// "### Match" are the same section); what follows up to the next heading
+	// is the section.
+	const marker = "## match"
+	idx := strings.Index(strings.ToLower(content), marker)
 	if idx < 0 {
 		return ""
 	}

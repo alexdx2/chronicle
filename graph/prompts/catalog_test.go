@@ -68,6 +68,12 @@ func TestParseMatchLine(t *testing.T) {
 		{"no recognised key", "match: C# projects\nmatch: foo=bar; baz", nil, nil, nil, false},
 		{"odd spacing and case", "  MATCH :  EXT = .TS , .Tsx ;CONTAINS=  @nestjs/ ;", []string{".ts", ".tsx"}, nil, []string{"@nestjs/"}, true},
 		{"extension without dot", "match: ext=cs", []string{".cs"}, nil, nil, true},
+		// what models actually write when the guide says "the `match:` line"
+		{"inline code", "`match: ext=.cs,.csproj; contains=Confluent.Kafka`", []string{".cs", ".csproj"}, nil, []string{"Confluent.Kafka"}, true},
+		{"bullet and bold", "- **match:** ext=.py; contains=boto3.resource('dynamodb'), DynamoDB", []string{".py"}, nil, []string{"boto3.resource('dynamodb')", "DynamoDB"}, true},
+		{"bracketed template copied", "match: ext=[.cs,.csproj]; always=[.csproj]; contains=[Confluent.Kafka, IProducer]", []string{".cs", ".csproj"}, []string{".csproj"}, []string{"Confluent.Kafka", "IProducer"}, true},
+		{"quoted tokens", "match: ext=\".ts\"; contains='@aws-cdk/core', \"aws-cdk-lib\"", []string{".ts"}, nil, []string{"@aws-cdk/core", "aws-cdk-lib"}, true},
+		{"unknown key next to a known one", "match: ext=.cs; regex=.*", []string{".cs"}, nil, nil, true},
 	}
 	for _, c := range cases {
 		exts, always, contains, ok := ParseMatchLine(c.in)
