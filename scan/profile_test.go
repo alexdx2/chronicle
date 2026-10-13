@@ -102,9 +102,12 @@ func TestGuardScope_SeedWinsWhenModelExcludesEverything(t *testing.T) {
 
 func TestBuildProfilePrompt_CarriesDepsCatalogAndSeed(t *testing.T) {
 	inv := &Inventory{ByExt: map[string]int{".cs": 3}, TopDirs: map[string]int{"src": 3}}
-	rep := deps.Report{Depends: []deps.Dependency{{Name: "confluent.kafka", Version: "2.3.0", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 6}}}
+	rep := deps.Report{Depends: []deps.Dependency{{Name: "confluent.kafka", Version: "2.3.0", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 6, Text: "PackageReference Confluent.Kafka"}}, Publishes: []deps.Package{{Name: "acme.api", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 2, Text: "PackageId"}}}
 	req := BuildProfilePrompt(inv, rep, SeedResult{Tech: []string{"dotnet"}}, []prompts.PackMeta{{ID: "dotnet", Description: "ASP.NET"}})
-	for _, want := range []string{"confluent.kafka 2.3.0", "Api/Api.csproj:6", "dotnet", "ASP.NET", "\"pack\"", "seed:"} {
+	if strings.Contains(req.User, "{Name:") || !strings.Contains(req.User, "PackageId") {
+		t.Errorf("publishes rendered badly: %q", req.User)
+	}
+	for _, want := range []string{"confluent.kafka 2.3.0", "Api/Api.csproj:6", "PackageReference Confluent.Kafka", "dotnet", "ASP.NET", "\"pack\"", "seed:"} {
 		if !strings.Contains(req.User, want) && !strings.Contains(req.System, want) {
 			t.Errorf("prompt lacks %q", want)
 		}
@@ -115,6 +118,10 @@ func TestSeedProfile_FromClassifier(t *testing.T) {
 	p := SeedProfile(SeedResult{Tech: []string{"dotnet", "kafka"}}, deps.Report{})
 	if len(p.Technologies) != 2 || p.Technologies[0].Pack != "dotnet" || p.Technologies[1].Pack != "kafka" {
 		t.Fatalf("%+v", p.Technologies)
+	}
+	p.Scope.Include = []ScopeRule{{Glob: "**/*.cs"}}
+	if err := ValidateProfile(&p, map[string]bool{"dotnet": true, "kafka": true}); err != nil {
+		t.Fatalf("seed profile must validate: %v", err)
 	}
 }
 
@@ -185,5 +192,48 @@ func TestRequestProfileWith_UnknownPackIsRetried(t *testing.T) {
 	}
 	if !strings.Contains(b.seen[1].User, "pack") {
 		t.Fatal("retry lacks the pack error")
+	}
+}
+
+func TestParseProfile_SkipsEmptyObjectInProse(t *testing.T) {
+	p, err := ParseProfile("text {} more " + goodProfile)
+	if err != nil || len(p.Technologies) != 1 {
+		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+func TestValidateProfile_RejectsEmptyProfile(t *testing.T) {
+	p, err := ParseProfile(`{"technologies":[],"scope":{}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateProfile(&p, nil); err == nil || !strings.Contains(err.Error(), "technologies") {
+		t.Fatalf("%v", err)
+	}
+	p, _ = ParseProfile(goodProfile)
+	p.Scope.Include = nil
+	if err := ValidateProfile(&p, nil); err == nil || !strings.Contains(err.Error(), "scope.include") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestRequestProfile_EmptyObjectThenGood(t *testing.T) {
+	b := &cannedBackend{answers: []string{`{}`, goodProfile}}
+	if _, err := RequestProfile(context.Background(), b, llm.Request{User: "u"}); err != nil || b.calls != 2 {
+		t.Fatalf("calls=%d err=%v", b.calls, err)
+	}
+}
+
+func TestSeedProfile_EvidenceByEcosystem(t *testing.T) {
+	rep := deps.Report{Depends: []deps.Dependency{
+		{Name: "express", Ecosystem: "npm", File: "package.json", Line: 5, Text: `"express"`},
+		{Name: "confluent.kafka", Ecosystem: "nuget", File: "A.csproj", Line: 3, Text: "PackageReference Confluent.Kafka"},
+	}}
+	p := SeedProfile(SeedResult{Tech: []string{"typescript", "kafka", "prisma"}}, rep)
+	if p.Technologies[0].Evidence[0] != `package.json:5 "express"` || p.Technologies[0].Language != "typescript" {
+		t.Fatalf("%+v", p.Technologies[0])
+	}
+	if !strings.Contains(p.Technologies[1].Evidence[0], "A.csproj:3") || p.Technologies[1].Language != "dotnet" {
+		t.Fatalf("%+v", p.Technologies[1])
 	}
 }

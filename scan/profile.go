@@ -90,14 +90,21 @@ func SortedTopDirs(inv *Inventory) []string {
 }
 
 // SeedProfile turns the classifier's tech list into a profile whose packs are
-// the built-in ids; evidence is the manifests that were read.
+// the built-in ids. Evidence is the dependency lines of the matching
+// ecosystem, else one honest line saying the technology came from the seed.
 func SeedProfile(seed SeedResult, rep deps.Report) Profile {
 	var p Profile
 	for _, t := range seed.Tech {
-		tech := Technology{ID: t, Pack: t, Role: "other"}
+		tech := Technology{ID: t, Pack: t, Role: "other", Language: "other"}
 		for _, d := range rep.Depends {
-			if len(tech.Evidence) < 3 && d.File != "" {
-				tech.Evidence = append(tech.Evidence, fmt.Sprintf("%s:%d", d.File, d.Line))
+			if !seedTechMatches(t, d) {
+				continue
+			}
+			if tech.Language == "other" {
+				tech.Language = ecosystemLanguage(d.Ecosystem)
+			}
+			if len(tech.Evidence) < 3 {
+				tech.Evidence = append(tech.Evidence, fmt.Sprintf("%s:%d %s", d.File, d.Line, d.Text))
 			}
 		}
 		if len(tech.Evidence) == 0 {
@@ -107,6 +114,37 @@ func SeedProfile(seed SeedResult, rep deps.Report) Profile {
 	}
 	p.Scope = seedScope(seed)
 	return p
+}
+
+func seedTechMatches(tech string, d deps.Dependency) bool {
+	if tech == "kafka" {
+		return strings.Contains(d.Name, "kafka")
+	}
+	switch tech {
+	case "dotnet":
+		return d.Ecosystem == "nuget"
+	case "typescript", "nestjs", "prisma", "graphql":
+		return d.Ecosystem == "npm"
+	case "go":
+		return d.Ecosystem == "go"
+	}
+	return false
+}
+
+func ecosystemLanguage(eco string) string {
+	switch eco {
+	case "nuget":
+		return "dotnet"
+	case "npm":
+		return "typescript"
+	case "go":
+		return "go"
+	case "python":
+		return "python"
+	case "maven", "gradle":
+		return "java"
+	}
+	return "other"
 }
 
 func seedScope(seed SeedResult) Scope {
@@ -127,7 +165,7 @@ func BuildProfilePrompt(inv *Inventory, rep deps.Report, seed SeedResult, catalo
 	var rest strings.Builder
 	rest.WriteString("\n## Dependencies\n")
 	for _, d := range rep.Depends {
-		fmt.Fprintf(&rest, "%s %s %s (%s:%d)", d.Ecosystem, d.Name, d.Version, d.File, d.Line)
+		fmt.Fprintf(&rest, "%s %s %s (%s:%d) %s", d.Ecosystem, d.Name, d.Version, d.File, d.Line, d.Text)
 		if d.Internal {
 			rest.WriteString(" [internal]")
 		}
@@ -136,7 +174,7 @@ func BuildProfilePrompt(inv *Inventory, rep deps.Report, seed SeedResult, catalo
 	if len(rep.Publishes) > 0 {
 		rest.WriteString("publishes:\n")
 		for _, p := range rep.Publishes {
-			fmt.Fprintf(&rest, "%+v\n", p)
+			fmt.Fprintf(&rest, "%s %s (%s:%d) %s\n", p.Ecosystem, p.Name, p.File, p.Line, p.Text)
 		}
 	}
 	fmt.Fprintf(&rest, "\n## Seed\nseed: include=%s, exclude=%s, tech=%s\n",
@@ -166,10 +204,30 @@ func BuildProfilePrompt(inv *Inventory, rep deps.Report, seed SeedResult, catalo
 // ParseProfile decodes the first balanced JSON object of text; unknown fields
 // are ignored.
 func ParseProfile(text string) (Profile, error) {
-	start := strings.IndexByte(text, '{')
-	if start < 0 {
-		return Profile{}, errors.New("no JSON object in the answer")
+	for from := 0; ; {
+		off := strings.IndexByte(text[from:], '{')
+		if off < 0 {
+			return Profile{}, errors.New("no JSON object in the answer")
+		}
+		start := from + off
+		end, ok := balancedEnd(text, start)
+		if !ok {
+			return Profile{}, errors.New("unbalanced JSON object in the answer")
+		}
+		if strings.TrimSpace(text[start+1:end]) == "" { // "{}" in prose: look further
+			from = end + 1
+			continue
+		}
+		var p Profile
+		if err := json.Unmarshal([]byte(text[start:end+1]), &p); err != nil {
+			return Profile{}, fmt.Errorf("decode profile: %w", err)
+		}
+		return p, nil
 	}
+}
+
+// balancedEnd returns the index of the brace closing the object at start.
+func balancedEnd(text string, start int) (int, bool) {
 	depth, inStr, esc := 0, false, false
 	for i := start; i < len(text); i++ {
 		c := text[i]
@@ -189,15 +247,11 @@ func ParseProfile(text string) (Profile, error) {
 		case c == '}':
 			depth--
 			if depth == 0 {
-				var p Profile
-				if err := json.Unmarshal([]byte(text[start:i+1]), &p); err != nil {
-					return Profile{}, fmt.Errorf("decode profile: %w", err)
-				}
-				return p, nil
+				return i, true
 			}
 		}
 	}
-	return Profile{}, errors.New("unbalanced JSON object in the answer")
+	return 0, false
 }
 
 var (
@@ -209,6 +263,9 @@ var (
 // ValidateProfile checks roles, ids, packs (known or "new"; a nil known skips
 // the membership check), evidence and globs.
 func ValidateProfile(p *Profile, known map[string]bool) error {
+	if len(p.Technologies) == 0 {
+		return errors.New("technologies must not be empty")
+	}
 	seen := map[string]bool{}
 	for i, t := range p.Technologies {
 		if !roles[t.Role] {
@@ -231,6 +288,9 @@ func ValidateProfile(p *Profile, known map[string]bool) error {
 		} else {
 			seen[k] = true
 		}
+	}
+	if len(p.Scope.Include) == 0 {
+		return errors.New("scope.include must list at least one glob")
 	}
 	for _, group := range []struct {
 		name  string

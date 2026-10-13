@@ -9,7 +9,7 @@ Give every glob a one-line reason. Globs are repository-relative, use "/" and "*
 
 ## Evidence rule
 
-Every technology carries at least one evidence line of the form `path:line text`, taken from the dependency report or the inventory. Never invent evidence, never guess: if the report does not show it, leave the technology out.
+Every technology carries at least one evidence line of the form `path:line text`, taken from the dependency report (`path:line text`, as printed there) or, for an inventory fact, a bare `path`. Never invent evidence, never guess: if the report does not show it, leave the technology out.
 
 ## Response format
 
