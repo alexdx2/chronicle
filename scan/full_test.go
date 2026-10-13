@@ -402,14 +402,11 @@ func TestFullScan_SeveralDomainsEachOwnTheirFiles(t *testing.T) {
 }
 
 func TestLimitationsFor(t *testing.T) {
-	if got := limitationsFor(0, true, 0); !reflect.DeepEqual(got, []string{"trace_flow phase not run"}) {
+	if got := limitationsFor(true, 0); !reflect.DeepEqual(got, []string{"trace_flow phase not run"}) {
 		t.Fatalf("clean = %v", got)
 	}
-	got := limitationsFor(3, true, 0)
-	if len(got) != 2 || !strings.Contains(got[0], "3 HTTP calls") || !strings.Contains(got[0], "reconcile_endpoints") || got[1] != "trace_flow phase not run" {
-		t.Fatalf("unmatched = %v", got)
-	}
-	got = limitationsFor(0, false, 2)
+	var got []string
+	got = limitationsFor(false, 2)
 	if !containsStr(got, "structural pass did not complete") || !containsStr(got, "2 files failed extraction and will be retried by the next run") {
 		t.Fatalf("failed = %v", got)
 	}

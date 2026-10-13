@@ -34,7 +34,13 @@ import (
 type RunInput struct {
 	G *graph.Graph
 	// Catalog supplies tech packs; nil -> built-in packs plus <ChronicleDir>/packs.
-	Catalog      *prompts.Catalog
+	Catalog *prompts.Catalog
+	// Guide, when set, wins over Catalog: the caller built it once and uses the
+	// same set to decide which files are stale (VersionFor).
+	Guide *GuideSet
+	// VersionFor gives the coverage version recorded for a file. nil derives it
+	// from the packs the file's guide contains.
+	VersionFor   func(path string) string
 	RepoRoot     string
 	ChronicleDir string // <RepoRoot>/.depbot (outbox lives under it)
 	Domain       string
@@ -217,14 +223,24 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		}
 	}
 
-	cat := in.Catalog
-	if cat == nil {
-		cat = prompts.BuiltinCatalog()
-		if err := cat.AddProjectPacks(filepath.Join(in.ChronicleDir, "packs")); err != nil {
-			return nil, fmt.Errorf("project packs: %w", err)
+	guide := in.Guide
+	if guide == nil {
+		cat := in.Catalog
+		if cat == nil {
+			cat = prompts.BuiltinCatalog()
+			if err := cat.AddProjectPacks(filepath.Join(in.ChronicleDir, "packs")); err != nil {
+				return nil, fmt.Errorf("project packs: %w", err)
+			}
+		}
+		guide = newGuideSet(g, in.Manifest.Tech, cat)
+	}
+	versionFor := in.VersionFor
+	if versionFor == nil {
+		versionFor = func(path string) string {
+			_, refs := guide.For(path)
+			return ExtractorVersion(refs)
 		}
 	}
-	guide := newGuideSet(g, in.Manifest.Tech, cat)
 	wantOutbox := filepath.Join(in.ChronicleDir, "scan-outbox", fmt.Sprintf("%d", rev))
 	// fail returns the partial result together with the error.
 	fail := func(err error) (*RunResult, error) {
@@ -244,7 +260,7 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			blob, _ := gitutil.FileBlobSHA(in.RepoRoot, f.Path)
 			if err := st.UpsertCoverage(store.CoverageRow{
 				DomainKey: in.Domain, FilePath: f.Path, ExtractorID: "chronicle-scan",
-				ExtractorVersion: fmt.Sprintf("fact-schema@%d", store.FactSchemaVersion),
+				ExtractorVersion: versionFor(f.Path),
 				Status:           f.Status, BlobSHA: blob,
 			}); err != nil {
 				return fmt.Errorf("headless: record coverage: %w", err)
@@ -373,7 +389,7 @@ func commitFailed(msgs []string, path string) bool {
 
 // runWave extracts one checkout batch with a bounded worker pool and writes
 // one outbox artifact per item.
-func runWave(ctx context.Context, in RunInput, b graph.CheckoutBatch, items []graph.CheckoutItem, guide *guideSet, conc, maxTokens int) ([]FileUsage, error) {
+func runWave(ctx context.Context, in RunInput, b graph.CheckoutBatch, items []graph.CheckoutItem, guide *GuideSet, conc, maxTokens int) ([]FileUsage, error) {
 	out := make([]FileUsage, len(items))
 	for i, it := range items {
 		out[i] = FileUsage{Path: it.FilePath, Status: "cancelled"}
@@ -440,7 +456,7 @@ func readSource(path string, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
-func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item graph.CheckoutItem, guide *guideSet, maxTokens int) (FileUsage, error) {
+func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item graph.CheckoutItem, guide *GuideSet, maxTokens int) (FileUsage, error) {
 	start := time.Now()
 	fu := FileUsage{Path: item.FilePath}
 	art := map[string]any{

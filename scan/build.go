@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -308,7 +309,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 		rep, runErr = FullScan(ctx, g, opts)
 	} else {
 		res.Incremental, res.BaseSha = true, base.CodeSha
-		rep, runErr = incrementalScan(ctx, g, opts, base.CodeSha, manPath, in.RetryPaths)
+		rep, runErr = incrementalScan(ctx, g, opts, base.CodeSha, manPath, base.Files.Domain, in.RetryPaths)
 	}
 	if rep != nil {
 		res.Failed = append(res.Failed, rep.Failed...)
@@ -408,7 +409,7 @@ func prepareConfigFiles(depDir, manPath, typesPath string, base *Base, projectPa
 // domain the deterministic phases, then extraction of the files that changed
 // between the base commit and HEAD (and only those). Like FullScan, the report
 // is returned even with an error.
-func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha, manPath string, retry []string) (*FullReport, error) {
+func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha, manPath string, baseManifest []byte, retry []string) (*FullReport, error) {
 	rep := &FullReport{Domains: []DomainReport{}, Failed: []FailedFile{}, Skipped: []FailedFile{}, Metrics: []FileMetric{}, Limitations: []string{}}
 	if o.Concurrency <= 0 {
 		o.Concurrency = 2
@@ -429,6 +430,11 @@ func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha
 		return rep, err
 	}
 	run := &fullRun{g: g, o: o, m: m, env: Env{RepoDir: o.RepoRoot, ManifestPath: manPath}, head: head, rep: rep}
+	if len(baseManifest) > 0 {
+		if bm, berr := manifest.Load(baseManifest); berr == nil {
+			run.prevM = bm
+		}
+	}
 	domains, _ := selectDomains(m, BootstrapResult{}, "")
 	var runErr error
 	for _, d := range domains {
@@ -439,7 +445,7 @@ func incrementalScan(ctx context.Context, g *graph.Graph, o FullOptions, baseSha
 			break
 		}
 	}
-	rep.Limitations = append(run.extra, limitationsFor(run.unmatched, run.structuralOK, len(rep.Failed))...)
+	rep.Limitations = append(run.extra, limitationsFor(run.structuralOK, len(rep.Failed))...)
 	rep.Complete = runErr == nil && ctx.Err() == nil && len(rep.Failed) == 0 && run.structuralOK
 	return rep, runErr
 }
@@ -522,9 +528,29 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		}
 	}
 
-	// A resumed build has some of these covered already.
+	// Every in-scope file the base covered is a candidate too: pendingFiles
+	// keeps those whose blob or coverage version differs from the base's (a
+	// rescan with other packs, a resumed build). A file with no coverage row
+	// at all failed or was skipped in the base and stays out unless it is
+	// named in retry.
+	covRows, err := r.g.Store().ListCoverage("")
+	if err != nil {
+		return fmt.Errorf("scan: list coverage: %w", err)
+	}
+	for _, c := range covRows {
+		if c.ExtractorID == scanExtractorID {
+			add(c.FilePath)
+		}
+	}
+	if err := r.invalidateDropped(d, multi); err != nil {
+		return err
+	}
 	st := r.g.Store()
-	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates)
+	guide, err := r.guide()
+	if err != nil {
+		return err
+	}
+	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates, versionFrom(guide))
 	if err != nil {
 		return err
 	}
@@ -536,14 +562,56 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		r.o.OnPlan(Plan{Domain: d.Key, InScope: len(candidates), AlreadyCovered: len(done), ToSend: len(todo)})
 	}
 	if len(todo) > 0 {
-		if err := r.extract(ctx, d, todo, &dr); err != nil {
+		if err := r.extract(ctx, d, todo, &dr, guide); err != nil {
 			return err
 		}
 	}
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
-	r.unmatched += len(unmatched)
 	return ctx.Err()
+}
+
+// invalidateDropped marks the evidence of files that the base's scan covered
+// and the current scope no longer does as stale: the graph must not keep
+// vouching for code the profile now leaves out.
+func (r *fullRun) invalidateDropped(d manifest.DomainEntry, multi bool) error {
+	if r.prevM == nil {
+		return nil
+	}
+	prev, ok := r.prevM.ScanConfigFor(d.Name)
+	if !ok {
+		return nil
+	}
+	now := d.Scan
+	modes, err := trackedModes(r.o.RepoRoot)
+	if err != nil {
+		return err
+	}
+	var dropped []string
+	for p := range modes {
+		if graph.InScope(p, prev) && !graph.InScope(p, &now) {
+			if multi && r.m.DomainForFile(p) != d.Key {
+				continue
+			}
+			dropped = append(dropped, p)
+		}
+	}
+	if len(dropped) == 0 {
+		return nil
+	}
+	sort.Strings(dropped)
+	st := r.g.Store()
+	rev, err := st.GetRevisionBySHA(d.Key, r.head)
+	var revID int64
+	if err == nil {
+		revID = rev.RevisionID
+	} else if revID, err = r.g.RecordRefreshNoop(d.Key, r.head); err != nil {
+		return fmt.Errorf("scan: revision for dropped files: %w", err)
+	}
+	if _, err := r.g.InvalidateChanged(d.Key, revID, dropped); err != nil {
+		return fmt.Errorf("scan: invalidate dropped files: %w", err)
+	}
+	return nil
 }
 
 // trackedModes maps every path tracked at HEAD of root to its git file mode

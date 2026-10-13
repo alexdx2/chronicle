@@ -66,9 +66,9 @@ type guideEntry struct {
 	packs []prompts.PackRef
 }
 
-// guideSet renders the extraction guide per file, memoised by the technology
+// GuideSet renders the extraction guide per file, memoised by the technology
 // set it resolves to (a repo has a handful of distinct sets, not one per file).
-type guideSet struct {
+type GuideSet struct {
 	g    *graph.Graph
 	tech []string
 	cat  *prompts.Catalog
@@ -76,12 +76,18 @@ type guideSet struct {
 	memo map[string]guideEntry
 }
 
-func newGuideSet(g *graph.Graph, tech []string, cat *prompts.Catalog) *guideSet {
-	return &guideSet{g: g, tech: tech, cat: cat, memo: map[string]guideEntry{}}
+func newGuideSet(g *graph.Graph, tech []string, cat *prompts.Catalog) *GuideSet {
+	return &GuideSet{g: g, tech: tech, cat: cat, memo: map[string]guideEntry{}}
+}
+
+// NewGuide builds the per-file guide set for a catalog and the technologies of
+// a domain. It has no graph, so the agent-path guide override never applies.
+func NewGuide(cat *prompts.Catalog, tech []string) *GuideSet {
+	return newGuideSet(nil, tech, cat)
 }
 
 // For returns the guide for one file and the pack versions it contains.
-func (s *guideSet) For(path string) (string, []prompts.PackRef) {
+func (s *GuideSet) For(path string) (string, []prompts.PackRef) {
 	t := techForFile(path, s.tech, s.cat)
 	key := strings.Join(t, ",")
 	s.mu.Lock()

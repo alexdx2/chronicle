@@ -12,6 +12,7 @@ import (
 
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/headless"
 	"github.com/alexdx2/chronicle-core/llm"
 	"github.com/alexdx2/chronicle-core/manifest"
@@ -34,6 +35,9 @@ type FullOptions struct {
 	ContextWindow int
 	FileTimeout   time.Duration
 	NoExtract     bool // structural pass only
+	// Catalog supplies the tech packs; nil -> built-in packs plus the project's
+	// <chronicle dir>/packs.
+	Catalog *prompts.Catalog
 	// OnFiles is called after each committed wave with that wave's metrics.
 	OnFiles func([]FileMetric)
 	// OnFileDone is called when a file's extraction finishes, before its wave
@@ -91,8 +95,6 @@ type FullReport struct {
 // unchanged.
 const scanExtractorID = "chronicle-scan"
 
-func scanExtractorVersion() string { return fmt.Sprintf("fact-schema@%d", store.FactSchemaVersion) }
-
 // FullScan takes the repository at o.RepoRoot's HEAD from nothing (or from a
 // partly finished earlier run in the same database) to a full graph: manifest
 // bootstrap, structural pass, then LLM extraction of every in-scope file that
@@ -139,7 +141,7 @@ func FullScan(ctx context.Context, g *graph.Graph, o FullOptions) (*FullReport, 
 			break
 		}
 	}
-	rep.Limitations = append(run.extra, limitationsFor(run.unmatched, run.structuralOK, len(rep.Failed))...)
+	rep.Limitations = append(run.extra, limitationsFor(run.structuralOK, len(rep.Failed))...)
 	rep.Complete = runErr == nil && ctx.Err() == nil && len(rep.Failed) == 0 && run.structuralOK
 	return rep, runErr
 }
@@ -168,17 +170,42 @@ func selectDomains(m *manifest.Manifest, boot BootstrapResult, want string) ([]m
 
 // fullRun carries what the domains of one FullScan share and accumulate.
 type fullRun struct {
-	g    *graph.Graph
-	o    FullOptions
-	m    *manifest.Manifest
-	env  Env
-	head string
-	rep  *FullReport
+	g     *graph.Graph
+	o     FullOptions
+	m     *manifest.Manifest
+	prevM *manifest.Manifest // the base build's manifest (incremental only)
+	env   Env
+	head  string
+	rep   *FullReport
 
 	extra        []string // limitations beyond limitationsFor's
-	unmatched    int
+	cat          *prompts.Catalog
 	structuralOK bool
 	started      bool // at least one domain began, so structuralOK is meaningful
+}
+
+// guide is the per-file guide set of this run: one catalog, the manifest's
+// technologies. Extraction and the staleness test share it, so the version a
+// file is recorded at is the version it is compared against.
+func (r *fullRun) guide() (*headless.GuideSet, error) {
+	if r.cat == nil {
+		cat := r.o.Catalog
+		if cat == nil {
+			cat = prompts.BuiltinCatalog()
+			if err := cat.AddProjectPacks(filepath.Join(paths.DirAt(r.o.RepoRoot), "packs")); err != nil {
+				return nil, fmt.Errorf("scan: project packs: %w", err)
+			}
+		}
+		r.cat = cat
+	}
+	return headless.NewGuide(r.cat, r.m.Tech), nil
+}
+
+func versionFrom(guide *headless.GuideSet) func(string) string {
+	return func(path string) string {
+		_, refs := guide.For(path)
+		return headless.ExtractorVersion(refs)
+	}
 }
 
 func (r *fullRun) addExtra(s string) {
@@ -223,7 +250,11 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	dr.InScope = len(list)
 
 	st := r.g.Store()
-	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, list)
+	guide, err := r.guide()
+	if err != nil {
+		return err
+	}
+	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, list, versionFrom(guide))
 	if err != nil {
 		return err
 	}
@@ -247,34 +278,43 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	case len(todo) == 0:
 		r.addExtra("nothing to extract: every in-scope file already covered at its current blob")
 	default:
-		if err := r.extract(ctx, d, todo, &dr); err != nil {
+		if err := r.extract(ctx, d, todo, &dr, guide); err != nil {
 			return err
 		}
 	}
 
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
-	r.unmatched += len(unmatched)
 	return ctx.Err()
 }
 
 // pendingFiles splits candidates into the files the model still has to see
 // (todo) and those a finished chronicle-scan observation already covers at the
-// file's current blob (done). Order is kept.
-func pendingFiles(st *store.Store, domainKey, root string, candidates []string) (todo, done []string, err error) {
-	cov, err := st.ListCoverage(domainKey)
+// file's current blob and at the coverage version versionFor gives for it
+// (done). Order is kept.
+func pendingFiles(st *store.Store, domainKey, root string, candidates []string, versionFor func(path string) string) (todo, done []string, err error) {
+	cov, err := st.ListCoverage("")
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan: list coverage: %w", err)
 	}
-	covered := map[string]string{} // path -> blob sha of a finished chronicle-scan observation
+	type coveredAt struct{ blob, version string }
+	covered := map[string]coveredAt{} // path -> a finished chronicle-scan observation
+	// A snapshot without nodes restores its coverage under no domain; such
+	// rows count unless the domain has its own row for the file.
+	own := map[string]bool{}
 	for _, c := range cov {
-		if c.ExtractorID == scanExtractorID && c.ExtractorVersion == scanExtractorVersion() {
-			covered[c.FilePath] = c.BlobSHA
+		if c.ExtractorID != scanExtractorID || (c.DomainKey != domainKey && c.DomainKey != "") {
+			continue
 		}
+		if c.DomainKey == "" && own[c.FilePath] {
+			continue
+		}
+		own[c.FilePath] = own[c.FilePath] || c.DomainKey != ""
+		covered[c.FilePath] = coveredAt{c.BlobSHA, c.ExtractorVersion}
 	}
 	for _, p := range candidates {
 		blob, berr := gitutil.FileBlobSHA(root, p)
-		if want, ok := covered[p]; ok && berr == nil && want == blob {
+		if want, ok := covered[p]; ok && berr == nil && want.blob == blob && want.version == versionFor(p) {
 			done = append(done, p)
 		} else {
 			todo = append(todo, p)
@@ -349,13 +389,13 @@ func (r *fullRun) skipIrregular(p string) bool {
 
 // extract runs the headless pipeline over todo and folds the per-file outcomes
 // into the report. A cancelled or failed run still contributes what it did.
-func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []string, dr *DomainReport) error {
+func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []string, dr *DomainReport, guide *headless.GuideSet) error {
 	model := r.o.Backend.Name() + ":" + r.o.Backend.Model()
 	res, runErr := headless.Run(ctx, headless.RunInput{
 		G: r.g, RepoRoot: r.o.RepoRoot, ChronicleDir: paths.DirAt(r.o.RepoRoot), Domain: d.Key, Manifest: r.m,
 		HeadSHA: r.head, Files: todo, Backend: r.o.Backend, Concurrency: r.o.Concurrency,
 		ContextWindow: r.o.ContextWindow, FileTimeout: r.o.FileTimeout,
-		OnFileDone: r.o.OnFileDone,
+		OnFileDone: r.o.OnFileDone, Guide: guide, VersionFor: versionFrom(guide),
 		OnFiles: func(fs []headless.FileUsage) {
 			ms := MetricsFrom(model, fs, time.Now())
 			r.rep.Metrics = append(r.rep.Metrics, ms...)
@@ -385,16 +425,13 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 }
 
 // limitationsFor says what a scan did not do, honestly.
-func limitationsFor(unmatched int, structuralComplete bool, failed int) []string {
+func limitationsFor(structuralComplete bool, failed int) []string {
 	var out []string
 	if !structuralComplete {
 		out = append(out, "structural pass did not complete")
 	}
 	if failed > 0 {
 		out = append(out, fmt.Sprintf("%d files failed extraction and will be retried by the next run", failed))
-	}
-	if unmatched > 0 {
-		out = append(out, fmt.Sprintf("%d HTTP calls could not be matched to an endpoint deterministically; the LLM reconcile_endpoints phase is not run by scan --full", unmatched))
 	}
 	return append(out, "trace_flow phase not run")
 }

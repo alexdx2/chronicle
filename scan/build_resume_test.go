@@ -342,7 +342,7 @@ func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 	if blobOf(decodeT(t, res.Files), "src/f4.ts") == "" {
 		t.Fatal("f4 is still not covered in the result")
 	}
-	if len(plans.plans) != 1 || plans.plans[0].InScope != 3 || plans.plans[0].AlreadyCovered != 1 || plans.plans[0].ToSend != 2 {
+	if len(plans.plans) != 1 || plans.plans[0].InScope != 5 || plans.plans[0].AlreadyCovered != 3 || plans.plans[0].ToSend != 2 {
 		t.Fatalf("plans = %+v", plans.plans)
 	}
 }
