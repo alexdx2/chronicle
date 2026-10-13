@@ -3,6 +3,7 @@ package deps
 import (
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -38,7 +39,13 @@ func (npm) parse(_, rel string, body []byte) (Report, error) {
 			continue
 		}
 		start := strings.Index(text, `"`+section+`"`)
-		for name, version := range entries {
+		names := make([]string, 0, len(entries))
+		for name := range entries {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			version := entries[name]
 			d := Dependency{
 				Name: Normalize("npm", name), Version: version, Section: section,
 				Ecosystem: "npm", File: rel,

@@ -24,10 +24,10 @@ func TestScan_AllEcosystems(t *testing.T) {
 	// BOM + CRLF, как из Visual Studio
 	write(t, root, "api/Api.csproj", "\ufeff<Project Sdk=\"Microsoft.NET.Sdk\">\r\n  <PropertyGroup>\r\n    <PackageId>Acme.Api</PackageId>\r\n  </PropertyGroup>\r\n  <ItemGroup>\r\n    <PackageReference Include=\"Confluent.Kafka\" Version=\"2.3.0\" />\r\n    <ProjectReference Include=\"..\\Shared\\Shared.csproj\" />\r\n  </ItemGroup>\r\n</Project>\r\n")
 	write(t, root, "Shared/Shared.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><AssemblyName>Acme.Shared</AssemblyName></PropertyGroup></Project>")
-	write(t, root, "svc/go.mod", "module github.com/acme/svc\n\ngo 1.25\n\nrequire (\n\tgithub.com/segmentio/kafka-go v0.4.47\n\tgolang.org/x/sys v0.1.0 // indirect\n)\n")
+	write(t, root, "svc/go.mod", "module github.com/acme/svc\n\ngo 1.25\n\nrequire (\n\tgithub.com/segmentio/kafka-go v0.4.47\n\tgolang.org/x/sys v0.1.0 // indirect\n\tgithub.com/acme/tabbed\tv1.2.3\n)\n")
 	write(t, root, "py/pyproject.toml", "[project]\nname = \"acme-py\"\ndependencies = [\n  \"fastapi>=0.100\",\n  \"boto3\",\n]\n\n[project.optional-dependencies]\ndev = [\"pytest>=8\"]\n")
 	write(t, root, "py/requirements-dev.txt", "pytest==8.0\n# comment\n")
-	write(t, root, "jvm/pom.xml", `<project><groupId>com.acme</groupId><artifactId>orders</artifactId><dependencies><dependency><groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>3.7.0</version><scope>compile</scope></dependency></dependencies></project>`)
+	write(t, root, "jvm/pom.xml", "<project>\n  <groupId>com.acme</groupId><artifactId>orders</artifactId>\n  <dependencyManagement>\n    <dependencies>\n      <dependency>\n        <groupId>org.apache.kafka</groupId>\n        <artifactId>kafka-clients</artifactId>\n        <version>3.0.0</version>\n      </dependency>\n    </dependencies>\n  </dependencyManagement>\n  <dependencies>\n    <dependency>\n      <groupId>org.apache.kafka</groupId>\n      <artifactId>kafka-clients</artifactId>\n      <version>3.7.0</version>\n      <scope>compile</scope>\n    </dependency>\n  </dependencies>\n</project>")
 	write(t, root, "src/main.go", "package main")
 
 	rep, err := Scan(root, []string{"web/package.json", "api/Api.csproj", "Shared/Shared.csproj", "svc/go.mod", "py/pyproject.toml", "py/requirements-dev.txt", "jvm/pom.xml", "src/main.go"})
@@ -65,6 +65,9 @@ func TestScan_AllEcosystems(t *testing.T) {
 	if d := find("jest"); d.Section != "devDependencies" {
 		t.Errorf("npm dev dep = %+v", d)
 	}
+	if d := find("github.com/acme/tabbed"); d.Version != "v1.2.3" || !strings.Contains("\tgithub.com/acme/tabbed\tv1.2.3", d.Text) || d.Text != "github.com/acme/tabbed\tv1.2.3" {
+		t.Errorf("go tab dep = %+v", d)
+	}
 	if d := find("golang.org/x/sys"); d.Section != "indirect" || d.Version != "v0.1.0" {
 		t.Errorf("go indirect = %+v", d)
 	}
@@ -77,7 +80,7 @@ func TestScan_AllEcosystems(t *testing.T) {
 	if d := findIn("pytest", "py/requirements-dev.txt"); d.Section != "requirements-dev" || d.Version != "==8.0" {
 		t.Errorf("requirements dep = %+v", d)
 	}
-	if d := find("org.apache.kafka:kafka-clients"); d.Version != "3.7.0" || d.Section != "compile" {
+	if d := find("org.apache.kafka:kafka-clients"); d.Version != "3.7.0" || d.Section != "compile" || d.Line != 15 {
 		t.Errorf("maven dep = %+v", d)
 	}
 }
@@ -125,5 +128,23 @@ func TestScan_SkipsUnparseableManifest(t *testing.T) {
 	}
 	if _, err := Scan(filepath.Join(root, "nope"), []string{"x/package.json"}); err == nil {
 		t.Fatal("unreadable root must be an error")
+	}
+}
+
+func TestScan_SameNameTwoSectionsOneLine(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "package.json", `{"name":"x","devDependencies":{"react":"18"},"peerDependencies":{"react":"^18"},"dependencies":{"react":"18.2"}}`)
+	for i := 0; i < 20; i++ {
+		rep, err := Scan(root, []string{"package.json"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, d := range rep.Depends {
+			got = append(got, d.Section)
+		}
+		if strings.Join(got, ",") != "dependencies,devDependencies,peerDependencies" {
+			t.Fatalf("order = %v", got)
+		}
 	}
 }

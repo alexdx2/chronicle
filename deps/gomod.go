@@ -55,6 +55,14 @@ func (r *Report) addGoRequire(rel string, line int, spec, comment string) {
 	}
 	r.Depends = append(r.Depends, Dependency{
 		Name: Normalize("go", f[0]), Version: f[1], Section: section,
-		Ecosystem: "go", File: rel, Line: line, Text: f[0] + " " + f[1],
+		Ecosystem: "go", File: rel, Line: line, Text: goRequireText(spec, f[0], f[1]),
 	})
+}
+
+// goRequireText is the byte-for-byte slice of spec from the module path to
+// the end of the version.
+func goRequireText(spec, path, version string) string {
+	start := strings.Index(spec, path)
+	end := strings.Index(spec[start+len(path):], version)
+	return spec[start : start+len(path)+end+len(version)]
 }

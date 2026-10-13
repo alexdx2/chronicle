@@ -104,7 +104,7 @@ func Scan(root string, files []string) (Report, error) {
 	}
 	fillCentralNuGetVersions(out.Depends)
 	sort.Strings(out.Warnings)
-	sort.Slice(out.Publishes, func(i, j int) bool {
+	sort.SliceStable(out.Publishes, func(i, j int) bool {
 		a, b := out.Publishes[i], out.Publishes[j]
 		if a.Name != b.Name {
 			return a.Name < b.Name
@@ -114,7 +114,7 @@ func Scan(root string, files []string) (Report, error) {
 		}
 		return a.Line < b.Line
 	})
-	sort.Slice(out.Depends, func(i, j int) bool {
+	sort.SliceStable(out.Depends, func(i, j int) bool {
 		a, b := out.Depends[i], out.Depends[j]
 		if a.Name != b.Name {
 			return a.Name < b.Name
@@ -122,7 +122,13 @@ func Scan(root string, files []string) (Report, error) {
 		if a.File != b.File {
 			return a.File < b.File
 		}
-		return a.Line < b.Line
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		if a.Section != b.Section {
+			return a.Section < b.Section
+		}
+		return a.Version < b.Version
 	})
 	return out, nil
 }

@@ -1,6 +1,7 @@
 package deps
 
 import (
+	"bytes"
 	"encoding/xml"
 	"path"
 	"regexp"
@@ -41,28 +42,17 @@ func parsePom(rel string, body []byte) (Report, error) {
 		return Report{}, err
 	}
 	var r Report
-	text := string(body)
-	artifactTag := func(a string) string { return "<artifactId>" + a + "</artifactId>" }
-	// The project's own artifactId comes before the dependencies; the cursor
-	// then follows the dependencies in document order.
-	cursor := 0
+	ownLine, depLines := pomLines(body)
 	group := strings.TrimSpace(doc.GroupID)
 	if group == "" {
 		group = strings.TrimSpace(doc.Parent.GroupID)
 	}
-	if doc.ArtifactID != "" {
-		own := strings.Index(text, artifactTag(strings.TrimSpace(doc.ArtifactID)))
-		if own >= 0 {
-			cursor = own + 1
-		}
-		if group != "" {
-			r.Publishes = append(r.Publishes, Package{
-				Name: Normalize("maven", group+":"+strings.TrimSpace(doc.ArtifactID)), Ecosystem: "maven",
-				File: rel, Line: lineOf(body, own),
-			})
-		}
+	if art := strings.TrimSpace(doc.ArtifactID); art != "" && group != "" {
+		r.Publishes = append(r.Publishes, Package{
+			Name: Normalize("maven", group+":"+art), Ecosystem: "maven", File: rel, Line: ownLine,
+		})
 	}
-	for _, d := range doc.Dependencies {
+	for i, d := range doc.Dependencies {
 		art := strings.TrimSpace(d.ArtifactID)
 		scope := strings.TrimSpace(d.Scope)
 		if scope == "" {
@@ -70,15 +60,44 @@ func parsePom(rel string, body []byte) (Report, error) {
 		}
 		dep := Dependency{
 			Name: Normalize("maven", strings.TrimSpace(d.GroupID)+":"+art), Version: strings.TrimSpace(d.Version),
-			Section: scope, Ecosystem: "maven", File: rel, Text: artifactTag(art),
+			Section: scope, Ecosystem: "maven", File: rel, Text: "<artifactId>" + art + "</artifactId>",
 		}
-		if i := strings.Index(text[cursor:], artifactTag(art)); i >= 0 {
-			dep.Line = lineOf(body, cursor+i)
-			cursor += i + 1
+		if i < len(depLines) {
+			dep.Line = depLines[i]
 		}
 		r.Depends = append(r.Depends, dep)
 	}
 	return r, nil
+}
+
+// pomLines walks the document and returns the line of the project's own
+// artifactId and, in document order, of the artifactId of every
+// project/dependencies/dependency (not dependencyManagement, plugins or
+// exclusions).
+func pomLines(body []byte) (own int, deps []int) {
+	dec := xml.NewDecoder(bytes.NewReader(body))
+	var stack []string
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return own, deps
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			stack = append(stack, t.Name.Local)
+			path := strings.Join(stack, "/")
+			switch path {
+			case "project/artifactId":
+				own = lineOf(body, int(dec.InputOffset()))
+			case "project/dependencies/dependency":
+				deps = append(deps, 0)
+			case "project/dependencies/dependency/artifactId":
+				deps[len(deps)-1] = lineOf(body, int(dec.InputOffset()))
+			}
+		case xml.EndElement:
+			stack = stack[:len(stack)-1]
+		}
+	}
 }
 
 var (
