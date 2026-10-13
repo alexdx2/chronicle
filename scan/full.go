@@ -383,6 +383,11 @@ func (r *fullRun) skipIrregular(p string) bool {
 	default:
 		why = "not a regular file (" + fi.Mode().Type().String() + ")"
 	}
+	for _, sk := range r.rep.Skipped {
+		if sk.Path == p && sk.Error == why {
+			return true // already reported (a second pass over the same tree)
+		}
+	}
 	r.rep.Skipped = append(r.rep.Skipped, FailedFile{Path: p, Error: why})
 	return true
 }

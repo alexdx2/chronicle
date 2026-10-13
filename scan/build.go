@@ -528,18 +528,18 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		}
 	}
 
-	// Every in-scope file the base covered is a candidate too: pendingFiles
-	// keeps those whose blob or coverage version differs from the base's (a
-	// rescan with other packs, a resumed build). A file with no coverage row
-	// at all failed or was skipped in the base and stays out unless it is
-	// named in retry.
-	covRows, err := r.g.Store().ListCoverage("")
+	// Every in-scope file is a candidate: pendingFiles keeps those with no
+	// coverage row or whose blob or coverage version differs (a rescan with
+	// other packs, a file a scope change newly admits, a file that failed in
+	// the base).
+	scopeList, err := r.inScopeFiles(d, &cfg, multi)
 	if err != nil {
-		return fmt.Errorf("scan: list coverage: %w", err)
+		return err
 	}
-	for _, c := range covRows {
-		if c.ExtractorID == scanExtractorID {
-			add(c.FilePath)
+	for _, p := range scopeList {
+		if !seen[p] {
+			seen[p] = true
+			candidates = append(candidates, p)
 		}
 	}
 	if err := r.invalidateDropped(d, multi); err != nil {

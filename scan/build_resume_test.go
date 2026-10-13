@@ -301,7 +301,9 @@ func partialBase(t *testing.T) (repo, c1, c2 string, base *Base) {
 	return repo, c1, c2, &Base{CodeSha: c1, Files: first.Files}
 }
 
-func TestBuildSnapshot_WithoutRetryPathsAFailedBaseFileStaysMissing(t *testing.T) {
+// Every in-scope file without a matching coverage row is a candidate, so a
+// file that failed in the base is sent again even without RetryPaths.
+func TestBuildSnapshot_WithoutRetryPathsAFailedBaseFileIsResent(t *testing.T) {
 	repo, _, c2, base := partialBase(t)
 	b := &countingBackend{}
 	in := buildIn(repo, c2, t.TempDir(), b)
@@ -309,11 +311,14 @@ func TestBuildSnapshot_WithoutRetryPathsAFailedBaseFileStaysMissing(t *testing.T
 	if _, err := BuildSnapshot(context.Background(), in); err != nil {
 		t.Fatal(err)
 	}
-	if b.total() != 1 || b.callsFor("src/f2.ts") != 1 {
+	if b.total() != 2 || b.callsFor("src/f2.ts") != 1 || b.callsFor("src/f4.ts") != 1 {
 		t.Fatalf("calls = %v", b.calls)
 	}
 }
 
+// Plan numbers: the candidates are the whole scope (f1..f5), so InScope is 5;
+// f1, f3, f5 match their coverage (AlreadyCovered 3); f2 changed and f4 has no
+// coverage row (ToSend 2). RetryPaths only overlaps with that now.
 func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 	repo, _, c2, base := partialBase(t)
 	b := &countingBackend{}
@@ -377,5 +382,36 @@ func TestBuildSnapshot_RetryPathThroughSymlinkedDirIsSkipped(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("src/link/x.ts not listed as skipped: %+v", res.Skipped)
+	}
+}
+
+// A scope change that newly admits a directory sends its files with no
+// RetryPaths: they have no coverage row.
+func TestBuildSnapshot_NewlyAdmittedDirectoryIsSentWithoutRetryPaths(t *testing.T) {
+	man := func(include string) string {
+		return "domains:\n  \"proj\":\n    name: \"proj\"\n    scan:\n      include:\n        - \"" + include + "\"\ntech: [typescript]\n"
+	}
+	repo, c1 := newCodeRepoT(t, map[string]string{
+		"src/a.ts": "export const a = 1", "legacy/old.ts": "export const o = 1",
+		".depbot/chronicle.domain.yaml": man("src/**"),
+	})
+	first, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), &countingBackend{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blobOf(decodeT(t, first.Files), "legacy/old.ts") != "" {
+		t.Fatal("setup: legacy/old.ts is covered in the base")
+	}
+	writeT(t, repo, ".depbot/chronicle.domain.yaml", man("**/*.ts"))
+	c2 := commitAllT(t, repo, "admit legacy")
+	b := &countingBackend{}
+	var plans planRecorder
+	in := buildIn(repo, c2, t.TempDir(), b)
+	in.Base, in.OnPlan = &Base{CodeSha: c1, Files: first.Files}, plans.on
+	if _, err := BuildSnapshot(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.plans) != 1 || plans.plans[0].ToSend != 1 || b.callsFor("legacy/old.ts") != 1 || b.total() != 1 {
+		t.Fatalf("plans %+v calls %v", plans.plans, b.calls)
 	}
 }
