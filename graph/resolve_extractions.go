@@ -1028,8 +1028,6 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		var toNodeKey string
 		if svcKey, ok := g.domainOwnPackages[flattenName(depsOwnLookupName(fact))]; ok {
 			toNodeKey = svcKey
-		} else if fromDeps {
-			toNodeKey = packageNodeKey(domainKey, fact.Ecosystem, depsOwnLookupName(fact))
 		} else {
 			// Not ours: the SAME package node shape code imports produce
 			// (SQ-Contract 1) — one node per package whether it's reached

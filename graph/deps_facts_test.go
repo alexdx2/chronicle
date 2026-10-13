@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/deps"
@@ -30,7 +31,7 @@ func TestWriteDepsExtractions_NuGetPublisherAndConsumer(t *testing.T) {
 	}
 
 	pkgs, _ := st.ListNodes(store.NodeFilter{Domain: "testapp", NodeType: "package"})
-	if len(pkgs) != 2 { // acme.shared (published) and confluent.kafka (external); system.text.json is infrastructure
+	if len(pkgs) != 1 { // only acme.shared (published): consumed packages keep the legacy node shape
 		var keys []string
 		for _, n := range pkgs {
 			keys = append(keys, n.NodeKey)
@@ -61,7 +62,7 @@ func TestWriteDepsExtractions_NuGetPublisherAndConsumer(t *testing.T) {
 
 	// The project reference lands on the node the sibling publishes from, not on a stub.
 	for _, e := range edges {
-		if e.EdgeType == "DEPENDS_ON" && e.ToNodeKey != packageNodeKey("testapp", "nuget", "confluent.kafka") &&
+		if e.EdgeType == "DEPENDS_ON" && e.ToNodeKey != typedNodeKeyFromImport("testapp", "confluent.kafka", "") &&
 			e.ToNodeKey != typedNodeKeyFromFile("testapp", "Shared/Shared.csproj", "file") {
 			t.Errorf("internal dependency target = %s", e.ToNodeKey)
 		}
@@ -87,5 +88,50 @@ func TestClassifyDependencyIn_NuGetInfrastructure(t *testing.T) {
 	}
 	if ShouldTrackDependencyIn("maven", "org.junit.jupiter:junit-jupiter") {
 		t.Error("junit is infrastructure")
+	}
+}
+
+// A dependency resolved by the deps pass and the same dependency resolved from
+// an LLM fact must land on ONE node: cross-repo package links are built from
+// the consumer nodes dependency facts create.
+func TestWriteDepsExtractions_SameNodeAsLegacyDependency(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{Depends: []deps.Dependency{
+		{Name: "@acme/ui", Version: "1.0.0", Section: "dependencies", Ecosystem: "npm", File: "web/package.json", Line: 5, Text: `"@acme/ui"`},
+	}}
+	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	rev2, _ := st.CreateRevision("testapp", "scan_2", "", "manual", "full", "{}")
+	g.SaveFileExtraction(rev2, "testapp", "web/package.json", "extracted", "manifest",
+		`[{"kind":"dependency","to":"@acme/ui","section":"dependencies"}]`, "")
+	if _, err := g.ResolveExtractions("testapp", rev2); err != nil {
+		t.Fatal(err)
+	}
+
+	nodes, _ := st.ListNodes(store.NodeFilter{Domain: "testapp"})
+	var uiKeys []string
+	for _, n := range nodes {
+		if strings.Contains(n.NodeKey, "@acme/ui") {
+			uiKeys = append(uiKeys, n.NodeKey)
+		}
+	}
+	if len(uiKeys) != 1 {
+		t.Fatalf("want exactly one node for @acme/ui, got %v", uiKeys)
+	}
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	var viaDeps bool
+	for _, e := range edges {
+		if e.ToNodeKey == uiKeys[0] {
+			ev, _ := st.ListEvidenceByEdge(e.EdgeID)
+			for _, x := range ev {
+				if x.ExtractorID == DepsExtractorID {
+					viaDeps = true
+				}
+			}
+		}
+	}
+	if !viaDeps {
+		t.Fatalf("deps-origin DEPENDS_ON edge does not point at %s: %+v", uiKeys[0], edges)
 	}
 }
