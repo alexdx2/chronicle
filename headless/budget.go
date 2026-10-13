@@ -35,8 +35,8 @@ func techForFile(path string, tech []string, cat *prompts.Catalog) []string {
 		key := strings.ToLower(t)
 		var exts []string
 		legacy, hasLegacy := techExts[key]
-		if p, ok := catGet(cat, key); ok && !(p.Source == prompts.SourceBuiltin && hasLegacy) {
-			exts = p.Exts // fleet/project packs: by their own Match section
+		if p, ok := catGet(cat, key); ok && (p.Structured || !(p.Source == prompts.SourceBuiltin && hasLegacy)) {
+			exts = p.Exts // a match: line, or a fleet/project pack: by its own Match section
 		} else {
 			exts = legacy // curated table for built-ins (their Match prose is not extension-complete)
 		}
@@ -86,9 +86,43 @@ func NewGuide(cat *prompts.Catalog, tech []string) *GuideSet {
 	return newGuideSet(nil, tech, cat)
 }
 
-// For returns the guide for one file and the pack versions it contains.
+// For returns the guide for one file and the pack versions it contains,
+// chosen by file extension only. It is content independent on purpose: the
+// coverage version of a file is derived from it, so the version names the
+// POTENTIAL pack set (every pack that could apply by extension). The prompt
+// itself is built with ForContent, which narrows that set to the packs
+// actually relevant to the file's content.
 func (s *GuideSet) For(path string) (string, []prompts.PackRef) {
+	return s.guideFor(techForFile(path, s.tech, s.cat))
+}
+
+// ForContent returns the guide for one file with its content known. A pack
+// with match-line tokens (CatalogPack.Contains) is attached only if the
+// content contains one of them (byte-wise, case-sensitive, as written); a
+// file with the pack's primary extension always gets it, and a pack without
+// tokens keeps the extension rule of For. The prompt carries these packs; the
+// coverage version is still computed from For (the potential set).
+func (s *GuideSet) ForContent(path string, content []byte) (string, []prompts.PackRef) {
 	t := techForFile(path, s.tech, s.cat)
+	ext := strings.ToLower(filepath.Ext(path))
+	kept := make([]string, 0, len(t))
+	for _, id := range t {
+		p, ok := catGet(s.cat, strings.ToLower(id))
+		if !ok || len(p.Contains) == 0 || (len(p.Exts) > 0 && p.Exts[0] == ext) {
+			kept = append(kept, id)
+			continue
+		}
+		for _, tok := range p.Contains {
+			if bytes.Contains(content, []byte(tok)) {
+				kept = append(kept, id)
+				break
+			}
+		}
+	}
+	return s.guideFor(kept)
+}
+
+func (s *GuideSet) guideFor(t []string) (string, []prompts.PackRef) {
 	key := strings.Join(t, ",")
 	s.mu.Lock()
 	defer s.mu.Unlock()

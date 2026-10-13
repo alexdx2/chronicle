@@ -1,6 +1,7 @@
 # TYPESCRIPT / JAVASCRIPT EXTRACTION HINTS
 
 ## Match
+match: ext=.ts,.tsx,.mts,.cts,.js,.jsx,.mjs,.cjs
 Load this pack when:
 - Files have extensions: .ts, .tsx, .js, .jsx, .mjs, .cjs
 - package.json exists in the project

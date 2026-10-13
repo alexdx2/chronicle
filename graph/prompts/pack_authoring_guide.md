@@ -7,8 +7,10 @@ create one. The pack is saved to `.depbot/packs/` and used in all future scans.
 
 Packs shared by a fleet of repositories live in the server's fleet registry, not in each repository.
 A fleet pack's id is `<tech>-<lang>` (for example `kafka-dotnet`, `nestjs-typescript`). The `## Match`
-section must list the file extensions explicitly (for example `.cs`, `.csproj`); a pack whose Match names
-no extension applies to every file in the repository.
+section must start with the machine-readable `match:` line (see "The Match section"): list the file
+extensions explicitly (for example `ext=.cs,.csproj`) and the content tokens that show a file really uses the
+technology (`contains=...`). A pack whose `match:` line names no extension applies to files of any extension;
+a pack with `contains` tokens is attached only to files that contain one. Fleet-authored packs MUST emit the line.
 
 ## Pack structure
 
@@ -18,6 +20,7 @@ Every pack is a markdown file with this structure:
 # FRAMEWORK_NAME EXTRACTION RULES
 
 ## Match
+match: ext=[.ext1,.ext2]; contains=[token1, token2]
 Load this pack when:
 - [file extensions, build files, imports, decorators that indicate this technology]
 - [be specific — list concrete filenames, extensions, import paths, or patterns]
@@ -65,11 +68,27 @@ List what to skip: admin classes, migrations, tests, config, generated code.
 ## The Match section
 
 The `## Match` section is CRITICAL. It tells the scan system when this pack should be loaded.
-Write it as a checklist of concrete signals an agent can verify by reading project files:
+Start it with ONE machine-readable line; the scan system reads it, the checklist below is for people:
+
+```
+match: ext=.cs,.csproj; contains=Confluent.Kafka, IProducer, IConsumer
+```
+
+- `ext=` lists the file extensions the pack is about, comma separated, with the dot. The FIRST one is the
+  pack's primary extension: a file with it always gets the pack (for example `.prisma` for a Prisma pack).
+- `contains=` lists literal tokens (no regex, case-sensitive, written exactly as they appear in code). When
+  present, the pack is attached to a file with any other extension only if the file contains one of the
+  tokens, so a pack is never pulled into files that do not use the technology. Choose tokens that appear
+  in every file that needs the pack (an import path, a type name), not generic words.
+- Either part may be omitted: without `ext=` the pack considers files of any extension; without `contains=`
+  every file with a listed extension gets it.
+
+Then write a checklist of concrete signals an agent can verify by reading project files:
 
 Good:
 ```
 ## Match
+match: ext=.cs,.csproj; contains=[ApiController], Microsoft.EntityFrameworkCore
 Load this pack when:
 - .csproj or .sln files exist in the project
 - Files have .cs extension

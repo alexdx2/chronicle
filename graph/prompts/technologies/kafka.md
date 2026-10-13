@@ -1,6 +1,7 @@
 # KAFKA / EVENT STREAM EXTRACTION RULES
 
 ## Match
+match: contains=kafka, Kafka, Confluent.Kafka, KafkaJS, kafkajs
 Load this pack when:
 - package.json has `kafkajs` dependency
 - the project file (csproj) has `Confluent.Kafka` PackageReference

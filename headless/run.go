@@ -506,7 +506,7 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 				}
 			}
 		}
-		sys, _ := guide.For(item.FilePath)
+		sys, _ := guide.ForContent(item.FilePath, content)
 		if in.IsTest != nil && in.IsTest(item.FilePath) {
 			sys += testFileNote
 		}

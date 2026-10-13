@@ -1,6 +1,7 @@
 # NESTJS EXTRACTION RULES
 
 ## Match
+match: ext=.ts,.tsx; contains=@nestjs/
 Load this pack when:
 - package.json has @nestjs/* dependencies (@nestjs/common, @nestjs/core, etc.)
 - Files import from @nestjs/common, @nestjs/core, @nestjs/graphql, @nestjs/websockets

@@ -3,6 +3,7 @@ package prompts
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +51,49 @@ func TestAddProjectPacks_IDIsLowercasedStem(t *testing.T) {
 	}
 	if _, ok := c.Get("Kafka-DotNet"); ok {
 		t.Error("the mixed-case id must not exist")
+	}
+}
+
+func TestParseMatchLine(t *testing.T) {
+	cases := []struct {
+		name, in       string
+		exts, contains []string
+		ok             bool
+	}{
+		{"both", "Load this pack when:\n- x\nmatch: ext=.cs,.csproj; contains=Confluent.Kafka, IProducer, IConsumer\n", []string{".cs", ".csproj"}, []string{"Confluent.Kafka", "IProducer", "IConsumer"}, true},
+		{"ext only", "match: ext=.prisma,.ts", []string{".prisma", ".ts"}, nil, true},
+		{"contains only", "match: contains=kafka, Kafka", nil, []string{"kafka", "Kafka"}, true},
+		{"absent", "Load this pack when:\n- Files have .cs extension\n", nil, nil, false},
+		{"odd spacing and case", "  MATCH :  EXT = .TS , .Tsx ;CONTAINS=  @nestjs/ ;", []string{".ts", ".tsx"}, []string{"@nestjs/"}, true},
+		{"extension without dot", "match: ext=cs", []string{".cs"}, nil, true},
+	}
+	for _, c := range cases {
+		exts, contains, ok := ParseMatchLine(c.in)
+		if ok != c.ok || strings.Join(exts, "|") != strings.Join(c.exts, "|") || strings.Join(contains, "|") != strings.Join(c.contains, "|") {
+			t.Errorf("%s: got %q %q %v want %q %q %v", c.name, exts, contains, ok, c.exts, c.contains, c.ok)
+		}
+	}
+}
+
+func TestCatalog_MatchLineFillsExtsAndContains(t *testing.T) {
+	c := NewCatalog()
+	c.Add(CatalogPack{ID: "k", Content: "# K\n\n## Match\nLoad when .java files:\nmatch: ext=.cs; contains=Confluent.Kafka\n\n## Rules\nx\n", Source: SourceFleet})
+	p, _ := c.Get("k")
+	if strings.Join(p.Exts, ",") != ".cs" || strings.Join(p.Contains, ",") != "Confluent.Kafka" || !p.Structured {
+		t.Fatalf("pack = %+v", p)
+	}
+	c.Add(CatalogPack{ID: "prose", Content: "# P\n\n## Match\n- Files have .go extension\n", Source: SourceFleet})
+	p, _ = c.Get("prose")
+	if strings.Join(p.Exts, ",") != ".go" || len(p.Contains) != 0 || p.Structured {
+		t.Fatalf("prose pack = %+v", p)
+	}
+}
+
+func TestBuiltinPacksCarryAMatchLine(t *testing.T) {
+	for id := range builtinTechPacks {
+		p, _ := BuiltinCatalog().Get(id)
+		if !p.Structured {
+			t.Errorf("builtin pack %s has no match: line", id)
+		}
 	}
 }

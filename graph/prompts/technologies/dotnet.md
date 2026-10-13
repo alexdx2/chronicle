@@ -1,6 +1,7 @@
 # C# / .NET EXTRACTION RULES
 
 ## Match
+match: ext=.cs,.csproj,.fs,.vb,.cshtml,.razor
 Load this pack when:
 - .csproj or .sln files exist in the project
 - Files have .cs extension

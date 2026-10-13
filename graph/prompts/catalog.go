@@ -28,6 +28,12 @@ type CatalogPack struct {
 	Content     string
 	Source      PackSource
 	Exts        []string // file extensions named by Match; empty = any file
+	// Contains are content tokens from the match: line. A pack that has some
+	// attaches to a file only when one occurs in it, except that a file with
+	// the pack's primary extension (Exts[0]) always matches.
+	Contains []string
+	// Structured: the Match section carries a machine-readable match: line.
+	Structured bool
 }
 
 // Catalog holds one pack per id; the highest source wins.
@@ -68,6 +74,46 @@ func MatchExts(match string) []string {
 	return out
 }
 
+// ParseMatchLine reads the optional machine-readable line of a Match section:
+//
+//	match: ext=.cs,.csproj; contains=Confluent.Kafka, IProducer
+//
+// Key names are case-insensitive, either part may be absent, tokens are
+// trimmed, extensions are lower-cased and get a leading dot; no regex. ok is
+// false when the section has no such line.
+func ParseMatchLine(section string) (exts, contains []string, ok bool) {
+	for _, line := range strings.Split(section, "\n") {
+		key, rest, found := strings.Cut(strings.TrimSpace(line), ":")
+		if !found || strings.ToLower(strings.TrimSpace(key)) != "match" {
+			continue
+		}
+		for _, part := range strings.Split(rest, ";") {
+			k, v, found := strings.Cut(part, "=")
+			if !found {
+				continue
+			}
+			for _, tok := range strings.Split(v, ",") {
+				tok = strings.TrimSpace(tok)
+				if tok == "" {
+					continue
+				}
+				switch strings.ToLower(strings.TrimSpace(k)) {
+				case "ext":
+					tok = strings.ToLower(tok)
+					if !strings.HasPrefix(tok, ".") {
+						tok = "." + tok
+					}
+					exts = append(exts, tok)
+				case "contains":
+					contains = append(contains, tok)
+				}
+			}
+		}
+		return exts, contains, true
+	}
+	return nil, nil, false
+}
+
 func firstHeading(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		if t := strings.TrimSpace(line); strings.HasPrefix(t, "#") {
@@ -89,7 +135,15 @@ func (c *Catalog) Add(p CatalogPack) {
 	if p.Match == "" {
 		p.Match = ExtractMatchSection(p.Content)
 	}
-	if p.Exts == nil {
+	if exts, contains, ok := ParseMatchLine(p.Match); ok {
+		p.Structured = true
+		if p.Exts == nil {
+			p.Exts = exts
+		}
+		if p.Contains == nil {
+			p.Contains = contains
+		}
+	} else if p.Exts == nil {
 		p.Exts = MatchExts(p.Match)
 	}
 	if p.Description == "" {

@@ -1,6 +1,7 @@
 # PRISMA EXTRACTION RULES
 
 ## Match
+match: ext=.prisma,.ts,.tsx,.js,.jsx; contains=prisma, Prisma, PrismaClient
 Load this pack when:
 - .prisma files exist in the project (prisma/schema.prisma)
 - package.json has @prisma/client dependency

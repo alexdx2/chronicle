@@ -189,3 +189,75 @@ func TestGuideSet_PacksPerFileAndVersion(t *testing.T) {
 		t.Fatalf("ts packs = %q", ids(ts))
 	}
 }
+
+func TestGuideSet_ForContent(t *testing.T) {
+	gs := NewGuide(prompts.BuiltinCatalog(), []string{"dotnet", "kafka", "prisma", "typescript"})
+	ids := func(r []prompts.PackRef) (s string) {
+		for _, p := range r {
+			s += p.ID + " "
+		}
+		return
+	}
+	_, refs := gs.ForContent("src/A.cs", []byte("using Confluent.Kafka;\nclass A {}\n"))
+	if ids(refs) != "dotnet kafka " {
+		t.Fatalf("cs with Confluent.Kafka: %q", ids(refs))
+	}
+	_, refs = gs.ForContent("src/B.cs", []byte("class B {}\n"))
+	if ids(refs) != "dotnet " {
+		t.Fatalf("cs without a token: %q", ids(refs))
+	}
+	// The primary extension of prisma always matches; others need a token.
+	_, refs = gs.ForContent("prisma/schema.prisma", []byte("model A { id Int }\n"))
+	if ids(refs) != "prisma " {
+		t.Fatalf("schema.prisma: %q", ids(refs))
+	}
+	_, refs = gs.ForContent("src/x.ts", []byte("export const a = 1;\n"))
+	if ids(refs) != "typescript " {
+		t.Fatalf("x.ts without token: %q", ids(refs))
+	}
+	_, refs = gs.ForContent("src/x.ts", []byte("const p = new PrismaClient();\n"))
+	if ids(refs) != "prisma typescript " {
+		t.Fatalf("x.ts with PrismaClient: %q", ids(refs))
+	}
+	// Tokens are case-sensitive, as written.
+	_, refs = gs.ForContent("src/y.ts", []byte("const k = 'KAFKA';\n"))
+	if ids(refs) != "typescript " {
+		t.Fatalf("case-sensitive token: %q", ids(refs))
+	}
+	// For stays content independent: the potential pack set by extension.
+	_, refs = gs.For("src/A.cs")
+	if ids(refs) != "dotnet kafka " {
+		t.Fatalf("For(cs): %q", ids(refs))
+	}
+	_, refs = gs.For("src/x.ts")
+	if ids(refs) != "kafka prisma typescript " {
+		t.Fatalf("For(ts): %q", ids(refs))
+	}
+}
+
+func TestRun_PackIsAttachedOnlyToFilesThatUseIt(t *testing.T) {
+	e := newRunEnv(t)
+	e.m.Tech = []string{"dotnet", "kafka"}
+	write(t, e.root, "src/plain.cs", "class Plain {}\n")
+	write(t, e.root, "src/bus.cs", "using Confluent.Kafka;\nclass Bus {}\n")
+	commitAll(t, e.root, "cs")
+	wb := &windowBackend{}
+	if _, err := Run(context.Background(), e.input(wb, "src/plain.cs", "src/bus.cs")); err != nil {
+		t.Fatal(err)
+	}
+	sys := map[string]string{}
+	for _, r := range wb.reqs {
+		first, _, _ := strings.Cut(r.User, "\n")
+		sys[first] = r.System
+	}
+	const heading = "# KAFKA / EVENT STREAM EXTRACTION RULES"
+	if sys["File: src/plain.cs"] == "" || sys["File: src/bus.cs"] == "" {
+		t.Fatalf("missing prompts: %d", len(sys))
+	}
+	if strings.Contains(sys["File: src/plain.cs"], heading) {
+		t.Error("kafka-free .cs file got the kafka pack")
+	}
+	if !strings.Contains(sys["File: src/bus.cs"], heading) {
+		t.Error("kafka-using .cs file did not get the kafka pack")
+	}
+}
