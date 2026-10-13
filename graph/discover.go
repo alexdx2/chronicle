@@ -440,7 +440,7 @@ func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
 		}
 	}
 
-	if cfg == nil || (len(cfg.Include) == 0 && len(cfg.Exclude) == 0) {
+	if cfg == nil || (len(cfg.Include) == 0 && len(cfg.Exclude) == 0 && len(cfg.Tests) == 0) {
 		return true // no config = include all
 	}
 
@@ -449,6 +449,11 @@ func shouldInclude(filePath string, cfg *manifest.ScanConfig) bool {
 		if manifest.MatchGlob(filePath, pattern) {
 			return false
 		}
+	}
+
+	// Test code is in scope (after excludes).
+	if cfg.IsTest(filePath) {
+		return true
 	}
 
 	// If no includes specified, everything passes (after excludes)

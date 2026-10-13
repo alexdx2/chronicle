@@ -12,12 +12,27 @@ import (
 type ScanConfig struct {
 	Include []string `yaml:"include,omitempty"`
 	Exclude []string `yaml:"exclude,omitempty"`
+	// Tests are test-code globs: in scope like Include, unless Exclude matches.
+	Tests []string `yaml:"tests,omitempty"`
 	// IncludeDevDeps opts this domain into manifest dependency extraction for
 	// devDependencies entries (SQ-Contract 2 axis 1 section policy). Default
 	// false: dev tooling deps are skipped entirely — most devDependencies are
 	// build/test tooling, not architecture, and the default should hide noise
 	// rather than show it.
 	IncludeDevDeps bool `yaml:"include_dev_deps,omitempty"`
+}
+
+// IsTest reports whether path matches one of the Tests globs.
+func (c *ScanConfig) IsTest(path string) bool {
+	if c == nil {
+		return false
+	}
+	for _, g := range c.Tests {
+		if MatchGlob(path, g) {
+			return true
+		}
+	}
+	return false
 }
 
 type DomainEntry struct {

@@ -85,12 +85,18 @@ domains:
 {{- if .Include}}
       include:
 {{- range .Include}}
-        - "{{.}}"
+        - {{.}}
 {{- end}}
 {{- end}}
       exclude:
 {{- range .Exclude}}
-        - "{{.}}"
+        - {{.}}
+{{- end}}
+{{- if .Tests}}
+      tests:
+{{- range .Tests}}
+        - {{.}}
+{{- end}}
 {{- end}}
 tech: [{{join .Tech ", "}}]
 `
@@ -124,41 +130,13 @@ func BootstrapManifest(in BootstrapInput) (BootstrapResult, error) {
 	key := DomainKey(projectPathOrDir(in))
 	include, tech := classify(in.RepoRoot, files)
 
-	var buf bytes.Buffer
-	// ScanConfigFor matches domains by name, so the name is the normalized key,
-	// not the raw project path.
-	err = bootstrapTmpl.Execute(&buf, map[string]any{
-		"Key":     strconv.Quote(key), // quoted: a key such as null or 123 must stay a string
-		"Name":    strconv.Quote(key),
-		"Include": include,
-		"Exclude": bootstrapExclude,
-		"Tech":    tech,
-	})
+	buf, err := renderManifest(key, include, bootstrapExclude, nil, tech)
 	if err != nil {
-		return BootstrapResult{}, fmt.Errorf("scan: render manifest: %w", err)
+		return BootstrapResult{}, err
 	}
 
-	dir := filepath.Dir(mpath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return BootstrapResult{}, fmt.Errorf("scan: create %s: %w", dir, err)
-	}
-	tmp, err := os.CreateTemp(dir, ".chronicle.domain.yaml.*")
-	if err != nil {
-		return BootstrapResult{}, fmt.Errorf("scan: write manifest: %w", err)
-	}
-	defer os.Remove(tmp.Name()) // no-op after a successful rename
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
-		tmp.Close()
-		return BootstrapResult{}, fmt.Errorf("scan: write manifest: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return BootstrapResult{}, fmt.Errorf("scan: write manifest: %w", err)
-	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		return BootstrapResult{}, fmt.Errorf("scan: write manifest: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), mpath); err != nil {
-		return BootstrapResult{}, fmt.Errorf("scan: install manifest %s: %w", mpath, err)
+	if err := writeFileAtomic(mpath, buf.Bytes()); err != nil {
+		return BootstrapResult{}, err
 	}
 	return BootstrapResult{Path: mpath, Created: true, Domain: key, DomainName: key, Tech: tech}, nil
 }
@@ -257,6 +235,73 @@ func classify(repoRoot string, files []string) (include, tech []string) {
 		tech = append(tech, "kafka")
 	}
 	return include, tech
+}
+
+// globLines renders globs as quoted YAML scalars.
+func globLines(globs []string) []string {
+	out := make([]string, len(globs))
+	for i, g := range globs {
+		out[i] = strconv.Quote(g)
+	}
+	return out
+}
+
+// writeFileAtomic writes data next to path and renames it into place.
+func writeFileAtomic(mpath string, data []byte) error {
+	dir := filepath.Dir(mpath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("scan: create %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".chronicle.domain.yaml.*")
+	if err != nil {
+		return fmt.Errorf("scan: write manifest: %w", err)
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("scan: write manifest: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("scan: write manifest: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return fmt.Errorf("scan: write manifest: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), mpath); err != nil {
+		return fmt.Errorf("scan: install manifest %s: %w", mpath, err)
+	}
+	return nil
+}
+
+// SeedResult is the deterministic classification of a repository: include and
+// exclude globs and the tech list.
+type SeedResult struct {
+	Include, Exclude, Tech []string
+}
+
+// Seed classifies the tracked files without a model.
+func Seed(repoRoot string, files []string) SeedResult {
+	include, tech := classify(repoRoot, files)
+	return SeedResult{Include: include, Exclude: append([]string(nil), bootstrapExclude...), Tech: tech}
+}
+
+// renderManifest renders the manifest text. ScanConfigFor matches domains by
+// name, so the name is the normalized key; the key is quoted so that a value
+// such as null or 123 stays a string.
+func renderManifest(key string, include, exclude, tests, tech []string) (bytes.Buffer, error) {
+	var buf bytes.Buffer
+	err := bootstrapTmpl.Execute(&buf, map[string]any{
+		"Key":     strconv.Quote(key),
+		"Name":    strconv.Quote(key),
+		"Include": globLines(include),
+		"Exclude": globLines(exclude),
+		"Tests":   globLines(tests),
+		"Tech":    tech,
+	})
+	if err != nil {
+		return buf, fmt.Errorf("scan: render manifest: %w", err)
+	}
+	return buf, nil
 }
 
 func matchesAny(p string, globs []string) bool {

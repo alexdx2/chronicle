@@ -89,6 +89,12 @@ type PackMeta struct {
 	AppliesWhen string `json:"applies_when,omitempty"`
 }
 
+// PackRef names an applied pack version in a profile.
+type PackRef struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+}
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 // contentByPath maps pack paths to their embedded content.
