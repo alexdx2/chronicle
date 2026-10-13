@@ -42,6 +42,10 @@ func (g *Graph) WriteDepsExtractions(domainKey string, revisionID int64, rep dep
 			Section: section, Line: d.Line, Text: d.Text, Origin: depsOrigin,
 		})
 	}
+	previous, err := g.store.ListStandingExtractionsByRole(domainKey, store.DepsExtractionRole)
+	if err != nil {
+		return nil, fmt.Errorf("deps: standing rows: %w", err)
+	}
 	files := make([]string, 0, len(byFile))
 	for f := range byFile {
 		files = append(files, f)
@@ -56,10 +60,69 @@ func (g *Graph) WriteDepsExtractions(domainKey string, revisionID int64, rep dep
 			return nil, fmt.Errorf("deps: save %s: %w", f, err)
 		}
 	}
-	return g.ResolveExtractionsWithOptions(domainKey, revisionID, ResolveOptions{
+	res, err := g.ResolveExtractionsWithOptions(domainKey, revisionID, ResolveOptions{
 		Deterministic: true, ExtractorID: DepsExtractorID, ExtractorVersion: deps.Version,
 		ExtractionRole: store.DepsExtractionRole, AllowDegraded: true,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The replacement contract: what a manifest asserts now is ALL it asserts.
+	var superseded int64
+	for _, file := range files {
+		keep, err := g.depsKeep(file, revisionID, res.EvidenceIDsByFile[file])
+		if err != nil {
+			return nil, err
+		}
+		n, err := g.store.SupersedeEvidenceNotIn(file, DepsExtractorID, keep, revisionID)
+		if err != nil {
+			return nil, fmt.Errorf("deps: supersede %s: %w", file, err)
+		}
+		superseded += n
+	}
+	// A manifest that left the report (deleted, or no longer yielding facts)
+	// asserts nothing at all.
+	for _, row := range previous {
+		if _, still := byFile[row.FilePath]; still {
+			continue
+		}
+		n, err := g.store.SupersedeEvidenceNotIn(row.FilePath, DepsExtractorID, nil, revisionID)
+		if err != nil {
+			return nil, fmt.Errorf("deps: supersede removed %s: %w", row.FilePath, err)
+		}
+		superseded += n
+		if err := g.store.DeleteStandingExtraction(domainKey, row.FilePath, store.DepsExtractionRole); err != nil {
+			return nil, fmt.Errorf("deps: forget %s: %w", row.FilePath, err)
+		}
+	}
+	if superseded > 0 {
+		if err := g.recalculateSupersededTrust(revisionID); err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+// depsKeep is the evidence a manifest's resolve re-observed: the ids the
+// resolve reported plus every deps row created for the file in this revision
+// (a dedup hit reaches the store by a path the result map may not record).
+func (g *Graph) depsKeep(filePath string, revisionID int64, fromResolve []int64) ([]int64, error) {
+	created, err := g.store.EvidenceIDsCreatedIn(filePath, DepsExtractorID, revisionID)
+	if err != nil {
+		return nil, fmt.Errorf("deps: evidence of %s: %w", filePath, err)
+	}
+	seen := map[int64]bool{}
+	var keep []int64
+	for _, ids := range [][]int64{fromResolve, created} {
+		for _, id := range ids {
+			if id > 0 && !seen[id] {
+				seen[id] = true
+				keep = append(keep, id)
+			}
+		}
+	}
+	return keep, nil
 }
 
 // packageNodeKey is the identity of a package of an ecosystem in a domain.
@@ -128,22 +191,31 @@ func (g *Graph) resolvePublishesPackage(domainKey string, revisionID int64, file
 	if fromID == 0 || toID == 0 || fromID == toID {
 		return counts
 	}
+	fromDeps := fact.Origin == depsOrigin
+	confidence := 0.95
+	if fromDeps {
+		confidence = 1.0
+	}
 	edgeKey := fromNodeKey + "->" + toNodeKey + ":PUBLISHES"
 	if _, err := g.store.UpsertEdge(store.EdgeRow{
 		EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
 		FromNodeID: fromID, ToNodeID: toID,
 		EdgeType: "PUBLISHES", DerivationKind: "hard", Active: true,
-		LastSeenRevisionID: revisionID, Confidence: 1.0, Freshness: 1.0, TrustScore: 1.0,
+		LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
 		Metadata: "{}", DependencySource: "manifest",
 	}); err != nil {
 		return counts
 	}
 	counts.edges++
 	kind, assertion := buildManifestLineAssertion(fact)
+	if !fromDeps {
+		a, _ := json.Marshal(map[string]any{"substring": fact.To})
+		kind, assertion = "text_contains", string(a)
+	}
 	_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 		TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 		ExtractorID: extractorID, ExtractorVersion: "1.0",
-		Confidence: 1.0, RevisionID: revisionID,
+		Confidence: confidence, RevisionID: revisionID,
 		AssertionKind: kind, Assertion: assertion,
 	})
 	counts.evidence++

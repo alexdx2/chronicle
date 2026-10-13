@@ -242,6 +242,16 @@ func (s *Store) DeleteStructuralExtraction(domainKey, filePath string) error {
 	return nil
 }
 
+// DeleteStandingExtraction forgets a standing row of any role for one file.
+func (s *Store) DeleteStandingExtraction(domainKey, filePath, role string) error {
+	if _, err := s.db.Exec(`DELETE FROM scan_extractions
+		WHERE domain_key = ? AND file_path = ? AND extraction_role = ?`,
+		domainKey, filePath, role); err != nil {
+		return fmt.Errorf("DeleteStandingExtraction %q %q: %w", role, filePath, err)
+	}
+	return nil
+}
+
 // StructuralFailures lists the files whose STANDING structural answer is "no
 // answer", split by why. They are two different disclosures and one retry set:
 // the phase re-targets both on every run, and the freshness line reports them

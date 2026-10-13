@@ -135,3 +135,91 @@ func TestWriteDepsExtractions_SameNodeAsLegacyDependency(t *testing.T) {
 		t.Fatalf("deps-origin DEPENDS_ON edge does not point at %s: %+v", uiKeys[0], edges)
 	}
 }
+
+func TestWriteDepsExtractions_InternalDependencyIsNeverNoise(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{Depends: []deps.Dependency{
+		{Name: "system.core/system.core.csproj", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 4, Internal: true, Text: `ProjectReference Include="System.Core/System.Core.csproj"`},
+		{Name: "eslint-config-acme", Ecosystem: "npm", File: "web/package.json", Line: 4, Internal: true, Text: `"eslint-config-acme"`},
+	}}
+	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	if len(edges) != 2 {
+		t.Fatalf("internal dependencies must not be filtered, got %d edges: %+v", len(edges), edges)
+	}
+}
+
+func TestResolvePublishesPackage_LLMOriginKeepsLegacyConfidence(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	g.SaveFileExtraction(rev, "testapp", "lib/package.json", "extracted", "manifest",
+		`[{"kind":"publishes_package","to":"acme-lib","ecosystem":"npm"}]`, "")
+	if _, err := g.ResolveExtractions("testapp", rev); err != nil {
+		t.Fatal(err)
+	}
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES"})
+	if len(edges) != 1 {
+		t.Fatalf("PUBLISHES edges = %+v", edges)
+	}
+	if edges[0].Confidence > 0.95 {
+		t.Errorf("edge confidence = %v, want <= 0.95", edges[0].Confidence)
+	}
+	ev, _ := st.ListEvidenceByEdge(edges[0].EdgeID)
+	if len(ev) == 0 {
+		t.Fatal("no evidence")
+	}
+	for _, e := range ev {
+		if e.AssertionKind == "manifest_line" || e.Confidence != 0.95 {
+			t.Errorf("evidence = kind %s conf %v, want legacy assertion at 0.95", e.AssertionKind, e.Confidence)
+		}
+	}
+}
+
+func TestWriteDepsExtractions_RerunSupersedesWhatManifestNoLongerSays(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	dep := func(name string, line int) deps.Dependency {
+		return deps.Dependency{Name: name, Version: "1.0", Section: "dependencies", Ecosystem: "nuget", File: "Api/Api.csproj", Line: line, Text: `PackageReference Include="` + name + `"`}
+	}
+	if _, err := g.WriteDepsExtractions("testapp", rev, deps.Report{Depends: []deps.Dependency{dep("confluent.kafka", 6), dep("serilog", 7)}}); err != nil {
+		t.Fatal(err)
+	}
+	rev2, _ := st.CreateRevision("testapp", "scan_2", "", "manual", "full", "{}")
+	if _, err := g.WriteDepsExtractions("testapp", rev2, deps.Report{Depends: []deps.Dependency{dep("serilog", 5)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	active := true
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON", Active: &active})
+	if len(edges) != 1 || !strings.HasSuffix(edges[0].ToNodeKey, "serilog") {
+		t.Fatalf("want one active DEPENDS_ON (serilog), got %+v", edges)
+	}
+	all, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	for _, e := range all {
+		ev, _ := st.ListEvidenceByEdge(e.EdgeID)
+		var live int
+		for _, x := range ev {
+			if x.EvidenceStatus == "valid" || x.EvidenceStatus == "revalidated" {
+				live++
+			}
+		}
+		if strings.HasSuffix(e.ToNodeKey, "kafka") && live != 0 {
+			t.Errorf("removed dependency still has %d live evidence rows", live)
+		}
+		if strings.HasSuffix(e.ToNodeKey, "serilog") && live != 1 {
+			t.Errorf("kept dependency has %d live evidence rows, want 1", live)
+		}
+	}
+
+	// A manifest that left the report asserts nothing and loses its standing row.
+	rev3, _ := st.CreateRevision("testapp", "scan_3", "", "manual", "full", "{}")
+	if _, err := g.WriteDepsExtractions("testapp", rev3, deps.Report{}); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ := st.ListStandingExtractionsByRole("testapp", store.DepsExtractionRole); len(rows) != 0 {
+		t.Errorf("standing rows left: %+v", rows)
+	}
+	if edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON", Active: &active}); len(edges) != 0 {
+		t.Errorf("active edges after manifest removal: %+v", edges)
+	}
+}

@@ -966,7 +966,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// Filter: skip infrastructure and architectural deps
 		fromDeps := fact.Origin == depsOrigin
 		if fromDeps {
-			if !ShouldTrackDependencyIn(fact.Ecosystem, fact.To) {
+			// An internal (project/workspace) reference is the repository's
+			// own structure and is never dropped as noise.
+			if fact.Section != "project" && !ShouldTrackDependencyIn(fact.Ecosystem, fact.To) {
 				return counts, nil, nil
 			}
 		} else if !ShouldTrackDependency(fact.To) {
