@@ -541,6 +541,7 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	// paths come from an older snapshot, so each is checked against the tree
 	// being built: only a tracked regular blob at HEAD qualifies (a directory
 	// that has since become a symlink must not lead the read out of the clone).
+	forced := map[string]bool{} // valid retry paths: extracted even when covered
 	if len(retry) > 0 {
 		modes, err := trackedModes(r.o.RepoRoot)
 		if err != nil {
@@ -554,6 +555,7 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 			switch mode, ok := modes[p]; {
 			case ok && (mode == "100644" || mode == "100755"):
 				add(p)
+				forced[p] = true
 			case ok:
 				if !seen[p] {
 					seen[p] = true
@@ -595,6 +597,20 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates, versionFrom(guide))
 	if err != nil {
 		return err
+	}
+	if len(forced) > 0 {
+		// RetryPaths is the caller's order to extract again: a retried file
+		// that matches its coverage row is sent anyway.
+		var still []string
+		for _, p := range done {
+			if forced[p] {
+				todo = append(todo, p)
+			} else {
+				still = append(still, p)
+			}
+		}
+		done = still
+		sort.Strings(todo)
 	}
 	dr.InScope, dr.AlreadyCovered, dr.Sent = len(candidates), len(done), len(todo)
 	if err := reopenObligations(st, d.Key, r.head, done); err != nil {

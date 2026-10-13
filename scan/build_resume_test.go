@@ -317,8 +317,9 @@ func TestBuildSnapshot_WithoutRetryPathsAFailedBaseFileIsResent(t *testing.T) {
 }
 
 // Plan numbers: the candidates are the whole scope (f1..f5), so InScope is 5;
-// f1, f3, f5 match their coverage (AlreadyCovered 3); f2 changed and f4 has no
-// coverage row (ToSend 2). RetryPaths only overlaps with that now.
+// f3, f5 match their coverage (AlreadyCovered 2); f2 changed, f4 has no
+// coverage row and f1 is covered but named in RetryPaths, which is an explicit
+// order to extract again (ToSend 3).
 func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 	repo, _, c2, base := partialBase(t)
 	b := &countingBackend{}
@@ -328,7 +329,7 @@ func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 	in.RetryPaths = []string{
 		"src/f4.ts",     // failed in the base: sent
 		"src/f2.ts",     // changed too: once, not twice
-		"src/f1.ts",     // covered at its blob: not sent
+		"src/f1.ts",     // covered at its blob: sent anyway (forced)
 		"src/gone.ts",   // not in the tree
 		"README.md",     // outside the scan scope
 		"../etc/passwd", // not a path inside the tree
@@ -338,7 +339,7 @@ func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.total() != 2 || b.callsFor("src/f2.ts") != 1 || b.callsFor("src/f4.ts") != 1 {
+	if b.total() != 3 || b.callsFor("src/f1.ts") != 1 || b.callsFor("src/f2.ts") != 1 || b.callsFor("src/f4.ts") != 1 {
 		t.Fatalf("calls = %v", b.calls)
 	}
 	if res.Partial || len(res.Failed) != 0 || len(res.Skipped) != 0 {
@@ -347,7 +348,7 @@ func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 	if blobOf(decodeT(t, res.Files), "src/f4.ts") == "" {
 		t.Fatal("f4 is still not covered in the result")
 	}
-	if len(plans.plans) != 1 || plans.plans[0].InScope != 5 || plans.plans[0].AlreadyCovered != 3 || plans.plans[0].ToSend != 2 {
+	if len(plans.plans) != 1 || plans.plans[0].InScope != 5 || plans.plans[0].AlreadyCovered != 2 || plans.plans[0].ToSend != 3 {
 		t.Fatalf("plans = %+v", plans.plans)
 	}
 }
