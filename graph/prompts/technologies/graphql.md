@@ -1,7 +1,7 @@
 # GRAPHQL EXTRACTION RULES
 
 ## Match
-match: ext=.graphql,.gql,.ts,.tsx,.js,.jsx; contains=graphql, GraphQL, gql
+match: ext=.graphql,.gql,.ts,.tsx,.js,.jsx; always=.graphql,.gql; contains=graphql, GraphQL, gql
 Load this pack when:
 - .graphql or .gql schema files exist in the project
 - Files import from @nestjs/graphql, apollo-server, @apollo/server, type-graphql

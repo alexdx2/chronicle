@@ -206,7 +206,7 @@ func TestGuideSet_ForContent(t *testing.T) {
 	if ids(refs) != "dotnet " {
 		t.Fatalf("cs without a token: %q", ids(refs))
 	}
-	// The primary extension of prisma always matches; others need a token.
+	// The own file type of prisma (always=) matches without a token; others need one.
 	_, refs = gs.ForContent("prisma/schema.prisma", []byte("model A { id Int }\n"))
 	if ids(refs) != "prisma " {
 		t.Fatalf("schema.prisma: %q", ids(refs))
@@ -218,6 +218,16 @@ func TestGuideSet_ForContent(t *testing.T) {
 	_, refs = gs.ForContent("src/x.ts", []byte("const p = new PrismaClient();\n"))
 	if ids(refs) != "prisma typescript " {
 		t.Fatalf("x.ts with PrismaClient: %q", ids(refs))
+	}
+	// nestjs has no always=: a plain .ts utility does not get it, one with the import does.
+	gn := NewGuide(prompts.BuiltinCatalog(), []string{"nestjs", "typescript"})
+	_, refs = gn.ForContent("src/util.ts", []byte("export const a = 1;\n"))
+	if ids(refs) != "typescript " {
+		t.Fatalf("plain .ts with nestjs listed: %q", ids(refs))
+	}
+	_, refs = gn.ForContent("src/app.controller.ts", []byte("import { Controller } from '@nestjs/common';\n"))
+	if ids(refs) != "nestjs typescript " {
+		t.Fatalf(".ts with @nestjs/common: %q", ids(refs))
 	}
 	// Tokens are case-sensitive, as written.
 	_, refs = gs.ForContent("src/y.ts", []byte("const k = 'KAFKA';\n"))

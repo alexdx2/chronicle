@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -108,7 +109,7 @@ func (s *GuideSet) ForContent(path string, content []byte) (string, []prompts.Pa
 	kept := make([]string, 0, len(t))
 	for _, id := range t {
 		p, ok := catGet(s.cat, strings.ToLower(id))
-		if !ok || len(p.Contains) == 0 || (len(p.Exts) > 0 && p.Exts[0] == ext) {
+		if !ok || len(p.Contains) == 0 || slices.Contains(p.Always, ext) {
 			kept = append(kept, id)
 			continue
 		}

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/llm"
+	"github.com/alexdx2/chronicle-core/snapshot"
 )
 
 // factsBackend is a countingBackend whose answers carry one model fact named
@@ -350,6 +351,39 @@ func TestBuildSnapshot_RetryPathsAreSentAlthoughUnchanged(t *testing.T) {
 	}
 	if len(plans.plans) != 1 || plans.plans[0].InScope != 5 || plans.plans[0].AlreadyCovered != 2 || plans.plans[0].ToSend != 3 {
 		t.Fatalf("plans = %+v", plans.plans)
+	}
+	// The forced file is covered at its current blob and a finished version.
+	snap := decodeT(t, res.Files)
+	var f1 *snapshot.Coverage
+	for i := range snap.Coverage {
+		if snap.Coverage[i].Path == "src/f1.ts" {
+			f1 = &snap.Coverage[i]
+		}
+	}
+	if f1 == nil || f1.Blob != blobOf(decodeT(t, base.Files), "src/f1.ts") || len(f1.Extractors) == 0 || f1.Extractors[0].Version == "" || f1.Extractors[0].Status == "failed" {
+		t.Fatalf("f1 coverage after the forced build = %+v", f1)
+	}
+	// Forcing is a per-build order, not sticky state: the same RetryPaths over
+	// the result send exactly the retry files again (f4 is covered now too).
+	b2 := &countingBackend{}
+	var plans2 planRecorder
+	in2 := buildIn(repo, c2, t.TempDir(), b2)
+	in2.Base, in2.OnPlan = &Base{CodeSha: c2, Files: res.Files}, plans2.on
+	in2.RetryPaths = []string{"src/f4.ts", "src/f2.ts", "src/f1.ts", "src/gone.ts", "README.md"}
+	if _, err := BuildSnapshot(context.Background(), in2); err != nil {
+		t.Fatal(err)
+	}
+	if b2.total() != 3 || len(plans2.plans) != 1 || plans2.plans[0].ToSend != 3 || plans2.plans[0].AlreadyCovered != 2 {
+		t.Fatalf("second build: calls %v plans %+v", b2.calls, plans2.plans)
+	}
+	b3 := &countingBackend{}
+	in3 := buildIn(repo, c2, t.TempDir(), b3)
+	in3.Base = &Base{CodeSha: c2, Files: res.Files}
+	if _, err := BuildSnapshot(context.Background(), in3); err != nil {
+		t.Fatal(err)
+	}
+	if b3.total() != 0 {
+		t.Fatalf("without RetryPaths nothing is sent, got %v", b3.calls)
 	}
 }
 

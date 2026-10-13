@@ -56,22 +56,34 @@ func TestAddProjectPacks_IDIsLowercasedStem(t *testing.T) {
 
 func TestParseMatchLine(t *testing.T) {
 	cases := []struct {
-		name, in       string
-		exts, contains []string
-		ok             bool
+		name, in               string
+		exts, always, contains []string
+		ok                     bool
 	}{
-		{"both", "Load this pack when:\n- x\nmatch: ext=.cs,.csproj; contains=Confluent.Kafka, IProducer, IConsumer\n", []string{".cs", ".csproj"}, []string{"Confluent.Kafka", "IProducer", "IConsumer"}, true},
-		{"ext only", "match: ext=.prisma,.ts", []string{".prisma", ".ts"}, nil, true},
-		{"contains only", "match: contains=kafka, Kafka", nil, []string{"kafka", "Kafka"}, true},
-		{"absent", "Load this pack when:\n- Files have .cs extension\n", nil, nil, false},
-		{"odd spacing and case", "  MATCH :  EXT = .TS , .Tsx ;CONTAINS=  @nestjs/ ;", []string{".ts", ".tsx"}, []string{"@nestjs/"}, true},
-		{"extension without dot", "match: ext=cs", []string{".cs"}, nil, true},
+		{"all three", "Load this pack when:\n- x\nmatch: ext=.prisma,.ts; always=.prisma; contains=PrismaClient, Prisma\n", []string{".prisma", ".ts"}, []string{".prisma"}, []string{"PrismaClient", "Prisma"}, true},
+		{"both", "match: ext=.cs,.csproj; contains=Confluent.Kafka, IProducer, IConsumer\n", []string{".cs", ".csproj"}, nil, []string{"Confluent.Kafka", "IProducer", "IConsumer"}, true},
+		{"ext only", "match: ext=.prisma,.ts", []string{".prisma", ".ts"}, nil, nil, true},
+		{"contains only", "match: contains=kafka, Kafka", nil, nil, []string{"kafka", "Kafka"}, true},
+		{"absent", "Load this pack when:\n- Files have .cs extension\n", nil, nil, nil, false},
+		{"no recognised key", "match: C# projects\nmatch: foo=bar; baz", nil, nil, nil, false},
+		{"odd spacing and case", "  MATCH :  EXT = .TS , .Tsx ;CONTAINS=  @nestjs/ ;", []string{".ts", ".tsx"}, nil, []string{"@nestjs/"}, true},
+		{"extension without dot", "match: ext=cs", []string{".cs"}, nil, nil, true},
 	}
 	for _, c := range cases {
-		exts, contains, ok := ParseMatchLine(c.in)
-		if ok != c.ok || strings.Join(exts, "|") != strings.Join(c.exts, "|") || strings.Join(contains, "|") != strings.Join(c.contains, "|") {
-			t.Errorf("%s: got %q %q %v want %q %q %v", c.name, exts, contains, ok, c.exts, c.contains, c.ok)
+		exts, always, contains, ok := ParseMatchLine(c.in)
+		j := func(a []string) string { return strings.Join(a, "|") }
+		if ok != c.ok || j(exts) != j(c.exts) || j(always) != j(c.always) || j(contains) != j(c.contains) {
+			t.Errorf("%s: got %q %q %q %v want %q %q %q %v", c.name, exts, always, contains, ok, c.exts, c.always, c.contains, c.ok)
 		}
+	}
+}
+
+func TestCatalog_ProseFallbackWhenTheLineHasNoKnownKey(t *testing.T) {
+	c := NewCatalog()
+	c.Add(CatalogPack{ID: "p", Content: "# P\n\n## Match\nmatch: C# projects\n- Files have .go extension\n", Source: SourceFleet})
+	p, _ := c.Get("p")
+	if p.Structured || strings.Join(p.Exts, ",") != ".go" {
+		t.Fatalf("pack = %+v", p)
 	}
 }
 
@@ -95,5 +107,11 @@ func TestBuiltinPacksCarryAMatchLine(t *testing.T) {
 		if !p.Structured {
 			t.Errorf("builtin pack %s has no match: line", id)
 		}
+	}
+	if p, _ := BuiltinCatalog().Get("nestjs"); len(p.Always) != 0 || len(p.Contains) == 0 {
+		t.Errorf("nestjs must attach by token only: %+v", p)
+	}
+	if p, _ := BuiltinCatalog().Get("prisma"); strings.Join(p.Always, ",") != ".prisma" {
+		t.Errorf("prisma always = %v", p.Always)
 	}
 }

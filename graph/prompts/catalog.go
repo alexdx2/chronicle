@@ -29,9 +29,10 @@ type CatalogPack struct {
 	Source      PackSource
 	Exts        []string // file extensions named by Match; empty = any file
 	// Contains are content tokens from the match: line. A pack that has some
-	// attaches to a file only when one occurs in it, except that a file with
-	// the pack's primary extension (Exts[0]) always matches.
+	// attaches to a file only when one occurs in it, except that a file whose
+	// extension is in Always (the pack's own file types) matches without one.
 	Contains []string
+	Always   []string
 	// Structured: the Match section carries a machine-readable match: line.
 	Structured bool
 }
@@ -76,21 +77,27 @@ func MatchExts(match string) []string {
 
 // ParseMatchLine reads the optional machine-readable line of a Match section:
 //
-//	match: ext=.cs,.csproj; contains=Confluent.Kafka, IProducer
+//	match: ext=.cs,.csproj; always=.csproj; contains=Confluent.Kafka, IProducer
 //
-// Key names are case-insensitive, either part may be absent, tokens are
-// trimmed, extensions are lower-cased and get a leading dot; no regex. ok is
-// false when the section has no such line.
-func ParseMatchLine(section string) (exts, contains []string, ok bool) {
+// Key names are case-insensitive, every part is optional, tokens are trimmed,
+// extensions (ext, always) are lower-cased and get a leading dot; no regex.
+// always lists the extensions that match without a content token. ok is false
+// when the section has no match: line with at least one recognised key.
+func ParseMatchLine(section string) (exts, always, contains []string, ok bool) {
 	for _, line := range strings.Split(section, "\n") {
 		key, rest, found := strings.Cut(strings.TrimSpace(line), ":")
 		if !found || strings.ToLower(strings.TrimSpace(key)) != "match" {
 			continue
 		}
+		recognised := false
 		for _, part := range strings.Split(rest, ";") {
 			k, v, found := strings.Cut(part, "=")
 			if !found {
 				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(k)) {
+			case "ext", "always", "contains":
+				recognised = true
 			}
 			for _, tok := range strings.Split(v, ",") {
 				tok = strings.TrimSpace(tok)
@@ -98,20 +105,27 @@ func ParseMatchLine(section string) (exts, contains []string, ok bool) {
 					continue
 				}
 				switch strings.ToLower(strings.TrimSpace(k)) {
-				case "ext":
+				case "ext", "always":
 					tok = strings.ToLower(tok)
 					if !strings.HasPrefix(tok, ".") {
 						tok = "." + tok
 					}
-					exts = append(exts, tok)
+					if strings.ToLower(strings.TrimSpace(k)) == "ext" {
+						exts = append(exts, tok)
+					} else {
+						always = append(always, tok)
+					}
 				case "contains":
 					contains = append(contains, tok)
 				}
 			}
 		}
-		return exts, contains, true
+		if !recognised {
+			continue // "match: something": prose, not a line
+		}
+		return exts, always, contains, true
 	}
-	return nil, nil, false
+	return nil, nil, nil, false
 }
 
 func firstHeading(content string) string {
@@ -135,13 +149,16 @@ func (c *Catalog) Add(p CatalogPack) {
 	if p.Match == "" {
 		p.Match = ExtractMatchSection(p.Content)
 	}
-	if exts, contains, ok := ParseMatchLine(p.Match); ok {
+	if exts, always, contains, ok := ParseMatchLine(p.Match); ok {
 		p.Structured = true
 		if p.Exts == nil {
 			p.Exts = exts
 		}
 		if p.Contains == nil {
 			p.Contains = contains
+		}
+		if p.Always == nil {
+			p.Always = always
 		}
 	} else if p.Exts == nil {
 		p.Exts = MatchExts(p.Match)
