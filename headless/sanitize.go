@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/alexdx2/chronicle-core/deps"
 )
 
 // manifestFile reports whether path is a package/build manifest, the only kind
@@ -109,6 +111,8 @@ func absoluteURL(s string) bool {
 // sanitizeFacts enforces the schema rules that models break regardless of how
 // the prompt words them, so a wrong fact never reaches the graph:
 //   - declares_service and dependency come from manifest files only;
+//   - dependency and publishes_package from a manifest the deps pass reads
+//     (package.json, csproj, go.mod, ...) are dropped: that pass owns them;
 //   - an absolute URL is an outbound http_call, never an endpoint (inbound route)
 //     or calls_endpoint (internal route path);
 //   - calls_service, injects, provides, uses_model, model and model_relation
@@ -127,6 +131,7 @@ func sanitizeFacts(path string, content []byte, facts json.RawMessage) (json.Raw
 		return facts, 0
 	}
 	manifest := manifestFile(path)
+	depsOwned := deps.IsManifest(path)
 	var types map[string]bool
 	if jsLike(path) {
 		types = tsTypeNames(content)
@@ -142,6 +147,12 @@ func sanitizeFacts(path string, content []byte, facts json.RawMessage) (json.Raw
 		kind, _ := f["kind"].(string)
 		str := func(k string) string { s, _ := f[k].(string); return s }
 		switch {
+		case (kind == "dependency" || kind == "publishes_package") && depsOwned:
+			// The deterministic deps pass owns what these manifests say about
+			// dependencies and publications; a model fact would only duplicate it.
+			dropped++
+			changed = true
+			continue
 		case (kind == "declares_service" || kind == "dependency") && !manifest:
 			dropped++
 			changed = true

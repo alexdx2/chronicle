@@ -25,6 +25,18 @@ const depsOrigin = "deps"
 // "publishes_package". Every fact carries the manifest line and text it came
 // from, so its evidence is a manifest_line assertion.
 func (g *Graph) WriteDepsExtractions(domainKey string, revisionID int64, rep deps.Report) (*ResolveExtractionsResult, error) {
+	return g.WriteDepsExtractionsOpts(domainKey, revisionID, rep, DepsOptions{})
+}
+
+// DepsOptions tunes WriteDepsExtractionsOpts.
+type DepsOptions struct {
+	// IncludeDevDeps mirrors the domain's scan.include_dev_deps: dev and
+	// transitive ("indirect") entries are resolved instead of dropped.
+	IncludeDevDeps bool
+}
+
+// WriteDepsExtractionsOpts is WriteDepsExtractions with options.
+func (g *Graph) WriteDepsExtractionsOpts(domainKey string, revisionID int64, rep deps.Report, opts DepsOptions) (*ResolveExtractionsResult, error) {
 	byFile := map[string][]Fact{}
 	for _, p := range rep.Publishes {
 		byFile[p.File] = append(byFile[p.File], Fact{
@@ -62,7 +74,7 @@ func (g *Graph) WriteDepsExtractions(domainKey string, revisionID int64, rep dep
 	}
 	res, err := g.ResolveExtractionsWithOptions(domainKey, revisionID, ResolveOptions{
 		Deterministic: true, ExtractorID: DepsExtractorID, ExtractorVersion: deps.Version,
-		ExtractionRole: store.DepsExtractionRole, AllowDegraded: true,
+		ExtractionRole: store.DepsExtractionRole, AllowDegraded: true, IncludeDevDeps: opts.IncludeDevDeps,
 	})
 	if err != nil {
 		return nil, err
@@ -133,7 +145,7 @@ func packageNodeKey(domainKey, ecosystem, name string) string {
 // depsOwnLookupName is the name a deps-pass fact is looked up under among the
 // domain's own packages: a project reference is known by its file stem.
 func depsOwnLookupName(fact Fact) string {
-	if fact.Origin == depsOrigin && fact.Section == "project" {
+	if fact.Origin == depsOrigin && fact.Section == "project" && fact.Ecosystem == "nuget" {
 		return projectFileStem(fact.To)
 	}
 	return fact.To
@@ -164,18 +176,24 @@ func (g *Graph) manifestOwnerKey(domainKey, filePath, fromType string) string {
 }
 
 // addPublishedPackages feeds ownPackagesForDomain: every package a manifest in
-// this batch publishes is the domain's own, under its name and, for project
-// files, under the file stem a ProjectReference uses.
+// this batch publishes is the domain's own, under its name. Every project file
+// in the batch (published or not: IsPackable=false still has a node a
+// ProjectReference must reach) is also known under the file stem.
 func (g *Graph) addPublishedPackages(domainKey string, allFiles []fileFacts, add func(name, nodeKey string)) {
 	for _, ff := range allFiles {
+		isProject := strings.HasSuffix(strings.ToLower(path.Ext(ff.filePath)), "proj")
+		stemmed := false
 		for _, f := range ff.facts {
-			if f.Kind != "publishes_package" || f.To == "" {
+			if f.Origin != depsOrigin && f.Kind != "publishes_package" {
 				continue
 			}
 			owner := g.manifestOwnerKey(domainKey, ff.filePath, f.FromType)
-			add(f.To, owner)
-			if strings.HasSuffix(strings.ToLower(path.Ext(ff.filePath)), "proj") {
+			if f.Kind == "publishes_package" && f.To != "" {
+				add(f.To, owner)
+			}
+			if isProject && !stemmed {
 				add(projectFileStem(ff.filePath), owner)
+				stemmed = true
 			}
 		}
 	}

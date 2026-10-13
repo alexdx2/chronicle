@@ -144,6 +144,26 @@ var jvmInfrastructurePrefixes = []string{
 	"org.junit", "org.mockito", "org.slf4j", "ch.qos.logback", "org.projectlombok",
 }
 
+// goInfrastructurePrefixes: the Go extended standard library and test helpers.
+var goInfrastructurePrefixes = []string{
+	"golang.org/x/", "github.com/stretchr/testify", "github.com/google/go-cmp", "go.uber.org/mock",
+}
+
+// pythonInfrastructureNames: test, lint and packaging tools (exact names, with
+// plugin suffixes such as pytest-asyncio).
+var pythonInfrastructureNames = []string{
+	"pytest", "mypy", "black", "ruff", "flake8", "setuptools", "wheel", "pip",
+}
+
+func pythonInfrastructure(n string) bool {
+	for _, e := range pythonInfrastructureNames {
+		if n == e || strings.HasPrefix(n, e+"-") {
+			return true
+		}
+	}
+	return false
+}
+
 // ClassifyDependencyIn is ClassifyDependency aware of the manifest's ecosystem.
 // Ecosystems without their own rules keep the legacy npm-shaped classifier.
 func ClassifyDependencyIn(ecosystem, name string) DependencyClass {
@@ -154,6 +174,18 @@ func ClassifyDependencyIn(ecosystem, name string) DependencyClass {
 		prefixes = nugetInfrastructurePrefixes
 	case "maven", "gradle":
 		prefixes = jvmInfrastructurePrefixes
+	case "go":
+		for _, p := range goInfrastructurePrefixes {
+			if strings.HasPrefix(n, p) {
+				return DepInfrastructure
+			}
+		}
+		return ClassifyDependency(name)
+	case "python":
+		if pythonInfrastructure(n) {
+			return DepInfrastructure
+		}
+		return ClassifyDependency(name)
 	default:
 		return ClassifyDependency(name)
 	}
@@ -169,8 +201,9 @@ func ClassifyDependencyIn(ecosystem, name string) DependencyClass {
 func ShouldTrackDependencyIn(ecosystem, name string) bool {
 	switch ecosystem {
 	case "nuget", "maven", "gradle":
-	default:
-		return ShouldTrackDependency(name)
+		return ClassifyDependencyIn(ecosystem, name) != DepInfrastructure
+	case "go", "python":
+		return ClassifyDependencyIn(ecosystem, name) == DepInternal
 	}
-	return ClassifyDependencyIn(ecosystem, name) != DepInfrastructure
+	return ShouldTrackDependency(name)
 }

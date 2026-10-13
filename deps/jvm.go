@@ -107,6 +107,7 @@ var (
 )
 
 func parseGradle(root, rel string, body []byte) Report {
+	const eco = "gradle"
 	var r Report
 	group, groupLine := "", 0
 	for i, line := range strings.Split(string(body), "\n") {
@@ -115,8 +116,8 @@ func parseGradle(root, rel string, body []byte) Report {
 			parts := strings.Split(m[2], ":")
 			if len(parts) >= 2 {
 				d := Dependency{
-					Name: Normalize("maven", parts[0]+":"+parts[1]), Section: m[1],
-					Ecosystem: "maven", File: rel, Line: n, Text: m[0],
+					Name: Normalize(eco, parts[0]+":"+parts[1]), Section: m[1],
+					Ecosystem: eco, File: rel, Line: n, Text: m[0],
 				}
 				if len(parts) >= 3 {
 					d.Version = parts[2]
@@ -130,7 +131,7 @@ func parseGradle(root, rel string, body []byte) Report {
 	}
 	if group != "" {
 		r.Publishes = append(r.Publishes, Package{
-			Name: Normalize("maven", group+":"+gradleProjectName(root, rel, body)), Ecosystem: "maven", File: rel, Line: groupLine, Text: "group",
+			Name: Normalize(eco, group+":"+gradleProjectName(root, rel, body)), Ecosystem: eco, File: rel, Line: groupLine, Text: "group",
 		})
 	}
 	return r

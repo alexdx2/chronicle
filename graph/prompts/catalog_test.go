@@ -1,6 +1,10 @@
 package prompts
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestCatalog_PriorityOnePerID(t *testing.T) {
 	c := BuiltinCatalog()
@@ -29,5 +33,22 @@ func TestMatchExts(t *testing.T) {
 	}
 	if e := MatchExts(ExtractMatchSection(builtinTechPacks["kafka"].Content)); len(e) != 0 {
 		t.Fatalf("builtin kafka has no extensions in Match: %v", e)
+	}
+}
+
+func TestAddProjectPacks_IDIsLowercasedStem(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Kafka-DotNet.md"), []byte("# KD\n\n## Match\n- *.cs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := BuiltinCatalog()
+	if err := c.AddProjectPacks(dir); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := c.Get("kafka-dotnet"); !ok || p.Source != SourceProject {
+		t.Fatalf("project pack not found under its lowercase id: %+v %v", p, ok)
+	}
+	if _, ok := c.Get("Kafka-DotNet"); ok {
+		t.Error("the mixed-case id must not exist")
 	}
 }

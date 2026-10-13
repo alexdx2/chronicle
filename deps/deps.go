@@ -46,6 +46,11 @@ type Report struct {
 	Depends   []Dependency `json:"depends"`
 	// Warnings lists manifests that were skipped, as "<file>: <error>".
 	Warnings []string `json:"warnings,omitempty"`
+
+	// central holds centrally managed versions (NuGet PackageVersion rows of a
+	// Directory.Packages.props): they complete other manifests' entries and
+	// are not dependencies of the props file.
+	central map[string]string
 }
 
 type parser interface {
@@ -102,10 +107,18 @@ func Scan(root string, files []string) (Report, error) {
 			}
 			out.Publishes = append(out.Publishes, r.Publishes...)
 			out.Depends = append(out.Depends, r.Depends...)
+			for name, v := range r.central {
+				if out.central == nil {
+					out.central = map[string]string{}
+				}
+				if _, ok := out.central[name]; !ok {
+					out.central[name] = v
+				}
+			}
 			break
 		}
 	}
-	fillCentralNuGetVersions(out.Depends)
+	fillCentralNuGetVersions(out.Depends, out.central)
 	sort.Strings(out.Warnings)
 	sort.SliceStable(out.Publishes, func(i, j int) bool {
 		a, b := out.Publishes[i], out.Publishes[j]

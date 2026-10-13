@@ -959,7 +959,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fact.Section == "" {
 			fact.Section = "dependencies"
 		}
-		if fact.Section == "devDependencies" && !includeDevDeps {
+		// "indirect" is a Go transitive requirement: dev-like, opt-in.
+		if (fact.Section == "devDependencies" || fact.Section == "indirect") && !includeDevDeps {
 			return counts, nil, nil
 		}
 
@@ -1030,6 +1031,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		var toNodeKey string
 		if svcKey, ok := g.domainOwnPackages[flattenName(depsOwnLookupName(fact))]; ok {
 			toNodeKey = svcKey
+		} else if fromDeps && fact.Section != "project" {
+			// The deterministic pass names the package exactly (a Go module
+			// path, a NuGet id, a Maven coordinate); the npm-shaped import
+			// parser would reduce "github.com/x/y" to its host.
+			toNodeKey = typedNodeKey(domainKey, fact.To, fact.ToType)
 		} else {
 			// Not ours: the SAME package node shape code imports produce
 			// (SQ-Contract 1) — one node per package whether it's reached

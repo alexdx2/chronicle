@@ -98,7 +98,8 @@ func (c *Catalog) Add(p CatalogPack) {
 	c.packs[p.ID] = p
 }
 
-// AddProjectPacks adds every *.md in dir as a project pack (id = file stem).
+// AddProjectPacks adds every *.md in dir as a project pack (id = lowercased
+// file stem, the same form the profile and the fleet registry use).
 // A missing dir is not an error.
 func (c *Catalog) AddProjectPacks(dir string) error {
 	ents, err := os.ReadDir(dir)
@@ -116,7 +117,7 @@ func (c *Catalog) AddProjectPacks(dir string) error {
 		if err != nil {
 			return err
 		}
-		c.Add(CatalogPack{ID: strings.TrimSuffix(e.Name(), ".md"), Content: string(data), Source: SourceProject})
+		c.Add(CatalogPack{ID: strings.ToLower(strings.TrimSuffix(e.Name(), ".md")), Content: string(data), Source: SourceProject})
 	}
 	return nil
 }

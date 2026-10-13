@@ -38,11 +38,11 @@ to extract architectural facts ABOUT the file from its actual structure.
 These are NOT optional. If the file matches a role below, you MUST check for the listed facts.
 
 ## Package / build / app manifest files
-Files: package.json, go.mod, pyproject.toml, pom.xml, build.gradle, Cargo.toml
+Files: package.json, *.csproj, go.mod, pyproject.toml, pom.xml, build.gradle, build.gradle.kts, Cargo.toml
 CHECK: Does this file confirm a deployable service/application boundary?
 IF YES: emit `declares_service` with the package/application name.
-Dependencies of package.json, csproj, go.mod, pyproject and pom are recorded by the
-deterministic deps pass; do not emit `dependency` facts from manifests.
+Dependencies of package.json, csproj, go.mod, pyproject, requirements, setup.cfg, pom.xml and
+build.gradle are recorded by the deterministic deps pass; do not emit `dependency` facts from them.
 
 ## Schema / contract files
 Files: *.prisma, *.graphql, *.proto, *.avro, openapi.yaml
@@ -208,8 +208,11 @@ Emitted by the deps pass; agents emit it only for manifests the pass does not re
 ```
 
 `section` ∈ `dependencies` | `optionalDependencies` | `peerDependencies` | `devDependencies` — defaults to `dependencies` when omitted.
-ONLY emit from package.json for entries actually listed under `dependencies`, `optionalDependencies`, `peerDependencies`, or `devDependencies`.
-`to` = the dependency's package name exactly as it appears as the object key (e.g. `"@okeep/ui"`, `"lodash"`).
+Emit `dependency` only for manifests the deterministic pass does not read. The pass reads
+package.json, csproj/props, go.mod, pyproject.toml/requirements*.txt/setup.cfg, pom.xml and
+build.gradle(.kts); for those, leave dependencies to it. For other manifests, emit it for entries
+actually listed under `dependencies`, `optionalDependencies`, `peerDependencies`, or `devDependencies`.
+`to` = the dependency's package name exactly as the manifest spells it (e.g. `"@okeep/ui"`, `"lodash"`).
 
 DO NOT emit `dependency` from source code files — a source-level import is an `import` fact, not a manifest fact.
 

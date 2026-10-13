@@ -516,10 +516,6 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := r.writeDeps(d, multi); err != nil {
-		return err
-	}
-
 	cfg := d.Scan
 	seen := map[string]bool{}
 	var candidates []string
@@ -611,6 +607,12 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		if err := r.extract(ctx, d, todo, &dr, guide); err != nil {
 			return err
 		}
+	}
+	// Dependencies are written after extraction so a manifest's service node
+	// (minted by the model's declares_service) exists: its edges then start
+	// there and the model's and the deps pass's DEPENDS_ON are one edge.
+	if err := r.writeDeps(d, multi); err != nil {
+		return err
 	}
 	r.runChecks(d)
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)

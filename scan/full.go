@@ -251,10 +251,6 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := r.writeDeps(d, multi); err != nil {
-		return err
-	}
-
 	scanCfg, _ := r.m.ScanConfigFor(d.Name) // matches by name, not key (P11)
 	list, err := r.inScopeFiles(d, scanCfg, multi)
 	if err != nil {
@@ -296,6 +292,12 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 		}
 	}
 
+	// Dependencies are written after extraction so a manifest's service node
+	// (minted by the model's declares_service) exists: its edges then start
+	// there and the model's and the deps pass's DEPENDS_ON are one edge.
+	if err := r.writeDeps(d, multi); err != nil {
+		return err
+	}
 	r.runChecks(d)
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
@@ -327,7 +329,11 @@ func (r *fullRun) writeDeps(d manifest.DomainEntry, multi bool) error {
 	if err != nil {
 		return fmt.Errorf("scan: claim revision for dependencies: %w", err)
 	}
-	if _, err := r.g.WriteDepsExtractions(d.Key, rev, own); err != nil {
+	var includeDev bool
+	if cfg, ok := r.m.ScanConfigFor(d.Name); ok && cfg != nil {
+		includeDev = cfg.IncludeDevDeps
+	}
+	if _, err := r.g.WriteDepsExtractionsOpts(d.Key, rev, own, graph.DepsOptions{IncludeDevDeps: includeDev}); err != nil {
 		return fmt.Errorf("scan: write dependencies of %s: %w", d.Key, err)
 	}
 	return nil

@@ -38,6 +38,19 @@ func (nuget) parse(_, rel string, body []byte) (Report, error) {
 	for i, line := range strings.Split(string(body), "\n") {
 		n := i + 1
 		if m := nugetRefRe.FindStringSubmatch(line); m != nil {
+			if m[1] == "PackageVersion" {
+				// A central version: it completes PackageReference entries
+				// elsewhere and is not a dependency of the props file.
+				if v := nugetVersionRe.FindStringSubmatch(line); v != nil {
+					if r.central == nil {
+						r.central = map[string]string{}
+					}
+					if name := Normalize("nuget", m[2]); r.central[name] == "" {
+						r.central[name] = v[1]
+					}
+				}
+				continue
+			}
 			d := Dependency{Ecosystem: "nuget", File: rel, Line: n, Section: "dependencies", Text: m[0]}
 			if m[1] == "ProjectReference" {
 				d.Name = Normalize("nuget", strings.ReplaceAll(m[2], `\`, "/"))
@@ -85,15 +98,7 @@ func pathExt(p string) string {
 
 // fillCentralNuGetVersions gives PackageReference entries without a Version
 // the version centrally managed by a Directory.Packages.props PackageVersion.
-func fillCentralNuGetVersions(ds []Dependency) {
-	central := map[string]string{}
-	for _, d := range ds {
-		if d.Ecosystem == "nuget" && d.Version != "" && base(d.File) == "Directory.Packages.props" {
-			if _, ok := central[d.Name]; !ok {
-				central[d.Name] = d.Version
-			}
-		}
-	}
+func fillCentralNuGetVersions(ds []Dependency, central map[string]string) {
 	for i := range ds {
 		d := &ds[i]
 		if d.Ecosystem == "nuget" && !d.Internal && d.Version == "" {

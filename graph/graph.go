@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -426,6 +427,11 @@ func verifyAssertionAtCreation(filePath, assertionKind, assertion string) creati
 		return creationVerifyResult{status: "unverified", reason: "no assertion to verify"}
 	}
 
+	// Evidence paths are repository-relative; the project root, not the
+	// process cwd, says which tree they are in (a fleet build reads a worktree).
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(ProjectRoot(), filePath)
+	}
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		// File not readable — can't verify, but don't reject

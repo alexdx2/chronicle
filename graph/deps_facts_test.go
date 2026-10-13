@@ -1,10 +1,13 @@
 package graph
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/deps"
+	"github.com/alexdx2/chronicle-core/paths"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -221,5 +224,204 @@ func TestWriteDepsExtractions_RerunSupersedesWhatManifestNoLongerSays(t *testing
 	}
 	if edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON", Active: &active}); len(edges) != 0 {
 		t.Errorf("active edges after manifest removal: %+v", edges)
+	}
+}
+
+// A Go module path is one identity: its host must not collapse several
+// modules into one node.
+func TestWriteDepsExtractions_GoModulesStayDistinct(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{Depends: []deps.Dependency{
+		{Name: "github.com/segmentio/kafka-go", Version: "v0.4.47", Section: "dependencies", Ecosystem: "go", File: "svc/go.mod", Line: 5, Text: "github.com/segmentio/kafka-go v0.4.47"},
+		{Name: "github.com/nats-io/nats.go", Version: "v1.0.0", Section: "dependencies", Ecosystem: "go", File: "svc/go.mod", Line: 6, Text: "github.com/nats-io/nats.go v1.0.0"},
+		{Name: "github.com/redis/go-redis", Version: "v9.0.0", Section: "dependencies", Ecosystem: "go", File: "svc/go.mod", Line: 7, Text: "github.com/redis/go-redis v9.0.0"},
+	}}
+	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	targets := map[string]bool{}
+	for _, e := range edges {
+		targets[e.ToNodeKey] = true
+	}
+	// (golang.org/x/* is infrastructure for go since A7, so it would not
+	// produce a node at all; three architectural modules stand in.)
+	if len(targets) != 3 {
+		t.Fatalf("want three distinct to-nodes, got %v", targets)
+	}
+	for _, name := range []string{"github.com/segmentio/kafka-go", "github.com/nats-io/nats.go", "github.com/redis/go-redis"} {
+		if !targets[typedNodeKey("testapp", name, "")] {
+			t.Fatalf("node for %s missing: %v", name, targets)
+		}
+	}
+}
+
+// A fleet build reads a worktree that is not the process cwd: the evidence of
+// a manifest fact is checked against the file under the project root.
+func TestWriteDepsExtractions_VerifiesAgainstProjectRoot(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	root := t.TempDir()
+	rel := "api/Api.csproj"
+	if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <PackageId>Acme.Api</PackageId>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageReference Include=\"Confluent.Kafka\" Version=\"2.3.0\" />\n  </ItemGroup>\n</Project>\n"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := deps.Scan(root, []string{rel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := paths.Root()
+	paths.SetProjectRoot(root)
+	t.Cleanup(func() { paths.SetProjectRoot(prev) })
+
+	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	edges, _ := st.ListEdges(store.EdgeFilter{})
+	seen := 0
+	for _, e := range edges {
+		if e.EdgeType != "DEPENDS_ON" && e.EdgeType != "PUBLISHES" {
+			continue
+		}
+		ev, _ := st.ListEvidenceByEdge(e.EdgeID)
+		if len(ev) == 0 {
+			t.Fatalf("%s has no evidence", e.EdgeKey)
+		}
+		for _, x := range ev {
+			seen++
+			if x.AssertionKind != "manifest_line" || x.VerificationStatus != "verified" {
+				t.Errorf("%s evidence: kind=%s status=%s (%s)", e.EdgeKey, x.AssertionKind, x.VerificationStatus, x.VerificationReason)
+			}
+		}
+	}
+	if seen < 2 {
+		t.Fatalf("expected evidence for a dependency and a publication, saw %d", seen)
+	}
+}
+
+// The deterministic deps pass is a structural asserter, verified or not.
+func TestDepsExtractorIsStructuralTier(t *testing.T) {
+	row := store.EvidenceRow{EvidencePolarity: "positive", EvidenceStatus: "valid", SourceKind: "file",
+		ExtractorID: DepsExtractorID, Confidence: 1.0, VerificationStatus: "unverified"}
+	structural := ConfidenceCap([]store.EvidenceRow{{EvidencePolarity: "positive", EvidenceStatus: "valid",
+		SourceKind: "file", ExtractorID: "chronicle-ast", Confidence: 1.0}})
+	if got := ConfidenceCap([]store.EvidenceRow{row}); got != structural {
+		t.Fatalf("deps cap = %v, want the structural tier %v", got, structural)
+	}
+
+	// End to end: the manifest is not readable (so the row stays unverified)
+	// and the derived DEPENDS_ON edge still carries the structural trust.
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{Depends: []deps.Dependency{
+		{Name: "@acme/ui", Version: "1.0.0", Section: "dependencies", Ecosystem: "npm", File: "gone/package.json", Line: 3, Text: `"@acme/ui"`},
+	}}
+	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	if len(edges) != 1 {
+		t.Fatalf("edges = %+v", edges)
+	}
+	if edges[0].Confidence != structural {
+		t.Errorf("edge confidence = %v, want %v", edges[0].Confidence, structural)
+	}
+}
+
+// An npm workspace reference names the sibling by its package name; only
+// NuGet project references are known by a file stem.
+func TestWriteDepsExtractions_NpmWorkspaceReferenceResolvesToSibling(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{
+		Publishes: []deps.Package{{Name: "@acme/ui", Ecosystem: "npm", File: "ui/package.json", Line: 2, Text: `"name"`}},
+		Depends: []deps.Dependency{
+			{Name: "@acme/ui", Version: "workspace:*", Section: "dependencies", Ecosystem: "npm", File: "web/package.json", Line: 5, Internal: true, Text: `"@acme/ui": "workspace:*"`},
+		},
+	}
+	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	owner := typedNodeKeyFromFile("testapp", "ui/package.json", "file")
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	if len(edges) != 1 || edges[0].ToNodeKey != owner {
+		t.Fatalf("workspace dependency should land on %s, edges = %+v", owner, edges)
+	}
+	nodes, _ := st.ListNodes(store.NodeFilter{Domain: "testapp"})
+	for _, n := range nodes {
+		if strings.Contains(n.NodeKey, ":provider:") {
+			t.Errorf("twin stub node %s", n.NodeKey)
+		}
+	}
+}
+
+// A ProjectReference to a sibling that publishes nothing (IsPackable=false)
+// still lands on that sibling's own node, not on a provider stub.
+func TestWriteDepsExtractions_ProjectReferenceToUnpackableSibling(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{
+		Depends: []deps.Dependency{
+			{Name: "newtonsoft.json", Version: "13.0.1", Section: "dependencies", Ecosystem: "nuget", File: "Shared/Shared.csproj", Line: 4, Text: `PackageReference Include="Newtonsoft.Json"`},
+			{Name: "../shared/shared.csproj", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 7, Internal: true, Text: `ProjectReference Include="../Shared/Shared.csproj"`},
+		},
+	}
+	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	sibling := typedNodeKeyFromFile("testapp", "Shared/Shared.csproj", "file")
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	var found bool
+	for _, e := range edges {
+		if strings.HasPrefix(e.FromNodeKey, typedNodeKeyFromFile("testapp", "Api/Api.csproj", "file")) && e.ToNodeKey == sibling {
+			found = true
+		}
+		if strings.Contains(e.ToNodeKey, "shared-csproj") || strings.Contains(e.ToNodeKey, ":provider:testapp:..") {
+			t.Errorf("stub target %s", e.ToNodeKey)
+		}
+	}
+	if !found {
+		t.Fatalf("Api -> %s edge missing: %+v", sibling, edges)
+	}
+}
+
+func TestClassifyDependencyIn_GoAndPythonInfrastructure(t *testing.T) {
+	for _, n := range []string{"golang.org/x/sys", "golang.org/x/net", "github.com/stretchr/testify", "github.com/google/go-cmp", "go.uber.org/mock"} {
+		if ClassifyDependencyIn("go", n) != DepInfrastructure || ShouldTrackDependencyIn("go", n) {
+			t.Errorf("go %s should be infrastructure", n)
+		}
+	}
+	for _, n := range []string{"pytest", "mypy", "black", "ruff", "flake8", "setuptools", "wheel", "pip"} {
+		if ClassifyDependencyIn("python", n) != DepInfrastructure || ShouldTrackDependencyIn("python", n) {
+			t.Errorf("python %s should be infrastructure", n)
+		}
+	}
+	for _, c := range [][2]string{{"go", "github.com/segmentio/kafka-go"}, {"python", "fastapi"}, {"python", "blackboxlib"}} {
+		if !ShouldTrackDependencyIn(c[0], c[1]) {
+			t.Errorf("%s %s must be tracked", c[0], c[1])
+		}
+	}
+}
+
+// A Go "// indirect" requirement is transitive: like devDependencies it is
+// dropped unless the domain opts in with include_dev_deps.
+func TestWriteDepsExtractions_GoIndirectFollowsIncludeDevDeps(t *testing.T) {
+	rep := deps.Report{Depends: []deps.Dependency{
+		{Name: "github.com/segmentio/kafka-go", Version: "v0.4.47", Section: "dependencies", Ecosystem: "go", File: "svc/go.mod", Line: 5, Text: "github.com/segmentio/kafka-go v0.4.47"},
+		{Name: "github.com/nats-io/nats.go", Version: "v1.0.0", Section: "indirect", Ecosystem: "go", File: "svc/go.mod", Line: 6, Text: "github.com/nats-io/nats.go v1.0.0"},
+	}}
+	count := func(include bool) int {
+		g, st, rev := setupTestGraph(t)
+		if _, err := g.WriteDepsExtractionsOpts("testapp", rev, rep, DepsOptions{IncludeDevDeps: include}); err != nil {
+			t.Fatal(err)
+		}
+		edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+		return len(edges)
+	}
+	if n := count(false); n != 1 {
+		t.Errorf("without include_dev_deps: %d edges, want 1 (the direct one)", n)
+	}
+	if n := count(true); n != 2 {
+		t.Errorf("with include_dev_deps: %d edges, want 2", n)
 	}
 }

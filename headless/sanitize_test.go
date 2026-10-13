@@ -37,10 +37,21 @@ func TestSanitizeFacts(t *testing.T) {
 		t.Errorf("the rule is for JS/TS only (python DI targets are functions), dropped %d", d)
 	}
 
+	// The deps pass reads these manifests: its dependency facts are the only
+	// ones; the model's declares_service stays.
 	for _, p := range []string{"package.json", "svc/go.mod", "Api/Api.csproj", "requirements-dev.txt", "a/pom.xml"} {
-		if g, d := sanitizeFacts(p, nil, json.RawMessage(`[{"kind":"declares_service","to":"x"},{"kind":"dependency","to":"y"}]`)); d != 0 || !strings.Contains(string(g), "declares_service") {
-			t.Errorf("%s is a manifest, nothing may be dropped (dropped %d)", p, d)
+		g, d := sanitizeFacts(p, nil, json.RawMessage(`[{"kind":"declares_service","to":"x"},{"kind":"dependency","to":"y"},{"kind":"publishes_package","to":"z"}]`))
+		if d != 2 || !strings.Contains(string(g), "declares_service") || strings.Contains(string(g), "dependency") || strings.Contains(string(g), "publishes_package") {
+			t.Errorf("%s: deps pass owns dependency and publishes_package, dropped %d: %s", p, d, g)
 		}
+	}
+	// A manifest the pass does not read keeps the model's dependency facts.
+	if g, d := sanitizeFacts("Cargo.toml", nil, json.RawMessage(`[{"kind":"declares_service","to":"x"},{"kind":"dependency","to":"y"}]`)); d != 0 || !strings.Contains(string(g), "dependency") {
+		t.Errorf("Cargo.toml is not read by the deps pass, dropped %d: %s", d, g)
+	}
+	// A source file may emit neither (today's rule).
+	if g, d := sanitizeFacts("src/x.ts", nil, json.RawMessage(`[{"kind":"dependency","to":"y"}]`)); d != 1 || strings.Contains(string(g), "dependency") {
+		t.Errorf("source file dependency must be dropped, dropped %d: %s", d, g)
 	}
 
 	same := json.RawMessage(`[ {"kind":"model","to":"M"} ]`)
