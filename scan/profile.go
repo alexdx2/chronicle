@@ -179,6 +179,8 @@ const (
 // then repeated dependencies are collapsed to the first "file:line text" of
 // each (ecosystem, name), and only then are dependency lines dropped from the
 // end. It returns the number of dependency lines dropped; a caller must say so.
+// With window == 0 (no hard limit) only the inventory samples shrink (5 -> 2
+// -> 0) and every dependency line is kept: dropped is always 0.
 func BuildProfilePrompt(inv *Inventory, rep deps.Report, seed SeedResult, catalog []prompts.PackMeta, window int) (llm.Request, int) {
 	budget := profileDefaultBudget
 	if window > 0 {
@@ -238,6 +240,16 @@ func BuildProfilePrompt(inv *Inventory, rep deps.Report, seed SeedResult, catalo
 		return llm.Request{System: profilePrompt, User: user, MaxTokens: profileMaxTokens}
 	}
 
+	if window <= 0 {
+		// No hard window: the 60000-char figure is only a soft target for the
+		// inventory samples. A dependency line is never collapsed or dropped.
+		for _, n := range []int{5, 2} {
+			if u := render(all, n); fits(u) {
+				return req(u), 0
+			}
+		}
+		return req(render(all, 0)), 0
+	}
 	for _, lines := range [][]string{all, deduped} {
 		for _, n := range []int{5, 2, 0} {
 			if u := render(lines, n); fits(u) {

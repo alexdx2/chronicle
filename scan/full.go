@@ -306,7 +306,7 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 
 // writeDeps stores the dependency extractions of the manifests this domain
 // owns, on the revision of head (claimed the way the headless run claims it,
-// so the extraction that follows joins the same row).
+// so the extraction that preceded it joins the same row).
 func (r *fullRun) writeDeps(d manifest.DomainEntry, multi bool) error {
 	if r.o.Deps == nil {
 		return nil

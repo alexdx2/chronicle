@@ -288,6 +288,29 @@ func TestBuildProfilePrompt_SmallWindowDeduplicatesDependencies(t *testing.T) {
 	}
 }
 
+// Without a window nothing but inventory samples may shrink: 1000 distinct
+// dependency lines (far over the soft 60000-char target) are all kept.
+func TestBuildProfilePrompt_NoWindowNeverDropsDependencyLines(t *testing.T) {
+	inv := &Inventory{ByExt: map[string]int{".cs": 3}, TopDirs: map[string]int{"src": 3}}
+	var rep deps.Report
+	for i := 0; i < 1000; i++ {
+		rep.Depends = append(rep.Depends, deps.Dependency{Ecosystem: "nuget", Name: fmt.Sprintf("dep-%04d", i), Version: "1.0.0", File: "svc/Svc.csproj", Line: i + 1, Text: strings.Repeat("x", 80)})
+	}
+	req, dropped := BuildProfilePrompt(inv, rep, SeedResult{}, nil, 0)
+	if dropped != 0 {
+		t.Fatalf("dropped = %d", dropped)
+	}
+	if got := strings.Count(req.User, "nuget dep-"); got != 1000 {
+		t.Fatalf("kept %d of 1000 lines", got)
+	}
+	// Also a repeated dependency is not collapsed without a window.
+	rep.Depends = append(rep.Depends, deps.Dependency{Ecosystem: "nuget", Name: "dep-0000", Version: "2.0.0", File: "other/Other.csproj", Line: 1})
+	req, _ = BuildProfilePrompt(inv, rep, SeedResult{}, nil, 0)
+	if got := strings.Count(req.User, "nuget dep-0000 "); got != 2 {
+		t.Fatalf("repeated dependency kept %d times, want 2", got)
+	}
+}
+
 func TestBuildProfilePrompt_TinyWindowDropsDependencyLinesAndSaysHowMany(t *testing.T) {
 	inv := &Inventory{ByExt: map[string]int{".cs": 3}, TopDirs: map[string]int{"src": 3}}
 	rep := repeatedDeps()
