@@ -505,7 +505,7 @@ func evidenceAddTool() mcp.Tool {
 		mcp.WithString("polarity", mcp.Description("Evidence polarity: positive (default) or negative. Use negative to explicitly record that a relationship was confirmed removed.")),
 		mcp.WithNumber("revision_id", mcp.Description("Revision ID for this evidence")),
 		mcp.WithString("assertion", mcp.Description("JSON assertion object describing what was observed (e.g. {\"package\": \"@foo/bar\", \"sections\": [\"dependencies\"]})")),
-		mcp.WithString("assertion_kind", mcp.Description("Assertion kind: manifest_dependency, import_specifier, call_expression, decorator, yaml_key_exists, prisma_model, text_contains")),
+		mcp.WithString("assertion_kind", mcp.Description("Assertion kind: manifest_dependency, import_specifier, call_expression, decorator, yaml_key_exists, prisma_model, text_contains, manifest_line (a line of a dependency manifest, written by the deterministic deps pass)")),
 	)
 }
 

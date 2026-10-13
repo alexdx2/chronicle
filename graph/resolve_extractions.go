@@ -35,6 +35,8 @@ type Fact struct {
 	Note       string   `json:"note,omitempty"`       // agent uncertainty/note
 	Reason     string   `json:"reason,omitempty"`     // reason for relationship (e.g. parent container justification)
 	Section    string   `json:"section,omitempty"`    // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
+	Version    string   `json:"version,omitempty"`    // dependency version as written in the manifest
+	Ecosystem  string   `json:"ecosystem,omitempty"`  // npm | nuget | go | python | maven | gradle
 	// Flow-specific fields
 	FlowName string   `json:"flow_name,omitempty"` // use case name (e.g. "Tom attacks Jerry")
 	Trigger  string   `json:"trigger,omitempty"`   // what triggers this flow (endpoint, event, cron)

@@ -90,5 +90,6 @@ func DefaultRegistry() *Registry {
 	r.Register(&ComplexityVerifier{})
 	r.Register(&ComplexitySmellsVerifier{})
 	r.Register(&TextVerifier{})
+	r.Register(ManifestLineVerifier{})
 	return r
 }

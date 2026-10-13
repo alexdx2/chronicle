@@ -74,7 +74,7 @@ func ExtractionGuide(technology string) string {
 			"evidence_with_assertions": map[string]string{
 				"why":    "Evidence without assertions is just a line number. When the file changes, line numbers break. Assertions describe WHAT was observed and can be mechanically verified.",
 				"how":    "When adding evidence, include assertion_kind and assertion JSON. Example: assertion_kind='go_module_require', assertion='{\"module\": \"github.com/foo/bar\"}'",
-				"kinds":  "manifest_dependency (package.json/go.mod deps), import_specifier (import statements), call_expression (method calls), decorator (class/method decorators), yaml_key_exists (config keys), prisma_model (schema models), text_contains (fallback substring match)",
+				"kinds":  "manifest_dependency (package.json/go.mod deps), import_specifier (import statements), call_expression (method calls), decorator (class/method decorators), yaml_key_exists (config keys), prisma_model (schema models), text_contains (fallback substring match), manifest_line (dependency manifest line, deterministic deps pass)",
 			},
 		},
 
