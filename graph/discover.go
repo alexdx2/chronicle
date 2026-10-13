@@ -144,8 +144,12 @@ func (g *Graph) DiscoverFilesOpts(rootDir, domainKey string, revisionID int64, m
 		filtered = exact
 	}
 
-	// Boundary-first ordering: package/build/deployment/schema files before source
+	// Layer order (contracts, structure, integrations, tests), boundary priority within a layer
 	sort.SliceStable(filtered, func(i, j int) bool {
+		li, lj := LayerOf(filtered[i]), LayerOf(filtered[j])
+		if li != lj {
+			return li < lj
+		}
 		return boundaryPriority(filtered[i]) < boundaryPriority(filtered[j])
 	})
 
