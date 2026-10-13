@@ -44,12 +44,19 @@ func isBinaryHead(b []byte) bool {
 	return bytes.IndexByte(b, 0) >= 0
 }
 
+// defaultMaxFileBytes is the size limit used when maxBytes <= 0; it matches
+// the cap headless applies to files sent to a model.
+const defaultMaxFileBytes int64 = 262144
+
 // BuildInventory lists the files git tracks in root and classifies them.
-// Symlinks and other non-regular entries are never read and land in Skipped.
+// A maxBytes <= 0 means defaultMaxFileBytes (256 KiB). Symlinks and other non-regular entries are never read and land in Skipped.
 func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
 	out, err := gitutil.RunRaw(root, "ls-files", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("inventory: git ls-files: %w", err)
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxFileBytes
 	}
 	inv := &Inventory{
 		ByExt:    map[string]int{},

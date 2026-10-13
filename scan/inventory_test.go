@@ -77,3 +77,20 @@ func TestBuildInventory_SymlinkSkippedAndInfraNames(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildInventory_NonPositiveMaxBytesIsDefault(t *testing.T) {
+	root, _ := newCodeRepoT(t, map[string]string{
+		"small.txt": "0123456789",
+		"big.txt":   strings.Repeat("x", 300000),
+	})
+	inv, err := BuildInventory(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := inv.Paths(); len(p) != 1 || p[0] != "small.txt" {
+		t.Fatalf("paths = %v", p)
+	}
+	if s := inv.Summary(2); !strings.Contains(s, "skipped: 1 (binary or over 262144 bytes)") {
+		t.Fatalf("summary:\n%s", s)
+	}
+}
