@@ -1,0 +1,195 @@
+package scan
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/alexdx2/chronicle-core/deps"
+	"github.com/alexdx2/chronicle-core/gitutil"
+)
+
+// InvFile is one tracked file of the repository.
+type InvFile struct {
+	Path   string
+	Size   int64
+	Binary bool
+}
+
+// Inventory is the deterministic first look at a repository: what is in it,
+// before any model reads anything.
+type Inventory struct {
+	Files     []InvFile
+	ByExt     map[string]int // ".cs" -> n (files without extension under "")
+	TopDirs   map[string]int // "src" -> n ("." for root files)
+	Manifests []string       // deps.IsManifest
+	Infra     []string       // Dockerfile, *.tf, cdk.json, serverless.yml, ...
+	Skipped   []string       // binary, over maxBytes or not regular: never sent to a model
+
+	maxBytes int64
+	skipped  map[string]bool
+}
+
+// isBinaryHead reports whether the leading bytes of a file mark it binary
+// (a NUL within the first 8 KiB).
+func isBinaryHead(b []byte) bool {
+	if len(b) > 8192 {
+		b = b[:8192]
+	}
+	return bytes.IndexByte(b, 0) >= 0
+}
+
+// BuildInventory lists the files git tracks in root and classifies them.
+// Symlinks and other non-regular entries are never read and land in Skipped.
+func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
+	out, err := gitutil.RunRaw(root, "ls-files", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("inventory: git ls-files: %w", err)
+	}
+	inv := &Inventory{
+		ByExt:    map[string]int{},
+		TopDirs:  map[string]int{},
+		maxBytes: maxBytes,
+		skipped:  map[string]bool{},
+	}
+	for _, p := range strings.Split(out, "\x00") {
+		if p == "" {
+			continue
+		}
+		f := InvFile{Path: p}
+		skip := false
+		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
+		switch {
+		case err != nil:
+			// tracked but absent from the working copy (deleted): nothing to read.
+			skip = true
+		case !fi.Mode().IsRegular():
+			skip = true
+		default:
+			f.Size = fi.Size()
+			if f.Size > maxBytes {
+				skip = true
+			} else if head, err := readHead(filepath.Join(root, filepath.FromSlash(p))); err != nil {
+				return nil, fmt.Errorf("inventory: read %s: %w", p, err)
+			} else if isBinaryHead(head) {
+				f.Binary = true
+				skip = true
+			}
+		}
+		inv.Files = append(inv.Files, f)
+		inv.ByExt[strings.ToLower(path.Ext(p))]++
+		top := "."
+		if i := strings.IndexByte(p, '/'); i >= 0 {
+			top = p[:i]
+		}
+		inv.TopDirs[top]++
+		if deps.IsManifest(p) {
+			inv.Manifests = append(inv.Manifests, p)
+		}
+		if isInfra(p) {
+			inv.Infra = append(inv.Infra, p)
+		}
+		if skip {
+			inv.Skipped = append(inv.Skipped, p)
+			inv.skipped[p] = true
+		}
+	}
+	return inv, nil
+}
+
+func readHead(p string) ([]byte, error) {
+	fh, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer fh.Close()
+	buf := make([]byte, 8192)
+	n, err := io.ReadFull(fh, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
+func isInfra(p string) bool {
+	base := path.Base(p)
+	switch base {
+	case "Dockerfile", "cdk.json", "serverless.yml", "serverless.yaml",
+		"template.yml", "template.yaml", ".gitlab-ci.yml", "Chart.yaml":
+		return true
+	}
+	if strings.HasPrefix(base, "Dockerfile.") || strings.ToLower(path.Ext(p)) == ".tf" {
+		return true
+	}
+	for _, seg := range strings.Split(path.Dir(p), "/") {
+		if seg == "helm" {
+			return true
+		}
+	}
+	return false
+}
+
+// Paths returns the non-skipped tracked files in git order.
+func (inv *Inventory) Paths() []string {
+	var out []string
+	for _, f := range inv.Files {
+		if !inv.skipped[f.Path] {
+			out = append(out, f.Path)
+		}
+	}
+	return out
+}
+
+// Summary renders the prompt section: counts by extension (with up to n sample
+// paths each), top directories, manifests, infra and the skipped count.
+func (inv *Inventory) Summary(n int) string {
+	var b strings.Builder
+	samples := map[string][]string{}
+	for _, p := range inv.Paths() {
+		e := strings.ToLower(path.Ext(p))
+		if len(samples[e]) < n {
+			samples[e] = append(samples[e], p)
+		}
+	}
+	b.WriteString("extensions:\n")
+	for _, k := range sortedByCount(inv.ByExt) {
+		fmt.Fprintf(&b, "%s: %d\n", k, inv.ByExt[k])
+		for _, p := range samples[k] {
+			fmt.Fprintf(&b, "  %s\n", p)
+		}
+	}
+	b.WriteString("top dirs:\n")
+	for _, k := range sortedByCount(inv.TopDirs) {
+		fmt.Fprintf(&b, "%s: %d\n", k, inv.TopDirs[k])
+	}
+	b.WriteString("manifests:\n")
+	for _, p := range inv.Manifests {
+		fmt.Fprintf(&b, "%s\n", p)
+	}
+	b.WriteString("infra:\n")
+	for _, p := range inv.Infra {
+		fmt.Fprintf(&b, "%s\n", p)
+	}
+	fmt.Fprintf(&b, "skipped: %d (binary or over %d bytes)\n", len(inv.Skipped), inv.maxBytes)
+	return b.String()
+}
+
+// sortedByCount orders keys by count descending, then by name.
+func sortedByCount(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if m[keys[i]] != m[keys[j]] {
+			return m[keys[i]] > m[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
