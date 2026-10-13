@@ -170,10 +170,32 @@ func checkCoverage(domainKey string, rep *FullReport) LayerCheck {
 	if sent == 0 {
 		return na
 	}
-	failed := len(rep.Failed)
+	failed := failedFor(domainKey, rep.Failed)
 	d := fmt.Sprintf("%d of %d files failed", failed, sent)
 	if failed*10 >= sent {
 		return LayerCheck{Layer: "coverage", Status: CheckFailed, Detail: d}
 	}
 	return LayerCheck{Layer: "coverage", Status: CheckOK, Detail: d}
+}
+
+// failedFor counts the failures of one domain; reports whose failures carry no
+// domain (older ones) count as a whole.
+func failedFor(domainKey string, failed []FailedFile) int {
+	tagged := false
+	for _, f := range failed {
+		if f.Domain != "" {
+			tagged = true
+			break
+		}
+	}
+	if !tagged {
+		return len(failed)
+	}
+	n := 0
+	for _, f := range failed {
+		if f.Domain == domainKey {
+			n++
+		}
+	}
+	return n
 }

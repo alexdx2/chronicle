@@ -19,7 +19,7 @@ func TestLayerOf(t *testing.T) {
 		"src/clients/billing.client.ts": LayerIntegrations, "src/kafka/OrderConsumer.cs": LayerIntegrations, "src/Messaging/Producer.cs": LayerIntegrations,
 		"src/integrations/stripe.ts": LayerIntegrations, "src/sdk/aws.ts": LayerIntegrations,
 		"tests/OrderTests.cs": LayerTests, "src/orders/orders.spec.ts": LayerTests, "pkg/x_test.go": LayerTests, "__tests__/a.ts": LayerTests,
-		"src/util/strings.ts": LayerStructure, "tests/clients/x.ts": LayerTests, "Dockerfile": LayerContracts,
+		"src/util/strings.ts": LayerStructure, "tests/clients/x.ts": LayerTests, "services/gateway/src/orders.controller.ts": LayerStructure, "src/clientele/list.ts": LayerStructure, "Dockerfile": LayerContracts,
 	}
 	for p, want := range cases {
 		if got := LayerOf(p); got != want {

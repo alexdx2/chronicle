@@ -138,3 +138,15 @@ func TestLayerChecks_Coverage(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+func TestLayerChecks_CoverageCountsOnlyOwnDomainFailures(t *testing.T) {
+	g, _ := checksGraph(t)
+	rep := &FullReport{Domains: []DomainReport{{Domain: "a", Sent: 15}}, Failed: []FailedFile{{Path: "x", Domain: "a"}, {Path: "y", Domain: "b"}}}
+	if c := byLayer(LayerChecks(g, "a", Profile{}, rep, nil))["coverage"]; c.Status != "ok" {
+		t.Fatalf("scoped 1/15 must be ok: %+v", c)
+	}
+	rep.Failed = []FailedFile{{Path: "x"}, {Path: "y"}}
+	if c := byLayer(LayerChecks(g, "a", Profile{}, rep, nil))["coverage"]; c.Status != "failed" {
+		t.Fatalf("untagged 2/15 must be failed: %+v", c)
+	}
+}

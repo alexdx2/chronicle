@@ -58,8 +58,9 @@ type Plan struct {
 
 // FailedFile is a file the scan could not finish, or deliberately passed over.
 type FailedFile struct {
-	Path  string `json:"path"`
-	Error string `json:"error"`
+	Path   string `json:"path"`
+	Error  string `json:"error"`
+	Domain string `json:"domain,omitempty"`
 }
 
 // DomainReport is what one domain's scan did.
@@ -413,9 +414,9 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 		for _, f := range res.Files {
 			switch {
 			case f.Status == "failed" || f.Status == "provider_error":
-				r.rep.Failed = append(r.rep.Failed, FailedFile{Path: f.Path, Error: f.Error})
+				r.rep.Failed = append(r.rep.Failed, FailedFile{Path: f.Path, Error: f.Error, Domain: d.Key})
 			case f.Status == "skipped" && f.Error != "":
-				r.rep.Skipped = append(r.rep.Skipped, FailedFile{Path: f.Path, Error: f.Error})
+				r.rep.Skipped = append(r.rep.Skipped, FailedFile{Path: f.Path, Error: f.Error, Domain: d.Key})
 			case f.Status == "cancelled", f.Status == "skipped":
 				// not done, not an error: the next run picks it up
 			default:

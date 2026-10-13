@@ -2,7 +2,6 @@ package graph
 
 import (
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/deps"
@@ -18,12 +17,12 @@ const (
 )
 
 var (
-	testSegments    = map[string]bool{"test": true, "tests": true, "__tests__": true, "spec": true, "specs": true}
-	testNameParts   = []string{".spec.", ".test.", "_test.go", "tests.cs", "test.cs"}
-	contractExts    = map[string]bool{".prisma": true, ".graphql": true, ".gql": true, ".proto": true, ".avsc": true, ".avro": true}
-	integrationLong = []string{"client", "consumer", "producer", "publisher", "subscriber", "messaging", "kafka", "eventbridge", "integration", "adapter", "gateway", "webhook"}
-	integrationTok  = map[string]bool{"sqs": true, "sns": true, "sdk": true}
-	nonAlnum        = regexp.MustCompile(`[^a-z0-9]+`)
+	testSegments        = map[string]bool{"test": true, "tests": true, "__tests__": true, "spec": true, "specs": true}
+	testNameParts       = []string{".spec.", ".test.", "_test.go", "tests.cs", "test.cs"}
+	contractExts        = map[string]bool{".prisma": true, ".graphql": true, ".gql": true, ".proto": true, ".avsc": true, ".avro": true}
+	integrationSegments = map[string]bool{"clients": true, "consumers": true, "producers": true, "publishers": true, "subscribers": true,
+		"messaging": true, "kafka": true, "sqs": true, "sns": true, "eventbridge": true, "integrations": true, "sdk": true, "adapters": true, "webhooks": true}
+	integrationBase = []string{"client", "consumer", "producer", "publisher", "subscriber", "adapter", "gateway", "webhook", "integration"}
 )
 
 // LayerOf says which extraction layer a repository path belongs to. Tests are
@@ -46,13 +45,14 @@ func LayerOf(path string) int {
 	if isContract(p, low, base) {
 		return LayerContracts
 	}
-	for _, w := range integrationLong {
-		if strings.Contains(low, w) {
+	for _, seg := range strings.Split(low, "/") {
+		if integrationSegments[seg] {
 			return LayerIntegrations
 		}
 	}
-	for _, tok := range nonAlnum.Split(low, -1) {
-		if integrationTok[tok] {
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	for _, w := range integrationBase {
+		if strings.Contains(stem, w) {
 			return LayerIntegrations
 		}
 	}
