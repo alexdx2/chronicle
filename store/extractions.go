@@ -110,7 +110,7 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 	err := s.db.QueryRow(`
 		SELECT extraction_id, facts_json FROM scan_extractions
 		WHERE domain_key = ? AND file_path = ?
-		  AND COALESCE(extraction_role,'single') NOT IN ('flow', '`+StructuralExtractionRole+`')
+		  AND COALESCE(extraction_role,'single') NOT IN ('flow', '`+StructuralExtractionRole+`', '`+DepsExtractionRole+`')
 		ORDER BY extraction_id DESC LIMIT 1
 	`, domainKey, filePath).Scan(&existingID, &existingFacts)
 	if err == nil {
@@ -135,7 +135,7 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 			s.db.QueryRow(`
 				SELECT extraction_id FROM scan_extractions
 				WHERE domain_key = ? AND file_path = ? AND facts_json LIKE ?
-				  AND COALESCE(extraction_role,'single') NOT IN ('flow', '`+StructuralExtractionRole+`')
+				  AND COALESCE(extraction_role,'single') NOT IN ('flow', '`+StructuralExtractionRole+`', '`+DepsExtractionRole+`')
 				LIMIT 1
 			`, domainKey, filePath, "%\"kind\":\""+primaryKind+"\"%").Scan(&existingWithKind)
 			if existingWithKind > 0 {
@@ -155,6 +155,12 @@ func (s *Store) SaveExtractionWithOutcome(revisionID int64, domainKey, filePath,
 // file's structure could never change again.
 const StructuralExtractionRole = "structural"
 
+// DepsExtractionRole marks the standing rows of the deterministic dependency
+// pass: one row per manifest file, replaced on every run. Like the structural
+// phase's rows they belong to another writer than a scan and are excluded from
+// every scan-owned listing, dedup and resolve.
+const DepsExtractionRole = "deps"
+
 // StructuralOutcomeUnreadable marks a standing structural row whose file could
 // not be read at all, as against one the parser choked on.
 //
@@ -172,9 +178,6 @@ const StructuralOutcomeUnreadable = "unreadable"
 // outcome is written to metadata as structural_outcome; empty means the plain
 // reading of status.
 func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, status, fromType, factsJSON, errorMessage, outcome string) (int64, error) {
-	if factsJSON == "" {
-		factsJSON = "[]"
-	}
 	metadata := "{}"
 	if outcome != "" {
 		buf, err := json.Marshal(map[string]string{"structural_outcome": outcome})
@@ -183,12 +186,26 @@ func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, 
 		}
 		metadata = string(buf)
 	}
+	return s.saveStandingExtraction(revisionID, domainKey, filePath, StructuralExtractionRole, status, fromType, factsJSON, errorMessage, metadata)
+}
+
+// SaveStandingExtraction is the standing-row upsert for any role that keeps one
+// row per (domain, file): the previous answer is replaced and re-pointed at
+// revisionID. The structural phase and the deps pass both write through it.
+func (s *Store) SaveStandingExtraction(revisionID int64, domainKey, filePath, role, status, fromType, factsJSON, errorMessage string) (int64, error) {
+	return s.saveStandingExtraction(revisionID, domainKey, filePath, role, status, fromType, factsJSON, errorMessage, "{}")
+}
+
+func (s *Store) saveStandingExtraction(revisionID int64, domainKey, filePath, role, status, fromType, factsJSON, errorMessage, metadata string) (int64, error) {
+	if factsJSON == "" {
+		factsJSON = "[]"
+	}
 	var existingID int64
 	err := s.db.QueryRow(`
 		SELECT extraction_id FROM scan_extractions
 		WHERE domain_key = ? AND file_path = ? AND extraction_role = ?
 		ORDER BY extraction_id DESC LIMIT 1
-	`, domainKey, filePath, StructuralExtractionRole).Scan(&existingID)
+	`, domainKey, filePath, role).Scan(&existingID)
 	if err == nil {
 		// metadata is reset with the facts: the unresolved names recorded on
 		// the row describe the answer being replaced, not the new one.
@@ -198,16 +215,16 @@ func (s *Store) SaveStructuralExtraction(revisionID int64, domainKey, filePath, 
 			    error_message = ?, metadata = ?
 			WHERE extraction_id = ?`,
 			revisionID, status, fromType, factsJSON, nullableStr(errorMessage), metadata, existingID); uerr != nil {
-			return 0, fmt.Errorf("SaveStructuralExtraction: %w", uerr)
+			return 0, fmt.Errorf("SaveStandingExtraction %q: %w", role, uerr)
 		}
 		return existingID, nil
 	}
 	res, err := s.db.Exec(`
 		INSERT INTO scan_extractions (revision_id, domain_key, file_path, status, from_type, extraction_role, vote_index, facts_json, error_message, metadata)
 		VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-	`, revisionID, domainKey, filePath, status, fromType, StructuralExtractionRole, factsJSON, nullableStr(errorMessage), metadata)
+	`, revisionID, domainKey, filePath, status, fromType, role, factsJSON, nullableStr(errorMessage), metadata)
 	if err != nil {
-		return 0, fmt.Errorf("SaveStructuralExtraction: %w", err)
+		return 0, fmt.Errorf("SaveStandingExtraction %q: %w", role, err)
 	}
 	return res.LastInsertId()
 }
@@ -276,7 +293,7 @@ func (s *Store) ListScanExtractions(revisionID int64, domainKey string) ([]Extra
 	}
 	out := all[:0:0]
 	for _, e := range all {
-		if e.ExtractionRole == StructuralExtractionRole {
+		if e.ExtractionRole == StructuralExtractionRole || e.ExtractionRole == DepsExtractionRole {
 			continue
 		}
 		out = append(out, e)
@@ -394,7 +411,7 @@ func (s *Store) ListUnresolvedExtractionsByRole(revisionID int64, domainKey, rol
 		// standing row is another writer's, exactly as this caller's own rows
 		// are not the structural phase's — the exclusion has to run both ways
 		// or a scan resolves and closes work it did not do.
-		q += ` AND COALESCE(extraction_role,'single') != '` + StructuralExtractionRole + `'`
+		q += ` AND COALESCE(extraction_role,'single') NOT IN ('` + StructuralExtractionRole + `', '` + DepsExtractionRole + `')`
 	}
 	q += ` ORDER BY extraction_id`
 	rows, err := s.db.Query(q, args...)
@@ -467,7 +484,7 @@ func (s *Store) MarkExtractionsResolvedByRole(revisionID int64, domainKey, role 
 		q += ` AND COALESCE(extraction_role,'single') = ?`
 		args = append(args, role)
 	} else {
-		q += ` AND COALESCE(extraction_role,'single') != '` + StructuralExtractionRole + `'`
+		q += ` AND COALESCE(extraction_role,'single') NOT IN ('` + StructuralExtractionRole + `', '` + DepsExtractionRole + `')`
 	}
 	_, err := s.db.Exec(q, args...)
 	return err

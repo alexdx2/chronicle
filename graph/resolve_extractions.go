@@ -37,6 +37,8 @@ type Fact struct {
 	Section    string   `json:"section,omitempty"`    // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
 	Version    string   `json:"version,omitempty"`    // dependency version as written in the manifest
 	Ecosystem  string   `json:"ecosystem,omitempty"`  // npm | nuget | go | python | maven | gradle
+	Line       int      `json:"line,omitempty"`       // manifest line of a deps-pass fact (set only by WriteDepsExtractions)
+	Text       string   `json:"text,omitempty"`       // manifest text on that line, the manifest_line assertion's anchor
 	// Flow-specific fields
 	FlowName string   `json:"flow_name,omitempty"` // use case name (e.g. "Tom attacks Jerry")
 	Trigger  string   `json:"trigger,omitempty"`   // what triggers this flow (endpoint, event, cron)
@@ -962,8 +964,17 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 
 		// Filter: skip infrastructure and architectural deps
-		if !ShouldTrackDependency(fact.To) {
+		fromDeps := fact.Origin == depsOrigin
+		if fromDeps {
+			if !ShouldTrackDependencyIn(fact.Ecosystem, fact.To) {
+				return counts, nil, nil
+			}
+		} else if !ShouldTrackDependency(fact.To) {
 			return counts, nil, nil
+		}
+		depConfidence := 0.95
+		if fromDeps {
+			depConfidence = 1.0
 		}
 
 		dependencySource := "manifest"
@@ -973,6 +984,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 		// Pick assertion kind based on file type
 		assertionKind, assertion := buildDependencyAssertion(filePath, fact)
+		if fromDeps {
+			assertionKind, assertion = buildManifestLineAssertion(fact)
+		}
 
 		// Workspace-aware from-node: a manifest dependency edge originates at
 		// the OWNING package's service node — the declares_service node minted
@@ -1012,8 +1026,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// declares_service fact then updates it in place (same key, same
 		// layer/type) and attaches its file path and aliases.
 		var toNodeKey string
-		if svcKey, ok := g.domainOwnPackages[flattenName(fact.To)]; ok {
+		if svcKey, ok := g.domainOwnPackages[flattenName(depsOwnLookupName(fact))]; ok {
 			toNodeKey = svcKey
+		} else if fromDeps {
+			toNodeKey = packageNodeKey(domainKey, fact.Ecosystem, depsOwnLookupName(fact))
 		} else {
 			// Not ours: the SAME package node shape code imports produce
 			// (SQ-Contract 1) — one node per package whether it's reached
@@ -1027,7 +1043,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
 			FromNodeID: fromID, ToNodeID: toID,
 			EdgeType: "DEPENDS_ON", DerivationKind: "hard", Active: true,
-			LastSeenRevisionID: revisionID, Confidence: 0.95, Freshness: 1.0, TrustScore: 0.95,
+			LastSeenRevisionID: revisionID, Confidence: depConfidence, Freshness: 1.0, TrustScore: depConfidence,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 			DependencySource: dependencySource,
 		})
@@ -1038,10 +1054,13 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
 			ExtractorID: extractorID, ExtractorVersion: "1.0",
-			Confidence: 0.95, RevisionID: revisionID,
+			Confidence: depConfidence, RevisionID: revisionID,
 			AssertionKind: assertionKind, Assertion: assertion,
 		})
 		counts.evidence++
+
+	case "publishes_package":
+		counts = g.resolvePublishesPackage(domainKey, revisionID, filePath, fact, extractorID)
 
 	case "http_call":
 		// External HTTP call — create service edge + evidence
@@ -4551,6 +4570,7 @@ func (g *Graph) ownPackagesForDomain(domainKey string, allFiles []fileFacts) map
 			add(f.To, canonicalNodeKey("service:service:"+domainKey+":"+normalizePackageName(f.To)))
 		}
 	}
+	g.addPublishedPackages(domainKey, allFiles, add)
 	return own
 }
 

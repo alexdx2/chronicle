@@ -130,3 +130,47 @@ func ShouldTrackDependency(module string) bool {
 func IsArchitecturalDep(module string) bool {
 	return ClassifyDependency(module) == DepArchitectural
 }
+
+// nugetInfrastructurePrefixes are NuGet packages (lowercase) that every .NET
+// project carries and that say nothing about its architecture.
+var nugetInfrastructurePrefixes = []string{
+	"system.", "microsoft.extensions.", "microsoft.net.", "microsoft.aspnetcore.",
+	"microsoft.entityframeworkcore.tools", "xunit", "nunit", "coverlet.", "moq",
+	"fluentassertions", "swashbuckle.",
+}
+
+// jvmInfrastructurePrefixes are the same for Maven/Gradle coordinates.
+var jvmInfrastructurePrefixes = []string{
+	"org.junit", "org.mockito", "org.slf4j", "ch.qos.logback", "org.projectlombok",
+}
+
+// ClassifyDependencyIn is ClassifyDependency aware of the manifest's ecosystem.
+// Ecosystems without their own rules keep the legacy npm-shaped classifier.
+func ClassifyDependencyIn(ecosystem, name string) DependencyClass {
+	n := strings.ToLower(name)
+	var prefixes []string
+	switch ecosystem {
+	case "nuget":
+		prefixes = nugetInfrastructurePrefixes
+	case "maven", "gradle":
+		prefixes = jvmInfrastructurePrefixes
+	default:
+		return ClassifyDependency(name)
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(n, p) {
+			return DepInfrastructure
+		}
+	}
+	return DepArchitectural
+}
+
+// ShouldTrackDependencyIn is ShouldTrackDependency for a known ecosystem.
+func ShouldTrackDependencyIn(ecosystem, name string) bool {
+	switch ecosystem {
+	case "nuget", "maven", "gradle":
+	default:
+		return ShouldTrackDependency(name)
+	}
+	return ClassifyDependencyIn(ecosystem, name) != DepInfrastructure
+}

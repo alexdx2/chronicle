@@ -269,7 +269,7 @@ var allowedFactKinds = map[string]bool{
 	"decorator": true, "constructor_param": true,
 	"call": true, "member_call": true,
 	"flow": true, "delegates": true, "declares_service": true,
-	"parent": true,
+	"parent": true, "publishes_package": true,
 	// dependency: manifest dependency facts (Task 4, SQ-Contract 2 axis 1) —
 	// package.json dependencies/optionalDependencies/peerDependencies/
 	// devDependencies entries, carrying a `section` field. See fact_schema.md

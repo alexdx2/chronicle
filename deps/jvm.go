@@ -49,7 +49,7 @@ func parsePom(rel string, body []byte) (Report, error) {
 	}
 	if art := strings.TrimSpace(doc.ArtifactID); art != "" && group != "" {
 		r.Publishes = append(r.Publishes, Package{
-			Name: Normalize("maven", group+":"+art), Ecosystem: "maven", File: rel, Line: ownLine,
+			Name: Normalize("maven", group+":"+art), Ecosystem: "maven", File: rel, Line: ownLine, Text: "artifactId",
 		})
 	}
 	for i, d := range doc.Dependencies {
@@ -130,7 +130,7 @@ func parseGradle(root, rel string, body []byte) Report {
 	}
 	if group != "" {
 		r.Publishes = append(r.Publishes, Package{
-			Name: Normalize("maven", group+":"+gradleProjectName(root, rel, body)), Ecosystem: "maven", File: rel, Line: groupLine,
+			Name: Normalize("maven", group+":"+gradleProjectName(root, rel, body)), Ecosystem: "maven", File: rel, Line: groupLine, Text: "group",
 		})
 	}
 	return r

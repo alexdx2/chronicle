@@ -41,12 +41,8 @@ These are NOT optional. If the file matches a role below, you MUST check for the
 Files: package.json, go.mod, pyproject.toml, pom.xml, build.gradle, Cargo.toml
 CHECK: Does this file confirm a deployable service/application boundary?
 IF YES: emit `declares_service` with the package/application name.
-THEN (package.json only): for each entry in `dependencies`, `optionalDependencies`,
-and `peerDependencies` (and `devDependencies` only when the scan manifest sets
-`include_dev_deps`), emit `dependency` with `section` set to the section it
-came from. Skip obvious tooling — the resolver filters
-infrastructure/architectural deps too, so don't spend effort hand-excluding
-lodash-style utilities.
+Dependencies of package.json, csproj, go.mod, pyproject and pom are recorded by the
+deterministic deps pass; do not emit `dependency` facts from manifests.
 
 ## Schema / contract files
 Files: *.prisma, *.graphql, *.proto, *.avro, openapi.yaml
@@ -204,6 +200,8 @@ DO NOT emit declares_service from controllers, services, modules, or any source 
 DO NOT emit declares_service for shared libraries or packages without server entrypoints.
 
 ## Manifest dependency
+
+Emitted by the deps pass; agents emit it only for manifests the pass does not read.
 
 ```json
 {"kind":"dependency","to":"@okeep/ui","section":"dependencies"}

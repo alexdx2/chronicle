@@ -25,7 +25,7 @@ func (npm) parse(_, rel string, body []byte) (Report, error) {
 		if json.Unmarshal(raw, &name) == nil && name != "" {
 			r.Publishes = append(r.Publishes, Package{
 				Name: Normalize("npm", name), Ecosystem: "npm", File: rel,
-				Line: lineOf(body, strings.Index(text, `"name"`)),
+				Line: lineOf(body, strings.Index(text, `"name"`)), Text: `"name"`,
 			})
 		}
 	}

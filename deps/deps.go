@@ -22,6 +22,9 @@ type Package struct {
 	Ecosystem string `json:"ecosystem"`
 	File      string `json:"file"`
 	Line      int    `json:"line"`
+	// Text is a fragment that sits on Line of the manifest; the evidence for
+	// the publication is checked against it.
+	Text string `json:"text,omitempty"`
 }
 
 // Dependency is one dependency entry of a manifest. Text is the exact

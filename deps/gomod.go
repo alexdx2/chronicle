@@ -28,7 +28,7 @@ func (gomod) parse(_, rel string, body []byte) (Report, error) {
 			continue
 		case strings.HasPrefix(line, "module"):
 			if f := strings.Fields(line); len(f) >= 2 && f[0] == "module" {
-				r.Publishes = append(r.Publishes, Package{Name: strings.Trim(f[1], `"`), Ecosystem: "go", File: rel, Line: n})
+				r.Publishes = append(r.Publishes, Package{Name: strings.Trim(f[1], `"`), Ecosystem: "go", File: rel, Line: n, Text: "module"})
 			}
 		case strings.HasPrefix(line, "require"):
 			rest := strings.TrimSpace(strings.TrimPrefix(line, "require"))

@@ -55,7 +55,7 @@ func parsePyproject(rel string, body []byte) Report {
 		switch {
 		case inProject && key == "name":
 			if m := pyNameRe.FindStringSubmatch(line); m != nil {
-				r.Publishes = append(r.Publishes, Package{Name: Normalize("python", m[1]), Ecosystem: "python", File: rel, Line: n})
+				r.Publishes = append(r.Publishes, Package{Name: Normalize("python", m[1]), Ecosystem: "python", File: rel, Line: n, Text: "name"})
 			}
 		case (inProject && key == "dependencies") || inOptional:
 			section := "dependencies"

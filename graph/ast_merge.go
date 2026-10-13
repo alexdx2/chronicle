@@ -304,6 +304,9 @@ func unionFacts(astFacts, llmFacts []map[string]any) []map[string]any {
 // "ast+llm") are deterministic — their evidence carries "chronicle-ast".
 // Pure-LLM facts (untagged or "llm") keep "chronicle-scan".
 func factExtractorID(fact Fact) string {
+	if fact.Origin == depsOrigin {
+		return DepsExtractorID
+	}
 	if strings.Contains(fact.Origin, "ast") {
 		return "chronicle-ast"
 	}

@@ -33,6 +33,7 @@ func (nuget) parse(_, rel string, body []byte) (Report, error) {
 	isProps := strings.HasSuffix(base(rel), ".props")
 	var packageID, assembly string
 	var idLine, asmLine int
+	var idText, asmText string
 	unpackable := false
 	for i, line := range strings.Split(string(body), "\n") {
 		n := i + 1
@@ -50,10 +51,10 @@ func (nuget) parse(_, rel string, body []byte) (Report, error) {
 			r.Depends = append(r.Depends, d)
 		}
 		if m := nugetIDRe.FindStringSubmatch(line); m != nil && packageID == "" {
-			packageID, idLine = m[1], n
+			packageID, idLine, idText = m[1], n, m[0]
 		}
 		if m := nugetAsmRe.FindStringSubmatch(line); m != nil && assembly == "" {
-			assembly, asmLine = m[1], n
+			assembly, asmLine, asmText = m[1], n, m[0]
 		}
 		if nugetUnpackRe.MatchString(line) {
 			unpackable = true
@@ -62,14 +63,15 @@ func (nuget) parse(_, rel string, body []byte) (Report, error) {
 	if isProps || unpackable {
 		return r, nil
 	}
-	name, line := packageID, idLine
+	name, line, text := packageID, idLine, idText
 	if name == "" {
-		name, line = assembly, asmLine
+		name, line, text = assembly, asmLine, asmText
 	}
 	if name == "" {
 		name, line = strings.TrimSuffix(base(rel), pathExt(rel)), 1
+		text = strings.TrimSpace(strings.TrimPrefix(strings.SplitN(string(body), "\n", 2)[0], "\ufeff"))
 	}
-	r.Publishes = append(r.Publishes, Package{Name: Normalize("nuget", name), Ecosystem: "nuget", File: rel, Line: line})
+	r.Publishes = append(r.Publishes, Package{Name: Normalize("nuget", name), Ecosystem: "nuget", File: rel, Line: line, Text: text})
 	return r, nil
 }
 
