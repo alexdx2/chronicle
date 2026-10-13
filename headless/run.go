@@ -251,10 +251,12 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	// freshness sees the new blob. Same extractor identity as the MCP paths.
 	// Called per committed wave, so the files a cancelled run did finish keep
 	// their coverage.
+	// A skipped file with an error (oversize, binary) is recorded too, with its
+	// blob: unchanged it is done, changed it is sent again.
 	recordCoverage := func(files []FileUsage, commitErrs []string) error {
 		for _, f := range files {
 			if f.Status == "failed" || f.Status == "provider_error" || f.Status == "cancelled" ||
-				(f.Status == "skipped" && f.Error != "") || commitFailed(commitErrs, f.Path) {
+				commitFailed(commitErrs, f.Path) {
 				continue
 			}
 			blob, _ := gitutil.FileBlobSHA(in.RepoRoot, f.Path)

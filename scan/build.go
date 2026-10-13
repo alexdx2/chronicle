@@ -600,16 +600,22 @@ func (r *fullRun) invalidateDropped(d manifest.DomainEntry, multi bool) error {
 		return nil
 	}
 	sort.Strings(dropped)
-	st := r.g.Store()
-	rev, err := st.GetRevisionBySHA(d.Key, r.head)
-	var revID int64
-	if err == nil {
-		revID = rev.RevisionID
-	} else if revID, err = r.g.RecordRefreshNoop(d.Key, r.head); err != nil {
-		return fmt.Errorf("scan: revision for dropped files: %w", err)
+	// Stale-mark directly: InvalidateChanged would also re-verify each path
+	// against the process cwd and could mark an unchanged file valid again.
+	// No verify step, no obligations; trust is recomputed for the owners.
+	_, edgeIDs, nodeIDs, err := r.g.Store().MarkEvidenceStaleByFiles(dropped)
+	if err != nil {
+		return fmt.Errorf("scan: stale-mark dropped files: %w", err)
 	}
-	if _, err := r.g.InvalidateChanged(d.Key, revID, dropped); err != nil {
-		return fmt.Errorf("scan: invalidate dropped files: %w", err)
+	for _, id := range edgeIDs {
+		if err := r.g.RecalculateEdgeTrust(id); err != nil {
+			return fmt.Errorf("scan: edge trust %d: %w", id, err)
+		}
+	}
+	for _, id := range nodeIDs {
+		if err := r.g.RecalculateNodeTrust(id); err != nil {
+			return fmt.Errorf("scan: node trust %d: %w", id, err)
+		}
 	}
 	return nil
 }
