@@ -1,13 +1,21 @@
 package e2e
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/llm"
 	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/scan"
+	"github.com/alexdx2/chronicle-core/snapshot"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -266,5 +274,123 @@ func TestTJNoDirectTomJerryPath(t *testing.T) {
 	}
 	if len(result.Paths) > 0 {
 		t.Errorf("expected NO directed path from tom-api to jerry-api, but found %d paths", len(result.Paths))
+	}
+}
+
+// copyTree copies src into dst, skipping the fixture's own .depbot* state and
+// the expected-graph payloads, so the copy is just source code.
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if rel == "." {
+			return nil
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".depbot") {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		if strings.HasSuffix(d.Name(), ".json") && filepath.Dir(rel) == "." {
+			return nil // expected-graph*.json, test-*-expected.json
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A full snapshot build of the fixture without a profile model (the fake
+// backend answers every file with no facts) carries profile.json with the
+// manifest dependencies and the package node the deps layer creates.
+func TestTJSnapshotProfileDeps(t *testing.T) {
+	repo := t.TempDir()
+	copyTree(t, "../fixtures/tom-and-jerry", repo)
+	runGit(t, repo, "init", "-q", "-b", "main")
+	runGit(t, repo, "config", "user.email", "t@example.com")
+	runGit(t, repo, "config", "user.name", "t")
+	runGit(t, repo, "config", "commit.gpgsign", "false")
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-q", "-m", "fixture")
+	sha := runGit(t, repo, "rev-parse", "HEAD")
+
+	fakeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeDir, "default.json"), []byte(`{"status":"extracted","from_type":"provider","facts":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := scan.BuildSnapshot(context.Background(), scan.BuildInput{
+		Repo: "tomandjerry", CodeRepo: repo, Sha: sha, WorkDir: t.TempDir(),
+		Backend: llm.NewFake(fakeDir), Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+	pf, err := scan.ParseProfileFile(res.Files.Profile)
+	if err != nil {
+		t.Fatalf("profile.json: %v", err)
+	}
+	if !pf.Seeded {
+		t.Errorf("no profile model was given, want seeded profile: %+v", pf.SeedReason)
+	}
+	hasDep := func(name, eco string) bool {
+		for _, d := range pf.Deps.Depends {
+			if d.Name == name && d.Ecosystem == eco {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasDep("confluent.kafka", "nuget") {
+		t.Errorf("Depends lacks nuget confluent.kafka: %+v", pf.Deps.Depends)
+	}
+	if !hasDep("kafkajs", "npm") {
+		t.Errorf("Depends lacks npm kafkajs: %+v", pf.Deps.Depends)
+	}
+	published := false
+	for _, p := range pf.Deps.Publishes {
+		if p.Name == "@tomandjerry/shared" {
+			published = true
+		}
+	}
+	if !published {
+		t.Errorf("Publishes lacks @tomandjerry/shared: %+v", pf.Deps.Publishes)
+	}
+
+	snap, _, err := snapshot.Decode(bytes.NewReader(res.Files.Graph), snapshot.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := false
+	var kinds []string
+	for _, n := range snap.Nodes {
+		if n.Type == "package" {
+			kinds = append(kinds, n.Name)
+			if n.Name == "@tomandjerry/shared" {
+				pkg = true
+			}
+		}
+	}
+	if !pkg {
+		t.Errorf("graph lacks a package node @tomandjerry/shared; package nodes: %v", kinds)
 	}
 }
