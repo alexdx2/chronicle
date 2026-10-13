@@ -50,6 +50,9 @@ func runScanFull(ctx context.Context, w io.Writer, g *graph.Graph, repoRoot stri
 	if !opts.Full {
 		return 1, errors.New("chronicle scan: only --full is implemented here (interactive scans run through the MCP scan command)")
 	}
+	if err := validateScanFlags(opts); err != nil {
+		return 2, err
+	}
 	if opts.Out != "" {
 		return runScanSnapshot(ctx, w, repoRoot, opts, env)
 	}
@@ -108,6 +111,36 @@ func runScanFull(ctx context.Context, w io.Writer, g *graph.Graph, repoRoot stri
 		return 4, nil
 	}
 	return 0, nil
+}
+
+// validateScanFlags rejects flag combinations in which a flag would be
+// silently ignored: the profile flags belong to the --out snapshot build, and
+// --domain/--no-export to the local-database scan.
+func validateScanFlags(opts scanCLIOptions) error {
+	if opts.Out == "" {
+		for flag, given := range map[string]bool{"--profile-model": opts.ProfileModel != "", "--no-profile": opts.NoProfile} {
+			if given {
+				return fmt.Errorf("chronicle scan: %s only applies together with --out", flag)
+			}
+		}
+		return nil
+	}
+	for flag, given := range map[string]bool{"--domain": opts.Domain != "", "--no-export": opts.NoExport} {
+		if given {
+			return fmt.Errorf("chronicle scan: %s does not apply together with --out (the snapshot build uses no local database)", flag)
+		}
+	}
+	return nil
+}
+
+// scanGraph opens the local graph for a scan that fills it; a --out snapshot
+// build never touches the local database, so it is not even opened (opening
+// creates .depbot/chronicle.db).
+func scanGraph(opts scanCLIOptions, open func() *graph.Graph) *graph.Graph {
+	if opts.Out != "" {
+		return nil
+	}
+	return open()
 }
 
 // openExtractBackend opens the extraction model from opts/env.
@@ -183,11 +216,24 @@ func runScanSnapshot(ctx context.Context, w io.Writer, repoRoot string, opts sca
 			return 1, fmt.Errorf("chronicle scan: write %s: %w", dst, err)
 		}
 	}
-	if err := writeJSON(w, map[string]any{
+	report := map[string]any{
 		"code_sha": res.CodeSha, "out": opts.Out, "partial": res.Partial, "failed": res.Failed,
 		"limitations": res.Limitations, "profile_seeded": res.Profile != nil && res.Profile.Seeded,
-	}); err != nil {
+	}
+	if err := writeJSON(w, report); err != nil {
 		return 1, fmt.Errorf("chronicle scan: write report: %w", err)
+	}
+	if opts.UsageOut != "" {
+		// As the full path does: the whole report, per-file metrics included.
+		full := map[string]any{"incremental": res.Incremental, "changed_files": res.ChangedFiles, "skipped": res.Skipped, "metrics": res.Metrics}
+		for k, v := range report {
+			full[k] = v
+		}
+		if data, err := json.MarshalIndent(full, "", "  "); err != nil {
+			return 1, fmt.Errorf("chronicle scan: encode usage: %w", err)
+		} else if err := os.WriteFile(opts.UsageOut, append(data, '\n'), 0o644); err != nil {
+			return 1, fmt.Errorf("chronicle scan: write usage: %w", err)
+		}
 	}
 	if res.Partial {
 		return 4, nil
@@ -205,7 +251,7 @@ when there is none (an existing one is never touched), runs the structural pass,
 that is not yet covered at its current content through the headless pipeline. Rerunning resumes: covered files are not
 sent again, failed files are retried. The phases that were not run are listed in the report's limitations.
 
-Exit code 0: complete. 1: error. 3: no API key for the model (prints {"error":...,"skipped":true}).
+Exit code 0: complete. 1: error. 2: flags that do not go together. 3: no API key for the model (prints {"error":...,"skipped":true}).
 4: finished but incomplete (failed files, or the structural pass did not finish).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -230,7 +276,7 @@ Exit code 0: complete. 1: error. 3: no API key for the model (prints {"error":..
 				paths.SetProjectRoot(wd)
 			}
 			// A missing manifest is bootstrapped by the scan itself, not stubbed.
-			g := openGraphWith(false)
+			g := scanGraph(o, func() *graph.Graph { return openGraphWith(false) })
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
@@ -258,6 +304,6 @@ Exit code 0: complete. 1: error. 3: no API key for the model (prints {"error":..
 	f.StringVar(&o.ProfileModel, "profile-model", "", "Model spec for the repository profile (default: the extraction model); used with --out")
 	f.BoolVar(&o.NoProfile, "no-profile", false, "Skip the profile request and take the deterministic seed profile; used with --out")
 	f.StringVar(&o.Out, "out", "", "Build a layered snapshot of HEAD and write graph.jsonl, the manifest and profile.json under <dir>/.depbot/")
-	f.StringVar(&o.UsageOut, "usage-out", "", "Write the full report JSON to this file")
+	f.StringVar(&o.UsageOut, "usage-out", "", "Write the full report JSON (per-file metrics included) to this file; with --out too")
 	return cmd
 }

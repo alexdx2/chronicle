@@ -19,7 +19,7 @@ Answer with this JSON shape:
   "technologies": [
     {"id": "kafka", "language": "dotnet", "role": "messaging",
      "evidence": ["Order.Api/Order.Api.csproj:14 PackageReference Confluent.Kafka 2.3.0"],
-     "pack": "kafka-dotnet"}
+     "pack": "kafka"}
   ],
   "scope": {
     "include": [{"glob": "src/**/*.cs", "reason": "application code"}],
@@ -34,7 +34,7 @@ Answer with this JSON shape:
 
 ## Pack rule
 
-Choose a pack id from the catalog when its Match section fits the evidence. Otherwise use "new". Never invent an id that is not in the catalog.
+The `pack` value is a catalog id (as listed under Known packs) or "new". Choose a catalog id when its Match section fits the evidence; otherwise use "new". Never invent an id that is not in the catalog.
 
 ## Output
 

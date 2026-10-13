@@ -62,12 +62,15 @@ type ProfileFile struct {
 	Deps          deps.Report       `json:"deps"`
 	Packs         []prompts.PackRef `json:"packs"` // applied packs, sorted
 	Checks        []LayerCheck      `json:"checks,omitempty"`
-	ScopeSource   string            `json:"scope_source"` // model | seed | repo
+	ScopeSource   string            `json:"scope_source"` // model | seed | repo | base
 	ScopeProposed *Scope            `json:"scope_proposed,omitempty"`
 	Seeded        bool              `json:"seeded"`
 	SeedReason    string            `json:"seed_reason,omitempty"`
 	ProfiledAt    string            `json:"profiled_at_sha"` // sha the model profiled
 	TopDirs       []string          `json:"top_dirs"`        // sorted top-level directories of the inventory
+	// Limitations are facts about how this profile was made that its reader
+	// must know (for example a prompt that had to drop dependency lines).
+	Limitations []string `json:"limitations,omitempty"`
 }
 
 // ParseProfileFile reads profile.json; unknown fields are ignored.
@@ -158,47 +161,96 @@ func seedScope(seed SeedResult) Scope {
 	return s
 }
 
-// BuildProfilePrompt assembles the profile request. The inventory summary
-// shrinks first when the input is large; dependencies are never cut.
-func BuildProfilePrompt(inv *Inventory, rep deps.Report, seed SeedResult, catalog []prompts.PackMeta) llm.Request {
-	const budget = 60000 // characters of system+user
-	var rest strings.Builder
-	rest.WriteString("\n## Dependencies\n")
-	for _, d := range rep.Depends {
-		fmt.Fprintf(&rest, "%s %s %s (%s:%d) %s", d.Ecosystem, d.Name, d.Version, d.File, d.Line, d.Text)
+// The same sizing rules the extraction prompts use (headless/budget.go): a
+// pessimistic characters-per-token ratio and a share of the window kept for
+// the answer.
+const (
+	profileCharsPerToken = 3
+	profileOutputReserve = 2048
+	profileMaxTokens     = 4096
+	// profileDefaultBudget is the prompt size, in characters, when the backend
+	// has no hard window (cloud models).
+	profileDefaultBudget = 60000
+)
+
+// BuildProfilePrompt assembles the profile request. window is the backend's
+// hard per-call token window (llm.WindowedBackend), 0 = none. When the prompt
+// does not fit, the inventory summary shrinks first (5 -> 2 -> 0 sample paths),
+// then repeated dependencies are collapsed to the first "file:line text" of
+// each (ecosystem, name), and only then are dependency lines dropped from the
+// end. It returns the number of dependency lines dropped; a caller must say so.
+func BuildProfilePrompt(inv *Inventory, rep deps.Report, seed SeedResult, catalog []prompts.PackMeta, window int) (llm.Request, int) {
+	budget := profileDefaultBudget
+	if window > 0 {
+		budget = (window - profileOutputReserve - profileMaxTokens) * profileCharsPerToken
+		if budget < 0 {
+			budget = 0
+		}
+	}
+	depLine := func(d deps.Dependency) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s %s %s (%s:%d) %s", d.Ecosystem, d.Name, d.Version, d.File, d.Line, d.Text)
 		if d.Internal {
-			rest.WriteString(" [internal]")
+			b.WriteString(" [internal]")
 		}
-		rest.WriteByte('\n')
+		b.WriteByte('\n')
+		return b.String()
 	}
+	var tail strings.Builder
 	if len(rep.Publishes) > 0 {
-		rest.WriteString("publishes:\n")
+		tail.WriteString("publishes:\n")
 		for _, p := range rep.Publishes {
-			fmt.Fprintf(&rest, "%s %s (%s:%d) %s\n", p.Ecosystem, p.Name, p.File, p.Line, p.Text)
+			fmt.Fprintf(&tail, "%s %s (%s:%d) %s\n", p.Ecosystem, p.Name, p.File, p.Line, p.Text)
 		}
 	}
-	fmt.Fprintf(&rest, "\n## Seed\nseed: include=%s, exclude=%s, tech=%s\n",
+	fmt.Fprintf(&tail, "\n## Seed\nseed: include=%s, exclude=%s, tech=%s\n",
 		strings.Join(seed.Include, ","), strings.Join(seed.Exclude, ","), strings.Join(seed.Tech, ","))
-	rest.WriteString("\n## Known packs\n")
+	tail.WriteString("\n## Known packs\n")
 	for _, c := range catalog {
-		fmt.Fprintf(&rest, "- %s: %s", c.ID, c.Description)
+		fmt.Fprintf(&tail, "- %s: %s", c.ID, c.Description)
 		if m := strings.Join(strings.Fields(c.AppliesWhen), " "); m != "" {
 			if r := []rune(m); len(r) > 300 {
 				m = string(r[:300])
 			}
-			fmt.Fprintf(&rest, " | Match: %s", m)
+			fmt.Fprintf(&tail, " | Match: %s", m)
 		}
-		rest.WriteByte('\n')
+		tail.WriteByte('\n')
 	}
 
-	user := ""
-	for _, n := range []int{5, 2, 0} {
-		user = "## Inventory\n" + inv.Summary(n) + rest.String()
-		if len(profilePrompt)+len(user) <= budget {
-			break
+	all := make([]string, 0, len(rep.Depends))
+	for _, d := range rep.Depends {
+		all = append(all, depLine(d))
+	}
+	deduped := make([]string, 0, len(rep.Depends))
+	seen := map[string]bool{}
+	for _, d := range rep.Depends {
+		if k := d.Ecosystem + "\x00" + d.Name; !seen[k] {
+			seen[k] = true
+			deduped = append(deduped, depLine(d))
 		}
 	}
-	return llm.Request{System: profilePrompt, User: user, MaxTokens: 4096}
+
+	render := func(lines []string, samples int) string {
+		return "## Inventory\n" + inv.Summary(samples) + "\n## Dependencies\n" + strings.Join(lines, "") + tail.String()
+	}
+	fits := func(user string) bool { return len(profilePrompt)+len(user) <= budget }
+	req := func(user string) llm.Request {
+		return llm.Request{System: profilePrompt, User: user, MaxTokens: profileMaxTokens}
+	}
+
+	for _, lines := range [][]string{all, deduped} {
+		for _, n := range []int{5, 2, 0} {
+			if u := render(lines, n); fits(u) {
+				return req(u), 0
+			}
+		}
+	}
+	// Drop dependency lines from the end until the prompt fits.
+	lines := deduped
+	for len(lines) > 0 && !fits(render(lines, 0)) {
+		lines = lines[:len(lines)-1]
+	}
+	return req(render(lines, 0)), len(deduped) - len(lines)
 }
 
 // ParseProfile decodes the first balanced JSON object of text; unknown fields
@@ -412,8 +464,5 @@ func WriteProfiledManifest(path, domainKey string, cfg manifest.ScanConfig, tech
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(path, buf.Bytes()); err != nil {
-		return fmt.Errorf("scan: %w", err)
-	}
-	return nil
+	return writeFileAtomic(path, buf.Bytes()) // its errors carry the "scan:" prefix already
 }

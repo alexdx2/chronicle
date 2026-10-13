@@ -656,6 +656,15 @@ func (r *fullRun) invalidateDropped(d manifest.DomainEntry, multi bool) error {
 	if err != nil {
 		return fmt.Errorf("scan: stale-mark dropped files: %w", err)
 	}
+	// The coverage row must not claim the file is still observed: if the scope
+	// admits it again, its stale evidence has to be re-extracted.
+	for _, p := range dropped {
+		for _, dk := range []string{d.Key, ""} {
+			if err := r.g.Store().ClearCoverageBlob(dk, p); err != nil {
+				return fmt.Errorf("scan: clear coverage of dropped %s: %w", p, err)
+			}
+		}
+	}
 	for _, id := range edgeIDs {
 		if err := r.g.RecalculateEdgeTrust(id); err != nil {
 			return fmt.Errorf("scan: edge trust %d: %w", id, err)

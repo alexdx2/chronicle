@@ -114,3 +114,35 @@ func TestBuildSnapshot_SameShaRebuildSendsNothingWithSkippedFile(t *testing.T) {
 		t.Fatalf("rebuild: %+v %v", plans.plans, err)
 	}
 }
+
+// A file dropped from the scope and admitted again must be extracted again:
+// its evidence was stale-marked, and an intact coverage row would keep it so.
+func TestBuildSnapshot_DropThenReadmitSendsTheFileAgain(t *testing.T) {
+	man := func(exclude string) string {
+		return "domains:\n  \"proj\":\n    name: \"proj\"\n    scan:\n      include:\n        - \"**/*.ts\"\n" + exclude + "tech: [typescript]\n"
+	}
+	root, c1 := newCodeRepoT(t, map[string]string{"src/a.ts": "export const a = 1", "legacy/old.ts": "export const o = 1"})
+	first, err := BuildSnapshot(context.Background(), buildIn(root, c1, t.TempDir(), &factsBackend{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeT(t, root, ".depbot/chronicle.domain.yaml", man("      exclude:\n        - \"legacy/**\"\n"))
+	c2 := commitAllT(t, root, "drop legacy")
+	in := buildIn(root, c2, t.TempDir(), &factsBackend{})
+	in.Base = &Base{CodeSha: c1, Files: first.Files}
+	second, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeT(t, root, ".depbot/chronicle.domain.yaml", man(""))
+	c3 := commitAllT(t, root, "readmit legacy")
+	var plans planRecorder
+	in = buildIn(root, c3, t.TempDir(), &factsBackend{})
+	in.Base, in.OnPlan = &Base{CodeSha: c2, Files: second.Files}, plans.on
+	if _, err := BuildSnapshot(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.plans) != 1 || plans.plans[0].ToSend != 1 {
+		t.Fatalf("re-admitted file must be sent again: %+v", plans.plans)
+	}
+}

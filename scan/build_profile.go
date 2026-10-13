@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -46,6 +47,9 @@ type profileStage struct {
 	// writeManifest, when set, writes the profiled manifest (the tree has none
 	// and the profile is fresh); nil leaves the base's manifest or the bootstrap.
 	writeManifest func(manPath string) error
+	// scopeFromBase: the base's manifest, not the profile, scopes this build
+	// (finish copies that scope into profile.json, source "base").
+	scopeFromBase bool
 }
 
 // buildProfileStage runs inventory, dependencies and the profile decision.
@@ -61,8 +65,9 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	st.catalog = opts.Catalog
 	if st.catalog == nil {
 		st.catalog = prompts.BuiltinCatalog()
+		// A project pack that cannot be read costs that pack, not the build.
 		if err := st.catalog.AddProjectPacks(filepath.Join(paths.DirAt(wt), "packs")); err != nil {
-			return nil, err
+			st.limitations = append(st.limitations, "project packs: "+err.Error())
 		}
 	}
 	inv, err := BuildInventory(wt, defaultMaxFileBytes)
@@ -109,9 +114,19 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	case resume != nil:
 		fresh = false
 		inheritPrev(&pf, &resume.File)
+		pf.Limitations = resume.File.Limitations
 		st.limitations = append(st.limitations, resume.Limitations...)
 	case needModel:
-		req := BuildProfilePrompt(inv, st.deps, seed, st.catalog.Metas())
+		window := 0
+		if wb, ok := opts.Backend.(llm.WindowedBackend); ok {
+			window = wb.ContextWindow()
+		}
+		req, dropped := BuildProfilePrompt(inv, st.deps, seed, st.catalog.Metas(), window)
+		if dropped > 0 {
+			note := fmt.Sprintf("profile prompt truncated: %d dependency lines dropped", dropped)
+			pf.Limitations = append(pf.Limitations, note)
+			st.limitations = append(st.limitations, note)
+		}
 		p, rerr := RequestProfileWith(ctx, opts.Backend, req, st.catalog.Known())
 		if rerr != nil {
 			if cerr := ctx.Err(); cerr != nil {
@@ -170,6 +185,13 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	if fresh && !treeHasManifest && (full || !pf.Seeded) {
 		cfg, tech := ScopeToScanConfig(pf.Profile.Scope), techIDs(pf.Profile)
 		st.writeManifest = func(manPath string) error { return WriteProfiledManifest(manPath, domainKey, cfg, tech) }
+	}
+	// A fresh seed on an incremental build leaves the base's manifest in
+	// charge: the seed's globs were never applied, so profile.json must not
+	// claim them as the scope.
+	if fresh && !treeHasManifest && st.writeManifest == nil && pf.ScopeSource == "seed" {
+		st.scopeFromBase = true
+		pf.ScopeSource = "base"
 	}
 	st.file = pf
 	return st, nil
@@ -234,7 +256,7 @@ func (st *profileStage) finish(manPath string, checks []LayerCheck) ([]byte, []s
 	var tech []string
 	if m, err := manifest.LoadFile(manPath); err == nil {
 		tech = m.Tech
-		if pf.ScopeSource == "repo" && len(m.Domains) > 0 {
+		if (pf.ScopeSource == "repo" || st.scopeFromBase) && len(m.Domains) > 0 {
 			if cfg, ok := m.ScanConfigFor(m.Domains[0].Name); ok {
 				pf.Profile.Scope = scopeOf(cfg)
 			}

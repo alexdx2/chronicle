@@ -150,3 +150,34 @@ func TestLayerChecks_CoverageCountsOnlyOwnDomainFailures(t *testing.T) {
 		t.Fatalf("untagged 2/15 must be failed: %+v", c)
 	}
 }
+
+// The spec says "above": exactly the threshold is still ok.
+func TestLayerChecks_ThresholdsAreStrict(t *testing.T) {
+	g, _ := checksGraph(t)
+	rep := &FullReport{Domains: []DomainReport{{Domain: "d", Sent: 10}}, Failed: []FailedFile{{Path: "a"}}}
+	if c := byLayer(LayerChecks(g, "d", Profile{}, rep, nil))["coverage"]; c.Status != "ok" {
+		t.Fatalf("1 of 10 failed is exactly 10%%, not above: %+v", c)
+	}
+	rep.Failed = append(rep.Failed, FailedFile{Path: "b"})
+	if c := byLayer(LayerChecks(g, "d", Profile{}, rep, nil))["coverage"]; c.Status != "failed" {
+		t.Fatalf("2 of 10 failed is above 10%%: %+v", c)
+	}
+
+	// Two http calls, one matched: exactly 50% unmatched.
+	g2, s := checksGraph(t)
+	ext := addNode(t, s, "service:external:d:ext", "service")
+	ep := addNode(t, s, "ep", "endpoint")
+	for _, k := range []string{"c1", "c2"} {
+		c := addNode(t, s, k, "method")
+		id := addEdge(t, s, c, ext, k, "service:external:d:ext", "CALLS_SERVICE")
+		if _, err := s.AddEvidence(store.EvidenceRow{TargetKind: "edge", EdgeID: id, SourceKind: "llm", ExtractorID: "t", ExtractorVersion: "1", ObservedAt: "2026-01-01T00:00:00Z", Assertion: `{"url":"http://ext/orders","method":"GET"}`}); err != nil {
+			t.Fatal(err)
+		}
+		if k == "c2" {
+			addEdge(t, s, c, ep, k, "ep", "CALLS_ENDPOINT")
+		}
+	}
+	if c := byLayer(LayerChecks(g2, "d", Profile{}, nil, nil))["integrations"]; c.Status != "ok" || !strings.Contains(c.Detail, "50% unmatched") {
+		t.Fatalf("exactly 50%% unmatched is not above 50%%: %+v", c)
+	}
+}

@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/llm"
+	"github.com/alexdx2/chronicle-core/manifest"
 )
 
 func hasLimitation(ls []string, sub string) bool {
@@ -311,5 +314,115 @@ func TestBuildSnapshot_ProfileFileCarriesChecksAndPacks(t *testing.T) {
 	pf, _ := ParseProfileFile(res.Files.Profile)
 	if len(pf.Checks) != 5 || len(pf.Packs) == 0 {
 		t.Fatalf("checks=%d packs=%+v", len(pf.Checks), pf.Packs)
+	}
+}
+
+// The first incremental build over a base without profile.json has no model
+// answer to use; the base's manifest scopes the scan and profile.json says so.
+func TestBuildSnapshot_IncrementalOverV1BaseReportsBaseScope(t *testing.T) {
+	root, head := newCodeRepoT(t, map[string]string{"src/a.ts": "export const a = 1", "legacy/old.js": "x"})
+	first, err := BuildSnapshot(context.Background(), buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := first.Files
+	base.Profile = nil // a version 1 snapshot has none
+	head2 := commitFileT(t, root, "src/b.ts", "export const b = 2")
+	in := buildIn(root, head2, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Base = &Base{CodeSha: head, Files: base}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, err := ParseProfileFile(res.Files.Profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pf.ScopeSource != "base" {
+		t.Fatalf("scope source = %q, want base", pf.ScopeSource)
+	}
+	m, err := manifest.Load(res.Files.Domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := m.ScanConfigFor(m.Domains[0].Name)
+	want := scopeOf(cfg)
+	if len(pf.Profile.Scope.Include) == 0 || !reflect.DeepEqual(pf.Profile.Scope.Include, want.Include) || !reflect.DeepEqual(pf.Profile.Scope.Exclude, want.Exclude) {
+		t.Fatalf("scope %+v does not match the manifest in effect %+v", pf.Profile.Scope, want)
+	}
+}
+
+// windowedCanned is a canned backend with a hard window, like a local runtime.
+type windowedCanned struct {
+	cannedBackend
+	window int
+}
+
+func (w *windowedCanned) ContextWindow() int { return w.window }
+
+func TestBuildSnapshot_ProfilePromptTruncationIsALimitation(t *testing.T) {
+	var body strings.Builder
+	body.WriteString("<Project><ItemGroup>\n")
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&body, "<PackageReference Include=\"Vendor.Package%02d\" Version=\"1.0.0\" />\n", i)
+	}
+	body.WriteString("</ItemGroup></Project>")
+	root, head := newCodeRepoT(t, map[string]string{"Api/Api.csproj": body.String(), "Api/C.cs": "class C {}"})
+	b := &windowedCanned{window: windowFor(300)}
+	b.answers = []string{goodProfileFor("Api/Api.csproj")}
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = b
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.calls != 1 {
+		t.Fatalf("profile requests = %d", b.calls)
+	}
+	pf, _ := ParseProfileFile(res.Files.Profile)
+	if !hasLimitation(pf.Limitations, "profile prompt truncated: ") || !hasLimitation(res.Limitations, "dependency lines dropped") {
+		t.Fatalf("profile limitations %v, build limitations %v", pf.Limitations, res.Limitations)
+	}
+	if pf.Seeded {
+		t.Errorf("the model answered; the profile is not a seed: %+v", pf)
+	}
+}
+
+func goodProfileFor(manifestPath string) string {
+	return `{"technologies":[{"id":"dotnet","language":"dotnet","role":"http","evidence":["` + manifestPath + `:1"],"pack":"dotnet"}],"scope":{"include":[{"glob":"**/*.cs","reason":"code"},{"glob":"**/*.csproj","reason":"manifest"}],"exclude":[]}}`
+}
+
+// An unreadable packs directory (here: a file where the directory should be)
+// costs the project packs, not the build.
+func TestBuildSnapshot_UnreadableProjectPacksIsALimitation(t *testing.T) {
+	root, head := newCodeRepoT(t, map[string]string{"src/a.ts": "export const a = 1", ".depbot/packs": "not a directory"})
+	res, err := BuildSnapshot(context.Background(), buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake")))
+	if err != nil {
+		t.Fatalf("build must go on: %v", err)
+	}
+	if !hasLimitation(res.Limitations, "project packs: ") {
+		t.Fatalf("limitations = %v", res.Limitations)
+	}
+}
+
+// The same repository, commit and model answer build the same profile.json.
+func TestBuildSnapshot_ProfileFileIsDeterministic(t *testing.T) {
+	root, head := newCodeRepoT(t, map[string]string{
+		"Api/Api.csproj":  "<Project><ItemGroup><PackageReference Include=\"Confluent.Kafka\" Version=\"2.3.0\" /></ItemGroup></Project>",
+		"Api/Consumer.cs": "class C {}",
+	})
+	answer := goodProfileFor("Api/Api.csproj")
+	var files [2][]byte
+	for i := range files {
+		in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+		in.Profile.Backend = &cannedBackend{answers: []string{answer}}
+		res, err := BuildSnapshot(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[i] = res.Files.Profile
+	}
+	if len(files[0]) == 0 || !bytes.Equal(files[0], files[1]) {
+		t.Fatalf("profile.json differs between identical builds:\n%s\n---\n%s", files[0], files[1])
 	}
 }

@@ -145,7 +145,7 @@ func checkIntegrations(g *graph.Graph, domainKey string) LayerCheck {
 	}
 	unmatched, _ := g.FindUnmatchedHTTPCalls(domainKey)
 	pct := (len(unmatched)*100 + total/2) / total
-	if len(unmatched)*2 >= total {
+	if len(unmatched)*2 > total {
 		return LayerCheck{Layer: "integrations", Status: CheckFailed, Detail: fmt.Sprintf("%d%% unmatched (%d of %d http calls)", pct, len(unmatched), total)}
 	}
 	return LayerCheck{Layer: "integrations", Status: CheckOK, Detail: fmt.Sprintf("%d%% unmatched (%d of %d http calls)", pct, len(unmatched), total)}
@@ -172,7 +172,7 @@ func checkCoverage(domainKey string, rep *FullReport) LayerCheck {
 	}
 	failed := failedFor(domainKey, rep.Failed)
 	d := fmt.Sprintf("%d of %d files failed", failed, sent)
-	if failed*10 >= sent {
+	if failed*10 > sent {
 		return LayerCheck{Layer: "coverage", Status: CheckFailed, Detail: d}
 	}
 	return LayerCheck{Layer: "coverage", Status: CheckOK, Detail: d}

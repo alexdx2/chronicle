@@ -29,7 +29,10 @@ type Inventory struct {
 	TopDirs   map[string]int // "src" -> n ("." for root files)
 	Manifests []string       // deps.IsManifest
 	Infra     []string       // Dockerfile, *.tf, cdk.json, serverless.yml, ...
-	Skipped   []string       // binary, over maxBytes or not regular: never sent to a model
+	Skipped   []string       // binary, over maxBytes, unreadable or not regular: never sent to a model
+	// SkipReasons says why a path in Skipped could not be read (stat or read
+	// errors); the other skip causes are evident from the file itself.
+	SkipReasons map[string]string
 
 	maxBytes int64
 	skipped  map[string]bool
@@ -63,6 +66,8 @@ func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
 		TopDirs:  map[string]int{},
 		maxBytes: maxBytes,
 		skipped:  map[string]bool{},
+
+		SkipReasons: map[string]string{},
 	}
 	for _, p := range strings.Split(out, "\x00") {
 		if p == "" {
@@ -73,8 +78,13 @@ func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
 		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
 		switch {
 		case err != nil:
-			// tracked but absent from the working copy (deleted): nothing to read.
+			// Tracked but absent from the working copy (deleted): nothing to
+			// read. Any other stat error is a file we cannot judge: skipped
+			// with its reason, not a failed build.
 			skip = true
+			if !os.IsNotExist(err) {
+				inv.SkipReasons[p] = "stat: " + err.Error()
+			}
 		case !fi.Mode().IsRegular():
 			skip = true
 		default:
@@ -82,7 +92,8 @@ func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
 			if f.Size > maxBytes {
 				skip = true
 			} else if head, err := readHead(filepath.Join(root, filepath.FromSlash(p))); err != nil {
-				return nil, fmt.Errorf("inventory: read %s: %w", p, err)
+				skip = true
+				inv.SkipReasons[p] = "read: " + err.Error()
 			} else if isBinaryHead(head) {
 				f.Binary = true
 				skip = true

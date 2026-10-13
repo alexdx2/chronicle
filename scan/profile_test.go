@@ -3,9 +3,11 @@ package scan
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"context"
 	"errors"
+	"fmt"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"strings"
@@ -103,7 +105,10 @@ func TestGuardScope_SeedWinsWhenModelExcludesEverything(t *testing.T) {
 func TestBuildProfilePrompt_CarriesDepsCatalogAndSeed(t *testing.T) {
 	inv := &Inventory{ByExt: map[string]int{".cs": 3}, TopDirs: map[string]int{"src": 3}}
 	rep := deps.Report{Depends: []deps.Dependency{{Name: "confluent.kafka", Version: "2.3.0", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 6, Text: "PackageReference Confluent.Kafka"}}, Publishes: []deps.Package{{Name: "acme.api", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 2, Text: "PackageId"}}}
-	req := BuildProfilePrompt(inv, rep, SeedResult{Tech: []string{"dotnet"}}, []prompts.PackMeta{{ID: "dotnet", Description: "ASP.NET"}})
+	req, dropped := BuildProfilePrompt(inv, rep, SeedResult{Tech: []string{"dotnet"}}, []prompts.PackMeta{{ID: "dotnet", Description: "ASP.NET"}}, 0)
+	if dropped != 0 {
+		t.Errorf("dropped %d", dropped)
+	}
 	if strings.Contains(req.User, "{Name:") || !strings.Contains(req.User, "PackageId") {
 		t.Errorf("publishes rendered badly: %q", req.User)
 	}
@@ -235,5 +240,91 @@ func TestSeedProfile_EvidenceByEcosystem(t *testing.T) {
 	}
 	if !strings.Contains(p.Technologies[1].Evidence[0], "A.csproj:3") || p.Technologies[1].Language != "dotnet" {
 		t.Fatalf("%+v", p.Technologies[1])
+	}
+}
+
+// repeatedDeps is 20 distinct dependencies each listed by 20 manifests.
+func repeatedDeps() deps.Report {
+	var rep deps.Report
+	for m := 0; m < 20; m++ {
+		for d := 0; d < 20; d++ {
+			rep.Depends = append(rep.Depends, deps.Dependency{
+				Name: fmt.Sprintf("dep-%02d", d), Version: "1.0.0", Ecosystem: "nuget",
+				File: fmt.Sprintf("svc%02d/Svc.csproj", m), Line: d + 3,
+				Text: `PackageReference Include="` + strings.Repeat("x", 60) + `"`,
+			})
+		}
+	}
+	return rep
+}
+
+// windowFor is a model window whose prompt budget is the system prompt plus extra characters.
+func windowFor(extra int) int {
+	return profileOutputReserve + profileMaxTokens + (len(profilePrompt)+extra)/profileCharsPerToken
+}
+
+func TestBuildProfilePrompt_SmallWindowDeduplicatesDependencies(t *testing.T) {
+	inv := &Inventory{ByExt: map[string]int{".cs": 3}, TopDirs: map[string]int{"src": 3}}
+	rep := repeatedDeps()
+	full, _ := BuildProfilePrompt(inv, rep, SeedResult{}, nil, 0)
+	if strings.Count(full.User, "dep-00 ") != 20 {
+		t.Fatalf("without a window every line is kept: %d", strings.Count(full.User, "dep-00 "))
+	}
+	req, dropped := BuildProfilePrompt(inv, rep, SeedResult{}, nil, windowFor(8000))
+	if dropped != 0 {
+		t.Fatalf("dedupe is enough here, dropped %d", dropped)
+	}
+	for d := 0; d < 20; d++ {
+		name := fmt.Sprintf("dep-%02d ", d)
+		if strings.Count(req.User, name) != 1 {
+			t.Errorf("%s appears %d times, want once", name, strings.Count(req.User, name))
+		}
+	}
+	if !strings.Contains(req.User, "svc00/Svc.csproj:3") {
+		t.Errorf("the first file:line of a dependency is kept:\n%s", req.User)
+	}
+	if len(req.System)+len(req.User) > (windowFor(8000)-profileOutputReserve-profileMaxTokens)*profileCharsPerToken {
+		t.Errorf("prompt exceeds the budget")
+	}
+}
+
+func TestBuildProfilePrompt_TinyWindowDropsDependencyLinesAndSaysHowMany(t *testing.T) {
+	inv := &Inventory{ByExt: map[string]int{".cs": 3}, TopDirs: map[string]int{"src": 3}}
+	rep := repeatedDeps()
+	budgetExtra := 900
+	req, dropped := BuildProfilePrompt(inv, rep, SeedResult{}, nil, windowFor(budgetExtra))
+	if dropped <= 0 || dropped >= 20 {
+		t.Fatalf("dropped = %d, want some of the 20 distinct lines", dropped)
+	}
+	if got := strings.Count(req.User, "nuget dep-"); got != 20-dropped {
+		t.Errorf("kept %d lines, dropped %d of 20", got, dropped)
+	}
+	if len(req.System)+len(req.User) > len(profilePrompt)+budgetExtra {
+		t.Errorf("prompt is %d chars, budget %d", len(req.System)+len(req.User), len(profilePrompt)+budgetExtra)
+	}
+}
+
+// The prompt's own example must be an answer the validator accepts.
+func TestProfilePrompt_ExamplePackIsInTheBuiltinCatalog(t *testing.T) {
+	m := regexp.MustCompile(`"pack":\s*"([^"]+)"`).FindStringSubmatch(profilePrompt)
+	if m == nil {
+		t.Fatal("no pack in the prompt's example")
+	}
+	if m[1] != "new" && !prompts.BuiltinCatalog().Known()[m[1]] {
+		t.Fatalf("the example pack %q is not a built-in id", m[1])
+	}
+	if !strings.Contains(profilePrompt, `or "new"`) {
+		t.Error(`the prompt must name "new" as the other allowed pack value`)
+	}
+}
+
+func TestWriteProfiledManifest_ErrorHasOneScanPrefix(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteProfiledManifest(filepath.Join(blocker, "sub", "chronicle.domain.yaml"), "app", manifest.ScanConfig{Include: []string{"src/**"}}, nil)
+	if err == nil || strings.Count(err.Error(), "scan:") != 1 {
+		t.Fatalf("err = %v", err)
 	}
 }

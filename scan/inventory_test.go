@@ -2,6 +2,7 @@ package scan
 
 import (
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -92,5 +93,26 @@ func TestBuildInventory_NonPositiveMaxBytesIsDefault(t *testing.T) {
 	}
 	if s := inv.Summary(2); !strings.Contains(s, "skipped: 1 (binary or over 262144 bytes)") {
 		t.Fatalf("summary:\n%s", s)
+	}
+}
+
+func TestBuildInventory_UnreadableFileIsSkippedWithReason(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file permissions are not enforced here")
+	}
+	root, _ := newCodeRepoT(t, map[string]string{"ok.txt": "fine", "secret.txt": "hidden"})
+	if err := os.Chmod(root+"/secret.txt", 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root+"/secret.txt", 0o644) })
+	inv, err := BuildInventory(root, 1000)
+	if err != nil {
+		t.Fatalf("one unreadable file must not fail the inventory: %v", err)
+	}
+	if len(inv.Skipped) != 1 || inv.Skipped[0] != "secret.txt" || !strings.HasPrefix(inv.SkipReasons["secret.txt"], "read: ") {
+		t.Fatalf("skipped = %v reasons = %v", inv.Skipped, inv.SkipReasons)
+	}
+	if p := inv.Paths(); len(p) != 1 || p[0] != "ok.txt" {
+		t.Fatalf("paths = %v", p)
 	}
 }
