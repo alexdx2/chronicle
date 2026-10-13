@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"sort"
 
@@ -48,7 +49,10 @@ type profileStage struct {
 // buildProfileStage runs inventory, dependencies and the profile decision.
 // treeHasManifest says the commit being built carries its own manifest, which
 // then owns the scope (ScopeSource "repo").
-func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string, base *Base, treeHasManifest bool) (*profileStage, error) {
+//
+// resume, when set, is the profile a restored build state saved: it is used
+// as is (no model call, no OnProfile), so the restored manifest matches it.
+func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string, base *Base, treeHasManifest bool, resume *stateProfile) (*profileStage, error) {
 	st := &profileStage{}
 	opts := in.Profile
 
@@ -95,13 +99,28 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	seed := Seed(wt, inv.Paths())
 	pf := ProfileFile{Deps: st.deps, TopDirs: topDirs, ProfiledAt: in.Sha}
 	fresh := true
+	inheritPrev := func(pf *ProfileFile, p *ProfileFile) {
+		pf.Profile, pf.ScopeSource, pf.ScopeProposed = p.Profile, p.ScopeSource, p.ScopeProposed
+		pf.Seeded, pf.SeedReason, pf.ProfiledAt = p.Seeded, p.SeedReason, p.ProfiledAt
+	}
 	switch {
+	case resume != nil:
+		fresh = false
+		inheritPrev(&pf, &resume.File)
+		st.limitations = append(st.limitations, resume.Limitations...)
 	case needModel:
 		req := BuildProfilePrompt(inv, st.deps, seed, st.catalog.Metas())
 		p, rerr := RequestProfileWith(ctx, opts.Backend, req, st.catalog.Known())
 		if rerr != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
+			}
+			if prev != nil && !full {
+				// Nothing better than the base's profile (and its manifest).
+				fresh = false
+				inheritPrev(&pf, prev)
+				st.limitations = append(st.limitations, "profile taken from the previous snapshot: "+rerr.Error())
+				break
 			}
 			st.seedProfile(&pf, seed, rerr.Error())
 			break
@@ -117,8 +136,7 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 		}
 	case prev != nil && !full:
 		fresh = false
-		pf.Profile, pf.ScopeSource, pf.ScopeProposed = prev.Profile, prev.ScopeSource, prev.ScopeProposed
-		pf.Seeded, pf.SeedReason, pf.ProfiledAt = prev.Seeded, prev.SeedReason, prev.ProfiledAt
+		inheritPrev(&pf, prev)
 		if pf.Seeded {
 			st.limitations = append(st.limitations, "profile taken from the seed: "+pf.SeedReason)
 		}
@@ -140,14 +158,58 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	}
 
 	// The manifest is written from the profile only when the tree has none and
-	// the profile is new; an incremental build that merely fell back to the
-	// seed (nothing to ask the model) keeps the base's manifest.
-	if fresh && !treeHasManifest && (full || needModel) {
+	// the profile is new: the model answered, or a full scan (which has no
+	// manifest to keep). An incremental build never replaces the base's
+	// manifest by the seed.
+	if fresh && !treeHasManifest && (full || !pf.Seeded) {
 		cfg, tech := ScopeToScanConfig(pf.Profile.Scope), techIDs(pf.Profile)
 		st.writeManifest = func(manPath string) error { return WriteProfiledManifest(manPath, domainKey, cfg, tech) }
 	}
 	st.file = pf
 	return st, nil
+}
+
+// stateProfile is what a build state keeps of the profile layer.
+type stateProfile struct {
+	File        ProfileFile `json:"file"`
+	Limitations []string    `json:"limitations,omitempty"`
+}
+
+// stateProfileFile is the profile's file in the build state directory.
+const stateProfileFile = "profile.json"
+
+// readStateProfile returns the profile saved in a restored build state.
+func readStateProfile(stateDir string) *stateProfile {
+	raw, err := os.ReadFile(filepath.Join(stateDir, stateProfileFile))
+	if err != nil {
+		return nil
+	}
+	var sp stateProfile
+	if json.Unmarshal(raw, &sp) != nil || len(sp.File.Profile.Technologies) == 0 {
+		return nil
+	}
+	return &sp
+}
+
+// saveStateProfile writes the stage's profile into the state directory
+// (atomically); checkpoint calls it before state.json is renamed in.
+func (st *profileStage) saveStateProfile(stateDir string) error {
+	raw, err := json.Marshal(stateProfile{File: st.file, Limitations: st.limitations})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return err
+	}
+	tmp := filepath.Join(stateDir, stateProfileFile+".tmp")
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return err
+	}
+	if err := renameFile(tmp, filepath.Join(stateDir, stateProfileFile)); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // seedProfile fills pf with the deterministic profile and says why.

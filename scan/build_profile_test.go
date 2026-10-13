@@ -1,7 +1,11 @@
 package scan
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -167,5 +171,145 @@ func TestBuildSnapshot_TestGlobFilesGetTheTestNote(t *testing.T) {
 	}
 	if withNote != 1 || without < 1 {
 		t.Fatalf("test note on %d requests, absent on %d", withNote, without)
+	}
+}
+
+const tsProfileAnswer = `{"technologies":[{"id":"typescript","language":"typescript","role":"other","evidence":["src/a.ts"],"pack":"typescript"}],"scope":{"include":[{"glob":"src/**","reason":"app"},{"glob":"package.json","reason":"manifest"}],"exclude":[]}}`
+
+func tsRepoT(t *testing.T) (string, string) {
+	t.Helper()
+	return newCodeRepoT(t, map[string]string{"package.json": `{"name":"a","dependencies":{"kafkajs":"1"}}`, "src/a.ts": "export const a = 1"})
+}
+
+func TestBuildSnapshot_ResumeReusesTheSavedProfile(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, sixFiles())
+	stateDir := filepath.Join(t.TempDir(), "state")
+	pb := &cannedBackend{answers: []string{tsProfileAnswer, tsProfileAnswer}}
+	hooks := 0
+	opts := ProfileOptions{Backend: pb, OnProfile: func(context.Context, *Profile) (*prompts.Catalog, error) { hooks++; return nil, nil }}
+	cancelledFirstRun(t, repo, c1, stateDir, 3, func(in *BuildInput) { in.Profile = opts })
+	if pb.calls != 1 || hooks != 1 {
+		t.Fatalf("first run: profile calls=%d hooks=%d", pb.calls, hooks)
+	}
+	in := buildIn(repo, c1, t.TempDir(), &factsBackend{})
+	in.StateDir = stateDir
+	in.Profile = opts
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pb.calls != 1 || hooks != 1 {
+		t.Fatalf("resumed run asked again: profile calls=%d hooks=%d", pb.calls, hooks)
+	}
+	pf, _ := ParseProfileFile(res.Files.Profile)
+	if pf.ScopeSource != "model" || pf.Seeded || pf.ProfiledAt != c1 {
+		t.Fatalf("resumed profile = %+v", pf)
+	}
+}
+
+func TestBuildSnapshot_ModelFailureOnIncrementalInheritsBaseProfileAndManifest(t *testing.T) {
+	root, head := tsRepoT(t)
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = &cannedBackend{answers: []string{tsProfileAnswer}}
+	first, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head2 := commitFileT(t, root, "package.json", `{"name":"a","dependencies":{"kafkajs":"1","express":"4"}}`)
+	in = buildIn(root, head2, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = &cannedBackend{} // every request fails
+	in.Base = &Base{CodeSha: head, Files: first.Files}
+	second, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(second.Files.Domain, first.Files.Domain) {
+		t.Fatalf("base manifest was replaced:\n%s\nvs\n%s", second.Files.Domain, first.Files.Domain)
+	}
+	a, _ := ParseProfileFile(first.Files.Profile)
+	b, _ := ParseProfileFile(second.Files.Profile)
+	ja, _ := json.Marshal(a.Profile)
+	jb, _ := json.Marshal(b.Profile)
+	if string(ja) != string(jb) || b.Seeded || b.ScopeSource != "model" || b.ProfiledAt != head {
+		t.Fatalf("profile not inherited: %+v", b)
+	}
+	if !hasLimitation(second.Limitations, "profile taken from the previous snapshot: ") {
+		t.Fatalf("limitations = %v", second.Limitations)
+	}
+}
+
+func TestBuildSnapshot_InheritedProfileKeepsBaseManifestBytes(t *testing.T) {
+	root, head := tsRepoT(t)
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = &cannedBackend{answers: []string{tsProfileAnswer}}
+	first, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head2 := commitFileT(t, root, "src/b.ts", "export const b = 2")
+	in = buildIn(root, head2, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Base = &Base{CodeSha: head, Files: first.Files}
+	second, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(second.Files.Domain, first.Files.Domain) || second.Profile.ProfiledAt != head {
+		t.Fatalf("manifest changed or profile re-taken: %+v", second.Profile)
+	}
+}
+
+func TestBuildSnapshot_TreeManifestWinsOverModelScope(t *testing.T) {
+	man := "domains:\n  \"proj\":\n    name: \"proj\"\n    scan:\n      include:\n        - \"src/**\"\ntech: [typescript]\n"
+	root, head := newCodeRepoT(t, map[string]string{".depbot/chronicle.domain.yaml": man, "package.json": `{"name":"a"}`, "src/a.ts": "export const a = 1", "lib/x.ts": "export const x = 1"})
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = &cannedBackend{answers: []string{`{"technologies":[{"id":"typescript","language":"typescript","role":"other","evidence":["src/a.ts"],"pack":"typescript"}],"scope":{"include":[{"glob":"lib/**","reason":"model"}],"exclude":[]}}`}}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, _ := ParseProfileFile(res.Files.Profile)
+	if pf.ScopeSource != "repo" || pf.ScopeProposed != nil || string(res.Files.Domain) != man {
+		t.Fatalf("scope source %q, manifest:\n%s", pf.ScopeSource, res.Files.Domain)
+	}
+}
+
+func TestBuildSnapshot_OnProfileErrorIsALimitation(t *testing.T) {
+	root, head := tsRepoT(t)
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile = ProfileOptions{Backend: &cannedBackend{answers: []string{tsProfileAnswer}}, OnProfile: func(context.Context, *Profile) (*prompts.Catalog, error) {
+		return nil, errors.New("registry down")
+	}}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasLimitation(res.Limitations, "pack authoring: registry down") {
+		t.Fatalf("limitations = %v", res.Limitations)
+	}
+}
+
+func TestBuildSnapshot_TwoInvalidAnswersFallBackToSeed(t *testing.T) {
+	root, head := tsRepoT(t)
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = &cannedBackend{answers: []string{"garbage", "garbage"}}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, _ := ParseProfileFile(res.Files.Profile)
+	if !pf.Seeded || pf.ScopeSource != "seed" || !hasLimitation(res.Limitations, "profile taken from the seed: profile: ") {
+		t.Fatalf("%+v %v", pf, res.Limitations)
+	}
+}
+
+func TestBuildSnapshot_ProfileFileCarriesChecksAndPacks(t *testing.T) {
+	root, head := tsRepoT(t)
+	res, err := BuildSnapshot(context.Background(), buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, _ := ParseProfileFile(res.Files.Profile)
+	if len(pf.Checks) != 5 || len(pf.Packs) == 0 {
+		t.Fatalf("checks=%d packs=%+v", len(pf.Checks), pf.Packs)
 	}
 }

@@ -185,12 +185,6 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	if err != nil {
 		return res, err
 	}
-	stage, err := buildProfileStage(ctx, in, wt, DomainKey(projectPathOrDir(BootstrapInput{RepoRoot: wt, ProjectPath: projectPath})), base, treeHasManifest)
-	if err != nil {
-		return res, err
-	}
-	res.Profile = &stage.file
-	res.Limitations = append(res.Limitations, stage.limitations...)
 	// The saved state of an earlier attempt at this very build: its database
 	// and a manifest the bootstrap generated then (the one thing the tree and
 	// the base cannot give back).
@@ -210,6 +204,16 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 			res.Limitations = append(res.Limitations, "discarded unusable build state")
 		}
 	}
+	var resume *stateProfile
+	if restored {
+		resume = readStateProfile(in.StateDir)
+	}
+	stage, err := buildProfileStage(ctx, in, wt, DomainKey(projectPathOrDir(BootstrapInput{RepoRoot: wt, ProjectPath: projectPath})), base, treeHasManifest, resume)
+	if err != nil {
+		return res, err
+	}
+	res.Profile = &stage.file
+	res.Limitations = append(res.Limitations, stage.limitations...)
 	manifestGenerated, err := prepareConfigFiles(depDir, manPath, typesPath, base, projectPath, wt, stage.writeManifest)
 	if err != nil {
 		return res, err
@@ -295,6 +299,9 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	onFiles := in.OnFiles
 	if in.StateDir != "" {
 		checkpoint := func() error {
+			if err := stage.saveStateProfile(in.StateDir); err != nil {
+				return err
+			}
 			return checkpointState(in.StateDir, wt, in.Sha, baseSha, g.Store(), manifestGenerated)
 		}
 		defer func() {
