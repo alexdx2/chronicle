@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/llm"
 	"github.com/alexdx2/chronicle-core/paths"
@@ -30,6 +31,14 @@ type scanCLIOptions struct {
 	NoExport       bool
 	ProjectPath    string
 	UsageOut       string // "" = none
+	// ProfileModel is the model spec for the repository profile; "" = the
+	// extraction model. NoProfile takes the deterministic seed instead.
+	ProfileModel string
+	NoProfile    bool
+	// Out, when set, builds a layered snapshot (inventory, dependencies,
+	// profile, packs, extraction) and writes its files under <Out>/.depbot/
+	// instead of filling the local database.
+	Out string
 }
 
 // runScanFull is chronicle scan --full's testable core. It returns the process
@@ -40,6 +49,9 @@ type scanCLIOptions struct {
 func runScanFull(ctx context.Context, w io.Writer, g *graph.Graph, repoRoot string, opts scanCLIOptions, env func(string) string) (int, error) {
 	if !opts.Full {
 		return 1, errors.New("chronicle scan: only --full is implemented here (interactive scans run through the MCP scan command)")
+	}
+	if opts.Out != "" {
+		return runScanSnapshot(ctx, w, repoRoot, opts, env)
 	}
 	if g == nil {
 		return 1, errors.New("chronicle scan: no graph")
@@ -93,6 +105,91 @@ func runScanFull(ctx context.Context, w io.Writer, g *graph.Graph, repoRoot stri
 		}
 	}
 	if !rep.Complete {
+		return 4, nil
+	}
+	return 0, nil
+}
+
+// openExtractBackend opens the extraction model from opts/env.
+func openExtractBackend(opts scanCLIOptions, env func(string) string) (llm.Backend, error) {
+	model := opts.Model
+	if model == "" {
+		model = env("CHRONICLE_MODEL")
+	}
+	if model == "" {
+		model = defaultExtractModel
+	}
+	return llm.Open(model, env)
+}
+
+// runScanSnapshot is scan --full --out: it builds the layered snapshot of HEAD
+// (inventory, dependencies, profile with seed fallback, packs, extraction) and
+// writes graph.jsonl, the manifest, the types file and profile.json under
+// <Out>/.depbot/. Exit codes as runScanFull.
+func runScanSnapshot(ctx context.Context, w io.Writer, repoRoot string, opts scanCLIOptions, env func(string) string) (int, error) {
+	if opts.StructuralOnly {
+		return 1, errors.New("chronicle scan: --out builds a snapshot with the model; it cannot be combined with --structural-only")
+	}
+	backend, err := openExtractBackend(opts, env)
+	if errors.Is(err, llm.ErrNoKey) {
+		_ = writeJSON(w, map[string]any{"error": err.Error(), "skipped": true})
+		return 3, nil
+	}
+	if err != nil {
+		return 1, fmt.Errorf("chronicle scan: %w", err)
+	}
+	prof := scan.ProfileOptions{Backend: backend}
+	switch {
+	case opts.NoProfile:
+		prof = scan.ProfileOptions{Off: true, OffReason: "profile disabled (--no-profile)"}
+	case opts.ProfileModel != "":
+		pb, perr := llm.Open(opts.ProfileModel, env)
+		if errors.Is(perr, llm.ErrNoKey) {
+			_ = writeJSON(w, map[string]any{"error": perr.Error(), "skipped": true})
+			return 3, nil
+		}
+		if perr != nil {
+			return 1, fmt.Errorf("chronicle scan: --profile-model: %w", perr)
+		}
+		prof.Backend = pb
+	}
+	sha, err := gitutil.Run(repoRoot, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+	if err != nil {
+		return 1, fmt.Errorf("chronicle scan: resolve HEAD in %s: %w", repoRoot, err)
+	}
+	repo := filepath.Base(repoRoot)
+	res, berr := scan.BuildSnapshot(ctx, scan.BuildInput{
+		Repo: repo, CodeRepo: repoRoot, Sha: sha, ProjectPath: opts.ProjectPath,
+		Backend: backend, Concurrency: opts.Concurrency, ContextWindow: opts.ContextWindow,
+		FileTimeout: opts.FileTimeout, Profile: prof,
+	})
+	if berr != nil {
+		return 1, fmt.Errorf("chronicle scan: %w", berr)
+	}
+	for rel, data := range map[string][]byte{
+		snapshot.Path:         res.Files.Graph,
+		snapshot.ManifestPath: res.Files.Domain,
+		snapshot.TypesPath:    res.Files.Types,
+		snapshot.ProfilePath:  res.Files.Profile,
+	} {
+		if len(data) == 0 {
+			continue
+		}
+		dst := filepath.Join(opts.Out, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return 1, fmt.Errorf("chronicle scan: %w", err)
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return 1, fmt.Errorf("chronicle scan: write %s: %w", dst, err)
+		}
+	}
+	if err := writeJSON(w, map[string]any{
+		"code_sha": res.CodeSha, "out": opts.Out, "partial": res.Partial, "failed": res.Failed,
+		"limitations": res.Limitations, "profile_seeded": res.Profile != nil && res.Profile.Seeded,
+	}); err != nil {
+		return 1, fmt.Errorf("chronicle scan: write report: %w", err)
+	}
+	if res.Partial {
 		return 4, nil
 	}
 	return 0, nil
@@ -158,6 +255,9 @@ Exit code 0: complete. 1: error. 3: no API key for the model (prints {"error":..
 	f.BoolVar(&o.StructuralOnly, "structural-only", false, "Run only the structural pass; no model is called")
 	f.BoolVar(&o.NoExport, "no-export", false, "Do not write .depbot/graph.jsonl afterwards")
 	f.StringVar(&o.ProjectPath, "project-path", "", "Project path used to name a generated manifest's domain (default: the repository directory name)")
+	f.StringVar(&o.ProfileModel, "profile-model", "", "Model spec for the repository profile (default: the extraction model); used with --out")
+	f.BoolVar(&o.NoProfile, "no-profile", false, "Skip the profile request and take the deterministic seed profile; used with --out")
+	f.StringVar(&o.Out, "out", "", "Build a layered snapshot of HEAD and write graph.jsonl, the manifest and profile.json under <dir>/.depbot/")
 	f.StringVar(&o.UsageOut, "usage-out", "", "Write the full report JSON to this file")
 	return cmd
 }

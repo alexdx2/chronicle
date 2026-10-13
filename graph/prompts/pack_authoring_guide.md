@@ -3,6 +3,13 @@
 When a project uses a framework, ORM, or language that has no matching instruction pack,
 create one. The pack is saved to `.depbot/packs/` and used in all future scans.
 
+## Fleet packs
+
+Packs shared by a fleet of repositories live in the server's fleet registry, not in each repository.
+A fleet pack's id is `<tech>-<lang>` (for example `kafka-dotnet`, `nestjs-typescript`). The `## Match`
+section must list the file extensions explicitly (for example `.cs`, `.csproj`); a pack whose Match names
+no extension applies to every file in the repository.
+
 ## Pack structure
 
 Every pack is a markdown file with this structure:

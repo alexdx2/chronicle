@@ -102,3 +102,39 @@ func TestScanCmd_IncompleteExit4(t *testing.T) {
 		t.Fatalf("report = %+v", rep)
 	}
 }
+
+func TestScanCmd_NoProfileWritesSeededProfile(t *testing.T) {
+	e := scanRepoEnv(t)
+	out := t.TempDir()
+	var buf bytes.Buffer
+	code, err := runScanFull(context.Background(), &buf, e.g, e.root, scanCLIOptions{
+		Full: true, NoProfile: true, Out: out,
+		Model: "fake:" + filepath.Join("testdata", "extract-fake"), Concurrency: 1,
+	}, noEnv)
+	if code != 0 || err != nil {
+		t.Fatalf("code=%d err=%v\n%s", code, err, buf.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(out, ".depbot", "profile.json"))
+	if err != nil {
+		t.Fatalf("profile.json not written: %v", err)
+	}
+	pf, err := scan.ParseProfileFile(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pf.Seeded || pf.SeedReason != "profile disabled (--no-profile)" {
+		t.Fatalf("seeded=%v reason=%q", pf.Seeded, pf.SeedReason)
+	}
+	if _, err := os.Stat(filepath.Join(out, ".depbot", "graph.jsonl")); err != nil {
+		t.Fatalf("graph.jsonl not written next to the profile: %v", err)
+	}
+}
+
+func TestScanCmd_ProfileFlagsRegistered(t *testing.T) {
+	cmd := newScanCmd()
+	for _, n := range []string{"profile-model", "no-profile", "out"} {
+		if cmd.Flags().Lookup(n) == nil {
+			t.Errorf("flag --%s missing", n)
+		}
+	}
+}

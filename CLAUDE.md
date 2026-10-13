@@ -177,9 +177,18 @@ a warning). With publishers, only chain commits with a good SSH signature from `
 count. Heads are never signed. `Verifier.GitArgs()` supplies `gpg.ssh.allowedSignersFile` /
 `revocationFile`, and signatures are checked through `git log` with `%G?`.
 
-`snapshot.ContentID(graph, domain, types)` is the content identity (sha256 over the re-encoded graph
-with `Seq=0`, manifest, types); it errors on input without a snapshot header or with an unrecognized format, and must be computed from
+`snapshot.ContentID` (`ContentIDFiles(Files{Graph, Domain, Types, Profile})`) is the content identity (sha256 over the re-encoded graph
+with `Seq=0`, manifest, types and, for a version 2 snapshot, `profile.json`); it errors on input without a snapshot header or with an unrecognized format, and must be computed from
 exported files, not from a store.
+
+Profile, dependencies, packs, coverage version (layered headless scan; `chronicle scan --full --out <dir>`
+builds it, `--profile-model <spec>` picks the profiling model, `--no-profile` takes the seed): a snapshot
+build runs inventory -> deps (deterministic manifest parsing) -> profile (one model request; on any failure the
+deterministic seed, with `seed_reason`) -> packs catalog (project > fleet > builtin, one pack per id) ->
+extraction by layers (contracts, structure, integrations, tests) -> layer checks. The coverage version of an
+extracted file is `fact-schema@N+packs:<hash>` (hash over the applied packs' `id@version`), so changing a pack
+makes only the files it covers stale. `.depbot/profile.json` is the fourth snapshot file (technologies, deps
+publishes/depends, packs, checks, scope source, `seeded`); the snapshot format version is 2 (v1 is still read).
 
 ## Signal pipeline (scan finalize)
 

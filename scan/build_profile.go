@@ -21,6 +21,8 @@ type ProfileOptions struct {
 	// deterministic seed (a full scan) or the base's profile (an incremental one).
 	Backend llm.Backend
 	Off     bool
+	// OffReason is the seed reason written when Off is set; "" = the default.
+	OffReason string
 	// Catalog supplies the packs; nil = built-in packs plus the project's.
 	Catalog *prompts.Catalog
 	// ForceReprofile asks the model on an incremental build although no
@@ -141,7 +143,11 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 			st.limitations = append(st.limitations, "profile taken from the seed: "+pf.SeedReason)
 		}
 	default:
-		st.seedProfile(&pf, seed, "no profile model configured")
+		reason := "no profile model configured"
+		if opts.Off && opts.OffReason != "" {
+			reason = opts.OffReason
+		}
+		st.seedProfile(&pf, seed, reason)
 	}
 	if treeHasManifest {
 		pf.ScopeSource, pf.ScopeProposed = "repo", nil
