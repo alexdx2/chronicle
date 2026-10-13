@@ -75,6 +75,10 @@ type BuildInput struct {
 	// still present, regular and in scope). Ignored by a full scan, which sends
 	// everything not yet covered anyway.
 	RetryPaths []string
+	// Profile steers the profile layer (see ProfileOptions). The zero value
+	// takes the deterministic seed on a full scan and inherits the base's
+	// profile on an incremental one.
+	Profile ProfileOptions
 }
 
 // BuildResult is what BuildSnapshot produced. On error it is the partial
@@ -92,6 +96,8 @@ type BuildResult struct {
 	Skipped     []FailedFile
 	Limitations []string
 	Metrics     []FileMetric
+	// Profile is what profile.json holds; never nil.
+	Profile *ProfileFile
 	// Partial: files failed extraction, so the snapshot has known gaps.
 	Partial bool
 }
@@ -124,7 +130,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	buildMu.Lock()
 	defer buildMu.Unlock()
 
-	res := &BuildResult{CodeSha: in.Sha, Failed: []FailedFile{}, Skipped: []FailedFile{}, Limitations: []string{}, Metrics: []FileMetric{}}
+	res := &BuildResult{CodeSha: in.Sha, Failed: []FailedFile{}, Skipped: []FailedFile{}, Limitations: []string{}, Metrics: []FileMetric{}, Profile: &ProfileFile{}}
 	if err := ctx.Err(); err != nil {
 		return res, err
 	}
@@ -173,6 +179,18 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	depDir := filepath.Join(wt, filepath.Dir(snapshot.ManifestPath))
 	manPath := filepath.Join(wt, filepath.FromSlash(snapshot.ManifestPath))
 	typesPath := filepath.Join(wt, filepath.FromSlash(snapshot.TypesPath))
+	// The layers before the scan: inventory, dependencies, profile. The tree's
+	// own manifest, when it has one, owns the scope.
+	_, treeHasManifest, err := regularFile(manPath)
+	if err != nil {
+		return res, err
+	}
+	stage, err := buildProfileStage(ctx, in, wt, DomainKey(projectPathOrDir(BootstrapInput{RepoRoot: wt, ProjectPath: projectPath})), base, treeHasManifest)
+	if err != nil {
+		return res, err
+	}
+	res.Profile = &stage.file
+	res.Limitations = append(res.Limitations, stage.limitations...)
 	// The saved state of an earlier attempt at this very build: its database
 	// and a manifest the bootstrap generated then (the one thing the tree and
 	// the base cannot give back).
@@ -192,7 +210,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 			res.Limitations = append(res.Limitations, "discarded unusable build state")
 		}
 	}
-	manifestGenerated, err := prepareConfigFiles(depDir, manPath, typesPath, base, projectPath, wt)
+	manifestGenerated, err := prepareConfigFiles(depDir, manPath, typesPath, base, projectPath, wt, stage.writeManifest)
 	if err != nil {
 		return res, err
 	}
@@ -300,6 +318,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	opts := FullOptions{
 		RepoRoot: wt, ProjectPath: projectPath, Backend: in.Backend, Concurrency: in.Concurrency,
 		ContextWindow: in.ContextWindow, FileTimeout: in.FileTimeout, OnFiles: onFiles, OnFileDone: in.OnFileDone, OnPlan: in.OnPlan,
+		Catalog: stage.catalog, Deps: &stage.deps, Profile: &stage.file.Profile, Inventory: stage.inv,
 	}
 	var (
 		rep    *FullReport
@@ -321,6 +340,10 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 		}
 	}
 	res.Partial = len(res.Failed) > 0
+	var checks []LayerCheck
+	if rep != nil {
+		checks = rep.Checks
+	}
 	if runErr != nil {
 		return res, runErr
 	}
@@ -344,6 +367,11 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	if res.Files.Types, _, err = regularFile(typesPath); err != nil {
 		return res, err
 	}
+	var checkLims []string
+	if res.Files.Profile, checkLims, err = stage.finish(manPath, checks); err != nil {
+		return res, fmt.Errorf("scan: profile file: %w", err)
+	}
+	res.Limitations = append(res.Limitations, checkLims...)
 	if res.SnapshotID, err = res.Files.ContentID(); err != nil {
 		return res, fmt.Errorf("scan: snapshot id: %w", err)
 	}
@@ -372,7 +400,10 @@ func regularFile(path string) (data []byte, exists bool, err error) {
 // file) of the commit being built in the working copy: from its tree, else
 // from the base, else a bootstrap for the manifest. generated says the
 // manifest is the bootstrap's (neither the tree nor the base had one).
-func prepareConfigFiles(depDir, manPath, typesPath string, base *Base, projectPath, wt string) (generated bool, err error) {
+//
+// profiled, when set, writes the manifest from the build's fresh profile and
+// takes the place of the base's copy and the bootstrap.
+func prepareConfigFiles(depDir, manPath, typesPath string, base *Base, projectPath, wt string, profiled func(manPath string) error) (generated bool, err error) {
 	if fi, err := os.Lstat(depDir); err == nil && !fi.IsDir() {
 		return false, fmt.Errorf("scan: %s in the tree is not a directory", filepath.Base(depDir))
 	}
@@ -385,6 +416,11 @@ func prepareConfigFiles(depDir, manPath, typesPath string, base *Base, projectPa
 	}
 	switch {
 	case haveMan:
+	case profiled != nil:
+		if err := profiled(manPath); err != nil {
+			return false, err
+		}
+		generated = true
 	case base != nil && len(base.Files.Domain) > 0:
 		if err := os.WriteFile(manPath, base.Files.Domain, 0o644); err != nil {
 			return false, err
@@ -471,6 +507,9 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		r.structuralOK = false
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := r.writeDeps(d, multi); err != nil {
 		return err
 	}
 
@@ -566,6 +605,7 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 			return err
 		}
 	}
+	r.runChecks(d)
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
 	return ctx.Err()

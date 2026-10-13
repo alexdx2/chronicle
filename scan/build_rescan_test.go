@@ -13,7 +13,9 @@ import (
 // A rescan is an incremental build whose base is the snapshot of the same sha:
 // the diff is empty, so only files whose coverage version differs are sent.
 func TestBuildSnapshot_RescanSameShaSendsOnlyStaleVersions(t *testing.T) {
-	root, head := newCodeRepoT(t, map[string]string{"src/a.ts": "export const a = 1", "src/b.cs": "class B {}"})
+	// The manifest names both technologies (the seed would pick just one).
+	man := "domains:\n  \"proj\":\n    name: \"proj\"\n    scan:\n      include:\n        - \"**/*.ts\"\n        - \"**/*.cs\"\ntech: [typescript, dotnet]\n"
+	root, head := newCodeRepoT(t, map[string]string{"src/a.ts": "export const a = 1", "src/b.cs": "class B {}", ".depbot/chronicle.domain.yaml": man})
 	fake := llm.NewFake("testdata/fake")
 	first, err := BuildSnapshot(context.Background(), buildIn(root, head, t.TempDir(), fake))
 	if err != nil {
@@ -29,18 +31,18 @@ func TestBuildSnapshot_RescanSameShaSendsOnlyStaleVersions(t *testing.T) {
 		t.Fatalf("same packs: %+v %v", plans, err)
 	}
 
-	t.Skip("Task 10: BuildInput.Profile")
 	// A fleet pack for .cs files changes the version of b.cs only.
 	cat := prompts.BuiltinCatalog()
 	cat.Add(prompts.CatalogPack{ID: "dotnet", Content: "# DOTNET v2\n\n## Match\n- *.cs\n\n## Entry points (→ endpoint facts)\ny\n", Source: prompts.SourceFleet})
-	_ = cat
-	// in = buildIn(root, head, t.TempDir(), fake)
-	// in.Base = &Base{CodeSha: head, Files: second.Files}
-	// in.Profile.Catalog = cat
-	// in.Profile.Off = true
-	// plans = nil
-	// in.OnPlan = func(p Plan) { plans = append(plans, p) }
-	// if _, err := BuildSnapshot(ctx, in); err != nil || plans[0].ToSend != 1 { ... }
+	in = buildIn(root, head, t.TempDir(), fake)
+	in.Base = &Base{CodeSha: head, Files: second.Files}
+	in.Profile.Catalog = cat
+	in.Profile.Off = true
+	plans = nil
+	in.OnPlan = func(p Plan) { plans = append(plans, p) }
+	if _, err := BuildSnapshot(context.Background(), in); err != nil || len(plans) == 0 || plans[0].ToSend != 1 {
+		t.Fatalf("new dotnet pack: %+v %v", plans, err)
+	}
 }
 
 func TestBuildSnapshot_ScopeDropMarksEvidenceStale(t *testing.T) {

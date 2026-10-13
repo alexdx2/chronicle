@@ -40,7 +40,10 @@ type RunInput struct {
 	Guide *GuideSet
 	// VersionFor gives the coverage version recorded for a file. nil derives it
 	// from the packs the file's guide contains.
-	VersionFor   func(path string) string
+	VersionFor func(path string) string
+	// IsTest says whether a file is test code; such a file gets a line telling
+	// the model to report contracts and calls only. nil = no file is a test.
+	IsTest       func(path string) bool
 	RepoRoot     string
 	ChronicleDir string // <RepoRoot>/.depbot (outbox lives under it)
 	Domain       string
@@ -71,6 +74,9 @@ type RunInput struct {
 	// from the extraction workers and must be safe for that and quick.
 	OnFileDone func(path, status string)
 }
+
+// testFileNote is appended to the system guide of a file in the scan's test globs.
+const testFileNote = "\n\nThis file is a test: report only contracts and calls (endpoint, http_call, calls_endpoint, topic publish/consume); do not declare services or models from it."
 
 const (
 	defaultMaxFileBytes = int64(262144)
@@ -501,6 +507,9 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 			}
 		}
 		sys, _ := guide.For(item.FilePath)
+		if in.IsTest != nil && in.IsTest(item.FilePath) {
+			sys += testFileNote
+		}
 		req := BuildPrompt(sys, item.FilePath, content, cands)
 		req.MaxTokens = maxTokens
 		window := in.ContextWindow

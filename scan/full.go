@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexdx2/chronicle-core/deps"
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/graph/prompts"
@@ -38,6 +39,13 @@ type FullOptions struct {
 	// Catalog supplies the tech packs; nil -> built-in packs plus the project's
 	// <chronicle dir>/packs.
 	Catalog *prompts.Catalog
+	// Deps, when set, is written as role-deps extractions after the structural
+	// pass of each domain (only the manifests the domain owns).
+	Deps *deps.Report
+	// Profile and Inventory, when Profile is set, feed the deterministic layer
+	// checks that run after extraction (FullReport.Checks).
+	Profile   *Profile
+	Inventory *Inventory
 	// OnFiles is called after each committed wave with that wave's metrics.
 	OnFiles func([]FileMetric)
 	// OnFileDone is called when a file's extraction finishes, before its wave
@@ -86,6 +94,7 @@ type FullReport struct {
 	Skipped         []FailedFile   `json:"skipped"` // intentional skips (file too large, binary), not errors
 	Metrics         []FileMetric   `json:"metrics"`
 	Limitations     []string       `json:"limitations"`
+	Checks          []LayerCheck   `json:"checks,omitempty"`
 	// Complete: no failed files, the structural pass finished everywhere and
 	// the context was not cancelled.
 	Complete bool `json:"complete"`
@@ -242,6 +251,9 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := r.writeDeps(d, multi); err != nil {
+		return err
+	}
 
 	scanCfg, _ := r.m.ScanConfigFor(d.Name) // matches by name, not key (P11)
 	list, err := r.inScopeFiles(d, scanCfg, multi)
@@ -284,9 +296,49 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 		}
 	}
 
+	r.runChecks(d)
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
 	return ctx.Err()
+}
+
+// writeDeps stores the dependency extractions of the manifests this domain
+// owns, on the revision of head (claimed the way the headless run claims it,
+// so the extraction that follows joins the same row).
+func (r *fullRun) writeDeps(d manifest.DomainEntry, multi bool) error {
+	if r.o.Deps == nil {
+		return nil
+	}
+	own := deps.Report{Warnings: r.o.Deps.Warnings}
+	for _, p := range r.o.Deps.Publishes {
+		if !multi || r.m.DomainForFile(p.File) == d.Key {
+			own.Publishes = append(own.Publishes, p)
+		}
+	}
+	for _, dep := range r.o.Deps.Depends {
+		if !multi || r.m.DomainForFile(dep.File) == d.Key {
+			own.Depends = append(own.Depends, dep)
+		}
+	}
+	rev, _, err := r.g.Store().ClaimRevision(store.RevisionClaim{
+		DomainKey: d.Key, AfterSHA: r.head, TriggerKind: "ci_pipeline", Mode: "incremental",
+		Metadata: `{"kind":"headless"}`,
+	})
+	if err != nil {
+		return fmt.Errorf("scan: claim revision for dependencies: %w", err)
+	}
+	if _, err := r.g.WriteDepsExtractions(d.Key, rev, own); err != nil {
+		return fmt.Errorf("scan: write dependencies of %s: %w", d.Key, err)
+	}
+	return nil
+}
+
+// runChecks appends the layer checks of the finished domain.
+func (r *fullRun) runChecks(d manifest.DomainEntry) {
+	if r.o.Profile == nil || r.o.Inventory == nil {
+		return
+	}
+	r.rep.Checks = append(r.rep.Checks, LayerChecks(r.g, d.Key, *r.o.Profile, r.rep, r.o.Inventory)...)
 }
 
 // pendingFiles splits candidates into the files the model still has to see
@@ -401,7 +453,7 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 		G: r.g, RepoRoot: r.o.RepoRoot, ChronicleDir: paths.DirAt(r.o.RepoRoot), Domain: d.Key, Manifest: r.m,
 		HeadSHA: r.head, Files: todo, Backend: r.o.Backend, Concurrency: r.o.Concurrency,
 		ContextWindow: r.o.ContextWindow, FileTimeout: r.o.FileTimeout,
-		OnFileDone: r.o.OnFileDone, Guide: guide, VersionFor: versionFrom(guide),
+		OnFileDone: r.o.OnFileDone, Guide: guide, VersionFor: versionFrom(guide), IsTest: r.isTest(d),
 		OnFiles: func(fs []headless.FileUsage) {
 			ms := MetricsFrom(model, fs, time.Now())
 			r.rep.Metrics = append(r.rep.Metrics, ms...)
@@ -428,6 +480,15 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 		return fmt.Errorf("scan: extract domain %s: %w", d.Key, runErr)
 	}
 	return nil
+}
+
+// isTest is the domain's test-glob predicate (nil without test globs).
+func (r *fullRun) isTest(d manifest.DomainEntry) func(string) bool {
+	cfg, ok := r.m.ScanConfigFor(d.Name)
+	if !ok || cfg == nil || len(cfg.Tests) == 0 {
+		return nil
+	}
+	return cfg.IsTest
 }
 
 // limitationsFor says what a scan did not do, honestly.
