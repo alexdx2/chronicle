@@ -17,6 +17,7 @@ import (
 	"github.com/alexdx2/chronicle-core/extract/deterministic"
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/llm"
 	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/mcpserver"
@@ -31,7 +32,9 @@ import (
 // ChronicleDir and fails otherwise. mcpserver.CommitScanOutbox does not record
 // file coverage (only the MCP file_extracted paths do), so Run does it itself.
 type RunInput struct {
-	G            *graph.Graph
+	G *graph.Graph
+	// Catalog supplies tech packs; nil -> built-in packs plus <ChronicleDir>/packs.
+	Catalog      *prompts.Catalog
 	RepoRoot     string
 	ChronicleDir string // <RepoRoot>/.depbot (outbox lives under it)
 	Domain       string
@@ -214,7 +217,14 @@ func Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		}
 	}
 
-	guide := newGuideSet(g, in.Manifest.Tech)
+	cat := in.Catalog
+	if cat == nil {
+		cat = prompts.BuiltinCatalog()
+		if err := cat.AddProjectPacks(filepath.Join(in.ChronicleDir, "packs")); err != nil {
+			return nil, fmt.Errorf("project packs: %w", err)
+		}
+	}
+	guide := newGuideSet(g, in.Manifest.Tech, cat)
 	wantOutbox := filepath.Join(in.ChronicleDir, "scan-outbox", fmt.Sprintf("%d", rev))
 	// fail returns the partial result together with the error.
 	fail := func(err error) (*RunResult, error) {
@@ -472,7 +482,7 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 				}
 			}
 		}
-		sys := guide.For(item.FilePath)
+		sys, _ := guide.For(item.FilePath)
 		req := BuildPrompt(sys, item.FilePath, content, cands)
 		req.MaxTokens = maxTokens
 		window := in.ContextWindow

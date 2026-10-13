@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/llm"
 )
 
@@ -24,12 +25,22 @@ var techExts = map[string][]string{
 
 // techForFile keeps the manifest technologies that can matter for one file, so
 // a Go file is not sent the NestJS and Prisma rules (~3k tokens per request).
-func techForFile(path string, tech []string) []string {
+// A tech with a catalog pack matches by the pack's Match extensions (none =
+// every file); built-in packs keep the curated techExts table, whose lists are
+// wider than the extensions their Match prose happens to name.
+func techForFile(path string, tech []string, cat *prompts.Catalog) []string {
 	ext := strings.ToLower(filepath.Ext(path))
 	out := make([]string, 0, len(tech))
 	for _, t := range tech {
-		exts, known := techExts[strings.ToLower(t)]
-		if !known {
+		key := strings.ToLower(t)
+		var exts []string
+		legacy, hasLegacy := techExts[key]
+		if p, ok := catGet(cat, key); ok && !(p.Source == prompts.SourceBuiltin && hasLegacy) {
+			exts = p.Exts // fleet/project packs: by their own Match section
+		} else {
+			exts = legacy // curated table for built-ins (their Match prose is not extension-complete)
+		}
+		if len(exts) == 0 {
 			out = append(out, t)
 			continue
 		}
@@ -43,30 +54,50 @@ func techForFile(path string, tech []string) []string {
 	return out
 }
 
+func catGet(cat *prompts.Catalog, id string) (prompts.CatalogPack, bool) {
+	if cat == nil {
+		return prompts.CatalogPack{}, false
+	}
+	return cat.Get(id)
+}
+
+type guideEntry struct {
+	guide string
+	packs []prompts.PackRef
+}
+
 // guideSet renders the extraction guide per file, memoised by the technology
 // set it resolves to (a repo has a handful of distinct sets, not one per file).
 type guideSet struct {
 	g    *graph.Graph
 	tech []string
+	cat  *prompts.Catalog
 	mu   sync.Mutex
-	memo map[string]string
+	memo map[string]guideEntry
 }
 
-func newGuideSet(g *graph.Graph, tech []string) *guideSet {
-	return &guideSet{g: g, tech: tech, memo: map[string]string{}}
+func newGuideSet(g *graph.Graph, tech []string, cat *prompts.Catalog) *guideSet {
+	return &guideSet{g: g, tech: tech, cat: cat, memo: map[string]guideEntry{}}
 }
 
-func (s *guideSet) For(path string) string {
-	t := techForFile(path, s.tech)
+// For returns the guide for one file and the pack versions it contains.
+func (s *guideSet) For(path string) (string, []prompts.PackRef) {
+	t := techForFile(path, s.tech, s.cat)
 	key := strings.Join(t, ",")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v, ok := s.memo[key]; ok {
-		return v
+		return v.guide, v.packs
 	}
-	v := s.g.ExtractionGuide(t...)
-	s.memo[key] = v
-	return v
+	guide, packs := graph.ExtractionGuideFrom(s.cat, t...)
+	if s.g != nil {
+		// Agent-path setting override, as today.
+		if custom, err := s.g.Store().GetSetting("guide_fact_schema"); err == nil && custom != "" {
+			guide, packs = custom, nil
+		}
+	}
+	s.memo[key] = guideEntry{guide, packs}
+	return guide, packs
 }
 
 const (

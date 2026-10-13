@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/graph/prompts"
 	"github.com/alexdx2/chronicle-core/llm"
 )
 
@@ -23,7 +24,7 @@ func TestTechForFile(t *testing.T) {
 		"schema/q.graphql":     {"kafka", "mycustom"},
 	}
 	for path, want := range cases {
-		if got := techForFile(path, all); strings.Join(got, ",") != strings.Join(want, ",") {
+		if got := techForFile(path, all, prompts.BuiltinCatalog()); strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s: got %v want %v", path, got, want)
 		}
 	}
@@ -166,5 +167,25 @@ func TestRun_GuideFollowsFileLanguage(t *testing.T) {
 	}
 	if !(len(cs) > len(ts)) {
 		t.Logf("ts guide %d bytes, cs guide %d bytes", len(ts), len(cs))
+	}
+}
+
+func TestGuideSet_PacksPerFileAndVersion(t *testing.T) {
+	cat := prompts.BuiltinCatalog()
+	cat.Add(prompts.CatalogPack{ID: "kafka-dotnet", Content: "# K\n\n## Match\n- *.cs\n\n## Entry points (→ endpoint facts)\nx\n", Source: prompts.SourceFleet})
+	gs := newGuideSet(nil, []string{"dotnet", "kafka", "kafka-dotnet"}, cat)
+	_, cs := gs.For("src/A.cs")
+	_, ts := gs.For("web/a.ts")
+	ids := func(r []prompts.PackRef) (s string) {
+		for _, p := range r {
+			s += p.ID + " "
+		}
+		return
+	}
+	if ids(cs) != "dotnet kafka kafka-dotnet " {
+		t.Fatalf("cs packs = %q", ids(cs))
+	}
+	if ids(ts) != "kafka " {
+		t.Fatalf("ts packs = %q", ids(ts))
 	}
 }

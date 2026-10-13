@@ -3,7 +3,7 @@
 ## Match
 Load this pack when:
 - package.json has `kafkajs` dependency
-- .csproj has `Confluent.Kafka` PackageReference
+- the project file (csproj) has `Confluent.Kafka` PackageReference
 - Files import from `kafkajs` or `Confluent.Kafka`
 - Files import `EventPattern` from `@nestjs/microservices`
 - Files contain Kafka topic strings or producer/consumer patterns

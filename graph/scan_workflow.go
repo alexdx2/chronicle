@@ -129,6 +129,14 @@ func (g *Graph) ExtractionGuide(tech ...string) string {
 	return g.getGuide("guide_fact_schema", tech...)
 }
 
+// ExtractionGuideFrom composes the core fact-schema guide with the catalog's
+// packs for tech and returns the pack versions it applied. It does not read
+// per-project overrides (the agent path, ExtractionGuide, does).
+func ExtractionGuideFrom(cat *prompts.Catalog, tech ...string) (string, []prompts.PackRef) {
+	packs := cat.ForTech(tech)
+	return prompts.ComposeCatalog(prompts.Defaults()["guide_fact_schema"], packs), prompts.Refs(packs)
+}
+
 // ScanProgress tracks extraction progress within a scan run.
 type ScanProgress struct {
 	Total     int `json:"total"`
