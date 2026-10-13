@@ -254,7 +254,7 @@ func Decode(r io.Reader, lim Limits) (*Snapshot, []Warning, error) {
 				if h.Format != Format {
 					return nil, nil, fmt.Errorf("snapshot: unrecognized format %q (want %q)", h.Format, Format)
 				}
-				if h.Version != Version {
+				if h.Version != 1 && h.Version != 2 {
 					return nil, nil, fmt.Errorf("snapshot: unsupported major version %d (want %d)", h.Version, Version)
 				}
 			}

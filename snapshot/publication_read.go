@@ -10,8 +10,11 @@ import (
 // TypesPath is where the optional types registry lives in a tree.
 const TypesPath = ".depbot/chronicle.types.yaml"
 
+// ProfilePath is where the optional repo profile (format version 2) lives.
+const ProfilePath = ".depbot/profile.json"
+
 // ReadPublicationFiles reads the snapshot files out of a publication commit.
-// graph.jsonl and the domain manifest are required, the types file is not.
+// graph.jsonl and the domain manifest are required, the types and profile files are not.
 func ReadPublicationFiles(repoRoot, commit string) (Files, error) {
 	var f Files
 	if !ValidCodeSha(commit) {
@@ -43,6 +46,11 @@ func ReadPublicationFiles(repoRoot, commit string) (Files, error) {
 	}
 	if have[TypesPath] {
 		if f.Types, err = read(TypesPath); err != nil {
+			return Files{}, err
+		}
+	}
+	if have[ProfilePath] {
+		if f.Profile, err = read(ProfilePath); err != nil {
 			return Files{}, err
 		}
 	}

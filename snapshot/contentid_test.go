@@ -84,6 +84,47 @@ func TestContentID_ChangesWithContent(t *testing.T) {
 	}
 }
 
+func encodeMinimalGraphT(t *testing.T, version int) []byte {
+	t.Helper()
+	return encodeT(t, &Snapshot{Header: Header{Kind: "header", Format: Format, Version: version, Seq: 1, FactSchema: FactSchema}})
+}
+
+func TestContentID_V2IncludesProfileAlways(t *testing.T) {
+	g := encodeMinimalGraphT(t, 2)
+	a, _ := ContentIDFiles(Files{Graph: g, Domain: []byte("d"), Types: nil, Profile: nil})
+	b, _ := ContentIDFiles(Files{Graph: g, Domain: []byte("d"), Types: nil, Profile: []byte(`{"x":1}`)})
+	if a == b {
+		t.Fatal("profile must change a v2 id")
+	}
+	c, _ := ContentIDFiles(Files{Graph: g, Domain: []byte("d"), Types: []byte("t\x1fp"), Profile: nil})
+	d, _ := ContentIDFiles(Files{Graph: g, Domain: []byte("d"), Types: []byte("t"), Profile: []byte("p")})
+	if c == d {
+		t.Fatal("v2 ids collide across the types/profile boundary")
+	}
+	e0, _ := ContentIDFiles(Files{Graph: g, Domain: []byte("d")})
+	e1, _ := ContentIDFiles(Files{Graph: g, Domain: []byte("d"), Profile: []byte{}})
+	if e0 != e1 {
+		t.Fatal("nil and empty profile must hash the same")
+	}
+	g1 := encodeMinimalGraphT(t, 1)
+	x, _ := ContentIDFiles(Files{Graph: g1, Domain: []byte("d"), Profile: []byte("ignored")})
+	y, _ := ContentID(g1, []byte("d"), nil)
+	if x != y {
+		t.Fatal("v1 id must equal the legacy ContentID and ignore profile")
+	}
+}
+
+func TestDecode_AcceptsV1AndV2RejectsV3(t *testing.T) {
+	for _, v := range []int{1, 2} {
+		if _, _, err := Decode(bytes.NewReader(encodeMinimalGraphT(t, v)), DefaultLimits()); err != nil {
+			t.Fatalf("v%d: %v", v, err)
+		}
+	}
+	if _, _, err := Decode(bytes.NewReader(encodeMinimalGraphT(t, 3)), DefaultLimits()); err == nil {
+		t.Fatal("v3 accepted")
+	}
+}
+
 func TestContentID_NilAndEmptyTypesEqual(t *testing.T) {
 	g := encodeT(t, twoNodeSnapshot(1))
 	a := mustContentID(t, g, []byte("m"), nil)

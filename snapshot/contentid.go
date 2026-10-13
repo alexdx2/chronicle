@@ -21,7 +21,12 @@ import (
 // line exactly like every other reader does. Input without a snapshot header
 // (empty, binary garbage, node lines only) is an error: it must not yield a
 // valid-looking id, since ContentID is compared at a trust boundary.
-func ContentID(graph, domain, types []byte) (string, error) {
+//
+// For a version 2 graph the profile bytes are appended after types, again
+// separated by 0x1f (always present, possibly empty); version 1 graphs hash
+// exactly the legacy bytes and ignore Profile.
+func ContentIDFiles(f Files) (string, error) {
+	graph, domain, types := f.Graph, f.Domain, f.Types
 	snap, _, err := Decode(bytes.NewReader(graph), DefaultLimits())
 	if err != nil {
 		return "", fmt.Errorf("snapshot: ContentID: %w", err)
@@ -43,5 +48,15 @@ func ContentID(graph, domain, types []byte) (string, error) {
 	h.Write(domain)
 	h.Write([]byte{0x1f})
 	h.Write(types)
+	if snap.Header.Version >= 2 {
+		h.Write([]byte{0x1f})
+		h.Write(f.Profile)
+	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ContentID is ContentIDFiles for graph, domain and types only. For a
+// version 2 graph it therefore hashes an empty profile.
+func ContentID(graph, domain, types []byte) (string, error) {
+	return ContentIDFiles(Files{Graph: graph, Domain: domain, Types: types})
 }

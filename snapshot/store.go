@@ -7,12 +7,13 @@ import (
 	"time"
 )
 
-// Files are the three exported files that make one snapshot (spec §3.1).
-// Types is optional; nil means the project has no chronicle.types.yaml.
-type Files struct{ Graph, Domain, Types []byte }
+// Files are the exported files that make one snapshot (spec §3.1). Types is
+// optional; nil means the project has no chronicle.types.yaml. Profile is
+// profile.json, part of format version 2 (nil/empty = no profile).
+type Files struct{ Graph, Domain, Types, Profile []byte }
 
 // ContentID is the content identity of the files (see ContentID).
-func (f Files) ContentID() (string, error) { return ContentID(f.Graph, f.Domain, f.Types) }
+func (f Files) ContentID() (string, error) { return ContentIDFiles(f) }
 
 // Labels on a stored snapshot. Every stored snapshot is a head; a snapshot
 // that is also part of a long-lived branch's history carries chain:<branch>.

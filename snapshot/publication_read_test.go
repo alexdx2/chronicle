@@ -85,6 +85,38 @@ func TestReadPublicationFiles_WithAndWithoutTypes(t *testing.T) {
 	}
 }
 
+func TestReadPublicationFiles_Profile(t *testing.T) {
+	repo := initGitRepoT(t)
+	graph, domain := pubFilesT(t)
+	code := strings.Repeat("c", 40)
+	without := makePublicationT(t, repo, code, graph, domain, nil, HeadRefPrefix+code)
+	f, err := ReadPublicationFiles(repo, without)
+	if err != nil || f.Profile != nil {
+		t.Fatalf("absent profile: %v %q", err, f.Profile)
+	}
+	// add profile.json on top of that tree
+	idx := t.TempDir() + "/index"
+	env := append(os.Environ(), "GIT_INDEX_FILE="+idx, "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	git := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = env
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "read-tree", without)
+	blob := git(`{"p":1}`, "hash-object", "-w", "--stdin")
+	git("", "update-index", "--add", "--cacheinfo", "100644,"+blob+","+ProfilePath)
+	with := git("x", "commit-tree", git("", "write-tree"), "-p", without)
+	f, err = ReadPublicationFiles(repo, with)
+	if err != nil || string(f.Profile) != `{"p":1}` {
+		t.Fatalf("profile: %v %q", err, f.Profile)
+	}
+}
+
 func TestReadPublicationFiles_MissingGraphIsError(t *testing.T) {
 	repo := initGitRepoT(t)
 	writeFileT(t, repo, ManifestPath, "domains:\n  d: {name: D}\n")

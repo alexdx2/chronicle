@@ -68,7 +68,7 @@ func mustPut(t *testing.T, st snapshot.Store, repo, sha string, f snapshot.Files
 }
 
 func sameFiles(a, b snapshot.Files) bool {
-	return bytes.Equal(a.Graph, b.Graph) && bytes.Equal(a.Domain, b.Domain) && bytes.Equal(a.Types, b.Types)
+	return bytes.Equal(a.Graph, b.Graph) && bytes.Equal(a.Domain, b.Domain) && bytes.Equal(a.Types, b.Types) && bytes.Equal(a.Profile, b.Profile)
 }
 
 func within(a, b time.Time) bool {
@@ -106,6 +106,21 @@ func Run(t *testing.T, h Harness) {
 		if e.Repo != "r1" || e.CodeSha != Sha(1) || e.SnapshotID != r.Entry.SnapshotID ||
 			!reflect.DeepEqual(e.Labels, r.Entry.Labels) || !within(e.CreatedAt, r.Entry.CreatedAt) {
 			t.Fatalf("Get entry %+v differs from Put entry %+v", e, r.Entry)
+		}
+	})
+
+	t.Run("PutGetRoundTripProfile", func(t *testing.T) {
+		st := h.New(t)
+		f := Sample("p")
+		f.Types = []byte("types: {}\n")
+		f.Profile = []byte("{}")
+		mustPut(t, st, "r1", Sha(1), f, snapshot.PutOptions{})
+		got, _, err := st.Get(ctx, "r1", Sha(1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameFiles(got, f) || string(got.Profile) != "{}" {
+			t.Fatalf("Get differs: %+v", got)
 		}
 	})
 

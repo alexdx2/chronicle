@@ -174,14 +174,14 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestDecode_UnknownMajorVersion(t *testing.T) {
-	input := `{"kind":"header","format":"chronicle-graph","version":2,"seq":1,"domains":["x"],"fact_schema":1,"counts":{"node":0,"edge":0,"term":0,"coverage":0}}` + "\n"
+	input := `{"kind":"header","format":"chronicle-graph","version":3,"seq":1,"domains":["x"],"fact_schema":1,"counts":{"node":0,"edge":0,"term":0,"coverage":0}}` + "\n"
 
 	_, _, err := Decode(strings.NewReader(input), DefaultLimits())
 	if err == nil {
 		t.Fatal("expected an error for an unknown major version, got nil")
 	}
-	if !strings.Contains(err.Error(), "version 2") {
-		t.Fatalf("expected error to mention %q, got: %v", "version 2", err)
+	if !strings.Contains(err.Error(), "version 3") {
+		t.Fatalf("expected error to mention %q, got: %v", "version 3", err)
 	}
 }
 

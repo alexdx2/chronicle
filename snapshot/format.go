@@ -17,7 +17,7 @@ import "encoding/json"
 // the file's fixed location relative to a project's .depbot directory.
 const (
 	Format     = "chronicle-graph"
-	Version    = 1
+	Version    = 2
 	FactSchema = 1
 	Path       = ".depbot/graph.jsonl"
 )

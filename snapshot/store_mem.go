@@ -43,7 +43,7 @@ func cloneBytes(b []byte) []byte {
 }
 
 func cloneFiles(f Files) Files {
-	return Files{Graph: cloneBytes(f.Graph), Domain: cloneBytes(f.Domain), Types: cloneBytes(f.Types)}
+	return Files{Graph: cloneBytes(f.Graph), Domain: cloneBytes(f.Domain), Types: cloneBytes(f.Types), Profile: cloneBytes(f.Profile)}
 }
 
 func cloneEntry(e Entry) Entry {
