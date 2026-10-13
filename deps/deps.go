@@ -41,6 +41,8 @@ type Dependency struct {
 type Report struct {
 	Publishes []Package    `json:"publishes"`
 	Depends   []Dependency `json:"depends"`
+	// Warnings lists manifests that were skipped, as "<file>: <error>".
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type parser interface {
@@ -77,6 +79,9 @@ func Normalize(ecosystem, name string) string {
 // under root. Files that are not manifests are skipped. The result is sorted.
 func Scan(root string, files []string) (Report, error) {
 	var out Report
+	if _, err := os.Stat(root); err != nil {
+		return Report{}, fmt.Errorf("deps: root: %w", err)
+	}
 	for _, rel := range files {
 		for _, p := range parsers {
 			if !p.matches(rel) {
@@ -84,11 +89,13 @@ func Scan(root string, files []string) (Report, error) {
 			}
 			body, err := osReadFile(joinRoot(root, rel))
 			if err != nil {
-				return Report{}, fmt.Errorf("deps: read %s: %w", rel, err)
+				out.Warnings = append(out.Warnings, fmt.Sprintf("%s: %v", rel, err))
+				break
 			}
 			r, err := p.parse(root, rel, stripBOM(body))
 			if err != nil {
-				return Report{}, fmt.Errorf("deps: %s: %w", rel, err)
+				out.Warnings = append(out.Warnings, fmt.Sprintf("%s: %v", rel, err))
+				break
 			}
 			out.Publishes = append(out.Publishes, r.Publishes...)
 			out.Depends = append(out.Depends, r.Depends...)
@@ -96,6 +103,7 @@ func Scan(root string, files []string) (Report, error) {
 		}
 	}
 	fillCentralNuGetVersions(out.Depends)
+	sort.Strings(out.Warnings)
 	sort.Slice(out.Publishes, func(i, j int) bool {
 		a, b := out.Publishes[i], out.Publishes[j]
 		if a.Name != b.Name {

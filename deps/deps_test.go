@@ -25,7 +25,7 @@ func TestScan_AllEcosystems(t *testing.T) {
 	write(t, root, "api/Api.csproj", "\ufeff<Project Sdk=\"Microsoft.NET.Sdk\">\r\n  <PropertyGroup>\r\n    <PackageId>Acme.Api</PackageId>\r\n  </PropertyGroup>\r\n  <ItemGroup>\r\n    <PackageReference Include=\"Confluent.Kafka\" Version=\"2.3.0\" />\r\n    <ProjectReference Include=\"..\\Shared\\Shared.csproj\" />\r\n  </ItemGroup>\r\n</Project>\r\n")
 	write(t, root, "Shared/Shared.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><AssemblyName>Acme.Shared</AssemblyName></PropertyGroup></Project>")
 	write(t, root, "svc/go.mod", "module github.com/acme/svc\n\ngo 1.25\n\nrequire (\n\tgithub.com/segmentio/kafka-go v0.4.47\n\tgolang.org/x/sys v0.1.0 // indirect\n)\n")
-	write(t, root, "py/pyproject.toml", "[project]\nname = \"acme-py\"\ndependencies = [\n  \"fastapi>=0.100\",\n  \"boto3\",\n]\n")
+	write(t, root, "py/pyproject.toml", "[project]\nname = \"acme-py\"\ndependencies = [\n  \"fastapi>=0.100\",\n  \"boto3\",\n]\n\n[project.optional-dependencies]\ndev = [\"pytest>=8\"]\n")
 	write(t, root, "py/requirements-dev.txt", "pytest==8.0\n# comment\n")
 	write(t, root, "jvm/pom.xml", `<project><groupId>com.acme</groupId><artifactId>orders</artifactId><dependencies><dependency><groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>3.7.0</version><scope>compile</scope></dependency></dependencies></project>`)
 	write(t, root, "src/main.go", "package main")
@@ -43,15 +43,16 @@ func TestScan_AllEcosystems(t *testing.T) {
 			t.Errorf("publish %+v", p)
 		}
 	}
-	find := func(name string) Dependency {
+	findIn := func(name, file string) Dependency {
 		for _, d := range rep.Depends {
-			if d.Name == name {
+			if d.Name == name && (file == "" || d.File == file) {
 				return d
 			}
 		}
 		t.Fatalf("dependency %q missing in %+v", name, rep.Depends)
 		return Dependency{}
 	}
+	find := func(name string) Dependency { return findIn(name, "") }
 	if d := find("confluent.kafka"); d.Version != "2.3.0" || d.Ecosystem != "nuget" || d.File != "api/Api.csproj" || d.Line != 6 || d.Section != "dependencies" || !strings.Contains(d.Text, `Include="Confluent.Kafka"`) {
 		t.Errorf("nuget dep = %+v", d)
 	}
@@ -70,7 +71,10 @@ func TestScan_AllEcosystems(t *testing.T) {
 	if d := find("fastapi"); d.Version != ">=0.100" || d.Section != "dependencies" {
 		t.Errorf("py dep = %+v", d)
 	}
-	if d := find("pytest"); d.Section != "requirements-dev" || d.Version != "==8.0" {
+	if d := findIn("pytest", "py/pyproject.toml"); d.Section != "dev" || d.Version != ">=8" {
+		t.Errorf("optional group dep = %+v", d)
+	}
+	if d := findIn("pytest", "py/requirements-dev.txt"); d.Section != "requirements-dev" || d.Version != "==8.0" {
 		t.Errorf("requirements dep = %+v", d)
 	}
 	if d := find("org.apache.kafka:kafka-clients"); d.Version != "3.7.0" || d.Section != "compile" {
@@ -102,5 +106,24 @@ func TestIsManifest(t *testing.T) {
 		if IsManifest(p) {
 			t.Errorf("%s should not be a manifest", p)
 		}
+	}
+}
+
+func TestScan_SkipsUnparseableManifest(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "good/package.json", `{"name":"good","dependencies":{"kafkajs":"1"}}`)
+	write(t, root, "bad/package.json", `{not json`)
+	rep, err := Scan(root, []string{"bad/package.json", "good/package.json", "missing/package.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Publishes) != 1 || rep.Publishes[0].Name != "good" || len(rep.Depends) != 1 {
+		t.Fatalf("report = %+v", rep)
+	}
+	if len(rep.Warnings) != 2 || !strings.HasPrefix(rep.Warnings[0], "bad/package.json: ") || !strings.HasPrefix(rep.Warnings[1], "missing/package.json: ") {
+		t.Fatalf("warnings = %q", rep.Warnings)
+	}
+	if _, err := Scan(filepath.Join(root, "nope"), []string{"x/package.json"}); err == nil {
+		t.Fatal("unreadable root must be an error")
 	}
 }

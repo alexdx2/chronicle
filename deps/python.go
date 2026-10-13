@@ -26,41 +26,54 @@ var (
 
 func parsePyproject(rel string, body []byte) Report {
 	var r Report
-	inProject, inDeps := false, false
+	inProject, inOptional := false, false
+	listSection := "" // set while inside a multi-line list
 	for i, raw := range strings.Split(string(body), "\n") {
 		n := i + 1
 		line := strings.TrimSpace(raw)
-		if inDeps {
+		if listSection != "" {
 			list, closed := line, strings.Contains(line, "]")
 			if closed {
 				list = line[:strings.Index(line, "]")]
 			}
-			r.addPyDeps(rel, n, list, "dependencies")
-			inDeps = !closed
+			r.addPyDeps(rel, n, list, listSection)
+			if closed {
+				listSection = ""
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "[") {
 			inProject = line == "[project]"
+			inOptional = line == "[project.optional-dependencies]"
 			continue
 		}
-		if !inProject {
+		key, value, hasEq := strings.Cut(line, "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if !hasEq {
 			continue
 		}
-		if m := pyNameRe.FindStringSubmatch(line); m != nil {
-			r.Publishes = append(r.Publishes, Package{Name: Normalize("python", m[1]), Ecosystem: "python", File: rel, Line: n})
-		} else if rest, ok := strings.CutPrefix(line, "dependencies"); ok {
-			rest = strings.TrimSpace(rest)
-			rest, ok = strings.CutPrefix(rest, "=")
-			rest, ok2 := strings.CutPrefix(strings.TrimSpace(rest), "[")
-			if !ok || !ok2 {
+		switch {
+		case inProject && key == "name":
+			if m := pyNameRe.FindStringSubmatch(line); m != nil {
+				r.Publishes = append(r.Publishes, Package{Name: Normalize("python", m[1]), Ecosystem: "python", File: rel, Line: n})
+			}
+		case (inProject && key == "dependencies") || inOptional:
+			section := "dependencies"
+			if inOptional {
+				section = strings.Trim(key, `"`)
+			}
+			rest, ok := strings.CutPrefix(value, "[")
+			if !ok {
 				continue
 			}
 			closed := strings.Contains(rest, "]")
 			if closed {
 				rest = rest[:strings.Index(rest, "]")]
 			}
-			r.addPyDeps(rel, n, rest, "dependencies")
-			inDeps = !closed
+			r.addPyDeps(rel, n, rest, section)
+			if !closed {
+				listSection = section
+			}
 		}
 	}
 	return r
