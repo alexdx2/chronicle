@@ -112,9 +112,10 @@ Be specific. List file extensions, filenames, import paths, decorator names, con
 
 ## Rules for the pack
 
-Every extraction section is an `## ` heading that ends in `(→ <kind> facts)` and shows at least one
-`=> {"kind":"<kind>",...}` example; a pack needs three such sections or it is rejected. Sections without a
-fact example (`## Match`, `## Hierarchy — Parent Assignment`, `## Do NOT extract`) do not count.
+Every extraction section is an `## ` heading that ends in `(→ ... facts)` naming the fact kind, and shows at
+least one `=> { ... }` fact example with that kind, as the sections above do; a pack needs three such sections
+or it is rejected. Sections without a fact example (`## Match`, `## Hierarchy — Parent Assignment`,
+`## Do NOT extract`) do not count.
 
 CRITICAL: Your pack MUST follow these rules:
 
