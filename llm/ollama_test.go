@@ -82,3 +82,21 @@ func TestOllama_HostNormalisation(t *testing.T) {
 		}
 	}
 }
+
+// A free-text request (an instruction pack in markdown) must not be forced
+// into JSON: with format:json the model wraps the pack in {"content":...} and
+// often stops after a title (fleet, 14.10).
+func TestOllama_TextRequestHasNoFormat(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(ollamaOK))
+	}))
+	defer srv.Close()
+	if _, err := NewOllama("m", srv.URL).Complete(context.Background(), Request{System: "S", User: "U", Text: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := body["format"]; has {
+		t.Fatalf("text request carries format: %v", body)
+	}
+}

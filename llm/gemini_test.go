@@ -151,3 +151,19 @@ func TestGemini_BackoffHonoursCancellation(t *testing.T) {
 		t.Fatalf("err=%v calls=%d", err, calls)
 	}
 }
+
+func TestGemini_TextRequestHasNoMimeType(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(geminiOK))
+	}))
+	defer srv.Close()
+	b := NewGemini("gemini-2.5-flash", "gk").(*gemini).WithBaseURL(srv.URL)
+	if _, err := b.Complete(context.Background(), Request{System: "S", User: "U", Text: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := body["generationConfig"].(map[string]any)["responseMimeType"]; has {
+		t.Fatalf("text request forces JSON: %v", body)
+	}
+}

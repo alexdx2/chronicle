@@ -15,6 +15,11 @@ type Request struct {
 	System    string
 	User      string
 	MaxTokens int // 0 -> DefaultMaxTokens
+	// Text asks for a free-text answer: the backends then do not force a JSON
+	// output format (Ollama format, OpenAI response_format, Gemini
+	// responseMimeType). Extraction and profile requests want JSON and leave
+	// it false; a request for markdown (an instruction pack) sets it.
+	Text bool
 }
 
 // Usage counts tokens for one or more calls.

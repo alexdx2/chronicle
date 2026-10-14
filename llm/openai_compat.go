@@ -69,7 +69,9 @@ func (c *chat) Complete(ctx context.Context, req Request) (Response, error) {
 			{"role": "system", "content": req.System},
 			{"role": "user", "content": req.User},
 		},
-		"response_format": map[string]string{"type": "json_object"},
+	}
+	if !req.Text {
+		body["response_format"] = map[string]string{"type": "json_object"}
 	}
 	for k, v := range c.extra {
 		body[k] = v

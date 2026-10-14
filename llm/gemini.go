@@ -52,10 +52,14 @@ func (g *gemini) Complete(ctx context.Context, req Request) (Response, error) {
 	if maxTokens == 0 {
 		maxTokens = DefaultMaxTokens
 	}
+	gen := map[string]any{"maxOutputTokens": maxTokens}
+	if !req.Text {
+		gen["responseMimeType"] = "application/json"
+	}
 	body, err := json.Marshal(map[string]any{
 		"systemInstruction": gemContent{Parts: []gemPart{{Text: req.System}}},
 		"contents":          []map[string]any{{"role": "user", "parts": []gemPart{{Text: req.User}}}},
-		"generationConfig":  map[string]any{"responseMimeType": "application/json", "maxOutputTokens": maxTokens},
+		"generationConfig":  gen,
 	})
 	if err != nil {
 		return Response{}, err

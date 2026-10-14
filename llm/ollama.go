@@ -67,11 +67,10 @@ func (o *ollama) Complete(ctx context.Context, req Request) (Response, error) {
 	if maxTokens == 0 {
 		maxTokens = DefaultMaxTokens
 	}
-	body, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"model":  o.model,
 		"stream": false,
 		"think":  false,
-		"format": "json",
 		"options": map[string]any{
 			"temperature": 0,
 			"num_predict": maxTokens,
@@ -81,7 +80,11 @@ func (o *ollama) Complete(ctx context.Context, req Request) (Response, error) {
 			{"role": "system", "content": req.System},
 			{"role": "user", "content": req.User},
 		},
-	})
+	}
+	if !req.Text {
+		payload["format"] = "json"
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return Response{}, err
 	}

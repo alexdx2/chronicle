@@ -149,3 +149,19 @@ func TestOpenAI_RetriesOn429(t *testing.T) {
 		t.Errorf("calls=%d slept=%v", calls, slept)
 	}
 }
+
+func TestOpenAI_TextRequestHasNoResponseFormat(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(chatOK))
+	}))
+	defer srv.Close()
+	b := NewOpenAI("m1", "sk").WithBaseURL(srv.URL + "/v1")
+	if _, err := b.Complete(context.Background(), Request{System: "S", User: "U", Text: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := body["response_format"]; has {
+		t.Fatalf("text request forces JSON: %v", body)
+	}
+}
