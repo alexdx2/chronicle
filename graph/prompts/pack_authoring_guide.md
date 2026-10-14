@@ -112,6 +112,10 @@ Be specific. List file extensions, filenames, import paths, decorator names, con
 
 ## Rules for the pack
 
+Every extraction section is an `## ` heading that ends in `(→ <kind> facts)` and shows at least one
+`=> {"kind":"<kind>",...}` example; a pack needs three such sections or it is rejected. Sections without a
+fact example (`## Match`, `## Hierarchy — Parent Assignment`, `## Do NOT extract`) do not count.
+
 CRITICAL: Your pack MUST follow these rules:
 
 1. **Only use existing fact kinds.** allowed kinds:
@@ -186,11 +190,11 @@ DRF ViewSets:
 `Order.objects.filter(...)` => `{"kind":"uses_model","to":"Order"}`
 `Order.objects.create(...)` => `{"kind":"uses_model","to":"Order"}`
 
-## Service calls
+## Service calls (→ calls_service facts)
 
 `self.payment_service.charge(order)` => `{"kind":"calls_service","to":"PaymentService","method":"charge"}`
 
-## Celery tasks (→ produces/consumes)
+## Celery tasks (→ produces/consumes facts)
 
 `order_created.delay(order_id)` => `{"kind":"produces","to":"order_created","method":"delay"}`
 `@shared_task def process_order(order_id):` => `{"kind":"consumes","to":"process_order","method":"process_order"}`
