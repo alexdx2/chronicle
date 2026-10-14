@@ -167,6 +167,11 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	if treeHasManifest {
 		pf.ScopeSource, pf.ScopeProposed = "repo", nil
 	}
+	if !fresh {
+		// The profile was decided by an earlier build; a pack that appeared
+		// since (authored by another repository, enabled by hand) applies now.
+		AdoptCatalogPacks(&pf.Profile, st.catalog)
+	}
 
 	if fresh && opts.OnProfile != nil {
 		cat, herr := opts.OnProfile(ctx, &pf.Profile)
@@ -262,7 +267,10 @@ func (st *profileStage) finish(manPath string, checks []LayerCheck) ([]byte, []s
 			}
 		}
 	}
-	pf.Packs = prompts.Refs(st.catalog.ForTech(tech))
+	// The packs applied are the manifest's technologies and the profile's
+	// pack choices (the same list for a profiled manifest; a tree manifest or
+	// an inherited one gains the profile's later choices this way).
+	pf.Packs = prompts.Refs(st.catalog.ForTech(append(tech, techIDs(pf.Profile)...)))
 	b, err := json.MarshalIndent(pf, "", "  ")
 	return b, checkLimitations(checks), err
 }

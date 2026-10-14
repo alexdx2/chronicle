@@ -146,3 +146,61 @@ func TestBuildSnapshot_DropThenReadmitSendsTheFileAgain(t *testing.T) {
 		t.Fatalf("re-admitted file must be sent again: %+v", plans.plans)
 	}
 }
+
+// A rescan at the same sha inherits the profile; a pack that appeared since for
+// one of its technologies (named "new" or left without a pack) is adopted: the
+// profile names it, profile.json applies it, and its files are sent again.
+func TestBuildSnapshot_RescanAdoptsAPackThatAppeared(t *testing.T) {
+	root, head := newCodeRepoT(t, map[string]string{"Api/Api.csproj": "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><ItemGroup><PackageReference Include=\"Confluent.Kafka\" Version=\"2.3.0\" /></ItemGroup></Project>", "Api/A.cs": "class A {}", "Api/B.cs": "class B {}"})
+	answer := `{"technologies":[{"id":"dotnet","language":"dotnet","role":"http","evidence":["Api/Api.csproj:1"],"pack":"dotnet"},{"id":"kafka","language":"dotnet","role":"messaging","evidence":["Api/Api.csproj:1 PackageReference Confluent.Kafka 2.3.0"],"pack":"new"}],"scope":{"include":[{"glob":"**/*.cs","reason":"code"},{"glob":"**/*.csproj","reason":"manifest"}],"exclude":[]}}`
+	fake := llm.NewFake("testdata/fake")
+	in := buildIn(root, head, t.TempDir(), fake)
+	in.Profile.Backend = &cannedBackend{answers: []string{answer}}
+	first, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, _ := ParseProfileFile(first.Files.Profile)
+	for _, p := range pf.Packs {
+		if p.ID == "kafka-dotnet" {
+			t.Fatal("no kafka pack exists yet")
+		}
+	}
+	// the pack appears in the fleet registry; the rescan inherits the profile (no model)
+	cat := prompts.BuiltinCatalog()
+	cat.Add(prompts.CatalogPack{ID: "kafka-dotnet", Content: "# KAFKA DOTNET\n\n## Match\nmatch: ext=.cs\n\n## Producers (→ produces facts)\ny\n", Source: prompts.SourceFleet})
+	in = buildIn(root, head, t.TempDir(), fake)
+	in.Base = &Base{CodeSha: head, Files: first.Files}
+	in.Profile.Catalog = cat
+	in.Profile.Off = true
+	var plans []Plan
+	in.OnPlan = func(p Plan) { plans = append(plans, p) }
+	second, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, _ = ParseProfileFile(second.Files.Profile)
+	var kafka Technology
+	for _, tc := range pf.Profile.Technologies {
+		if tc.ID == "kafka" {
+			kafka = tc
+		}
+	}
+	applied := false
+	for _, p := range pf.Packs {
+		applied = applied || p.ID == "kafka-dotnet"
+	}
+	if kafka.Pack != "kafka-dotnet" || !applied || len(plans) == 0 || plans[0].ToSend != 2 {
+		t.Fatalf("kafka=%+v packs=%+v plans=%+v", kafka, pf.Packs, plans)
+	}
+	// a third build with the same catalog: nothing new, nothing sent
+	in = buildIn(root, head, t.TempDir(), fake)
+	in.Base = &Base{CodeSha: head, Files: second.Files}
+	in.Profile.Catalog = cat
+	in.Profile.Off = true
+	plans = nil
+	in.OnPlan = func(p Plan) { plans = append(plans, p) }
+	if _, err := BuildSnapshot(context.Background(), in); err != nil || len(plans) == 0 || plans[0].ToSend != 0 {
+		t.Fatalf("third build: %+v %v", plans, err)
+	}
+}

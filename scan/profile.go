@@ -478,3 +478,39 @@ func WriteProfiledManifest(path, domainKey string, cfg manifest.ScanConfig, tech
 	}
 	return writeFileAtomic(path, buf.Bytes()) // its errors carry the "scan:" prefix already
 }
+
+// PackIDFor is the catalog id of the pack a technology would use when the
+// profile names none: "<id>-<language>", or the id alone when the language is
+// empty or "other". The worker authors packs under this id and the server
+// records a repository as waiting for it.
+func PackIDFor(t Technology) string {
+	id := strings.ToLower(strings.TrimSpace(t.ID))
+	lang := strings.ToLower(strings.TrimSpace(t.Language))
+	if lang == "" || lang == "other" {
+		return id
+	}
+	return id + "-" + lang
+}
+
+// AdoptCatalogPacks gives every technology without a pack ("" or "new") the
+// catalog pack named PackIDFor, when the catalog has one, and returns the ids
+// adopted. An inherited profile was decided when that pack did not exist
+// yet; a later build must apply it or the repository waits for it forever.
+func AdoptCatalogPacks(p *Profile, cat *prompts.Catalog) []string {
+	if p == nil || cat == nil {
+		return nil
+	}
+	var adopted []string
+	for i := range p.Technologies {
+		t := &p.Technologies[i]
+		if t.Pack != "" && t.Pack != "new" {
+			continue
+		}
+		id := PackIDFor(*t)
+		if _, ok := cat.Get(id); ok {
+			t.Pack = id
+			adopted = append(adopted, id)
+		}
+	}
+	return adopted
+}

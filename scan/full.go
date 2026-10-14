@@ -208,7 +208,11 @@ func (r *fullRun) guide() (*headless.GuideSet, error) {
 		}
 		r.cat = cat
 	}
-	return headless.NewGuide(r.cat, r.m.Tech), nil
+	tech := append([]string{}, r.m.Tech...)
+	if r.o.Profile != nil {
+		tech = append(tech, techIDs(*r.o.Profile)...) // the profile's pack choices join the manifest's technologies
+	}
+	return headless.NewGuide(r.cat, tech), nil
 }
 
 func versionFrom(guide *headless.GuideSet) func(string) string {
