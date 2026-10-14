@@ -351,3 +351,33 @@ func TestWriteProfiledManifest_ErrorHasOneScanPrefix(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// One technology, one pack id: the names a model picks for the same thing
+// (csharp/dotnet, "AWS Secrets Manager"/aws-secrets-manager, python/python)
+// land on the same id, so a fleet does not author three packs for one
+// technology (seen 14.10: aws-secretsmanager-csharp, aws-secrets-manager-dotnet,
+// aws-secretsmanager-dotnet, python-python).
+func TestPackIDFor_NormalizesNames(t *testing.T) {
+	for _, c := range []struct {
+		id, lang, want string
+	}{
+		{"kafka", "dotnet", "kafka-dotnet"},
+		{"Kafka", "", "kafka"},
+		{"redis", "other", "redis"},
+		{"aws-secrets-manager", "csharp", "aws-secrets-manager-dotnet"},
+		{"AWS Secrets Manager", "C#", "aws-secrets-manager-dotnet"},
+		{"aws_secrets_manager", ".NET", "aws-secrets-manager-dotnet"},
+		{"python", "python", "python"},
+		{"shellscript", "shell", "shell"},
+		{"shellscript", "sh", "shell"},
+		{"typescript", "ts", "typescript"},
+		{"zod", "js", "zod-javascript"},
+		{"node.js", "javascript", "javascript"},
+		{"aws-cdk", "TypeScript", "aws-cdk-typescript"},
+		{"prisma", "nodejs", "prisma-javascript"},
+	} {
+		if got := PackIDFor(Technology{ID: c.id, Language: c.lang}); got != c.want {
+			t.Errorf("PackIDFor(%q, %q) = %q, want %q", c.id, c.lang, got, c.want)
+		}
+	}
+}

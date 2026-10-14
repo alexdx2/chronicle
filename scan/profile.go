@@ -484,12 +484,63 @@ func WriteProfiledManifest(path, domainKey string, cfg manifest.ScanConfig, tech
 // empty or "other". The worker authors packs under this id and the server
 // records a repository as waiting for it.
 func PackIDFor(t Technology) string {
-	id := strings.ToLower(strings.TrimSpace(t.ID))
-	lang := strings.ToLower(strings.TrimSpace(t.Language))
-	if lang == "" || lang == "other" {
+	id := normalizeTechToken(t.ID)
+	lang := normalizeLanguage(t.Language)
+	if lang == "" || lang == "other" || lang == id {
 		return id
 	}
 	return id + "-" + lang
+}
+
+// languageAliases maps the names models use for a language to the one the
+// built-in packs use, so one technology gets one pack id ("csharp" and
+// "dotnet" named three different packs on the first fleet run).
+var languageAliases = map[string]string{
+	"c#": "dotnet", "csharp": "dotnet", "cs": "dotnet", ".net": "dotnet", "net": "dotnet", "dotnetcore": "dotnet", "net core": "dotnet",
+	"js": "javascript", "node": "javascript", "nodejs": "javascript", "node.js": "javascript",
+	"ts": "typescript",
+	"py": "python", "python3": "python",
+	"sh": "shell", "bash": "shell", "shellscript": "shell", "zsh": "shell",
+	"golang": "go",
+	"kt":     "kotlin",
+	"rb":     "ruby",
+	"yml":    "yaml",
+}
+
+// normalizeLanguage lower-cases a language name and resolves its aliases.
+func normalizeLanguage(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if a, ok := languageAliases[s]; ok {
+		return a
+	}
+	return s
+}
+
+// normalizeTechToken lower-cases a technology id and writes it with single
+// dashes between words: spaces, underscores and dots become dashes, runs
+// collapse, and the alias table applies to ids that are languages
+// ("shellscript" → "shell"), so "AWS Secrets Manager", "aws_secrets-manager"
+// and "aws-secrets-manager" are one id.
+func normalizeTechToken(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if a, ok := languageAliases[s]; ok {
+		return a
+	}
+	var b strings.Builder
+	dash := false
+	for _, r := range s {
+		switch {
+		case r == ' ' || r == '_' || r == '-' || r == '.' || r == '/':
+			dash = b.Len() > 0
+		default:
+			if dash {
+				b.WriteByte('-')
+				dash = false
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // AdoptCatalogPacks gives every technology without a pack ("" or "new") the
