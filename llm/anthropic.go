@@ -45,7 +45,7 @@ func (a *anthropicBackend) Complete(ctx context.Context, req Request) (Response,
 		return Response{}, fmt.Errorf("llm: anthropic refused the request (category %q)", resp.StopDetails.Category)
 	}
 	if resp.StopReason == anthropic.StopReasonMaxTokens {
-		return Response{}, fmt.Errorf("llm: anthropic: output truncated (max_tokens)")
+		return Response{}, fmt.Errorf("llm: anthropic: %w (max_tokens)", ErrTruncated)
 	}
 	var sb strings.Builder
 	for _, block := range resp.Content {

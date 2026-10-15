@@ -61,6 +61,10 @@ type Backend interface {
 var (
 	ErrNoKey   = errors.New("llm: no API key in environment")
 	ErrBadSpec = errors.New("llm: bad model spec, want provider:model")
+	// ErrTruncated is wrapped by every backend when the answer was cut at the
+	// output cap (max_tokens, num_predict, MAX_TOKENS). Callers may ask again
+	// about a smaller input; the answer itself is unusable.
+	ErrTruncated = errors.New("output truncated")
 )
 
 // WindowedBackend is implemented by backends with a hard per-call token window

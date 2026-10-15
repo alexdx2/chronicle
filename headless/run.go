@@ -522,16 +522,21 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 		if budget := fileBudget(window, BuildPrompt(sys, item.FilePath, nil, cands)); budget > 0 {
 			chunks = splitLines(content, budget)
 		}
-		fu.Parts = len(chunks)
+		parts := len(chunks)
 		fctx, cancel := ctx, context.CancelFunc(func() {})
 		if in.FileTimeout > 0 {
 			fctx, cancel = context.WithTimeout(ctx, in.FileTimeout)
 		}
 		defer cancel()
 		var answers []*parsedAnswer
-		for ci, chunk := range chunks {
+		queue := chunks
+		labelled := len(chunks) > 1
+		for len(queue) > 0 {
+			chunk := queue[0]
+			queue = queue[1:]
+			ci, total := len(answers), len(answers)+1+len(queue)
 			creq := req
-			if len(chunks) > 1 {
+			if labelled {
 				chunkCands := cands
 				if ci > 0 {
 					chunkCands = nil // the deterministic list belongs to the whole file; send it once
@@ -539,10 +544,22 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 				creq = BuildPrompt(sys, item.FilePath, chunk, chunkCands)
 				creq.MaxTokens = maxTokens
 				creq.User = strings.Replace(creq.User, "File: "+item.FilePath+"\n",
-					fmt.Sprintf("File: %s\n(part %d of %d of a long file: extract only what appears in this part)\n", item.FilePath, ci+1, len(chunks)), 1)
+					fmt.Sprintf("File: %s\n(part %d of %d of a long file: extract only what appears in this part)\n", item.FilePath, ci+1, total), 1)
 			}
-			a, failed := askModel(fctx, in.Backend, creq, &fu)
+			a, failed, perr := askModel(fctx, in.Backend, creq, &fu)
 			if failed != "" {
+				if errors.Is(perr, llm.ErrTruncated) && len(chunk) > minChunkBytes {
+					// The answer did not fit the output cap: ask about this piece
+					// in halves. Halving ends at minChunkBytes, so a model that
+					// never stops repeating itself still fails below.
+					if halves := splitLines(chunk, (len(chunk)+1)/2); len(halves) > 1 {
+						queue = append(append(make([][]byte, 0, len(halves)+len(queue)), halves...), queue...)
+						parts += len(halves) - 1
+						labelled = true
+						fu.Status = ""
+						continue
+					}
+				}
 				if failed == "cancelled" && ctx.Err() == nil && fctx.Err() != nil {
 					// The file's own limit ended, not the run.
 					fail("failed", fmt.Sprintf("timeout: no answer within %s", in.FileTimeout))
@@ -560,8 +577,9 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 			}
 			answers = append(answers, a)
 		}
+		fu.Parts = parts
 		var parsed *parsedAnswer
-		if len(answers) == len(chunks) && fu.Status == "" {
+		if len(answers) == parts && fu.Status == "" {
 			parsed = mergeAnswers(answers)
 			parsed.Facts, fu.Dropped = sanitizeFacts(item.FilePath, content, parsed.Facts)
 			fu.Facts = countFacts(parsed.Facts)
@@ -592,10 +610,11 @@ func countFacts(raw json.RawMessage) int {
 }
 
 // askModel sends one request, retrying once when the answer is not the required
-// JSON. It returns the parsed answer, or a non-empty failure message. fu.Status
-// is set to "provider_error" or "failed" accordingly; the failure "cancelled"
-// means the context ended and the file is not a model failure.
-func askModel(ctx context.Context, b llm.Backend, req llm.Request, fu *FileUsage) (*parsedAnswer, string) {
+// JSON. It returns the parsed answer, or a non-empty failure message and, for a
+// provider failure, the error itself (nil when the model answered but not in
+// JSON). fu.Status is set to "provider_error" or "failed" accordingly; the
+// failure "cancelled" means the context ended and the file is not a model failure.
+func askModel(ctx context.Context, b llm.Backend, req llm.Request, fu *FileUsage) (*parsedAnswer, string, error) {
 	firstUser := req.User
 	var lastText string
 	for attempt := 0; attempt < 2; attempt++ {
@@ -603,20 +622,20 @@ func askModel(ctx context.Context, b llm.Backend, req llm.Request, fu *FileUsage
 		fu.Usage = fu.Usage.Add(resp.Usage)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, "cancelled"
+				return nil, "cancelled", err
 			}
 			fu.Status = "provider_error"
-			return nil, err.Error()
+			return nil, err.Error(), err
 		}
 		lastText = resp.Text
 		a, perr := parseAnswer(resp.Text)
 		if perr == nil {
-			return a, ""
+			return a, "", nil
 		}
 		req.User = firstUser + "\n\nYour previous answer was not the required JSON object (" + perr.Error() + "). Answer again with only the JSON object."
 	}
 	fu.Status = "failed"
-	return nil, truncate(lastText, 2000)
+	return nil, truncate(lastText, 2000), nil
 }
 
 // writeAtomic writes data to path via a temp file and rename so the commit

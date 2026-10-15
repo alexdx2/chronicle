@@ -271,3 +271,80 @@ func TestRun_PackIsAttachedOnlyToFilesThatUseIt(t *testing.T) {
 		t.Error("kafka-using .cs file did not get the kafka pack")
 	}
 }
+
+// truncatingBackend answers like windowBackend but refuses any request whose
+// user prompt is longer than limit bytes with llm.ErrTruncated, the way a
+// provider reports an answer cut at its output cap.
+type truncatingBackend struct {
+	limit int
+	mu    sync.Mutex
+	reqs  []llm.Request
+}
+
+func (*truncatingBackend) Name() string  { return "trunc" }
+func (*truncatingBackend) Model() string { return "trunc" }
+func (b *truncatingBackend) Complete(_ context.Context, r llm.Request) (llm.Response, error) {
+	b.mu.Lock()
+	b.reqs = append(b.reqs, r)
+	n := len(b.reqs)
+	b.mu.Unlock()
+	if len(r.User) > b.limit {
+		return llm.Response{}, fmt.Errorf("llm: trunc: %w (num_predict)", llm.ErrTruncated)
+	}
+	return llm.Response{Text: fmt.Sprintf(`{"status":"extracted","facts":[{"kind":"model","name":"M%d"}]}`, n)}, nil
+}
+
+func TestRun_TruncatedAnswerSplitsTheFile(t *testing.T) {
+	e := newRunEnv(t)
+	body := strings.Repeat("export const filler = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';\n", 400) // ~27 KB, backend without a window
+	write(t, e.root, "src/long.ts", body)
+	commitAll(t, e.root, "long")
+	tb := &truncatingBackend{limit: 12000}
+	res, err := Run(context.Background(), e.input(tb, "src/long.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := res.Files[0]
+	if f.Status != "extracted" || f.Error != "" {
+		t.Fatalf("file = %+v", f)
+	}
+	if f.Parts < 3 {
+		t.Fatalf("27 KB over a 12 KB answer limit must end in at least 3 parts, got %d", f.Parts)
+	}
+	var truncated, answered int
+	for _, r := range tb.reqs {
+		if len(r.User) > tb.limit {
+			truncated++
+			continue
+		}
+		answered++
+		if !strings.Contains(r.User, "(part ") {
+			t.Errorf("an answered piece is not labelled as a part: %.120q", r.User)
+		}
+	}
+	if truncated == 0 || answered != f.Parts {
+		t.Fatalf("truncated %d, answered %d, parts %d", truncated, answered, f.Parts)
+	}
+	rows, _ := e.g.Store().ListExtractions(res.RevisionID, "d")
+	var facts []map[string]string
+	_ = json.Unmarshal([]byte(rows[0].FactsJSON), &facts)
+	if len(facts) != f.Parts {
+		t.Fatalf("want one merged fact per part (%d), got %s", f.Parts, rows[0].FactsJSON)
+	}
+}
+
+func TestRun_TruncationAtTheSmallestPieceFails(t *testing.T) {
+	e := newRunEnv(t)
+	tb := &truncatingBackend{limit: 0} // every answer is truncated
+	res, err := Run(context.Background(), e.input(tb, "src/a.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := res.Files[0]
+	if f.Status != "provider_error" || !strings.Contains(f.Error, "output truncated") {
+		t.Fatalf("file = %+v", f)
+	}
+	if len(tb.reqs) != 1 {
+		t.Fatalf("a %d-byte file is under the smallest piece and must not be split: %d requests", f.Bytes, len(tb.reqs))
+	}
+}

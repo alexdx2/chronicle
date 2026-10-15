@@ -140,7 +140,7 @@ func (c *chat) parse(raw []byte) (Response, error) {
 	}
 	ch := out.Choices[0]
 	if ch.FinishReason == "length" {
-		return Response{}, fmt.Errorf("llm: %s: output truncated (max_tokens)", c.name)
+		return Response{}, fmt.Errorf("llm: %s: %w (max_tokens)", c.name, ErrTruncated)
 	}
 	if strings.TrimSpace(ch.Message.Content) == "" {
 		return Response{}, errors.New("llm: " + c.name + ": empty message content (reasoning model spent the budget thinking?)")

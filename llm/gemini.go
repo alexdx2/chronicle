@@ -106,7 +106,7 @@ func (g *gemini) parse(raw []byte) (Response, error) {
 	}
 	finish := out.Candidates[0].FinishReason
 	if finish == "MAX_TOKENS" {
-		return Response{}, errors.New("llm: gemini: output truncated (MAX_TOKENS)")
+		return Response{}, fmt.Errorf("llm: gemini: %w (MAX_TOKENS)", ErrTruncated)
 	}
 	if finish == "SAFETY" || finish == "RECITATION" || finish == "OTHER" || sb.Len() == 0 {
 		if finish == "" {

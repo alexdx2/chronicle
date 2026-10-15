@@ -115,7 +115,7 @@ func (o *ollama) Complete(ctx context.Context, req Request) (Response, error) {
 		return Response{}, fmt.Errorf("llm: ollama: %s", out.Error)
 	}
 	if out.DoneReason == "length" {
-		return Response{}, errors.New("llm: ollama: output truncated (num_predict)")
+		return Response{}, fmt.Errorf("llm: ollama: %w (num_predict)", ErrTruncated)
 	}
 	if strings.TrimSpace(out.Message.Content) == "" {
 		return Response{}, errors.New("llm: ollama: empty message content")
