@@ -1,5 +1,7 @@
 // Package lex blanks comments out of source text so extraction rules never
 // see them. String literals are kept intact: rules read route paths from them.
+// Known over-blanking by design: a JS regex literal containing /* opens a block
+// comment the lexer cannot tell apart, so the rest of the file is blanked.
 package lex
 
 import (
@@ -13,7 +15,7 @@ type Family int
 
 const (
 	CLike  Family = iota // //, /* */, "…", '…', `…`, C# @"…" and """…"""
-	Python               // #, '…', "…", '''…''', """…"""
+	Python               // #, '…', "…"; '''…''' and """…""" are blanked like comments (docstrings)
 	Hash                 // yaml, toml, hcl, dotenv, Dockerfile: # comments, single-line quotes
 	None                 // json, xml: no comments
 )
@@ -123,11 +125,11 @@ func Scan(src []byte, f Family) Result {
 		case f == CLike && has(i, `"""`):
 			i = multi(i, i+3, `"""`, false, false)
 		case f == Python && (has(i, `"""`) || has(i, `'''`)):
-			i = multi(i, i+3, string(src[i:i+3]), true, false)
+			i = multi(i, i+3, string(src[i:i+3]), true, true)
 		case f == CLike && c == '`':
 			i = multi(i, i+1, "`", true, false)
 		case c == '"' || c == '\'':
-			// Single-line string; an unclosed quote ends at EOL.
+			// Single-line string; an unclosed quote is not a string at all.
 			esc := !(f == Hash && c == '\'')
 			j := i + 1
 			for j < n && src[j] != c && src[j] != '\n' {
@@ -137,9 +139,12 @@ func Scan(src []byte, f Family) Result {
 				j++
 			}
 			if j < n && src[j] == c {
-				j++
+				i = j + 1
+			} else {
+				// Unclosed: not a string (e.g. an apostrophe in JSX text);
+				// resume right after the quote so later openers are seen.
+				i++
 			}
-			i = j
 		default:
 			i++
 		}
