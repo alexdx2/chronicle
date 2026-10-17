@@ -50,6 +50,7 @@ func TestHTTPRules(t *testing.T) {
 			"axios.create | api.payments.io",
 			"fetch.literal | feed.example.com",
 			"fetch.literal | var:HOST",
+			"fetch.template | var:TOM_API_URL",
 			"nest.httpservice | svc.example.com",
 			"nest.httpservice | svc2.example.com",
 		}},

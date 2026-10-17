@@ -13,6 +13,8 @@ export async function load() {
   const t = await fetch(`http://${process.env.X}/y`);
   const u = await fetch(`https://${HOST}/z`);
   const rel = await fetch('/api/local');
+  const v = await fetch(`${TOM_API_URL}/tom/status`);
+  const w = await fetch(`${prefix}/x`);
   // await fetch('https://comment.example.com');
   return r;
 }

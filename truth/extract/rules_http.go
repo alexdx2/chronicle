@@ -110,9 +110,37 @@ func init() {
 		funcRule{"csharp.refit", isCS, lineRule("csharp.refit", csRefit)},
 		funcRule{"axios.create", isJS, applyAxiosCreate},
 		funcRule{"fetch.literal", isJS, lineRule("fetch.literal", jsFetch)},
+		funcRule{"fetch.template", isJS, applyFetchTemplate},
 		funcRule{"nest.httpservice", isJS, lineRule("nest.httpservice", nestHTTP)},
 		funcRule{"requests.literal", isPy, lineRule("requests.literal", pyRequests)},
 	)
+}
+
+// jsFetchTpl is fetch(`${NAME}/path`): the whole base is one URL-like constant
+// (TOM_API_URL, apiBaseUrl). Names that do not look like a URL/host variable
+// are ignored (they are usually relative path prefixes).
+var jsFetchTpl = regexp.MustCompile("\\bfetch\\(\\s*`\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}")
+
+func applyFetchTemplate(f *FileCtx) []truth.Fact {
+	if f.IsTest {
+		return nil
+	}
+	var out []truth.Fact
+	for _, l := range f.Lines {
+		for _, m := range jsFetchTpl.FindAllStringSubmatch(l.Code, -1) {
+			if !cfgURLKey.MatchString(m[1]) {
+				continue
+			}
+			out = append(out, truth.Fact{
+				Class:   truth.ClassHTTP,
+				Key:     "var:" + m[1],
+				Attrs:   map[string]string{"host": "", "path": "", "var": m[1]},
+				Primary: evidence(f, l),
+				Sources: []string{"fetch.template"},
+			})
+		}
+	}
+	return out
 }
 
 const quote = "[\"'`]"
