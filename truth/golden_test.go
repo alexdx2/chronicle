@@ -2,6 +2,7 @@ package truth_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -10,6 +11,13 @@ import (
 	"github.com/alexdx2/chronicle-core/truth"
 	"github.com/alexdx2/chronicle-core/truth/extract"
 )
+
+// Golden gates for the tom-and-jerry fixture.
+//
+// Editing rule: fixtures/tom-and-jerry/truth-expected.json is hand-written
+// from source lines, never pasted from extractor output. When Gate 1 fails,
+// fix the rule or re-read the source line and fix the golden; never loosen
+// the gate.
 
 const fixtureDir = "../fixtures/tom-and-jerry"
 
@@ -34,6 +42,15 @@ func loadGolden(t *testing.T) goldenFile {
 		t.Fatal(err)
 	}
 	g = goldenFile{}
+	for k := range m {
+		known := k == "_comment"
+		for _, c := range truth.Classes {
+			known = known || k == string(c)
+		}
+		if !known {
+			t.Fatalf("truth-expected.json: unknown top-level key %q", k)
+		}
+	}
 	for _, c := range truth.Classes {
 		var es []goldenEntry
 		if r, ok := m[string(c)]; ok {
@@ -76,6 +93,19 @@ func TestGoldenExtractionMatchesSources(t *testing.T) {
 	}
 	for _, f := range rep.Facts {
 		got[f.Class][f.Key] = true
+	}
+	cited := map[string]bool{}
+	for _, f := range rep.Facts {
+		for _, ev := range append([]truth.Evidence{f.Primary}, f.Derived...) {
+			cited[fmt.Sprintf("%s:%d", ev.File, ev.Line)] = true
+		}
+	}
+	for _, c := range truth.Classes {
+		for _, e := range g[c] {
+			if !cited[fmt.Sprintf("%s:%d", e.File, e.Line)] {
+				t.Logf("%s: golden entry %s (%s:%d) is cited by no extracted fact", c, e.Key, e.File, e.Line)
+			}
+		}
 	}
 	for _, c := range truth.Classes {
 		want := keySet(g[c])
@@ -126,14 +156,14 @@ func TestGoldenAgainstExpectedGraph(t *testing.T) {
 	const topicPrefix = "contract:topic:tom-and-jerry:"
 	endpoints, topics := map[string]bool{}, map[string]bool{}
 	// modelled reports whether the graph golden knows the service at all
-	// (any node key mentioning it). A service the graph golden does not model
+	// (a service:service:<domain>:<dir> node). A service the graph golden does not model
 	// (scoreboard-api today) cannot be calibrated against it; such entries are
 	// logged, not failed. Any service the graph does model stays strict.
 	modelled := func(file string) bool {
-		svc := strings.ToLower(strings.SplitN(file, "/", 2)[0])
-		svc = strings.TrimSuffix(svc, "-api")
+		dir := strings.SplitN(file, "/", 2)[0]
+		suffix := ":" + dir
 		for _, n := range graph.Nodes {
-			if strings.Contains(strings.ToLower(n.NodeKey), svc) {
+			if strings.HasPrefix(n.NodeKey, "service:service:") && strings.HasSuffix(n.NodeKey, suffix) {
 				return true
 			}
 		}

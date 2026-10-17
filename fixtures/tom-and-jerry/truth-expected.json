@@ -99,6 +99,11 @@
    "key": "topic:battle-results#consume",
    "file": "scoreboard-api/Services/BattleResultConsumer.cs",
    "line": 31
+  },
+  {
+   "key": "topic:battle-results#consume",
+   "file": "spectators-api/src/spectators/battle-result.consumer.ts",
+   "line": 9
   }
  ],
  "deps": [

@@ -15,6 +15,9 @@ export async function load() {
   const rel = await fetch('/api/local');
   const v = await fetch(`${TOM_API_URL}/tom/status`);
   const w = await fetch(`${prefix}/x`);
+  const bare = await fetch(`${url}/x`);
+  // const old = await fetch(`${OLD_URL}/x`);
+  const cc = await fetch(`${apiBaseUrl}/items?a=1`);
   // await fetch('https://comment.example.com');
   return r;
 }

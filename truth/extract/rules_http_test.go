@@ -51,6 +51,7 @@ func TestHTTPRules(t *testing.T) {
 			"fetch.literal | feed.example.com",
 			"fetch.literal | var:HOST",
 			"fetch.template | var:TOM_API_URL",
+			"fetch.template | var:apiBaseUrl",
 			"nest.httpservice | svc.example.com",
 			"nest.httpservice | svc2.example.com",
 		}},

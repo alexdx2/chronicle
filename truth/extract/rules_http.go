@@ -121,20 +121,38 @@ func init() {
 // are ignored (they are usually relative path prefixes).
 var jsFetchTpl = regexp.MustCompile("\\bfetch\\(\\s*`\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}")
 
+// tplCamel: camelCase with a real prefix (apiBaseUrl), never a bare word (url).
+var tplCamel = regexp.MustCompile(`^[a-z]+[A-Za-z0-9]*[a-z0-9](?:Url|Uri|Endpoint|Host|BaseAddress)$`)
+
+func tplVarName(n string) bool {
+	if strings.Contains(n, "_") {
+		return cfgURLKey.MatchString(n) && strings.Trim(n, "_") != ""
+	}
+	return tplCamel.MatchString(n)
+}
+
 func applyFetchTemplate(f *FileCtx) []truth.Fact {
 	if f.IsTest {
 		return nil
 	}
 	var out []truth.Fact
 	for _, l := range f.Lines {
-		for _, m := range jsFetchTpl.FindAllStringSubmatch(l.Code, -1) {
-			if !cfgURLKey.MatchString(m[1]) {
+		for _, ix := range jsFetchTpl.FindAllStringSubmatchIndex(l.Code, -1) {
+			name := l.Code[ix[2]:ix[3]]
+			if !tplVarName(name) {
 				continue
+			}
+			path := l.Code[ix[1]:]
+			if i := strings.Index(path, "`"); i >= 0 {
+				path = path[:i]
+			}
+			if i := strings.IndexAny(path, "?#"); i >= 0 {
+				path = path[:i]
 			}
 			out = append(out, truth.Fact{
 				Class:   truth.ClassHTTP,
-				Key:     "var:" + m[1],
-				Attrs:   map[string]string{"host": "", "path": "", "var": m[1]},
+				Key:     "var:" + name,
+				Attrs:   map[string]string{"host": "", "path": path, "var": name},
 				Primary: evidence(f, l),
 				Sources: []string{"fetch.template"},
 			})
