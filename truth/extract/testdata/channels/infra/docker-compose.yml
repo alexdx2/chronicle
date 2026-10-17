@@ -1,0 +1,7 @@
+services:
+  kafka:
+    environment:
+      - KAFKA_CREATE_TOPICS=comp-a:1:1,comp-b:3:1:compact
+  kafka2:
+    environment:
+      KAFKA_CREATE_TOPICS: "comp-c:1:1"
