@@ -1,0 +1,13 @@
+services:
+  api:
+    image: api
+    environment:
+      - TOM_API_URL=http://tom.internal:8080
+      - LOG_LEVEL=debug
+      - LOCAL=http://localhost:1
+  web:
+    image: web
+    environment:
+      PAY_URL: https://pay.example.com/v2
+      SELF: http://127.0.0.1:80
+      N: 5

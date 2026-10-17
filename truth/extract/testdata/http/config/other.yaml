@@ -1,0 +1,3 @@
+kind: Service
+data:
+  X_URL: https://not-k8s-kind.example.com

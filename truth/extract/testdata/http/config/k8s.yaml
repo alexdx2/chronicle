@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cfg
+data:
+  SEARCH_URL: https://search.example.com
+  MODE: prod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: TOM_API_URL
+              value: http://tom.example.com
+            - name: LOG
+              value: info
+            - name: FROM_SECRET
+              valueFrom:
+                secretKeyRef: {name: s, key: k}
