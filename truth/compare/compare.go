@@ -1,0 +1,360 @@
+package compare
+
+import (
+	"sort"
+	"strings"
+
+	"github.com/alexdx2/chronicle-core/snapshot"
+	"github.com/alexdx2/chronicle-core/truth"
+)
+
+// Compare judges every fact of rep against snap. It never panics: a nil
+// snapshot yields all facts "missing" with the warning "no snapshot".
+func Compare(rep *truth.Report, snap *snapshot.Snapshot) *truth.Verdict {
+	v := &truth.Verdict{}
+	if rep == nil {
+		rep = &truth.Report{}
+	}
+	v.SkippedFiles = append(v.SkippedFiles, rep.SkippedFiles...)
+	v.Warnings = append(v.Warnings, rep.Warnings...)
+	if snap == nil {
+		v.Warnings = append(v.Warnings, "no snapshot")
+	}
+	ix := buildIndex(snap)
+	haveCoverage := len(ix.coverage) > 0
+	if snap != nil && !haveCoverage {
+		v.Warnings = append(v.Warnings, "snapshot has no coverage records; scope unknown")
+	}
+	matched := map[truth.Class]map[string]bool{}
+	for _, c := range truth.Classes {
+		matched[c] = map[string]bool{}
+	}
+
+	for _, f := range rep.Facts {
+		jf := truth.JudgedFact{Fact: f}
+		status, node := ix.match(f)
+		if status == "" {
+			switch {
+			case f.Class == truth.ClassDeps && truth.Noise(f.Attrs["ecosystem"], depName(f)):
+				status = truth.Ignored
+			case haveCoverage && scoped(f.Class) && !ix.coverage[strings.TrimPrefix(f.Primary.File, "./")]:
+				status = truth.OutOfScope
+			default:
+				status = truth.Missing
+			}
+		} else {
+			matched[f.Class][node] = true
+		}
+		jf.Status, jf.GraphNodeKey = status, node
+		if status == truth.Ignored || status == truth.OutOfScope || status == truth.Missing {
+			jf.GraphNodeKey = ""
+		}
+		v.Facts = append(v.Facts, jf)
+	}
+
+	v.Uncovered = ix.uncovered(matched)
+	v.Classes = Summaries(v.Facts, v.Uncovered)
+	return v
+}
+
+func scoped(c truth.Class) bool {
+	return c == truth.ClassEndpoints || c == truth.ClassHTTP || c == truth.ClassChannels
+}
+
+func depName(f truth.Fact) string {
+	if n := f.Attrs["name"]; n != "" {
+		return n
+	}
+	if i := strings.Index(f.Key, ":"); i >= 0 {
+		return f.Key[i+1:]
+	}
+	return f.Key
+}
+
+func depEco(f truth.Fact) string {
+	if e := f.Attrs["ecosystem"]; e != "" {
+		return e
+	}
+	if i := strings.Index(f.Key, ":"); i >= 0 {
+		return f.Key[:i]
+	}
+	return ""
+}
+
+// match returns the status and graph node key of the best match, or "" status.
+func (ix *index) match(f truth.Fact) (truth.Status, string) {
+	switch f.Class {
+	case truth.ClassEndpoints:
+		return ix.matchEndpoint(f)
+	case truth.ClassHTTP:
+		return ix.matchHTTP(f)
+	case truth.ClassChannels:
+		return ix.matchChannel(f)
+	case truth.ClassDeps:
+		return ix.matchDep(f)
+	case truth.ClassServices:
+		return ix.matchService(f)
+	}
+	return "", ""
+}
+
+func splitEndpointKey(key string) (method, path string) {
+	if i := strings.Index(key, " "); i >= 0 {
+		return strings.ToUpper(key[:i]), key[i+1:]
+	}
+	return "GET", key
+}
+
+func (ix *index) matchEndpoint(f truth.Fact) (truth.Status, string) {
+	m, p := splitEndpointKey(f.Key)
+	p = truth.CanonPath(p)
+	sameMethod := func(g epNode) bool { return m == "ANY" || g.method == "ANY" || g.method == m }
+	for _, g := range ix.endpoints {
+		if sameMethod(g) && g.path == p {
+			return truth.Confirmed, g.key
+		}
+	}
+	best, bestDiff := "", -1
+	for _, g := range ix.endpoints {
+		if !sameMethod(g) || g.path == p || g.path == "/" || p == "/" {
+			continue
+		}
+		long, short := g.path, p
+		if len(short) > len(long) {
+			long, short = short, long
+		}
+		if strings.HasSuffix(long, short) {
+			if d := len(long) - len(short); bestDiff < 0 || d < bestDiff || (d == bestDiff && g.key < best) {
+				best, bestDiff = g.key, d
+			}
+		}
+	}
+	if best != "" {
+		return truth.ConfirmedLoose, best
+	}
+	return "", ""
+}
+
+func (ix *index) matchChannel(f truth.Fact) (truth.Status, string) {
+	c := truth.CanonName(f.Attrs["name"])
+	if c == "" {
+		return "", ""
+	}
+	best := ""
+	for _, g := range ix.channels {
+		if g.canon != c {
+			continue
+		}
+		hasSide := g.produce || g.consume
+		sideOK := !hasSide
+		switch f.Attrs["side"] {
+		case "produce":
+			sideOK = sideOK || g.produce
+		case "consume":
+			sideOK = sideOK || g.consume
+		default:
+			sideOK = true
+		}
+		if sideOK && (best == "" || g.key < best) {
+			best = g.key
+		}
+	}
+	if best != "" {
+		return truth.Confirmed, best
+	}
+	return "", ""
+}
+
+func (ix *index) matchDep(f truth.Fact) (truth.Status, string) {
+	eco, name := depEco(f), depName(f)
+	pick := func(idx []int) string {
+		best := ""
+		for _, i := range idx {
+			if k := ix.pkgs[i].key; best == "" || k < best {
+				best = k
+			}
+		}
+		return best
+	}
+	if strings.EqualFold(eco, "project") {
+		c := truth.CanonName(name)
+		if k := pick(ix.pkgByName[c]); k != "" {
+			return truth.Confirmed, k
+		}
+		for _, s := range ix.services {
+			if s.names[c] {
+				return truth.Confirmed, s.key
+			}
+		}
+		return "", ""
+	}
+	if k := pick(ix.pkgByDep[truth.CanonDep(eco, name)]); k != "" {
+		return truth.Confirmed, k
+	}
+	if k := pick(ix.pkgByName[truth.CanonName(name)]); k != "" {
+		return truth.Confirmed, k
+	}
+	return "", ""
+}
+
+func (ix *index) matchService(f truth.Fact) (truth.Status, string) {
+	cands := []string{truth.CanonName(f.Attrs["name"])}
+	if f.Attrs["kind"] == "infra" || f.Attrs["kind"] == "infrastructure" {
+		cands = append(cands, truth.CanonName(f.Attrs["tech"]))
+	}
+	best := ""
+	for _, s := range ix.services {
+		for _, c := range cands {
+			if c != "" && s.names[c] && (best == "" || s.key < best) {
+				best = s.key
+			}
+		}
+	}
+	if best != "" {
+		return truth.Confirmed, best
+	}
+	return "", ""
+}
+
+func (ix *index) matchHTTP(f truth.Fact) (truth.Status, string) {
+	host := truth.CanonHost(f.Attrs["host"])
+	if host == "" && !strings.HasPrefix(f.Key, "var:") {
+		host = truth.CanonHost(f.Key)
+	}
+	varName := f.Attrs["var"]
+	if varName == "" {
+		varName = f.Attrs["config_key"]
+	}
+	if varName == "" && strings.HasPrefix(f.Key, "var:") {
+		varName = strings.TrimPrefix(f.Key, "var:")
+	}
+	var names []string
+	if host != "" {
+		names = append(names, truth.CanonName(host), truth.CanonName(strings.SplitN(host, ".", 2)[0]))
+	}
+	if varName != "" {
+		names = append(names, truth.CanonName(truth.HostFromVar(varName)))
+	}
+	best := ""
+	for _, n := range ix.http {
+		ok := host != "" && n.hosts[host]
+		for _, c := range names {
+			if c != "" && n.names[c] {
+				ok = true
+			}
+		}
+		if ok && (best == "" || n.key < best) {
+			best = n.key
+		}
+	}
+	if best != "" {
+		return truth.Confirmed, best
+	}
+	return "", ""
+}
+
+// uncovered lists graph entities of the five classes that no fact matched.
+func (ix *index) uncovered(matched map[truth.Class]map[string]bool) []truth.GraphFact {
+	var out []truth.GraphFact
+	add := func(c truth.Class, key, name string) {
+		if !matched[c][key] {
+			out = append(out, truth.GraphFact{Class: c, NodeKey: key, Name: name})
+		}
+	}
+	for _, e := range ix.endpoints {
+		name := e.name
+		if name == "" {
+			name = truth.CanonEndpoint(e.method, e.path)
+		}
+		add(truth.ClassEndpoints, e.key, name)
+	}
+	for _, h := range ix.http {
+		add(truth.ClassHTTP, h.key, h.name)
+	}
+	for _, c := range ix.channels {
+		add(truth.ClassChannels, c.key, c.name)
+	}
+	for _, p := range ix.pkgs {
+		if p.incoming && !p.own {
+			add(truth.ClassDeps, p.key, p.name)
+		}
+	}
+	for _, s := range ix.services {
+		if s.typ != "external_system" {
+			add(truth.ClassServices, s.key, s.name)
+		}
+	}
+	order := map[truth.Class]int{}
+	for i, c := range truth.Classes {
+		order[c] = i
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if order[out[i].Class] != order[out[j].Class] {
+			return order[out[i].Class] < order[out[j].Class]
+		}
+		return out[i].NodeKey < out[j].NodeKey
+	})
+	return out
+}
+
+func tally(c *truth.Counts, s truth.Status) {
+	switch s {
+	case truth.Confirmed:
+		c.Confirmed++
+	case truth.ConfirmedLoose:
+		c.Loose++
+	case truth.Missing:
+		c.Missing++
+	case truth.OutOfScope:
+		c.OutOfScope++
+	case truth.Ignored:
+		c.Ignored++
+	}
+}
+
+func finish(c *truth.Counts) {
+	c.Known = c.Confirmed + c.Loose + c.Missing + c.OutOfScope
+}
+
+// Summaries aggregates judged facts into five ClassSummary values in
+// truth.Classes order, with metrics and a per-source breakdown.
+func Summaries(facts []truth.JudgedFact, uncovered []truth.GraphFact) []truth.ClassSummary {
+	out := make([]truth.ClassSummary, 0, len(truth.Classes))
+	for _, cl := range truth.Classes {
+		cs := truth.ClassSummary{Class: cl, BySource: []truth.SourceSummary{}}
+		bySrc := map[string]*truth.Counts{}
+		for _, f := range facts {
+			if f.Class != cl {
+				continue
+			}
+			tally(&cs.Counts, f.Status)
+			for _, s := range f.Sources {
+				c := bySrc[s]
+				if c == nil {
+					c = &truth.Counts{}
+					bySrc[s] = c
+				}
+				tally(c, f.Status)
+			}
+		}
+		for _, u := range uncovered {
+			if u.Class == cl {
+				cs.Uncovered++
+			}
+		}
+		finish(&cs.Counts)
+		cs.Metrics = cs.Counts.Compute()
+		names := make([]string, 0, len(bySrc))
+		for s := range bySrc {
+			names = append(names, s)
+		}
+		sort.Strings(names)
+		for _, s := range names {
+			c := *bySrc[s]
+			finish(&c)
+			cs.BySource = append(cs.BySource, truth.SourceSummary{Source: s, Counts: c, Metrics: c.Compute()})
+		}
+		out = append(out, cs)
+	}
+	return out
+}
