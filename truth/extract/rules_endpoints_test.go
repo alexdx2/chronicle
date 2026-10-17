@@ -68,6 +68,13 @@ func TestEndpointRules(t *testing.T) {
 			{"csharp.route_attr", "PUT /api/edge/one", true},
 			{"csharp.route_attr", "GET /api/edge/after-nested", true},
 		}},
+		{"csharp split attribute group and qualified name", "src/AController.cs", "csharp/SplitAttr.cs", []wantFact{
+			{"csharp.route_attr", "GET /api/a/split", true},
+			{"csharp.route_attr", "POST /api/a/qualified", true},
+		}},
+		{"csharp chained MapGroup", "Program.cs", "csharp/ChainedGroup.cs", []wantFact{
+			{"csharp.minimal_api", "GET /api/v1/x", true},
+		}},
 		{"csharp nested and typed groups", "Program.cs", "csharp/NestedGroups.cs", []wantFact{
 			{"csharp.minimal_api", "GET /api/orders/{}", true},
 			{"csharp.minimal_api", "GET /items", true},

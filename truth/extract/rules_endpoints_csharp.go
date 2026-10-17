@@ -17,13 +17,14 @@ func init() {
 
 var (
 	csClass   = regexp.MustCompile(`\bclass\s+(\w+)`)
-	csVerb    = regexp.MustCompile(`[\[,]\s*Http(Get|Post|Put|Delete|Patch)\b(?:\s*\(\s*"([^"]*)")?`)
-	csRoute   = regexp.MustCompile(`[\[,]\s*Route\s*\(\s*"([^"]*)"`)
-	csAPICtrl = regexp.MustCompile(`[\[,]\s*ApiController\b`)
+	csVerb    = regexp.MustCompile(`[\[,.]\s*Http(Get|Post|Put|Delete|Patch)\b(?:\s*\(\s*"([^"]*)")?`)
+	csRoute   = regexp.MustCompile(`[\[,.]\s*Route\s*\(\s*"([^"]*)"`)
+	csAPICtrl = regexp.MustCompile(`[\[,.]\s*ApiController\b`)
 	csDecl    = regexp.MustCompile(`\b(\w+)\s*\(`)
 
 	csMinimal = regexp.MustCompile(`(\w*)\.Map(Get|Post|Put|Delete|Patch)\(\s*"([^"]+)"`)
-	csGroup   = regexp.MustCompile(`\b(?:var|[\w<>]+)\s+(\w+)\s*=\s*(\w+)\.MapGroup\(\s*"([^"]+)"`)
+	csGroup   = regexp.MustCompile(`\b(?:var|[\w<>]+)\s+(\w+)\s*=\s*(\w+)((?:\.MapGroup\(\s*"[^"]+"\s*\))+)`)
+	csSegment = regexp.MustCompile(`\.MapGroup\(\s*"([^"]+)"`)
 )
 
 // maskStrings blanks the contents of string literals (same length), so
@@ -119,11 +120,12 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 			continue
 		}
 		rest := l.Code
-		if strings.HasPrefix(trimmed, "[") || openDepth > 0 {
+		startedOpen := openDepth > 0
+		if strings.HasPrefix(trimmed, "[") || startedOpen {
 			var attrs string
 			attrs, rest, openDepth = consumeAttrs(l.Code, openDepth)
 			masked := maskStrings(attrs)
-			if openDepth > 0 || strings.HasPrefix(trimmed, "[") {
+			if startedOpen || strings.HasPrefix(trimmed, "[") {
 				// the attribute may start mid-group on this line: prefix with "["
 				masked = "[" + masked
 				attrs = "[" + attrs
@@ -218,11 +220,15 @@ func applyCSharpMinimalAPI(f *FileCtx) []truth.Fact {
 		return e
 	}
 	for _, l := range f.Lines {
-		if m := csGroup.FindStringSubmatch(l.Code); m != nil {
+		if m := csGroup.FindStringSubmatch(l.Code); m != nil && strings.Count(l.Code, ".MapGroup(") == strings.Count(m[3], ".MapGroup(") {
+			chain := ""
+			for _, sg := range csSegment.FindAllStringSubmatch(m[3], -1) {
+				chain = joinPath(chain, sg[1], false)
+			}
 			if parent, ok := groups[m[2]]; ok {
-				groups[m[1]] = group{joinPath(parent.prefix, m[3], false), append(append([]lex.Line(nil), parent.lines...), l)}
+				groups[m[1]] = group{joinPath(parent.prefix, chain, false), append(append([]lex.Line(nil), parent.lines...), l)}
 			} else if roots[m[2]] {
-				groups[m[1]] = group{joinPath("", m[3], false), []lex.Line{l}}
+				groups[m[1]] = group{joinPath("", chain, false), []lex.Line{l}}
 			}
 		}
 		for _, loc := range csMinimal.FindAllStringSubmatchIndex(l.Code, -1) {
