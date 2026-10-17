@@ -159,8 +159,8 @@ func (ix *index) matchChannel(f truth.Fact) (truth.Status, string) {
 			ok = g.produce
 		case "consume":
 			ok = g.consume
-		default: // declare
-			ok = !g.produce && !g.consume
+		default: // declare: the node existing is enough
+			ok = true
 		}
 		if ok && (best == "" || g.key < best) {
 			best = g.key

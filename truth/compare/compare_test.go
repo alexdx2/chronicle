@@ -234,6 +234,7 @@ func TestChannelSides(t *testing.T) {
 	}{
 		{"lonely", "consume", truth.Missing},
 		{"lonely", "declare", truth.Confirmed},
+		{"pubonly", "declare", truth.Confirmed},
 		{"pubonly", "produce", truth.Confirmed},
 		{"pubonly", "consume", truth.Missing},
 	}
