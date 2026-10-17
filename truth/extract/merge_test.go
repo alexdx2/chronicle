@@ -58,3 +58,21 @@ func TestMergeOrderAndPriority(t *testing.T) {
 		t.Fatal("priority table")
 	}
 }
+
+func TestPriorityTable(t *testing.T) {
+	for s, want := range map[string]int{"csharp.route_attr": 3, "openapi.paths": 2, "compose.service": 1,
+		"appsettings.url": 0, "kafkajs": 3, "kafkajs.consumer": 3, "unknown.rule": 0} {
+		if got := Priority(s); got != want {
+			t.Errorf("%s: got %d want %d", s, got, want)
+		}
+	}
+}
+
+func TestMergeZeroPrimaryNotDerived(t *testing.T) {
+	a := truth.Fact{Class: truth.ClassDeps, Key: "k", Primary: truth.Evidence{File: "a", Line: 1}, Sources: []string{"lock.x"}}
+	b := truth.Fact{Class: truth.ClassDeps, Key: "k", Sources: []string{"dotenv.x"}}
+	out, _ := Merge([]truth.Fact{a, b})
+	if len(out[0].Derived) != 0 {
+		t.Fatalf("derived %v", out[0].Derived)
+	}
+}

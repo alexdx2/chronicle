@@ -1,6 +1,8 @@
 package extract
 
 import (
+	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -109,4 +111,58 @@ func TestIsTestPath(t *testing.T) {
 			t.Errorf("%s: want %v", p, want)
 		}
 	}
+}
+
+type failFS struct {
+	fstest.MapFS
+	bad map[string]bool
+}
+
+func (f failFS) Open(name string) (fs.File, error) {
+	if f.bad[name] {
+		return nil, errors.New("denied")
+	}
+	return f.MapFS.Open(name)
+}
+
+func TestExtractIOErrorsIsolated(t *testing.T) {
+	withRules(t, stubRule{"stub.io", ".cs", func(f *FileCtx) []truth.Fact {
+		return []truth.Fact{{Class: truth.ClassServices, Key: f.Path}}
+	}})
+	fsys := failFS{fstest.MapFS{
+		"ok.cs": {Data: []byte("x")}, "locked.cs": {Data: []byte("x")},
+		"d/in.cs": {Data: []byte("x")}, "e/z.cs": {Data: []byte("x")},
+	}, map[string]bool{"locked.cs": true, "d": true}}
+	rep, err := Extract(fsys)
+	if err != nil || rep == nil {
+		t.Fatalf("err %v", err)
+	}
+	var keys []string
+	for _, f := range rep.Facts {
+		keys = append(keys, f.Key)
+	}
+	if strings.Join(keys, ",") != "e/z.cs,ok.cs" {
+		t.Fatalf("facts %v", keys)
+	}
+	if len(rep.SkippedFiles) != 1 || rep.SkippedFiles[0] != "locked.cs" {
+		t.Fatalf("skipped %v", rep.SkippedFiles)
+	}
+	w := strings.Join(rep.Warnings, "|")
+	if !strings.Contains(w, "walk locked.cs: denied") || !strings.Contains(w, "walk d: denied") {
+		t.Fatalf("warnings %v", rep.Warnings)
+	}
+}
+
+func (f failFS) ReadFile(name string) ([]byte, error) {
+	if f.bad[name] {
+		return nil, errors.New("denied")
+	}
+	return f.MapFS.ReadFile(name)
+}
+
+func (f failFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if f.bad[name] {
+		return nil, errors.New("denied")
+	}
+	return f.MapFS.ReadDir(name)
 }

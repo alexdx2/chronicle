@@ -31,8 +31,23 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 	skipped := map[string]bool{}
 
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		skipFile := func(e error) error {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("walk %s: %v", p, e))
+			if !skipped[p] {
+				skipped[p] = true
+				rep.SkippedFiles = append(rep.SkippedFiles, p)
+			}
+			return nil
+		}
 		if err != nil {
-			return err
+			if p == "." {
+				return err
+			}
+			if d != nil && d.IsDir() {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("walk %s: %v", p, err))
+				return fs.SkipDir
+			}
+			return skipFile(err)
 		}
 		if d.IsDir() {
 			if p != "." && isExcluded(d.Name()) {
@@ -54,7 +69,7 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 		}
 		info, err := d.Info()
 		if err != nil {
-			return err
+			return skipFile(err)
 		}
 		if info.Size() > MaxFile {
 			skipped[p] = true
@@ -63,7 +78,7 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 		}
 		raw, err := fs.ReadFile(fsys, p)
 		if err != nil {
-			return err
+			return skipFile(err)
 		}
 		ctx := &FileCtx{
 			Path:   p,

@@ -13,7 +13,7 @@ import (
 var priorities = map[string]int{
 	// code-level
 	"csharp.": 3, "nest.": 3, "express.": 3, "fastapi.": 3, "flask.": 3, "django.": 3,
-	"axios.": 3, "fetch.": 3, "requests.": 3, "kafka.": 3, "kafkajs": 3, "sqs.": 3,
+	"axios.": 3, "fetch.": 3, "requests.": 3, "kafka.": 3, "kafkajs": 3, "kafkajs.": 3, "sqs.": 3,
 	"eventbridge.": 3, "boto3.": 3, "python.": 3,
 	// contract
 	"openapi.": 2, "lock.": 2, "manifest.": 2,
@@ -26,6 +26,9 @@ var priorities = map[string]int{
 // Priority ranks a rule source: code 3 > contract 2 > infra 1 > config 0.
 // Unknown prefixes rank 0.
 func Priority(source string) int {
+	if v, ok := priorities[source]; ok {
+		return v
+	}
 	key := source
 	if i := strings.Index(source, "."); i >= 0 {
 		key = source[:i+1]
@@ -93,7 +96,7 @@ func Merge(facts []truth.Fact) ([]truth.Fact, []string) {
 			for _, s := range f.Sources {
 				srcSet[s] = true
 			}
-			if i > 0 {
+			if i > 0 && f.Primary.File != "" {
 				addEv(f.Primary)
 			}
 			for _, e := range f.Derived {
