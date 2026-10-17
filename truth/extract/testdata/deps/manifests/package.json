@@ -1,0 +1,8 @@
+{
+  "name": "web",
+  "scripts": { "start": "node express.js" },
+  "dependencies": { "express": "^4.18.0", "local-lib": "file:../lib", "ws": "workspace:*" },
+  "devDependencies": { "jest": "^29.0.0" },
+  "peerDependencies": { "react": ">=18" },
+  "optionalDependencies": { "fsevents": "^2.3.0" }
+}

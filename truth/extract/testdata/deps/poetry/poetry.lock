@@ -1,0 +1,22 @@
+[[package]]
+name = "requests"
+version = "2.31.0"
+description = "HTTP"
+
+[package.dependencies]
+urllib3 = ">=1.21"
+
+[[package]]
+name = "urllib3"
+version = "2.0.7"
+
+[[package]]
+name = "Flask_SQLAlchemy"
+version = "3.1.1"
+
+[[package]]
+name = "pytest"
+version = "7.4.0"
+
+[metadata]
+lock-version = "2.0"

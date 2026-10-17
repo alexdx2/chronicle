@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0": {
+      "Newtonsoft.Json": {
+        "type": "Direct",
+        "requested": "[13.0.3, )",
+        "resolved": "13.0.3",
+        "contentHash": "abc"
+      },
+      "Serilog": {
+        "type": "Direct",
+        "requested": "[3.1.1, )",
+        "resolved": "3.1.1"
+      },
+      "Orders.Core": {
+        "type": "Project",
+        "dependencies": {
+          "Dapper": "[2.1.0, )"
+        }
+      },
+      "Dapper": {
+        "type": "Transitive",
+        "resolved": "2.1.0"
+      }
+    },
+    "net6.0": {
+      "Newtonsoft.Json": {
+        "type": "Direct",
+        "requested": "[13.0.3, )",
+        "resolved": "13.0.3"
+      },
+      "Microsoft.Extensions.Logging": {
+        "type": "Transitive",
+        "resolved": "6.0.0"
+      }
+    }
+  }
+}

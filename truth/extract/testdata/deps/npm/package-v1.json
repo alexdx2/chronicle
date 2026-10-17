@@ -1,0 +1,5 @@
+{
+  "name": "legacy",
+  "dependencies": { "express": "^4.17.0" },
+  "devDependencies": { "mocha": "^8.0.0" }
+}

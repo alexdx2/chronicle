@@ -1,0 +1,18 @@
+[project]
+name = "svc"
+dependencies = [
+    "requests>=2.31",
+    "Flask_SQLAlchemy[async]>=3 ; python_version >= '3.9'",
+    "tool @ https://example.com/tool.whl",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+click = "^8.0"
+localpkg = { path = "../local" }
+
+[tool.poetry.group.lint.dependencies]
+ruff = "^0.1"

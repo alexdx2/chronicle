@@ -1,0 +1,15 @@
+{
+  "name": "shop",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {
+      "name": "shop",
+      "dependencies": { "express": "^4.18.0", "lodash": "^4.17.21", "shared": "file:../shared" },
+      "devDependencies": { "jest": "^29.0.0" },
+      "optionalDependencies": { "fsevents": "^2.3.0" },
+      "peerDependencies": { "react": ">=18" }
+    },
+    "node_modules/express": { "version": "4.18.2" },
+    "node_modules/accepts": { "version": "1.3.8" }
+  }
+}

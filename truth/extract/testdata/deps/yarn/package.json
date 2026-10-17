@@ -1,0 +1,5 @@
+{
+  "name": "app",
+  "dependencies": { "express": "^4.18.0", "@babel/core": "^7.0.0", "missing-in-lock": "^1.0.0" },
+  "devDependencies": { "jest": "^29.0.0" }
+}

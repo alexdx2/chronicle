@@ -1,0 +1,14 @@
+# pinned
+-r other.txt
+--index-url https://example.com/simple
+-e .
+requests==2.31.0  # http
+pkg[extra]>=1
+Flask_SQLAlchemy ; python_version >= "3.9"
+./local/dir
+/abs/path
+https://example.com/x.whl
+git+https://github.com/a/b.git#egg=b
+
+django>=4,<5 \
+    --hash=sha256:abc
