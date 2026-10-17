@@ -70,13 +70,16 @@ func applyFastAPI(f *FileCtx) []truth.Fact {
 	pfx := pyPrefixes(f, pyAPIRouter, pyPrefixKw)
 	var out []truth.Fact
 	for i, l := range f.Lines {
-		if m := pyVerbDeco.FindStringSubmatch(l.Code); m != nil {
+		if !strings.HasPrefix(strings.TrimSpace(l.Code), "@") {
+			continue
+		}
+		if m := pyVerbDeco.FindStringSubmatch(callText(f.Lines, i, 6)); m != nil {
 			if fc, ok := prefixFact("fastapi.decorator", f, l, m[2], m[3], pfx, m[1]); ok {
 				out = append(out, fc)
 			}
 			continue
 		}
-		if m := pyAPIRoute.FindStringSubmatch(l.Code); m != nil {
+		if m := pyAPIRoute.FindStringSubmatch(callText(f.Lines, i, 6)); m != nil {
 			methods := []string{"GET"}
 			if mm := pyMethodsKw.FindStringSubmatch(callText(f.Lines, i, 6)); mm != nil {
 				methods = methods[:0]
@@ -101,7 +104,10 @@ func applyFlask(f *FileCtx) []truth.Fact {
 	pfx := pyPrefixes(f, pyBlueprint, pyURLPrefix)
 	var out []truth.Fact
 	for i, l := range f.Lines {
-		m := pyFlaskRoute.FindStringSubmatch(l.Code)
+		if !strings.HasPrefix(strings.TrimSpace(l.Code), "@") {
+			continue
+		}
+		m := pyFlaskRoute.FindStringSubmatch(callText(f.Lines, i, 6))
 		if m == nil {
 			continue
 		}

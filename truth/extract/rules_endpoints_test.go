@@ -62,6 +62,22 @@ func TestEndpointRules(t *testing.T) {
 			{"csharp.minimal_api", "GET /api/v1/items", true},
 			{"csharp.minimal_api", "POST /api/v1/items/{}", true},
 		}},
+		{"csharp multi-line and nested attributes", "src/EdgeController.cs", "csharp/EdgeController.cs", []wantFact{
+			{"csharp.route_attr", "POST /api/edge/create", true},
+			{"csharp.route_attr", "GET /api/edge/{}", true},
+			{"csharp.route_attr", "PUT /api/edge/one", true},
+			{"csharp.route_attr", "GET /api/edge/after-nested", true},
+		}},
+		{"csharp nested and typed groups", "Program.cs", "csharp/NestedGroups.cs", []wantFact{
+			{"csharp.minimal_api", "GET /api/orders/{}", true},
+			{"csharp.minimal_api", "GET /items", true},
+		}},
+		{"fastapi multi-line decorator", "app/v.py", "py/fastapi_multiline.py", []wantFact{
+			{"fastapi.decorator", "GET /v/multi-line", true},
+		}},
+		{"fastify server.get and template literal", "src/s.ts", "ts/fastify.ts", []wantFact{
+			{"express.router", "GET /health", false},
+		}},
 		{"nest", "src/cats.controller.ts", "ts/cats.controller.ts", []wantFact{
 			{"nest.controller", "GET /cats", true},
 			{"nest.controller", "GET /cats/{}", true},

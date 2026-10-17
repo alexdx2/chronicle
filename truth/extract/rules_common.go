@@ -72,10 +72,7 @@ func joinPath(prefix, route string, replace bool) string {
 		s = "/" + s
 	}
 	if len(s) > 1 {
-		s = strings.TrimRight(s, "/")
-		if s == "" {
-			s = "/"
-		}
+		s = strings.TrimRight(s, "/") // s starts with "/" and has no "//", so this keeps at least "/x"
 	}
 	return s
 }

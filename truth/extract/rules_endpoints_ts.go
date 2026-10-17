@@ -118,13 +118,13 @@ func applyExpress(f *FileCtx) []truth.Fact {
 	if f.IsTest {
 		return nil
 	}
-	frameworkSeen := codeContains(f, "express", "router(", "koa", "hono", "@hapi")
+	frameworkSeen := codeContains(f, "express", "router(", "koa", "hono", "@hapi", "fastify")
 	axiosSeen := codeContains(f, "axios")
 	var out []truth.Fact
 	for _, l := range f.Lines {
 		for _, m := range express.FindAllStringSubmatch(l.Code, -1) {
 			recv, method, route := m[1], m[2], m[3]
-			if !strings.HasPrefix(route, "/") {
+			if !strings.HasPrefix(route, "/") || strings.Contains(route, "${") {
 				continue // app.get('port') is a settings getter, not a route
 			}
 			if recv != "fastify" && !frameworkSeen {

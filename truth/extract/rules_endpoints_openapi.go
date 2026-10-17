@@ -71,5 +71,8 @@ func openAPIPathLine(f *FileCtx, p string) (l lex.Line) {
 			return ln
 		}
 	}
+	if len(f.Lines) == 0 {
+		return lex.Line{Num: 1}
+	}
 	return f.Lines[0]
 }
