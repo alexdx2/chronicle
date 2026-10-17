@@ -80,6 +80,7 @@ func NewRootCmd() *cobra.Command {
 		newAttachCmd(),
 		newDetachCmd(),
 		newDoctorCmd(),
+		newTruthCmd(),
 	)
 
 	return root
