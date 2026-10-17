@@ -74,6 +74,9 @@ func TestHTTPRules(t *testing.T) {
 			"appsettings.url | search.internal",
 			"appsettings.url | top.example.com",
 		}},
+		{"appsettings comment retry", "appsettings.json", "config/appsettings.comment.json", []string{"appsettings.url | x.example.com"}},
+		{"csharp pinned", "Pinned.cs", "csharp/Pinned.cs", []string{"csharp.httpclient_base | b.example.com"}},
+		{"axios pinned", "pinned.ts", "ts/pinned.ts", []string{"axios.create | b.example.com"}},
 		{"other json ignored", "config/other.json", "config/appsettings.json", nil},
 		{"dotenv", "svc/.env", "config/env.sample", []string{
 			"dotenv.url | tom.example.com",
@@ -150,17 +153,27 @@ func TestHTTPAttrsAndLines(t *testing.T) {
 		t.Errorf("tom attrs %v", f.Attrs)
 	}
 
+	if f := findHTTP(t, httpFacts(t, "Pinned.cs", "csharp/Pinned.cs"), "b.example.com"); f.Primary.Line != 6 || !strings.Contains(f.Primary.Text, "new Uri") {
+		t.Errorf("cs pinned: %+v", f.Primary)
+	}
+	if f := findHTTP(t, httpFacts(t, "pinned.ts", "ts/pinned.ts"), "b.example.com"); f.Primary.Line != 2 {
+		t.Errorf("axios pinned: %+v", f.Primary)
+	}
+	if f := findHTTP(t, httpFacts(t, "appsettings.json", "config/appsettings.comment.json"), "x.example.com"); f.Primary.Line != 3 {
+		t.Errorf("comment retry: %+v", f.Primary)
+	}
+
 	st := httpFacts(t, "appsettings.json", "config/appsettings.json")
 	f = findHTTP(t, st, "var:TOM_API_URL")
 	if f.Attrs["var"] != "TOM_API_URL" || f.Attrs["config_key"] != "TomApiUrl" || f.Primary.Line != 5 {
 		t.Errorf("tom: %+v %+v", f.Attrs, f.Primary)
 	}
 	f = findHTTP(t, st, "api.payments.io")
-	if f.Attrs["var"] != "PaymentsBaseAddress" || f.Attrs["config_key"] != "PaymentsBaseAddress" || f.Attrs["path"] != "/v1" {
+	if f.Attrs["var"] != "" || f.Attrs["config_key"] != "PaymentsBaseAddress" || f.Attrs["path"] != "/v1" {
 		t.Errorf("payments cfg: %v", f.Attrs)
 	}
 	f = findHTTP(t, st, "top.example.com")
-	if f.Attrs["path"] != "/path" || f.Primary.Line != 13 {
+	if f.Attrs["path"] != "/path" || f.Primary.Line != 14 {
 		t.Errorf("top: %+v %+v", f.Attrs, f.Primary)
 	}
 
@@ -170,5 +183,16 @@ func TestHTTPAttrsAndLines(t *testing.T) {
 	}
 	if f := findHTTP(t, k, "search.example.com"); f.Primary.Line != 6 || f.Attrs["config_key"] != "SEARCH_URL" {
 		t.Errorf("k8s search: %+v %v", f.Primary, f.Attrs)
+	}
+}
+
+func TestHTTPConfigKeyRegex(t *testing.T) {
+	for k, want := range map[string]bool{
+		"TomApiUrl": true, "PaymentsBaseUrl": true, "ServiceEndpoint": true, "BASE_URL": true,
+		"api_url": true, "Url": true, "WebHost": true, "NotAUrl": false, "Ghost": false, "Notes": false,
+	} {
+		if cfgURLKey.MatchString(k) != want {
+			t.Errorf("%s: want %v", k, want)
+		}
 	}
 }

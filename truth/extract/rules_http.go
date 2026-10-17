@@ -8,7 +8,8 @@ import (
 	"github.com/alexdx2/chronicle-core/truth/extract/lex"
 )
 
-// Outbound HTTP targets. A fact is keyed by the canonical host of a literal
+// Outbound HTTP targets (grpc:// and grpcs:// hosts are accepted under class http).
+// A fact is keyed by the canonical host of a literal
 // URL, or by "var:NAME" when the host (or the whole config value) is a
 // template such as ${NAME}, %NAME% or {NAME}. Local hosts yield no fact.
 
@@ -88,10 +89,7 @@ func httpFact(rule string, f *FileCtx, l lex.Line, value, cfgKey string) (truth.
 	}
 	attrs := map[string]string{"host": host, "path": path, "var": variable}
 	if cfgKey != "" {
-		attrs["config_key"] = cfgKey
-		if variable == "" {
-			attrs["var"] = cfgKey
-		}
+		attrs["config_key"] = cfgKey // "var" stays the template variable name only
 	}
 	return truth.Fact{
 		Class:   truth.ClassHTTP,
@@ -117,15 +115,15 @@ func init() {
 	)
 }
 
-const q = "[\"'`]"
+const quote = "[\"'`]"
 
 var (
 	csBaseAddr    = regexp.MustCompile(`\bBaseAddress\s*=\s*new\s*(?:Uri)?\s*\(\s*\$?@?"((?i:https?|grpcs?)://[^"]*)`)
 	csHTTPLiteral = regexp.MustCompile(`\.(?:Get|Post|Put|Delete|Patch|Send)(?:Async)?\(\s*\$?@?"((?i:https?|grpcs?)://[^"]*)`)
 	csRefit       = regexp.MustCompile(`RestService\.For<\w+>\(\s*\$?@?"((?i:https?|grpcs?)://[^"]*)`)
-	axBase        = regexp.MustCompile(`\bbaseURL\s*:\s*` + q + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
-	jsFetch       = regexp.MustCompile(`\bfetch\(\s*` + q + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
-	nestHTTP      = regexp.MustCompile(`\bthis\.http(?:Service)?\.(?:get|post|put|delete|patch)\(\s*` + q + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
+	axBase        = regexp.MustCompile(`\bbaseURL\s*:\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
+	jsFetch       = regexp.MustCompile(`\bfetch\(\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
+	nestHTTP      = regexp.MustCompile(`\bthis\.http(?:Service)?\.(?:get|post|put|delete|patch)\(\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
 	pyRequests    = regexp.MustCompile(`\b(?:requests|httpx|session|client)\.(?:get|post|put|delete|patch)\(\s*[fF]?["']((?i:https?|grpcs?)://[^"']*)`)
 )
 
@@ -147,7 +145,8 @@ func lineRule(name string, re *regexp.Regexp) func(f *FileCtx) []truth.Fact {
 	}
 }
 
-// windowRule matches re on the joined code of a 4-line window that starts at
+// windowRule matches re on the joined code of a 4-line window (a baseURL more
+// than three lines below its axios.create( is not found) that starts at
 // every line containing anchor; the fact points at the anchor line.
 func windowRule(name, anchor string, re *regexp.Regexp) func(f *FileCtx) []truth.Fact {
 	return func(f *FileCtx) []truth.Fact {
@@ -164,11 +163,14 @@ func windowRule(name, anchor string, re *regexp.Regexp) func(f *FileCtx) []truth
 				sb.WriteString(f.Lines[j].Code)
 				sb.WriteByte(' ')
 			}
-			m := re.FindStringSubmatch(sb.String())
-			if m == nil {
+			win := sb.String()
+			idx := re.FindStringSubmatchIndex(win)
+			// Pin the match to the anchor line: a hit that starts on a later
+			// line of the window belongs to that line's own anchor.
+			if idx == nil || idx[0] >= len(l.Code) || idx[2] < 0 {
 				continue
 			}
-			if fc, ok := httpFact(name, f, l, m[1], ""); ok {
+			if fc, ok := httpFact(name, f, l, win[idx[2]:idx[3]], ""); ok {
 				out = append(out, fc)
 			}
 		}

@@ -33,15 +33,15 @@ func init() {
 }
 
 var (
-	cfgURLKey   = regexp.MustCompile(`(?i)(url|uri|baseaddress|endpoint|host)$`)
+	cfgURLKey   = regexp.MustCompile(`(?:^|[_.\-])(?i:url|uri|baseaddress|endpoint|host)$|[a-z0-9](?:Url|URL|Uri|URI|BaseAddress|Endpoint|ENDPOINT|Host|HOST)$`)
 	dotenvLine  = regexp.MustCompile(`^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.*?)\s*$`)
-	k8sKindLine = regexp.MustCompile(`(?m)^\s*kind:\s*(?:Deployment|StatefulSet|DaemonSet|CronJob|ConfigMap)\b`)
+	k8sKindLine = regexp.MustCompile(`(?m)^\s*kind:\s*(?:Deployment|StatefulSet|DaemonSet|CronJob|Job|Pod|ConfigMap)\b`)
 )
 
 // lineOf finds the first code line that contains every needle (key first).
-func lineOf(f *FileCtx, needles ...string) (lex.Line, bool) {
+func lineOf(lines []lex.Line, needles ...string) (lex.Line, bool) {
 	for len(needles) > 0 {
-		for _, l := range f.Lines {
+		for _, l := range lines {
 			ok := true
 			for _, n := range needles {
 				if !strings.Contains(l.Code, n) {
@@ -63,10 +63,12 @@ func applyAppSettings(f *FileCtx) []truth.Fact {
 		return nil
 	}
 	var root any
+	lines := f.Lines
 	if err := json.Unmarshal(f.Raw, &root); err != nil {
 		// .NET accepts comments in appsettings; blank them and retry.
 		var sb strings.Builder
-		for _, l := range lex.Scan(f.Raw, lex.CLike).Lines {
+		lines = lex.Scan(f.Raw, lex.CLike).Lines
+		for _, l := range lines {
 			sb.WriteString(l.Code)
 			sb.WriteByte('\n')
 		}
@@ -87,7 +89,7 @@ func applyAppSettings(f *FileCtx) []truth.Fact {
 			for _, k := range keys {
 				if s, ok := x[k].(string); ok {
 					if cfgURLKey.MatchString(k) {
-						if l, found := lineOf(f, `"`+k+`"`, s); found {
+						if l, found := lineOf(lines, `"`+k+`"`, s); found {
 							if fc, ok := httpFact("appsettings.url", f, l, s, k); ok {
 								out = append(out, fc)
 							}
@@ -131,7 +133,7 @@ func applyDotenv(f *FileCtx) []truth.Fact {
 	return out
 }
 
-// yamlRoot parses one document.
+// yamlMap returns the value node of key in a mapping node, or nil.
 func yamlMap(n *yaml.Node, key string) *yaml.Node {
 	if n == nil || n.Kind != yaml.MappingNode {
 		return nil
@@ -236,7 +238,7 @@ func applyK8s(f *FileCtx) []truth.Fact {
 	return out
 }
 
-var k8sKinds = map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true, "CronJob": true, "ConfigMap": true}
+var k8sKinds = map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true, "CronJob": true, "Job": true, "Pod": true, "ConfigMap": true}
 
 func k8sKindIsConfigMap(root *yaml.Node) bool {
 	k := yamlMap(root, "kind")
