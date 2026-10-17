@@ -3,7 +3,6 @@ package extract
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"path"
 	"regexp"
 	"strings"
@@ -49,13 +48,6 @@ func serviceFact(rule string, f *FileCtx, kind, name, tech, image string, primar
 	}, true
 }
 
-func svcLineAt(f *FileCtx, n int) (lex.Line, bool) {
-	if n < 1 || n > len(f.Lines) {
-		return lex.Line{}, false
-	}
-	return f.Lines[n-1], true
-}
-
 // ---- compose ----
 
 var infraTechs = []string{"postgres", "mysql", "mariadb", "mongo", "redis", "rabbitmq", "kafka", "zookeeper", "elasticsearch", "opensearch", "localstack", "minio", "nats", "memcached"}
@@ -82,6 +74,42 @@ func infraTech(image string) string {
 	return ""
 }
 
+func yamlResolve(n *yaml.Node) *yaml.Node {
+	for n != nil && n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	return n
+}
+
+// yamlMapMerged is yamlMap that also follows "<<" merge keys (aliases).
+func yamlMapMerged(n *yaml.Node, key string) *yaml.Node {
+	return yamlMapMergedDepth(n, key, 0)
+}
+
+func yamlMapMergedDepth(n *yaml.Node, key string, depth int) *yaml.Node {
+	n = yamlResolve(n)
+	if n == nil || n.Kind != yaml.MappingNode || depth > 8 {
+		return nil
+	}
+	if v := yamlMap(n, key); v != nil {
+		return v
+	}
+	m := yamlMap(n, "<<")
+	if m == nil {
+		return nil
+	}
+	m = yamlResolve(m)
+	if m.Kind == yaml.SequenceNode {
+		for _, it := range m.Content {
+			if v := yamlMapMergedDepth(it, key, depth+1); v != nil {
+				return v
+			}
+		}
+		return nil
+	}
+	return yamlMapMergedDepth(m, key, depth+1)
+}
+
 func applyComposeService(f *FileCtx) []truth.Fact {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(f.Raw, &doc); err != nil {
@@ -93,21 +121,21 @@ func applyComposeService(f *FileCtx) []truth.Fact {
 	}
 	var out []truth.Fact
 	for i := 0; i+1 < len(services.Content); i += 2 {
-		key, svc := services.Content[i], services.Content[i+1]
+		key, svc := services.Content[i], yamlResolve(services.Content[i+1])
 		if svc.Kind != yaml.MappingNode {
 			continue
 		}
-		l, ok := svcLineAt(f, key.Line)
+		l, ok := yamlLine(f, key.Line)
 		if !ok {
 			continue
 		}
 		image := ""
-		if n := yamlMap(svc, "image"); n != nil && n.Kind == yaml.ScalarNode {
+		if n := yamlMapMerged(svc, "image"); n != nil && n.Kind == yaml.ScalarNode {
 			image = n.Value
 		}
 		kind, tech := "external", ""
 		switch {
-		case yamlMap(svc, "build") != nil:
+		case yamlMapMerged(svc, "build") != nil:
 			kind = "own"
 		case image != "":
 			if tech = infraTech(image); tech != "" {
@@ -129,30 +157,21 @@ func applyK8sWorkload(f *FileCtx) []truth.Fact {
 	if !bytes.Contains(f.Raw, []byte("kind:")) {
 		return nil
 	}
-	dec := yaml.NewDecoder(bytes.NewReader(f.Raw))
 	var out []truth.Fact
-	for {
-		var doc yaml.Node
-		if err := dec.Decode(&doc); err != nil {
-			if err != io.EOF {
-				return out // a templated document: keep what parsed so far
-			}
-			break
-		}
-		root := yamlDoc(&doc)
+	yamlDocs(f.Raw, func(root *yaml.Node) {
 		if k := yamlMap(root, "kind"); k == nil || !k8sWorkloads[k.Value] {
-			continue
+			return
 		}
 		name := yamlMap(yamlMap(root, "metadata"), "name")
 		if name == nil || name.Kind != yaml.ScalarNode {
-			continue
+			return
 		}
-		if l, ok := svcLineAt(f, name.Line); ok {
+		if l, ok := yamlLine(f, name.Line); ok {
 			if fc, ok := serviceFact("k8s.workload", f, "own", name.Value, "", "", l); ok {
 				out = append(out, fc)
 			}
 		}
-	}
+	})
 	return out
 }
 
@@ -169,7 +188,7 @@ func applyHelmChart(f *FileCtx) []truth.Fact {
 	if name == nil || name.Kind != yaml.ScalarNode {
 		return nil
 	}
-	if l, ok := svcLineAt(f, name.Line); ok {
+	if l, ok := yamlLine(f, name.Line); ok {
 		if fc, ok := serviceFact("helm.chart", f, "own", name.Value, "", "", l); ok {
 			return []truth.Fact{fc}
 		}
@@ -182,42 +201,27 @@ func applyHelmChart(f *FileCtx) []truth.Fact {
 var (
 	tfCompute = regexp.MustCompile(`^\s*resource\s+"(aws_lambda_function|aws_ecs_service|aws_ecs_task_definition)"\s+"[^"]+"\s*\{`)
 	tfNameKey = map[string]string{"aws_lambda_function": "function_name", "aws_ecs_service": "name", "aws_ecs_task_definition": "family"}
-	tfAnyAttr = regexp.MustCompile(`^\s*(function_name|name|family)\s*=\s*"([^"]*)"`)
 )
 
 func applyTerraformCompute(f *FileCtx) []truth.Fact {
 	var out []truth.Fact
-	for i := 0; i < len(f.Lines); i++ {
-		m := tfCompute.FindStringSubmatch(f.Lines[i].Code)
-		if m == nil {
-			continue
-		}
-		res := f.Lines[i]
-		depth := strings.Count(res.Code, "{") - strings.Count(res.Code, "}")
-		j := i + 1
-		for ; j < len(f.Lines) && depth > 0; j++ {
-			l := f.Lines[j]
-			if a := tfAnyAttr.FindStringSubmatch(l.Code); a != nil && depth == 1 && a[1] == tfNameKey[m[1]] {
-				if fc, ok := serviceFact("terraform.compute", f, "own", a[2], "", "", l, evidence(f, res)); ok {
-					out = append(out, fc)
-				}
+	tfResourceAttrs(f, tfCompute, func(typ string) string { return tfNameKey[typ] },
+		func(res, l lex.Line, _, val string) {
+			if fc, ok := serviceFact("terraform.compute", f, "own", val, "", "", l, evidence(f, res)); ok {
+				out = append(out, fc)
 			}
-			depth += strings.Count(l.Code, "{") - strings.Count(l.Code, "}")
-		}
-		i = j - 1
-	}
+		})
 	return out
 }
 
 // ---- cdk ----
 
 var (
-	cdkFnTS    = regexp.MustCompile(`new\s+(?:\w+\.)?(?:Function|NodejsFunction|DockerImageFunction|PythonFunction)\(\s*\w+\s*,\s*['"]([^'"]+)['"]`)
+	cdkFnTS    = regexp.MustCompile(`new\s+(?:\w*lambda\w*\.)?(?:Function|NodejsFunction|DockerImageFunction|PythonFunction)\(\s*\w+\s*,\s*['"]([^'"]+)['"]`)
 	cdkFnPy    = regexp.MustCompile(`\b\w*lambda\w*\.(?:Function|DockerImageFunction|PythonFunction)\(\s*\w+\s*,\s*['"]([^'"]+)['"]`)
 	cdkNameTS  = regexp.MustCompile(`\bfunctionName\s*:\s*(['"])([^'"]*)['"]\s*[,}]?`)
 	cdkNamePy  = regexp.MustCompile(`\bfunction_name\s*=\s*(['"])([^'"]*)['"]`)
 	cdkNameAny = regexp.MustCompile(`\b(?:functionName\s*:|function_name\s*=)`)
-	cdkNextNew = regexp.MustCompile(`\bnew\s|\b\w*lambda\w*\.(?:Function|DockerImageFunction|PythonFunction)\(`)
 )
 
 func applyCDKFunction(f *FileCtx) []truth.Fact {
@@ -230,16 +234,13 @@ func applyCDKFunction(f *FileCtx) []truth.Fact {
 	}
 	var out []truth.Fact
 	for i, l := range f.Lines {
-		text := codeWindow(f.Lines, i, 7)
+		text := callText(f.Lines, i, 40)
 		loc := re.FindStringSubmatchIndex(text)
 		if loc == nil || loc[0] >= len(l.Code) {
 			continue
 		}
 		id := text[loc[2]:loc[3]]
 		rest := text[loc[1]:]
-		if n := cdkNextNew.FindStringIndex(rest); n != nil {
-			rest = rest[:n[0]] // the next construct is not ours
-		}
 		name := id
 		if cdkNameAny.MatchString(rest) {
 			nm := nameRe.FindStringSubmatch(rest)

@@ -1,9 +1,7 @@
 package extract
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -151,10 +149,14 @@ func yamlDoc(n *yaml.Node) *yaml.Node {
 
 // yamlFact builds a fact from a scalar node (its own line is the evidence).
 func yamlFact(rule string, f *FileCtx, val *yaml.Node, key string) (truth.Fact, bool) {
-	if val == nil || val.Kind != yaml.ScalarNode || val.Line < 1 || val.Line > len(f.Lines) {
+	if val == nil || val.Kind != yaml.ScalarNode {
 		return truth.Fact{}, false
 	}
-	return httpFact(rule, f, f.Lines[val.Line-1], val.Value, key)
+	l, ok := yamlLine(f, val.Line)
+	if !ok {
+		return truth.Fact{}, false
+	}
+	return httpFact(rule, f, l, val.Value, key)
 }
 
 func applyCompose(f *FileCtx) []truth.Fact {
@@ -215,22 +217,12 @@ func applyK8s(f *FileCtx) []truth.Fact {
 	if !k8sKindLine.MatchString(code.String()) {
 		return nil
 	}
-	dec := yaml.NewDecoder(bytes.NewReader(f.Raw))
 	var out []truth.Fact
-	for {
-		var doc yaml.Node
-		if err := dec.Decode(&doc); err != nil {
-			if err != io.EOF {
-				return out // a templated document: keep what parsed so far
-			}
-			break
+	yamlDocs(f.Raw, func(root *yaml.Node) {
+		if k := yamlMap(root, "kind"); k != nil && k8sKinds[k.Value] {
+			out = append(out, k8sWalk(f, root, k8sKindIsConfigMap(root))...)
 		}
-		root := yamlDoc(&doc)
-		if k := yamlMap(root, "kind"); k == nil || !k8sKinds[k.Value] {
-			continue
-		}
-		out = append(out, k8sWalk(f, root, k8sKindIsConfigMap(root))...)
-	}
+	})
 	return out
 }
 

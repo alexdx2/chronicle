@@ -80,6 +80,23 @@ func TestServiceRules(t *testing.T) {
 		{"csproj exe uses file stem", map[string]string{"src/Worker/Worker.csproj": "cs/Worker.csproj"}, []wantFact{
 			{"csharp.web_sdk", "own:worker", false},
 		}},
+		{"cdk long props and nested new", map[string]string{"infra/props.ts": "cdk/props.ts"}, []wantFact{
+			{"cdk.function", "own:longnamefn", false},
+			{"cdk.function", "own:rtnamefn", false},
+		}},
+		{"compose merge keys and aliases", map[string]string{"docker-compose.yml": "compose/merge.yml"}, []wantFact{
+			{"compose.service", "own:api", false},
+			{"compose.service", "own:worker", false},
+			{"compose.service", "infra:cache", false},
+		}},
+		{"csproj MSBuildProjectName", map[string]string{"src/Prop/Prop.csproj": "cs/Prop.csproj"}, []wantFact{
+			{"csharp.web_sdk", "own:prop", false},
+		}},
+		{"csproj IsTestProject", map[string]string{"src/T/IsTest.csproj": "cs/IsTest.csproj"}, nil},
+		{"nest two creates one fact", map[string]string{"api/main.ts": "nest/double.ts"}, []wantFact{
+			{"nest.bootstrap", "own:api", false},
+		}},
+		{"helm template", map[string]string{"charts/x/templates/deployment.yaml": "helm/deployment.yaml"}, nil},
 		{"library csproj", map[string]string{"src/Lib/Lib.csproj": "cs/Lib.csproj"}, nil},
 		{"commented OutputType", map[string]string{"src/C/Commented.csproj": "cs/Commented.csproj"}, nil},
 		{"test project exe", map[string]string{"src/T/Tests.csproj": "cs/Tests.csproj"}, nil},

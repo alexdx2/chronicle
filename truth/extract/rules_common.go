@@ -1,11 +1,14 @@
 package extract
 
 import (
+	"bytes"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/truth"
 	"github.com/alexdx2/chronicle-core/truth/extract/lex"
+	"gopkg.in/yaml.v3"
 )
 
 // funcRule adapts three functions to the Rule interface.
@@ -129,4 +132,52 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// yamlLine returns the 1-based source line n, if it exists.
+func yamlLine(f *FileCtx, n int) (lex.Line, bool) {
+	if n < 1 || n > len(f.Lines) {
+		return lex.Line{}, false
+	}
+	return f.Lines[n-1], true
+}
+
+// yamlDocs calls fn with the root of every document of a multi-document YAML
+// stream. A document that fails to parse (templated) ends the walk and keeps
+// what was seen so far.
+func yamlDocs(raw []byte, fn func(root *yaml.Node)) {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	for {
+		var doc yaml.Node
+		if err := dec.Decode(&doc); err != nil {
+			return // io.EOF or a templated document
+		}
+		fn(yamlDoc(&doc))
+	}
+}
+
+var tfAttrLine = regexp.MustCompile(`^\s*(\w+)\s*=\s*"([^"]*)"`)
+
+// tfResourceAttrs walks Terraform resource blocks matched by resourceRe (group
+// 1 is the resource type). For each, emit is called with the resource line, the
+// top-level attribute line named attrFor(type) and its quoted value.
+func tfResourceAttrs(f *FileCtx, resourceRe *regexp.Regexp, attrFor func(resType string) string, emit func(res, attr lex.Line, resType, val string)) {
+	for i := 0; i < len(f.Lines); i++ {
+		m := resourceRe.FindStringSubmatch(f.Lines[i].Code)
+		if m == nil {
+			continue
+		}
+		want := attrFor(m[1])
+		res := f.Lines[i]
+		depth := strings.Count(res.Code, "{") - strings.Count(res.Code, "}")
+		j := i + 1
+		for ; j < len(f.Lines) && depth > 0; j++ {
+			l := f.Lines[j]
+			if a := tfAttrLine.FindStringSubmatch(l.Code); a != nil && depth == 1 && a[1] == want {
+				emit(res, l, m[1], a[2])
+			}
+			depth += strings.Count(l.Code, "{") - strings.Count(l.Code, "}")
+		}
+		i = j - 1
+	}
 }

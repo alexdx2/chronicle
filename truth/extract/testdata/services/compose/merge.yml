@@ -1,0 +1,11 @@
+x-base: &base
+  build: ./svc
+x-img: &img
+  image: redis:7
+services:
+  api:
+    <<: *base
+    ports: ["1:1"]
+  worker: *base
+  cache:
+    <<: [*img]

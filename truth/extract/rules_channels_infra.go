@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/truth"
+	"github.com/alexdx2/chronicle-core/truth/extract/lex"
 )
 
 // Infrastructure-declared channels: Terraform, CDK and compose.
@@ -17,42 +18,29 @@ func init() {
 	)
 }
 
-var (
-	tfResource = regexp.MustCompile(`^\s*resource\s+"(aws_sqs_queue|aws_sns_topic|kafka_topic|confluent_kafka_topic)"\s+"[^"]+"\s*\{`)
-	tfAttr     = regexp.MustCompile(`^\s*(name|topic_name)\s*=\s*"([^"]*)"`)
-)
+var tfResource = regexp.MustCompile(`^\s*resource\s+"(aws_sqs_queue|aws_sns_topic|kafka_topic|confluent_kafka_topic)"\s+"[^"]+"\s*\{`)
 
 func applyTerraformChannel(f *FileCtx) []truth.Fact {
 	if f.IsTest {
 		return nil
 	}
-	var out []truth.Fact
-	for i := 0; i < len(f.Lines); i++ {
-		m := tfResource.FindStringSubmatch(f.Lines[i].Code)
-		if m == nil {
-			continue
-		}
-		kind, attr := "queue", "name"
-		switch m[1] {
+	kindOf := func(typ string) (kind, attr string) {
+		switch typ {
 		case "aws_sns_topic":
-			kind = "topic"
+			return "topic", "name"
 		case "kafka_topic", "confluent_kafka_topic":
-			kind, attr = "topic", "topic_name"
+			return "topic", "topic_name"
 		}
-		res := f.Lines[i]
-		depth := strings.Count(res.Code, "{") - strings.Count(res.Code, "}")
-		j := i + 1
-		for ; j < len(f.Lines) && depth > 0; j++ {
-			l := f.Lines[j]
-			if a := tfAttr.FindStringSubmatch(l.Code); a != nil && depth == 1 && a[1] == attr {
-				if fc, ok := channelFact("terraform.channel", f, l, kind, a[2], "declare", evidence(f, res)); ok {
-					out = append(out, fc)
-				}
-			}
-			depth += strings.Count(l.Code, "{") - strings.Count(l.Code, "}")
-		}
-		i = j - 1
+		return "queue", "name"
 	}
+	var out []truth.Fact
+	tfResourceAttrs(f, tfResource, func(typ string) string { _, a := kindOf(typ); return a },
+		func(res, l lex.Line, typ, val string) {
+			kind, _ := kindOf(typ)
+			if fc, ok := channelFact("terraform.channel", f, l, kind, val, "declare", evidence(f, res)); ok {
+				out = append(out, fc)
+			}
+		})
 	return out
 }
 
