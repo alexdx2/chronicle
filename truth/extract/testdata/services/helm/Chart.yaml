@@ -1,0 +1,3 @@
+apiVersion: v2
+name: payments-chart
+version: 0.1.0

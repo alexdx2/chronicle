@@ -1,0 +1,23 @@
+version: "3.8"
+services:
+  order-api:
+    build: ./orders
+    ports: ["8080:80"]
+  Billing_Svc:
+    build:
+      context: ./billing
+    image: registry.local/billing:latest
+  db:
+    image: bitnami/postgresql:16
+  cache:
+    image: "redis:7-alpine"
+  broker:
+    image: confluentinc/cp-kafka:7.5.0
+  zk:
+    image: zookeeper
+  proxy:
+    image: ${REGISTRY}/edge-proxy:${TAG}
+  web:
+    image: nginx:latest
+x-common: &common
+  restart: always
