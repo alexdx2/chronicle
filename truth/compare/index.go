@@ -73,7 +73,7 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 			nodes[n.ID] = n
 		}
 	}
-	// Edge facts.
+	// Edge facts. Edge sources are not domain-checked: snapshots are single-repo.
 	pub, con := map[string]bool{}, map[string]bool{}
 	dependsIn, publishesIn := map[string]bool{}, map[string]bool{}
 	callTargets := map[string]bool{}
@@ -83,7 +83,7 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 		}
 		switch e.Type {
 		case "PUBLISHES_TOPIC":
-			pub[e.From], pub[e.To] = true, true
+			pub[e.To] = true
 		case "CONSUMES_TOPIC":
 			con[e.From], con[e.To] = true, true
 		case "DEPENDS_ON":
@@ -145,7 +145,9 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 			}
 			ix.services = append(ix.services, svcNode{key: id, name: n.Name, typ: typ, names: names})
 		}
-		if typ == "external_system" || callTargets[id] {
+		// CALLS_ENDPOINT targets are endpoint nodes judged under endpoints, so
+		// the http index holds service/external_system nodes only.
+		if typ == "external_system" || (typ == "service" && callTargets[id]) {
 			h := httpNode{key: id, name: n.Name, external: typ == "external_system", hosts: map[string]bool{}, names: map[string]bool{}}
 			addName := func(s string) {
 				if c := truth.CanonName(s); c != "" {

@@ -10,6 +10,11 @@ import (
 
 func mkSnap(t *testing.T, coverage ...string) *snapshot.Snapshot {
 	t.Helper()
+	return mkSnapWith(t, nil, nil, coverage...)
+}
+
+func mkSnapWith(t *testing.T, extraNodes []snapshot.Node, extraEdges []snapshot.Edge, coverage ...string) *snapshot.Snapshot {
+	t.Helper()
 	n := func(id, typ, name string, al ...snapshot.Alias) snapshot.Node {
 		return snapshot.Node{Kind: "node", ID: id, Type: typ, Domain: "d", Name: name, Status: "active", Aliases: al}
 	}
@@ -30,6 +35,12 @@ func mkSnap(t *testing.T, coverage ...string) *snapshot.Snapshot {
 			{Kind: "edge", ID: "e3", Type: "CALLS_SERVICE", From: "service:service:d:orders-api", To: "service:external_system:d:tom-api", Active: true},
 		},
 	}
+	s.Nodes = append(s.Nodes, extraNodes...)
+	s.Edges = append(s.Edges, extraEdges...)
+	for i := range s.Edges {
+		e := &s.Edges[i]
+		e.ID = e.From + "->" + e.To + ":" + e.Type
+	}
 	for _, c := range coverage {
 		s.Coverage = append(s.Coverage, snapshot.Coverage{Kind: "coverage", Path: c})
 	}
@@ -37,9 +48,15 @@ func mkSnap(t *testing.T, coverage ...string) *snapshot.Snapshot {
 	if err := snapshot.Encode(&buf, s); err != nil {
 		t.Fatal(err)
 	}
-	out, _, err := snapshot.Decode(&buf, snapshot.DefaultLimits())
+	out, warns, err := snapshot.Decode(&buf, snapshot.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(warns) != 0 {
+		t.Fatalf("decode warnings: %v", warns)
+	}
+	if len(out.Edges) != len(s.Edges) {
+		t.Fatalf("edges lost: %d vs %d", len(out.Edges), len(s.Edges))
 	}
 	return out
 }
@@ -164,5 +181,94 @@ func TestSummariesBySource(t *testing.T) {
 	}
 	if d.Known != 2 {
 		t.Errorf("class counted a fact once: %d", d.Known)
+	}
+}
+
+func nd(id, typ, name string) snapshot.Node {
+	return snapshot.Node{Kind: "node", ID: id, Type: typ, Domain: "d", Name: name, Status: "active"}
+}
+
+func ed(typ, from, to string) snapshot.Edge {
+	return snapshot.Edge{Kind: "edge", Type: typ, From: from, To: to, Active: true}
+}
+
+func one(t *testing.T, snap *snapshot.Snapshot, f truth.Fact) truth.Status {
+	t.Helper()
+	return Compare(&truth.Report{Facts: []truth.Fact{f}}, snap).Facts[0].Status
+}
+
+func TestHTTPHostMatching(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{nd("service:service:d:api", "service", "api")}, nil, "src/b.ts")
+	f := fact(truth.ClassHTTP, "api.stripe.com", "src/b.ts", map[string]string{"host": "api.stripe.com"})
+	if s := one(t, snap, f); s != truth.Missing {
+		t.Errorf("api.stripe.com vs service api: %s", s)
+	}
+	host := truth.CanonHost("http://tom-api:3001")
+	f = fact(truth.ClassHTTP, host, "src/b.ts", map[string]string{"host": host})
+	if s := one(t, snap, f); s != truth.Confirmed {
+		t.Errorf("literal host: %s", s)
+	}
+}
+
+func TestNoEndpointUnderHTTPUncovered(t *testing.T) {
+	snap := mkSnapWith(t, nil, []snapshot.Edge{ed("CALLS_ENDPOINT", "service:service:d:orders-api", "contract:endpoint:d:get:/api/extra")}, "src/a.cs")
+	v := Compare(&truth.Report{}, snap)
+	for _, u := range v.Uncovered {
+		if u.Class == truth.ClassHTTP && u.NodeKey == "contract:endpoint:d:get:/api/extra" {
+			t.Errorf("endpoint under http uncovered")
+		}
+	}
+}
+
+func TestChannelSides(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{
+		nd("contract:topic:d:lonely", "topic", "lonely"),
+		nd("contract:topic:d:pubonly", "topic", "pubonly"),
+	}, []snapshot.Edge{ed("PUBLISHES_TOPIC", "service:service:d:orders-api", "contract:topic:d:pubonly")}, "src/a.cs")
+	ch := func(name, side string) truth.Fact {
+		return fact(truth.ClassChannels, "topic:"+name+"#"+side, "src/a.cs", map[string]string{"name": name, "kind": "topic", "side": side})
+	}
+	cases := []struct {
+		name, side string
+		want       truth.Status
+	}{
+		{"lonely", "consume", truth.Missing},
+		{"lonely", "declare", truth.Confirmed},
+		{"pubonly", "produce", truth.Confirmed},
+		{"pubonly", "consume", truth.Missing},
+	}
+	for _, c := range cases {
+		if g := one(t, snap, ch(c.name, c.side)); g != c.want {
+			t.Errorf("%s/%s: got %s want %s", c.name, c.side, g, c.want)
+		}
+	}
+}
+
+func TestDepRules(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{
+		nd("code:package:d:npm:lodash", "package", "lodash"),
+		nd("code:package:d:npm:orphan", "package", "orphan"),
+	}, []snapshot.Edge{ed("DEPENDS_ON", "service:service:d:orders-api", "code:package:d:npm:lodash")}, "package.json")
+	dep := func(eco, name string) truth.Fact {
+		return fact(truth.ClassDeps, eco+":"+name, "package.json", map[string]string{"ecosystem": eco, "name": name})
+	}
+	if s := one(t, snap, dep("python", "lodash")); s != truth.Missing {
+		t.Errorf("cross-ecosystem: %s", s)
+	}
+	if s := one(t, snap, dep("npm", "express")); s != truth.Confirmed {
+		t.Errorf("express: %s", s)
+	}
+	if s := one(t, snap, dep("npm", "orphan")); s != truth.Missing {
+		t.Errorf("orphan: %s", s)
+	}
+	v := Compare(&truth.Report{Facts: []truth.Fact{dep("npm", "orphan")}}, snap)
+	found := false
+	for _, u := range v.Uncovered {
+		if u.NodeKey == "code:package:d:npm:orphan" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("orphan package not uncovered")
 	}
 }

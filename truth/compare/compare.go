@@ -16,14 +16,23 @@ func Compare(rep *truth.Report, snap *snapshot.Snapshot) *truth.Verdict {
 		rep = &truth.Report{}
 	}
 	v.SkippedFiles = append(v.SkippedFiles, rep.SkippedFiles...)
-	v.Warnings = append(v.Warnings, rep.Warnings...)
+	seenW := map[string]bool{}
+	addWarn := func(w string) {
+		if !seenW[w] {
+			seenW[w] = true
+			v.Warnings = append(v.Warnings, w)
+		}
+	}
+	for _, w := range rep.Warnings {
+		addWarn(w)
+	}
 	if snap == nil {
-		v.Warnings = append(v.Warnings, "no snapshot")
+		addWarn("no snapshot")
 	}
 	ix := buildIndex(snap)
 	haveCoverage := len(ix.coverage) > 0
 	if snap != nil && !haveCoverage {
-		v.Warnings = append(v.Warnings, "snapshot has no coverage records; scope unknown")
+		addWarn("snapshot has no coverage records; scope unknown")
 	}
 	matched := map[truth.Class]map[string]bool{}
 	for _, c := range truth.Classes {
@@ -46,9 +55,6 @@ func Compare(rep *truth.Report, snap *snapshot.Snapshot) *truth.Verdict {
 			matched[f.Class][node] = true
 		}
 		jf.Status, jf.GraphNodeKey = status, node
-		if status == truth.Ignored || status == truth.OutOfScope || status == truth.Missing {
-			jf.GraphNodeKey = ""
-		}
 		v.Facts = append(v.Facts, jf)
 	}
 
@@ -114,6 +120,8 @@ func (ix *index) matchEndpoint(f truth.Fact) (truth.Status, string) {
 			return truth.Confirmed, g.key
 		}
 	}
+	// Loose match: one canonical path is a suffix of the other at a "/"
+	// boundary; a graph-side ANY method is accepted like a fact-side one.
 	best, bestDiff := "", -1
 	for _, g := range ix.endpoints {
 		if !sameMethod(g) || g.path == p || g.path == "/" || p == "/" {
@@ -145,17 +153,16 @@ func (ix *index) matchChannel(f truth.Fact) (truth.Status, string) {
 		if g.canon != c {
 			continue
 		}
-		hasSide := g.produce || g.consume
-		sideOK := !hasSide
+		var ok bool
 		switch f.Attrs["side"] {
 		case "produce":
-			sideOK = sideOK || g.produce
+			ok = g.produce
 		case "consume":
-			sideOK = sideOK || g.consume
-		default:
-			sideOK = true
+			ok = g.consume
+		default: // declare
+			ok = !g.produce && !g.consume
 		}
-		if sideOK && (best == "" || g.key < best) {
+		if ok && (best == "" || g.key < best) {
 			best = g.key
 		}
 	}
@@ -167,18 +174,26 @@ func (ix *index) matchChannel(f truth.Fact) (truth.Status, string) {
 
 func (ix *index) matchDep(f truth.Fact) (truth.Status, string) {
 	eco, name := depEco(f), depName(f)
-	pick := func(idx []int) string {
+	project := strings.EqualFold(eco, "project")
+	pick := func(idx []int, crossCheck bool) string {
 		best := ""
 		for _, i := range idx {
-			if k := ix.pkgs[i].key; best == "" || k < best {
-				best = k
+			p := ix.pkgs[i]
+			if !p.incoming && !(project && p.own) {
+				continue
+			}
+			if crossCheck && eco != "" && !project && p.eco != "" && !strings.EqualFold(p.eco, "project") && !strings.EqualFold(p.eco, eco) {
+				continue
+			}
+			if best == "" || p.key < best {
+				best = p.key
 			}
 		}
 		return best
 	}
-	if strings.EqualFold(eco, "project") {
+	if project {
 		c := truth.CanonName(name)
-		if k := pick(ix.pkgByName[c]); k != "" {
+		if k := pick(ix.pkgByName[c], false); k != "" {
 			return truth.Confirmed, k
 		}
 		for _, s := range ix.services {
@@ -188,10 +203,10 @@ func (ix *index) matchDep(f truth.Fact) (truth.Status, string) {
 		}
 		return "", ""
 	}
-	if k := pick(ix.pkgByDep[truth.CanonDep(eco, name)]); k != "" {
+	if k := pick(ix.pkgByDep[truth.CanonDep(eco, name)], false); k != "" {
 		return truth.Confirmed, k
 	}
-	if k := pick(ix.pkgByName[truth.CanonName(name)]); k != "" {
+	if k := pick(ix.pkgByName[truth.CanonName(name)], true); k != "" {
 		return truth.Confirmed, k
 	}
 	return "", ""
@@ -229,8 +244,8 @@ func (ix *index) matchHTTP(f truth.Fact) (truth.Status, string) {
 		varName = strings.TrimPrefix(f.Key, "var:")
 	}
 	var names []string
-	if host != "" {
-		names = append(names, truth.CanonName(host), truth.CanonName(strings.SplitN(host, ".", 2)[0]))
+	if host != "" && !strings.Contains(host, ".") { // single-label host only
+		names = append(names, truth.CanonName(host))
 	}
 	if varName != "" {
 		names = append(names, truth.CanonName(truth.HostFromVar(varName)))
@@ -275,7 +290,7 @@ func (ix *index) uncovered(matched map[truth.Class]map[string]bool) []truth.Grap
 		add(truth.ClassChannels, c.key, c.name)
 	}
 	for _, p := range ix.pkgs {
-		if p.incoming && !p.own {
+		if !p.own {
 			add(truth.ClassDeps, p.key, p.name)
 		}
 	}
