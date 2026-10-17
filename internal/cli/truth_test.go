@@ -96,6 +96,26 @@ func TestTruthCompareJSON(t *testing.T) {
 	if len(v.Classes) == 0 || v.Classes[0].Class != "endpoints" || v.Classes[0].Coverage != 1 {
 		t.Fatalf("classes = %+v\n%s", v.Classes, out)
 	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"classes", "snapshot_id", "code_sha", "facts", "uncovered"} {
+		if _, ok := raw[k]; !ok {
+			t.Errorf("missing key %q in %s", k, out)
+		}
+	}
+	if _, ok := raw["Classes"]; ok {
+		t.Error("unexpected CamelCase key Classes")
+	}
+	// --report gives the same verdict as extracting inline.
+	rp := filepath.Join(dir, "report.json")
+	if err := os.WriteFile(rp, runTruth(t, "extract", "--root", dir, "--json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if viaReport := runTruth(t, "compare", "--graph", gp, "--report", rp, "--json"); !bytes.Equal(viaReport, out) {
+		t.Errorf("--report verdict differs:\n%s\nvs\n%s", viaReport, out)
+	}
 	table := string(runTruth(t, "compare", "--root", dir, "--graph", gp))
 	if !bytes.Contains([]byte(table), []byte("100%")) || !bytes.Contains([]byte(table), []byte("нет данных")) {
 		t.Fatalf("table = %s", table)
@@ -113,4 +133,22 @@ func TestTruthExtractSha(t *testing.T) {
 		}
 	}
 	assertOneEndpoint(t, runTruth(t, "extract", "--root", dir, "--sha", "HEAD", "--json"))
+}
+
+func TestTruthExtractBadSha(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := writeCats(t)
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	defer func() { projectPath = "" }()
+	root := NewRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"truth", "extract", "--root", dir, "--sha", "deadbeef", "--json"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("expected error for bad sha")
+	}
 }

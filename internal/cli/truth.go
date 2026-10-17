@@ -116,7 +116,7 @@ func newTruthCompareCmd() *cobra.Command {
 
 			v := compare.Compare(rep, snap)
 			if jsonOut {
-				return writeIndentedJSON(cmd.OutOrStdout(), verdictView(v))
+				return writeIndentedJSON(cmd.OutOrStdout(), v)
 			}
 			printVerdict(cmd.OutOrStdout(), v)
 			return nil
@@ -154,9 +154,14 @@ func truthExtract(ctx context.Context, root, sha string) (*truth.Report, error) 
 		return nil, fmt.Errorf("git archive: %w", err)
 	}
 	fsys, rerr := tarToFS(out)
+	// Drain what tarToFS left unread (tar padding / early error) so git can exit
+	// instead of blocking on a full pipe before Wait.
 	io.Copy(io.Discard, out)
 	if werr := c.Wait(); werr != nil {
-		return nil, fmt.Errorf("git archive %s: %w: %s", sha, werr, strings.TrimSpace(stderr.String()))
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("git archive %s: %w: %s", sha, werr, msg)
+		}
+		return nil, fmt.Errorf("git archive %s: %w", sha, werr)
 	}
 	if rerr != nil {
 		return nil, fmt.Errorf("read git archive: %w", rerr)
@@ -165,6 +170,7 @@ func truthExtract(ctx context.Context, root, sha string) (*truth.Report, error) 
 }
 
 // tarToFS loads regular files (<= truthMaxFile) of a tar stream into memory.
+// Memory is bounded by the repository size: every kept file is held in the map.
 func tarToFS(r io.Reader) (fs.FS, error) {
 	m := fstest.MapFS{}
 	tr := tar.NewReader(r)
@@ -176,14 +182,15 @@ func tarToFS(r io.Reader) (fs.FS, error) {
 		if err != nil {
 			return nil, err
 		}
-		if h.Typeflag != tar.TypeReg || h.Size > truthMaxFile {
+		name := strings.TrimPrefix(h.Name, "./")
+		if h.Typeflag != tar.TypeReg || h.Size > truthMaxFile || !fs.ValidPath(name) {
 			continue
 		}
 		data, err := io.ReadAll(io.LimitReader(tr, truthMaxFile+1))
 		if err != nil {
 			return nil, err
 		}
-		m[strings.TrimPrefix(h.Name, "./")] = &fstest.MapFile{Data: data, Mode: 0o644}
+		m[name] = &fstest.MapFile{Data: data, Mode: 0o644}
 	}
 }
 
@@ -191,27 +198,6 @@ func writeIndentedJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-// verdictJSON mirrors truth.Verdict with lowercase JSON keys (the type itself
-// carries no tags and lives outside the CLI's remit).
-type verdictJSON struct {
-	Repo         string               `json:"repo,omitempty"`
-	SnapshotID   string               `json:"snapshot_id,omitempty"`
-	CodeSha      string               `json:"code_sha,omitempty"`
-	Classes      []truth.ClassSummary `json:"classes"`
-	Facts        []truth.JudgedFact   `json:"facts"`
-	Uncovered    []truth.GraphFact    `json:"uncovered"`
-	SkippedFiles []string             `json:"skipped_files,omitempty"`
-	Warnings     []string             `json:"warnings,omitempty"`
-}
-
-func verdictView(v *truth.Verdict) verdictJSON {
-	return verdictJSON{
-		Repo: v.Repo, SnapshotID: v.SnapshotID, CodeSha: v.CodeSha,
-		Classes: v.Classes, Facts: v.Facts, Uncovered: v.Uncovered,
-		SkippedFiles: v.SkippedFiles, Warnings: v.Warnings,
-	}
 }
 
 func printReport(w io.Writer, rep *truth.Report) {
@@ -241,6 +227,8 @@ func pct(m truth.Metrics, v float64) string {
 	return fmt.Sprintf(truthPercentFormat, int(v*100+0.5))
 }
 
+// printVerdict renders the summary table. The "confirmed" column is
+// Confirmed+Loose (strict and loose matches together).
 func printVerdict(w io.Writer, v *truth.Verdict) {
 	fmt.Fprintf(w, "%-10s | %5s | %9s | %7s | %12s | %7s | %9s | %-10s | %-10s | %s\n",
 		"class", "known", "confirmed", "missing", "out_of_scope", "ignored", "uncovered", "coverage", "scope", "recall")

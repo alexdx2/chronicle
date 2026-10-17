@@ -104,11 +104,14 @@ type ClassSummary struct {
 
 // Verdict is the full comparison result for one repo snapshot.
 type Verdict struct {
-	Repo, SnapshotID, CodeSha string
-	Classes                   []ClassSummary
-	Facts                     []JudgedFact
-	Uncovered                 []GraphFact
-	SkippedFiles, Warnings    []string
+	Repo         string         `json:"repo"`
+	SnapshotID   string         `json:"snapshot_id"`
+	CodeSha      string         `json:"code_sha"`
+	Classes      []ClassSummary `json:"classes"`
+	Facts        []JudgedFact   `json:"facts"`
+	Uncovered    []GraphFact    `json:"uncovered"`
+	SkippedFiles []string       `json:"skipped_files,omitempty"`
+	Warnings     []string       `json:"warnings,omitempty"`
 }
 
 // Compute derives the metrics. It is named Compute (not Metrics) because
