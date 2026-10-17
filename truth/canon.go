@@ -144,6 +144,9 @@ var (
 	}
 )
 
+// The ecosystem parameter is accepted for symmetry with CanonDep and is
+// intentionally unused: spec §4.4 has one shared noise list.
+//
 // Noise reports whether a dependency is on the reference's own noise list
 // (framework and tooling packages that get status "ignored" when absent from
 // the graph). Matching is case-insensitive.

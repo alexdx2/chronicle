@@ -1,6 +1,7 @@
 package truth
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -36,14 +37,52 @@ func listDeps(t *testing.T, root string, pkgs ...string) []string {
 	return res
 }
 
+// checkDirectImports verifies the direct imports of one truth package against
+// the allowlist: std, truth itself, gopkg.in/yaml.v3, github.com/BurntSushi/toml,
+// and, for truth/compare only, the snapshot package. The forbidden packages
+// (deps, extract, scan, graph, manifest, store, validate) are not named: the
+// list is an allowlist on purpose.
+func checkDirectImports(pkg string, imports []string) error {
+	truthPrefix := modulePath + "/truth"
+	for _, imp := range imports {
+		switch {
+		case imp == truthPrefix || strings.HasPrefix(imp, truthPrefix+"/"):
+		case imp == "gopkg.in/yaml.v3", imp == "github.com/BurntSushi/toml":
+		case pkg == truthPrefix+"/compare" && imp == modulePath+"/snapshot":
+		case !strings.Contains(strings.SplitN(imp, "/", 2)[0], "."):
+			// std library: first path element has no dot
+		default:
+			return fmt.Errorf("%s imports %q, which is not on the allowlist", pkg, imp)
+		}
+	}
+	return nil
+}
+
+func TestCheckDirectImports(t *testing.T) {
+	cmp := modulePath + "/truth/compare"
+	cases := []struct {
+		name    string
+		pkg     string
+		imports []string
+		wantErr bool
+	}{
+		{"compare importing graph", cmp, []string{"fmt", modulePath + "/graph"}, true},
+		{"compare importing snapshot", cmp, []string{"fmt", modulePath + "/snapshot"}, false},
+		{"extract importing snapshot", modulePath + "/truth/extract", []string{modulePath + "/snapshot"}, true},
+		{"extract importing yaml and truth", modulePath + "/truth/extract", []string{"gopkg.in/yaml.v3", modulePath + "/truth"}, false},
+	}
+	for _, c := range cases {
+		if err := checkDirectImports(c.pkg, c.imports); (err != nil) != c.wantErr {
+			t.Errorf("%s: err=%v wantErr=%v", c.name, err, c.wantErr)
+		}
+	}
+}
+
 // TestIndependence guarantees the truth reference never depends on Chronicle's
-// own extraction pipeline. The forbidden packages are deps, extract, scan,
-// graph, manifest, store and validate. This is an allowlist on purpose: a new
-// import must be added here deliberately, rather than a blocklist that silently
-// permits whatever it forgot to name.
-//
-// Allowed: truth itself, gopkg.in/yaml.v3 and github.com/BurntSushi/toml; and,
-// for truth/compare only, the snapshot package with its own non-std closure.
+// own extraction pipeline. Direct imports of every truth package are
+// allowlisted (see checkDirectImports). Transitive dependencies are allowed
+// only for the base set (truth, yaml.v3, toml and its subpackages) and, for
+// truth/compare alone, the non-std closure of the snapshot package.
 func TestIndependence(t *testing.T) {
 	root := moduleRoot(t)
 	truthPrefix := modulePath + "/truth"
@@ -57,8 +96,6 @@ func TestIndependence(t *testing.T) {
 		snapshotSet[p] = true
 	}
 
-	// Each package under ./truth/... is checked on its own, so the snapshot
-	// closure is allowed only for truth/compare. A missing truth/compare is fine.
 	listPkgs := exec.Command("go", "list", "./truth/...")
 	listPkgs.Dir = root
 	out, err := listPkgs.CombinedOutput()
@@ -66,6 +103,15 @@ func TestIndependence(t *testing.T) {
 		t.Fatalf("go list ./truth/...: %v\n%s", err, out)
 	}
 	for _, pkg := range strings.Fields(string(out)) {
+		imp := exec.Command("go", "list", "-f", `{{join .Imports "\n"}}`, pkg)
+		imp.Dir = root
+		iout, err := imp.CombinedOutput()
+		if err != nil {
+			t.Fatalf("go list imports %s: %v\n%s", pkg, err, iout)
+		}
+		if err := checkDirectImports(pkg, strings.Fields(string(iout))); err != nil {
+			t.Error(err)
+		}
 		allowSnapshot := pkg == truthPrefix+"/compare"
 		for _, dep := range listDeps(t, root, pkg) {
 			if base(dep) || (allowSnapshot && snapshotSet[dep]) {

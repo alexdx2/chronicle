@@ -70,13 +70,21 @@ type GraphFact struct {
 // Counts are per-status tallies. Known is set by the compare side to
 // Confirmed+Loose+Missing+OutOfScope.
 type Counts struct {
-	Known, Confirmed, Loose, Missing, OutOfScope, Ignored, Uncovered int
+	Known      int `json:"known"`
+	Confirmed  int `json:"confirmed"`
+	Loose      int `json:"loose"`
+	Missing    int `json:"missing"`
+	OutOfScope int `json:"out_of_scope"`
+	Ignored    int `json:"ignored"`
+	Uncovered  int `json:"uncovered"`
 }
 
 // Metrics are the ratios derived from Counts. HasData=false means "no data".
 type Metrics struct {
-	Coverage, Scope, Recall float64
-	HasData                 bool
+	Coverage float64 `json:"coverage"`
+	Scope    float64 `json:"scope"`
+	Recall   float64 `json:"recall"`
+	HasData  bool    `json:"has_data"`
 }
 
 // SourceSummary is the per-rule-source breakdown.

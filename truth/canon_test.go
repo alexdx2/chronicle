@@ -1,6 +1,7 @@
 package truth
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -120,5 +121,25 @@ func TestWeakest(t *testing.T) {
 	}
 	if _, ok := Weakest([]ClassSummary{mk(ClassDeps, 0, 0)}); ok {
 		t.Error("no data must give ok=false")
+	}
+}
+
+func TestClassSummaryMarshalSnakeCase(t *testing.T) {
+	cn := Counts{Known: 4, Confirmed: 2}
+	b, err := json.Marshal(ClassSummary{Class: ClassDeps, Counts: cn, Metrics: cn.Compute()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"known", "coverage", "by_source", "out_of_scope", "has_data"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing key %q in %s", k, b)
+		}
+	}
+	if _, ok := m["Known"]; ok {
+		t.Errorf("unexpected key Known in %s", b)
 	}
 }
