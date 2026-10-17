@@ -3,6 +3,7 @@ module github.com/alexdx2/chronicle-core
 go 1.25.5
 
 require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/anthropics/anthropic-sdk-go v1.80.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
