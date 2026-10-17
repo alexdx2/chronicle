@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/truth"
@@ -119,4 +120,13 @@ func isComposePath(p string) bool {
 	b := strings.ToLower(baseName(p))
 	return (strings.HasPrefix(b, "docker-compose") || strings.HasPrefix(b, "compose")) &&
 		(strings.HasSuffix(b, ".yml") || strings.HasSuffix(b, ".yaml"))
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

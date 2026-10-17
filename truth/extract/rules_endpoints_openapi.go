@@ -2,7 +2,6 @@ package extract
 
 import (
 	"encoding/json"
-	"sort"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/truth"
@@ -40,11 +39,7 @@ func applyOpenAPI(f *FileCtx) []truth.Fact {
 	}
 	paths, _ := doc["paths"].(map[string]any)
 	base, _ := doc["basePath"].(string)
-	keys := make([]string, 0, len(paths))
-	for k := range paths {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := sortedKeys(paths)
 	var out []truth.Fact
 	for _, p := range keys {
 		if !strings.HasPrefix(p, "/") {

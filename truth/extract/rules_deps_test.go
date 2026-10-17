@@ -96,15 +96,15 @@ func TestDepRules(t *testing.T) {
 		{"requirements.txt",
 			map[string]string{"requirements.txt": "manifests/requirements.txt"},
 			[]w{{"manifest.requirements", "python:requests", false}, {"manifest.requirements", "python:pkg", false},
-				{"manifest.requirements", "python:flask-sqlalchemy", false}, {"manifest.requirements", "python:django", false}}},
+				{"manifest.requirements", "python:flask-sqlalchemy", false}, {"manifest.requirements", "python:django", false}, {"manifest.requirements", "python:bar", false}}},
 		{"requirements/dev.txt",
 			map[string]string{"requirements/dev.txt": "manifests/requirements.txt"},
 			[]w{{"manifest.requirements", "python:requests", false}, {"manifest.requirements", "python:pkg", false},
-				{"manifest.requirements", "python:flask-sqlalchemy", false}, {"manifest.requirements", "python:django", false}}},
+				{"manifest.requirements", "python:flask-sqlalchemy", false}, {"manifest.requirements", "python:django", false}, {"manifest.requirements", "python:bar", false}}},
 		{"requirements beside a lockfile still counts",
 			map[string]string{"requirements.txt": "manifests/requirements.txt", "poetry.lock": "poetry/poetry.lock"},
 			[]w{{"manifest.requirements", "python:requests", false}, {"manifest.requirements", "python:pkg", false},
-				{"manifest.requirements", "python:flask-sqlalchemy", false}, {"manifest.requirements", "python:django", false}}},
+				{"manifest.requirements", "python:flask-sqlalchemy", false}, {"manifest.requirements", "python:django", false}, {"manifest.requirements", "python:bar", false}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -180,4 +180,5 @@ func TestDepAttrsAndLines(t *testing.T) {
 	check(byKey(rq, "python:requests"), "requests", "python", "==2.31.0", "requirements.txt", 5)
 	check(byKey(rq, "python:pkg"), "pkg", "python", ">=1", "requirements.txt", 6)
 	check(byKey(rq, "python:django"), "django", "python", ">=4,<5", "requirements.txt", 13)
+	check(byKey(rq, "python:bar"), "bar", "python", "==1.0", "requirements.txt", 15)
 }

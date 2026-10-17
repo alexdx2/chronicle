@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -13,6 +12,11 @@ import (
 	"github.com/alexdx2/chronicle-core/truth"
 )
 
+// Section vocabulary (Attrs["section"]): dependencies, devDependencies,
+// optional, peer for npm and Python; "direct" for lock.nuget; "project" for
+// ProjectReference; manifest.csproj uses "dependencies"; manifest.requirements
+// uses the requirements file name. Compare ignores the section.
+//
 // Dependency rules. Lockfile rules list DIRECT dependencies only; manifest
 // rules (rules_deps_manifest.go) step aside when a lockfile of their
 // ecosystem sits in the same directory. Deps rules ignore IsTest.
@@ -99,23 +103,6 @@ func findDepLine(f *FileCtx, name string, anchors []string) int {
 
 func isLocalSpec(v string) bool {
 	return strings.HasPrefix(v, "file:") || strings.HasPrefix(v, "link:") || strings.HasPrefix(v, "workspace:")
-}
-
-func jsonString(raw json.RawMessage) string {
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	return ""
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // ---- NuGet -----------------------------------------------------------------
@@ -346,6 +333,8 @@ func applyLockYarn(f *FileCtx) []truth.Fact {
 
 type pyDep struct{ name, version, section string }
 
+var optionRe = regexp.MustCompile(`\s-`)
+
 var pyNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // pep508 splits a requirement into name and version spec.
@@ -360,6 +349,9 @@ func pep508(s string) (name, version string, ok bool) {
 		return "", "", false
 	}
 	rest := strings.TrimSpace(s[i:])
+	if j := optionRe.FindStringIndex(" " + rest); j != nil {
+		rest = strings.TrimSpace((" " + rest)[:j[0]])
+	}
 	if strings.HasPrefix(rest, "[") {
 		if j := strings.Index(rest, "]"); j >= 0 {
 			rest = strings.TrimSpace(rest[j+1:])
@@ -517,6 +509,7 @@ func applyLockUV(f *FileCtx) []truth.Fact {
 			Name    string `toml:"name"`
 			Version string `toml:"version"`
 			Source  struct {
+				Registry string `toml:"registry"`
 				Editable string `toml:"editable"`
 				Virtual  string `toml:"virtual"`
 			} `toml:"source"`
@@ -544,6 +537,9 @@ func applyLockUV(f *FileCtx) []truth.Fact {
 	for i, p := range lock.Package {
 		if i == root {
 			continue
+		}
+		if p.Source.Registry == "" {
+			continue // directory, git, path, editable, virtual: not an external dependency
 		}
 		k := truth.DepKey("python", p.Name)
 		if _, dup := versions[k]; !dup {

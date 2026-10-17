@@ -20,11 +20,17 @@ version = "8.1.1"
 source = { registry = "https://pypi.org/simple" }
 
 [[package]]
+name = "mylib"
+version = "0.2.0"
+source = { directory = "../mylib" }
+
+[[package]]
 name = "svc"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "mylib" },
 ]
 
 [package.dev-dependencies]

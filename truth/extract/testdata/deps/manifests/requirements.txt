@@ -12,3 +12,4 @@ git+https://github.com/a/b.git#egg=b
 
 django>=4,<5 \
     --hash=sha256:abc
+bar==1.0 --hash=sha256:abc --no-binary :all:
