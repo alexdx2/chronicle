@@ -13,11 +13,7 @@ func init() {
 	Rules = append(Rules,
 		funcRule{"terraform.channel", func(p string) bool { return hasExt(p, ".tf") }, applyTerraformChannel},
 		funcRule{"cdk.channel", func(p string) bool { return hasExt(p, ".ts", ".js", ".py") }, applyCDK},
-		funcRule{"compose.kafka_topics", func(p string) bool {
-			b := strings.ToLower(baseName(p))
-			return (strings.HasPrefix(b, "docker-compose") || strings.HasPrefix(b, "compose")) &&
-				(strings.HasSuffix(b, ".yml") || strings.HasSuffix(b, ".yaml"))
-		}, applyComposeTopics},
+		funcRule{"compose.kafka_topics", isComposePath, applyComposeTopics},
 	)
 }
 
@@ -61,8 +57,8 @@ func applyTerraformChannel(f *FileCtx) []truth.Fact {
 }
 
 var (
-	cdkTS = regexp.MustCompile(`new\s+(?:sqs\.|sns\.)?(Queue|Topic)\(\s*\w+\s*,\s*['"][^'"]*['"]\s*,\s*\{[^}]*?\b(?:queueName|topicName):\s*['"]([^'"]+)['"]`)
-	cdkPy = regexp.MustCompile(`\b(?:sqs|sns)\.(Queue|Topic)\(\s*\w+\s*,\s*['"][^'"]*['"][^)]*?\b(?:queue_name|topic_name)\s*=\s*['"]([^'"]+)['"]`)
+	cdkTS = regexp.MustCompile(`new\s+(?:sqs\.|sns\.)?(Queue|Topic)\(\s*\w+\s*,\s*['"][^'"]*['"]\s*,\s*\{[^}]*?\b(?:queueName|topicName):\s*['"]([^'"]+)['"]\s*[,}]`)
+	cdkPy = regexp.MustCompile(`\b(?:sqs|sns)\.(Queue|Topic)\(\s*\w+\s*,\s*['"][^'"]*['"][^)]*?\b(?:queue_name|topic_name)\s*=\s*['"]([^'"]+)['"]\s*[,)]`)
 )
 
 func applyCDK(f *FileCtx) []truth.Fact {

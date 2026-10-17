@@ -113,3 +113,10 @@ func codeContains(f *FileCtx, subs ...string) bool {
 	}
 	return false
 }
+
+// isComposePath reports whether p is a docker-compose / compose YAML file.
+func isComposePath(p string) bool {
+	b := strings.ToLower(baseName(p))
+	return (strings.HasPrefix(b, "docker-compose") || strings.HasPrefix(b, "compose")) &&
+		(strings.HasSuffix(b, ".yml") || strings.HasSuffix(b, ".yaml"))
+}

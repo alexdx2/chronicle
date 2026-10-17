@@ -37,7 +37,9 @@ func channelFact(rule string, f *FileCtx, l lex.Line, kind, lit, side string, de
 	}, true
 }
 
-// codeWindow joins the code of lines[i : i+n].
+// codeWindow joins the code of lines[i : i+n] unconditionally. callText (in
+// rules_common.go) instead stops when the call's parentheses balance, which
+// suits one call but not object literals or Python keyword arguments.
 func codeWindow(lines []lex.Line, i, n int) string {
 	var sb strings.Builder
 	for j := i; j < len(lines) && j < i+n; j++ {
@@ -76,6 +78,9 @@ type chanSpec struct {
 	side string
 	list bool
 	win  int // lines joined for the match (default 1)
+	// gate, when set, means capture 1 is a receiver identifier and capture 2
+	// the name(s); the match counts only if gate(f, receiver) is true.
+	gate func(f *FileCtx, recv string) bool
 }
 
 var quotedLit = regexp.MustCompile(`['"]([^'"]+)['"]`)
@@ -101,6 +106,12 @@ func specRule(name string, pre func(f *FileCtx) bool, specs ...chanSpec) func(f 
 					if loc[2*k] >= 0 {
 						m[k] = text[loc[2*k]:loc[2*k+1]]
 					}
+				}
+				if s.gate != nil {
+					if !s.gate(f, m[1]) {
+						continue
+					}
+					m = m[1:]
 				}
 				var names []string
 				if s.list {
@@ -128,24 +139,24 @@ var (
 
 	csSubOne   = regexp.MustCompile(`\.Subscribe\(\s*"([^"]+)"\s*\)`)
 	csSubArr   = regexp.MustCompile(`\.Subscribe\(\s*new\s*(?:string)?\s*\[\]\s*\{([^}]*)\}`)
-	csProduce  = regexp.MustCompile(`\.Produce(?:Async)?\(\s*"([^"]+)"`)
-	csTopicPar = regexp.MustCompile(`new\s+TopicPartition\(\s*"([^"]+)"`)
+	csProduce  = regexp.MustCompile(`\.Produce(?:Async)?\(\s*"([^"]+)"\s*[,)]`)
+	csTopicPar = regexp.MustCompile(`new\s+TopicPartition\(\s*"([^"]+)"\s*,`)
 
-	csQueueURL    = regexp.MustCompile(`\bQueueUrl\s*=\s*"([^"]+)"`)
+	csQueueURL    = regexp.MustCompile(`\bQueueUrl\s*=\s*"([^"]+)"\s*(?:[,;})]|$)`)
 	csGetQueueURL = regexp.MustCompile(`\bGetQueueUrlAsync\(\s*"([^"]+)"\s*\)`)
-	csDetailType  = regexp.MustCompile(`\bDetailType\s*=\s*"([^"]+)"`)
+	csDetailType  = regexp.MustCompile(`\bDetailType\s*=\s*"([^"]+)"\s*(?:[,;})]|$)`)
 
-	kjsSub  = regexp.MustCompile(`\bsubscribe\(\s*\{[^}]*?\btopics?:\s*(?:` + cq + `([^'"` + "`" + `]*)` + cq + `|\[([^\]]*)\])`)
-	kjsSend = regexp.MustCompile(`\.send\(\s*\{[^}]*?\btopic:\s*` + cq + `([^'"` + "`" + `]*)` + cq)
+	kjsSub  = regexp.MustCompile(`\bsubscribe\(\s*\{[^}]*?\btopics?:\s*(?:` + cq + `([^'"` + "`" + `]*)` + cq + `\s*[,}]|\[([^\]]*)\])`)
+	kjsSend = regexp.MustCompile(`\.send\(\s*\{[^}]*?\btopic:\s*` + cq + `([^'"` + "`" + `]*)` + cq + `\s*[,}]`)
 	nestPat = regexp.MustCompile(`@(?:EventPattern|MessagePattern)\(\s*['"]([^'"]+)['"]\s*[,)]`)
-	jsQueue = regexp.MustCompile(`\bQueueUrl:\s*['"](https?://[^'"]+)['"]`)
+	jsQueue = regexp.MustCompile(`\bQueueUrl:\s*['"](https?://[^'"]+)['"]\s*(?:[,;})]|$)`)
 
-	pyConsumer  = regexp.MustCompile(`\bKafkaConsumer\(((?:\s*['"][^'"]+['"]\s*,?)+)`)
-	pySubList   = regexp.MustCompile(`\.subscribe\(\s*(?:topics\s*=\s*)?\[([^\]]*)\]`)
-	pySubOne    = regexp.MustCompile(`\.subscribe\(\s*(?:topics\s*=\s*)?(['"][^'"]+['"])\s*[,)]`)
-	pySend      = regexp.MustCompile(`\.send\(\s*(['"][^'"]+['"])`)
-	pyQueueName = regexp.MustCompile(`\bget_queue_url\(\s*QueueName\s*=\s*['"]([^'"]+)['"]`)
-	pyQueueURL  = regexp.MustCompile(`\bQueueUrl\s*=\s*['"](https?://[^'"]+)['"]`)
+	pyConsumer  = regexp.MustCompile(`\bKafkaConsumer\(((?:\s*['"][^'"]+['"]\s*(?:,|\)))+)`)
+	pySubList   = regexp.MustCompile(`([A-Za-z_][\w.]*)\.subscribe\(\s*(?:topics\s*=\s*)?\[([^\]]*)\]`)
+	pySubOne    = regexp.MustCompile(`([A-Za-z_][\w.]*)\.subscribe\(\s*(?:topics\s*=\s*)?(['"][^'"]+['"])\s*[,)]`)
+	pySend      = regexp.MustCompile(`([A-Za-z_][\w.]*)\.send\(\s*(['"][^'"]+['"])\s*[,)]`)
+	pyQueueName = regexp.MustCompile(`\bget_queue_url\(\s*QueueName\s*=\s*['"]([^'"]+)['"]\s*[,)]`)
+	pyQueueURL  = regexp.MustCompile(`\bQueueUrl\s*=\s*['"](https?://[^'"]+)['"]\s*[,)]`)
 )
 
 // urlRule handles "QueueUrl = <url>" style matches where the side depends on
@@ -173,18 +184,51 @@ func urlRule(name string, re *regexp.Regexp) func(f *FileCtx) []truth.Fact {
 
 func isKafkaPy(f *FileCtx) bool { return codeContains(f, "kafka") }
 
+// isKafkaDotnet / isEventBridgeDotnet gate rules whose call shapes are shared
+// with unrelated libraries (Redis Subscribe, plain DetailType fields).
+func isKafkaDotnet(f *FileCtx) bool { return codeContains(f, "kafka") }
+func isEventBridgeDotnet(f *FileCtx) bool {
+	return codeContains(f, "putevents", "eventbridge", "cloudwatchevents")
+}
+
+var (
+	pyKafkaAssign = regexp.MustCompile(`([A-Za-z_][\w.]*)\s*=\s*(?:await\s+)?(?:\w+\.)?(?:AIO)?Kafka(?:Producer|Consumer)\(`)
+	pyKafkaImport = regexp.MustCompile(`(?i)\b(?:import|from)\b.*kafka`)
+)
+
+// pyKafkaReceiver accepts a receiver assigned from a Kafka client constructor
+// in this file, or the conventional producer/consumer names when the file
+// imports kafka.
+func pyKafkaReceiver(f *FileCtx, recv string) bool {
+	imports := false
+	for _, l := range f.Lines {
+		if m := pyKafkaAssign.FindStringSubmatch(l.Code); m != nil && m[1] == recv {
+			return true
+		}
+		if pyKafkaImport.MatchString(l.Code) {
+			imports = true
+		}
+	}
+	switch recv {
+	case "producer", "consumer", "self.producer", "self.consumer":
+		return imports
+	}
+	return false
+}
+
 func init() {
 	isCS := func(p string) bool { return hasExt(p, ".cs") }
 	isJS := func(p string) bool { return hasExt(p, ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs") }
 	isPy := func(p string) bool { return hasExt(p, ".py") }
 	Rules = append(Rules,
-		funcRule{"kafka.dotnet", isCS, specRule("kafka.dotnet", nil,
+		funcRule{"kafka.dotnet", isCS, specRule("kafka.dotnet", isKafkaDotnet,
 			chanSpec{re: csSubOne, kind: "topic", side: "consume"},
 			chanSpec{re: csSubArr, kind: "topic", side: "consume", list: true},
 			chanSpec{re: csProduce, kind: "topic", side: "produce"},
 			chanSpec{re: csTopicPar, kind: "topic", side: "consume"})},
 		funcRule{"sqs.dotnet", isCS, applySQSDotnet},
-		funcRule{"eventbridge.dotnet", isCS, specRule("eventbridge.dotnet", nil,
+		// Keyed by DetailType: EventBusName is almost always a variable.
+		funcRule{"eventbridge.dotnet", isCS, specRule("eventbridge.dotnet", isEventBridgeDotnet,
 			chanSpec{re: csDetailType, kind: "bus", side: "produce"})},
 		funcRule{"kafkajs", isJS, applyKafkaJS},
 		funcRule{"nest.pattern", isJS, specRule("nest.pattern", nil,
@@ -192,23 +236,28 @@ func init() {
 		funcRule{"sqs.js", isJS, urlRule("sqs.js", jsQueue)},
 		funcRule{"kafka.py", isPy, specRule("kafka.py", isKafkaPy,
 			chanSpec{re: pyConsumer, kind: "topic", side: "consume", list: true, win: 3},
-			chanSpec{re: pySubList, kind: "topic", side: "consume", list: true, win: 3},
-			chanSpec{re: pySubOne, kind: "topic", side: "consume", list: true},
-			chanSpec{re: pySend, kind: "topic", side: "produce", list: true})},
+			chanSpec{re: pySubList, kind: "topic", side: "consume", list: true, win: 3, gate: pyKafkaReceiver},
+			chanSpec{re: pySubOne, kind: "topic", side: "consume", list: true, gate: pyKafkaReceiver},
+			chanSpec{re: pySend, kind: "topic", side: "produce", list: true, gate: pyKafkaReceiver})},
 		funcRule{"boto3.sqs", isPy, applyBoto3},
 	)
 }
 
 // applySQSDotnet: QueueUrl with a side from nearby calls, plus GetQueueUrlAsync.
 func applySQSDotnet(f *FileCtx) []truth.Fact {
-	out := urlRule("sqs.dotnet", csQueueURL)(f)
-	return append(out, specRule("sqs.dotnet", nil, chanSpec{re: csGetQueueURL, kind: "queue", side: "declare"})(f)...)
+	return append(sqsDotnetURL(f), sqsDotnetName(f)...)
 }
 
 func applyBoto3(f *FileCtx) []truth.Fact {
-	out := urlRule("boto3.sqs", pyQueueURL)(f)
-	return append(out, specRule("boto3.sqs", nil, chanSpec{re: pyQueueName, kind: "queue", side: "declare", win: 2})(f)...)
+	return append(boto3URL(f), boto3Name(f)...)
 }
+
+var (
+	sqsDotnetURL  = urlRule("sqs.dotnet", csQueueURL)
+	sqsDotnetName = specRule("sqs.dotnet", nil, chanSpec{re: csGetQueueURL, kind: "queue", side: "declare"})
+	boto3URL      = urlRule("boto3.sqs", pyQueueURL)
+	boto3Name     = specRule("boto3.sqs", nil, chanSpec{re: pyQueueName, kind: "queue", side: "declare", win: 2})
+)
 
 // applyKafkaJS matches subscribe/send object literals over a 4-line window.
 func applyKafkaJS(f *FileCtx) []truth.Fact {
@@ -219,9 +268,16 @@ func applyKafkaJS(f *FileCtx) []truth.Fact {
 	for i, l := range f.Lines {
 		switch {
 		case strings.Contains(l.Code, "subscribe("):
-			m := kjsSub.FindStringSubmatch(codeWindow(f.Lines, i, 4))
-			if m == nil {
+			text := codeWindow(f.Lines, i, 4)
+			loc := kjsSub.FindStringSubmatchIndex(text)
+			if loc == nil || loc[0] >= len(l.Code) { // must start on this line
 				continue
+			}
+			m := make([]string, len(loc)/2)
+			for k := range m {
+				if loc[2*k] >= 0 {
+					m[k] = text[loc[2*k]:loc[2*k+1]]
+				}
 			}
 			names := []string{m[1]}
 			if m[2] != "" {
@@ -236,8 +292,9 @@ func applyKafkaJS(f *FileCtx) []truth.Fact {
 				}
 			}
 		case strings.Contains(l.Code, ".send("):
-			if m := kjsSend.FindStringSubmatch(codeWindow(f.Lines, i, 4)); m != nil {
-				if fc, ok := channelFact("kafkajs", f, l, "topic", m[1], "produce"); ok {
+			text := codeWindow(f.Lines, i, 4)
+			if loc := kjsSend.FindStringSubmatchIndex(text); loc != nil && loc[0] < len(l.Code) {
+				if fc, ok := channelFact("kafkajs", f, l, "topic", text[loc[2]:loc[3]], "produce"); ok {
 					out = append(out, fc)
 				}
 			}

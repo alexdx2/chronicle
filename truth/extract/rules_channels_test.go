@@ -46,6 +46,14 @@ func TestChannelRules(t *testing.T) {
 			{"kafka.dotnet", "topic:inventory#consume", false},
 		}},
 		{"dotnet test file yields nothing", "tests/BusTests.cs", "csharp/Kafka.cs", nil},
+		{"dotnet redis subscribe ignored", "src/Chat.cs", "csharp/Redis.cs", nil},
+		{"dotnet DetailType field ignored", "src/Dto.cs", "csharp/Dto.cs", nil},
+		{"kafkajs primary line", "src/lines.ts", "ts/kafka_lines.ts", []wantFact{
+			{"kafkajs", "topic:real-one#consume", false},
+		}},
+		{"python receiver gate", "app/gate.py", "py/kafka_gate.py", []wantFact{
+			{"kafka.py", "topic:assigned-out#produce", false},
+		}},
 		{"sqs and eventbridge dotnet", "src/Q.cs", "csharp/Sqs.cs", []wantFact{
 			{"sqs.dotnet", "queue:orders-queue#produce", false},
 			{"sqs.dotnet", "queue:inbox#consume", false},
@@ -143,6 +151,14 @@ func TestChannelAttrsAndLines(t *testing.T) {
 	for _, f := range channelFacts(t, "infra/main.tf", "infra/main.tf") {
 		if f.Key == "queue:orders-queue-tf#declare" && (f.Primary.Line != 2 || f.Derived[0].Line != 1) {
 			t.Errorf("terraform evidence %+v %+v", f.Primary, f.Derived)
+		}
+	}
+}
+
+func TestChannelKafkaJSLine(t *testing.T) {
+	for _, f := range channelFacts(t, "src/lines.ts", "ts/kafka_lines.ts") {
+		if f.Primary.Line != 2 {
+			t.Errorf("primary line %d, want 2", f.Primary.Line)
 		}
 	}
 }

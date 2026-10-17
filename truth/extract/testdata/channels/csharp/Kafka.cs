@@ -12,5 +12,6 @@ public class Bus
         producer.Produce("audit-log", msg);
         consumer.Assign(new TopicPartition("inventory", 0));
         consumer.Subscribe($"orders-{env}");
+        await producer.ProduceAsync("orders-" + env, msg);
     }
 }

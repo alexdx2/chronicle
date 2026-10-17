@@ -23,11 +23,7 @@ func init() {
 			b := strings.ToLower(baseName(p))
 			return b == ".env" || strings.HasPrefix(b, ".env.")
 		}, applyDotenv},
-		funcRule{"compose.env", func(p string) bool {
-			b := strings.ToLower(baseName(p))
-			return (strings.HasPrefix(b, "docker-compose") || strings.HasPrefix(b, "compose")) &&
-				(strings.HasSuffix(b, ".yml") || strings.HasSuffix(b, ".yaml"))
-		}, applyCompose},
+		funcRule{"compose.env", isComposePath, applyCompose},
 		funcRule{"k8s.env", func(p string) bool { return hasExt(p, ".yaml", ".yml") }, applyK8s},
 	)
 }

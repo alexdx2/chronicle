@@ -19,3 +19,5 @@ sqs.send_message(QueueUrl='https://sqs.eu-central-1.amazonaws.com/1/py-send', Me
 # ------
 # ------
 sqs.receive_message(QueueUrl='https://sqs.eu-central-1.amazonaws.com/1/py-recv')
+c2 = KafkaConsumer('a-topic' + suffix)
+producer.send('orders-' + env, b'x')
