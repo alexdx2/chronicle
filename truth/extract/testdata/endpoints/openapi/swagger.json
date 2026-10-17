@@ -1,0 +1,10 @@
+{
+  "swagger": "2.0",
+  "basePath": "/v2",
+  "paths": {
+    "/pets": {
+      "get": {"summary": "list"},
+      "put": {"summary": "replace"}
+    }
+  }
+}
