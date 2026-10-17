@@ -1,0 +1,112 @@
+package extract
+
+import (
+	"strings"
+	"testing"
+	"testing/fstest"
+
+	"github.com/alexdx2/chronicle-core/truth"
+)
+
+type stubRule struct {
+	name  string
+	ext   string
+	apply func(f *FileCtx) []truth.Fact
+}
+
+func (s stubRule) Name() string                  { return s.name }
+func (s stubRule) Match(p string) bool           { return strings.HasSuffix(p, s.ext) }
+func (s stubRule) Apply(f *FileCtx) []truth.Fact { return s.apply(f) }
+
+func withRules(t *testing.T, rs ...Rule) {
+	old := Rules
+	Rules = append(append([]Rule(nil), old...), rs...)
+	t.Cleanup(func() { Rules = old })
+}
+
+func TestExtractWalk(t *testing.T) {
+	withRules(t, stubRule{"stub.a", ".cs", func(f *FileCtx) []truth.Fact {
+		return []truth.Fact{{Class: truth.ClassServices, Key: f.Path, Sources: []string{"stub.a"}}}
+	}})
+	fsys := fstest.MapFS{
+		"src/a.cs":                {Data: []byte("class A {}")},
+		"bin/b.cs":                {Data: []byte("x")},
+		"node_modules/x/index.cs": {Data: []byte("x")},
+		"big.cs":                  {Data: make([]byte, MaxFile+1)},
+		"vendor/v.cs":             {Data: []byte("x")},
+		"src/skip.min.js":         {Data: []byte("x")},
+	}
+	rep, err := Extract(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Facts) != 1 || rep.Facts[0].Key != "src/a.cs" {
+		t.Fatalf("facts %v", rep.Facts)
+	}
+	if len(rep.SkippedFiles) != 1 || rep.SkippedFiles[0] != "big.cs" {
+		t.Fatalf("skipped %v", rep.SkippedFiles)
+	}
+	if rep.Files != 1 {
+		t.Fatalf("files %d", rep.Files)
+	}
+}
+
+func TestExtractPanicIsolated(t *testing.T) {
+	withRules(t, stubRule{"stub.p", ".cs", func(f *FileCtx) []truth.Fact {
+		if f.Path == "bad.cs" {
+			panic("boom")
+		}
+		return []truth.Fact{{Class: truth.ClassServices, Key: f.Path}}
+	}})
+	rep, err := Extract(fstest.MapFS{"bad.cs": {Data: []byte("x")}, "ok.cs": {Data: []byte("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Facts) != 1 || rep.Facts[0].Key != "ok.cs" {
+		t.Fatalf("facts %v", rep.Facts)
+	}
+	if len(rep.SkippedFiles) != 1 || rep.SkippedFiles[0] != "bad.cs" {
+		t.Fatalf("skipped %v", rep.SkippedFiles)
+	}
+	if len(rep.Warnings) != 1 || rep.Warnings[0] != "panic in stub.p on bad.cs: boom" {
+		t.Fatalf("warnings %v", rep.Warnings)
+	}
+}
+
+func TestTreeAndCtx(t *testing.T) {
+	var got *FileCtx
+	withRules(t, stubRule{"stub.t", ".cs", func(f *FileCtx) []truth.Fact { got = f; return nil }})
+	_, err := Extract(fstest.MapFS{
+		"svc/FooTests.cs":  {Data: []byte("a\nb")},
+		"svc/package.json": {Data: []byte("{}")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Dir != "svc" || !got.IsTest || len(got.Lines) != 2 {
+		t.Fatalf("ctx %+v", got)
+	}
+	if b, ok := got.Tree.ReadFile("svc/package.json"); !ok || string(b) != "{}" {
+		t.Fatal("ReadFile")
+	}
+	if _, ok := got.Tree.ReadFile("nope"); ok {
+		t.Fatal("ReadFile missing")
+	}
+	if s := got.Tree.Siblings("svc", "*.json"); len(s) != 1 || s[0] != "package.json" {
+		t.Fatalf("siblings %v", s)
+	}
+}
+
+func TestIsTestPath(t *testing.T) {
+	cases := map[string]bool{
+		"src/OrderTests.cs": true, "src/Order.cs": false,
+		"a/b.spec.ts": true, "a/b.test.ts": true, "a/b.test.js": true, "a/b.ts": false,
+		"pkg/test_x.py": true, "pkg/x_test.py": false,
+		"tests/a.py": true, "src/__tests__/a.js": true, "src/contest/a.js": false,
+	}
+	for p, want := range cases {
+		if IsTestPath(p) != want {
+			t.Errorf("%s: want %v", p, want)
+		}
+	}
+}
