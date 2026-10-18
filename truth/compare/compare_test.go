@@ -114,7 +114,7 @@ func TestCompareStatuses(t *testing.T) {
 	if len(v.Uncovered) != 1 || v.Uncovered[0].NodeKey != "contract:endpoint:d:get:/api/extra" {
 		t.Errorf("uncovered = %+v", v.Uncovered)
 	}
-	if len(v.Classes) != 5 || v.Classes[0].Class != truth.ClassEndpoints {
+	if len(v.Classes) != 6 || v.Classes[0].Class != truth.ClassEndpoints {
 		t.Errorf("classes = %+v", v.Classes)
 	}
 	if v.Classes[0].Uncovered != 1 || v.Classes[0].Known != 5 {
@@ -159,7 +159,7 @@ func TestSummariesNumeric(t *testing.T) {
 	add(2, truth.Missing)
 	add(90, truth.OutOfScope)
 	cs := Summaries(facts, nil)
-	if len(cs) != 5 {
+	if len(cs) != 6 {
 		t.Fatal(len(cs))
 	}
 	e := cs[0]
@@ -407,5 +407,56 @@ func TestHTTPStrictBeatsLoose(t *testing.T) {
 	v := Compare(&truth.Report{Facts: []truth.Fact{httpVar("var:NOTIFICATION_SERVICE_URL", "NOTIFICATION_SERVICE_URL")}}, snap)
 	if v.Facts[0].Status != truth.Confirmed || len(v.Warnings) != 0 {
 		t.Errorf("strict: %s %v", v.Facts[0].Status, v.Warnings)
+	}
+}
+
+func TestPackageClass(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{
+		nd("code:package:d:npm:@acme/shared", "package", "@acme/shared"),
+		nd("code:package:d:npm:consumed", "package", "consumed"),
+		nd("code:package:d:npm:orphan-lib", "package", "orphan-lib"),
+		nd("service:service:d:svc-pub", "service", "svc-pub"),
+		nd("service:service:d:svc-quiet", "service", "svc-quiet"),
+		nd("code:file:d:shared/package.json", "file", "package.json"),
+		nd("code:file:d:o/package.json", "file", "package.json"),
+		nd("code:package:d:nuget:other", "package", "other"),
+	}, []snapshot.Edge{
+		ed("PUBLISHES", "code:file:d:shared/package.json", "code:package:d:npm:@acme/shared"),
+		ed("PUBLISHES", "code:file:d:o/package.json", "code:package:d:npm:orphan-lib"),
+		ed("DEPENDS_ON", "service:service:d:orders-api", "code:package:d:npm:consumed"),
+		ed("PUBLISHES", "service:service:d:svc-pub", "code:package:d:nuget:other"),
+	})
+	pk := func(eco, name string) truth.Fact {
+		return fact(truth.ClassPackages, truth.CanonDep(eco, name), "m", map[string]string{"ecosystem": eco, "name": name})
+	}
+	// Manifests are always in scope: no out_of_scope even with coverage listed.
+	cases := []struct {
+		eco, name string
+		want      truth.Status
+	}{
+		{"npm", "@acme/shared", truth.Confirmed},
+		{"npm", "consumed", truth.Missing}, // depended on, not published
+		{"npm", "nothing", truth.Missing},
+		{"python", "@acme/shared", truth.Missing},
+		{"nuget", "svc-pub", truth.Confirmed}, // service with outgoing PUBLISHES
+		{"nuget", "svc-quiet", truth.Missing},
+	}
+	for _, c := range cases {
+		if g := one(t, snap, pk(c.eco, c.name)); g != c.want {
+			t.Errorf("%s:%s got %s want %s", c.eco, c.name, g, c.want)
+		}
+	}
+	v := Compare(&truth.Report{Facts: []truth.Fact{pk("npm", "@acme/shared")}}, snap)
+	var un []string
+	for _, u := range v.Uncovered {
+		if u.Class == truth.ClassPackages {
+			un = append(un, u.NodeKey)
+		}
+	}
+	if len(un) != 2 || un[0] != "code:package:d:npm:orphan-lib" {
+		t.Errorf("uncovered packages: %v", un)
+	}
+	if len(v.Classes) != 6 || v.Classes[5].Class != truth.ClassPackages {
+		t.Errorf("classes: %+v", v.Classes)
 	}
 }

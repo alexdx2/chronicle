@@ -110,7 +110,7 @@ func TestGoldenExtractionMatchesSources(t *testing.T) {
 	for _, c := range truth.Classes {
 		want := keySet(g[c])
 		switch c {
-		case truth.ClassEndpoints, truth.ClassHTTP, truth.ClassDeps, truth.ClassServices:
+		case truth.ClassEndpoints, truth.ClassHTTP, truth.ClassDeps, truth.ClassServices, truth.ClassPackages:
 			if len(want) > 0 && len(got[c]) == 0 {
 				t.Errorf("%s: golden has %d entries but nothing was extracted (vacuous pass)", c, len(want))
 			}

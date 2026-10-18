@@ -154,5 +154,32 @@
    "file": "scoreboard-api/ScoreboardApi.csproj",
    "line": 4
   }
+ ],
+ "packages": [
+  {
+   "key": "npm:arena-api",
+   "file": "arena-api/package.json",
+   "line": 1
+  },
+  {
+   "key": "npm:jerry-api",
+   "file": "jerry-api/package.json",
+   "line": 1
+  },
+  {
+   "key": "npm:@tomandjerry/shared",
+   "file": "shared/package.json",
+   "line": 1
+  },
+  {
+   "key": "npm:spectators-api",
+   "file": "spectators-api/package.json",
+   "line": 1
+  },
+  {
+   "key": "npm:tom-api",
+   "file": "tom-api/package.json",
+   "line": 1
+  }
  ]
 }

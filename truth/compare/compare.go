@@ -104,6 +104,34 @@ func (ix *index) match(f truth.Fact) (truth.Status, string) {
 		return ix.matchDep(f)
 	case truth.ClassServices:
 		return ix.matchService(f)
+	case truth.ClassPackages:
+		return ix.matchPackage(f)
+	}
+	return "", ""
+}
+
+// matchPackage confirms a published package: the graph has a package node
+// that is the target of a PUBLISHES edge, or a service node of the same
+// canonical name that publishes. Manifests are always in scope.
+func (ix *index) matchPackage(f truth.Fact) (truth.Status, string) {
+	eco, name := depEco(f), depName(f)
+	best := ""
+	for _, i := range ix.pkgByDep[truth.CanonDep(eco, name)] {
+		if p := ix.pkgs[i]; p.own && (best == "" || p.key < best) {
+			best = p.key
+		}
+	}
+	if best != "" {
+		return truth.Confirmed, best
+	}
+	c := truth.CanonName(name)
+	for _, s := range ix.services {
+		if s.typ == "service" && s.publishes && c != "" && s.names[c] && (best == "" || s.key < best) {
+			best = s.key
+		}
+	}
+	if best != "" {
+		return truth.Confirmed, best
 	}
 	return "", ""
 }
@@ -331,7 +359,7 @@ func (ix *index) matchHTTP(f truth.Fact) (truth.Status, string) {
 	return "", ""
 }
 
-// uncovered lists graph entities of the five classes that no fact matched.
+// uncovered lists graph entities of the reference classes that no fact matched.
 func (ix *index) uncovered(matched map[truth.Class]map[string]bool) []truth.GraphFact {
 	out := []truth.GraphFact{}
 	add := func(c truth.Class, key, name string) {
@@ -353,7 +381,9 @@ func (ix *index) uncovered(matched map[truth.Class]map[string]bool) []truth.Grap
 		add(truth.ClassChannels, c.key, c.name)
 	}
 	for _, p := range ix.pkgs {
-		if !p.own {
+		if p.own {
+			add(truth.ClassPackages, p.key, p.name)
+		} else {
 			add(truth.ClassDeps, p.key, p.name)
 		}
 	}
@@ -394,7 +424,7 @@ func finish(c *truth.Counts) {
 	c.Known = c.Confirmed + c.Loose + c.Missing + c.OutOfScope
 }
 
-// Summaries aggregates judged facts into five ClassSummary values in
+// Summaries aggregates judged facts into one ClassSummary per class values in
 // truth.Classes order, with metrics and a per-source breakdown.
 func Summaries(facts []truth.JudgedFact, uncovered []truth.GraphFact) []truth.ClassSummary {
 	out := make([]truth.ClassSummary, 0, len(truth.Classes))

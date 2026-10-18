@@ -11,10 +11,11 @@ const (
 	ClassChannels  Class = "channels"
 	ClassDeps      Class = "deps"
 	ClassServices  Class = "services"
+	ClassPackages  Class = "packages"
 )
 
 // Classes lists all classes in display order.
-var Classes = []Class{ClassEndpoints, ClassHTTP, ClassChannels, ClassDeps, ClassServices}
+var Classes = []Class{ClassEndpoints, ClassHTTP, ClassChannels, ClassDeps, ClassServices, ClassPackages}
 
 // Status is the verdict for one reference fact (or Uncovered for a graph fact).
 type Status string

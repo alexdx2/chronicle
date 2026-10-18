@@ -16,7 +16,7 @@ var priorities = map[string]int{
 	"axios.": 3, "fetch.": 3, "requests.": 3, "kafka.": 3, "kafkajs": 3, "kafkajs.": 3, "sqs.": 3,
 	"eventbridge.": 3, "boto3.": 3, "python.": 3,
 	// contract
-	"openapi.": 2, "lock.": 2, "manifest.": 2,
+	"openapi.": 2, "lock.": 2, "manifest.": 2, "npm.": 2, "csproj.": 2, "pyproject.": 2,
 	// infra
 	"compose.": 1, "k8s.": 1, "helm.": 1, "terraform.": 1, "cdk.": 1,
 	// config

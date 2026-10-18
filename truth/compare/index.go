@@ -27,6 +27,7 @@ type pkgNode struct {
 type svcNode struct {
 	key, name, typ string
 	names          map[string]bool // CanonName of name and every alias
+	publishes      bool            // source of a PUBLISHES edge
 }
 
 type httpNode struct {
@@ -77,7 +78,7 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 	}
 	// Edge facts. Edge sources are not domain-checked: snapshots are single-repo.
 	pub, con := map[string]bool{}, map[string]bool{}
-	dependsIn, publishesIn := map[string]bool{}, map[string]bool{}
+	dependsIn, publishesIn, publishesOut := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	callTargets := map[string]bool{}
 	for _, e := range snap.Edges {
 		if !e.Active {
@@ -92,6 +93,7 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 			dependsIn[e.To] = true
 		case "PUBLISHES":
 			publishesIn[e.To] = true
+			publishesOut[e.From] = true
 		case "CALLS_SERVICE", "CALLS_ENDPOINT":
 			callTargets[e.To] = true
 		}
@@ -145,7 +147,7 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 			for _, a := range n.Aliases {
 				add(a.Alias)
 			}
-			ix.services = append(ix.services, svcNode{key: id, name: n.Name, typ: typ, names: names})
+			ix.services = append(ix.services, svcNode{key: id, name: n.Name, typ: typ, names: names, publishes: publishesOut[id]})
 		}
 		// CALLS_ENDPOINT targets are endpoint nodes judged under endpoints, so
 		// the http index holds service/external_system nodes only.
