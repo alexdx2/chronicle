@@ -896,31 +896,46 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 					toNodeKey = altKey
 				}
 			}
-			if candidates, err := g.store.FindCodeNodesByAlias(domainKey, toName, ""); err == nil && len(candidates) == 1 {
+			// SQ-Contract 1: a bare import of a package no in-repo node
+			// claims lands on the SAME code:package node the manifest pass
+			// mints, so a package that is declared AND imported is one node.
+			// Only for provider-shaped targets from a file whose ecosystem
+			// the extension names; C# usings and Go import paths do not map
+			// to package names and keep the code:provider path.
+			var pkgKey, pkgName, pkgAsWritten string
+			legacyKey := toNodeKey
+			if fact.ToType == "" || fact.ToType == "provider" {
+				if eco := importEcosystemOfFile(filePath); eco != "" {
+					pkg, _ := ParsePackageSpecifier(fact.To)
+					if eco == "python" {
+						// "a.b.c" names the distribution root "a".
+						pkg, _, _ = strings.Cut(pkg, ".")
+					}
+					if pkg != "" && toNodeKey == typedNodeKeyFromImport(domainKey, fact.To, fact.ToType) {
+						pkgAsWritten = pkg
+						pkgName = pkg // as written: the manifest path stores fact.To the same way
+						pkgKey = packageNodeKey(domainKey, eco, deps.Normalize(eco, pkg))
+					}
+				}
+			}
+			candidates, err := g.store.FindCodeNodesByAlias(domainKey, toName, "")
+			// A graph built before packages had their own node holds
+			// code:provider:<d>:<package> for a package-shaped import. That
+			// node is not an in-repo claim; it is the twin this routing
+			// retires, so it must not win the alias lookup. It loses its
+			// evidence as each importing file is rescanned.
+			if pkgKey != "" && len(candidates) == 1 && toName == pkgAsWritten &&
+				candidates[0].NodeKey == legacyKey && candidates[0].NodeType == "provider" {
+				candidates = nil
+			}
+			if err == nil && len(candidates) == 1 {
 				toID = candidates[0].NodeID
 				toNodeKey = candidates[0].NodeKey
 			} else {
-				pkgName := toName
-				// SQ-Contract 1: a bare import of a package no in-repo node
-				// claims lands on the SAME code:package node the manifest
-				// pass mints, so a package that is declared AND imported is
-				// one node. Only for provider-shaped targets from a file
-				// whose ecosystem the extension names; C# usings and Go
-				// import paths do not map to package names and keep the
-				// code:provider path.
-				if fact.ToType == "" || fact.ToType == "provider" {
-					if eco := importEcosystemOfFile(filePath); eco != "" {
-						pkg, _ := ParsePackageSpecifier(fact.To)
-						if eco == "python" {
-							// "a.b.c" names the distribution root "a".
-							pkg, _, _ = strings.Cut(pkg, ".")
-						}
-						if pkg != "" && toNodeKey == typedNodeKeyFromImport(domainKey, fact.To, fact.ToType) {
-							pkg = deps.Normalize(eco, pkg)
-							toNodeKey = packageNodeKey(domainKey, eco, pkg)
-							pkgName = pkg
-						}
-					}
+				if pkgKey != "" {
+					toNodeKey = pkgKey
+				} else {
+					pkgName = toName
 				}
 				toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, pkgName, "")
 			}
