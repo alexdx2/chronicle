@@ -1029,9 +1029,11 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// gets overwritten below and nothing ever points at the discarded node.
 		var fromNodeKey string
 		var fromID int64
+		fromService := false
 		if svc, err := g.store.GetServiceNodeByFilePath(domainKey, filePath); err == nil && svc != nil {
 			fromNodeKey = svc.NodeKey
 			fromID = svc.NodeID
+			fromService = true
 		} else {
 			fromNodeKey = typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 			fromID = g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -1088,6 +1090,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		})
 		if err == nil {
 			counts.edges++
+			// A model fact that resolved BEFORE the manifest's service node
+			// existed started at the manifest's file node. Now that the
+			// service owns the manifest, that earlier edge is the same
+			// claim from the wrong origin: retire it so the package has one
+			// manifest DEPENDS_ON, from the service.
+			if fromService {
+				g.retireFileNodeManifestEdges(filePath, fromID, toID)
+			}
 		}
 
 		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
@@ -4951,4 +4961,37 @@ func importEcosystemOfFile(filePath string) string {
 		return "python"
 	}
 	return ""
+}
+
+// retireFileNodeManifestEdges deactivates active manifest-sourced DEPENDS_ON
+// edges into toID whose origin is a non-service node anchored at the manifest
+// file, when the manifest's service node (svcID) now carries the same claim.
+// Why not pick the service up front: a model dependency fact can resolve
+// before any declares_service for that manifest exists (the deps pass mints
+// it later), so the service is not knowable at that moment; correcting after
+// the fact keeps one rule for both orders. Goes through DeactivateEdge, so
+// it journals and invalidates the edge's evidence.
+func (g *Graph) retireFileNodeManifestEdges(filePath string, svcID, toID int64) {
+	if svcID == 0 || toID == 0 || filePath == "" {
+		return
+	}
+	active := true
+	edges, err := g.store.ListEdges(store.EdgeFilter{
+		ToNodeID: toID, EdgeType: "DEPENDS_ON", Active: &active,
+		DependencySourceIn: []string{"manifest", "manifest_peer"},
+	})
+	if err != nil {
+		g.noteEvidenceErr(err)
+		return
+	}
+	for _, e := range edges {
+		if e.FromNodeID == svcID {
+			continue
+		}
+		from, err := g.store.GetNodeByID(e.FromNodeID)
+		if err != nil || from.Layer == "service" || from.FilePath != filePath {
+			continue
+		}
+		g.noteEvidenceErr(g.store.DeactivateEdge(e.EdgeID, "manifest_owner_service"))
+	}
 }

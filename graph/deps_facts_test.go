@@ -151,6 +151,18 @@ func TestWriteDepsExtractions_SameNodeAsLegacyDependency(t *testing.T) {
 			if len(active) != 1 {
 				t.Fatalf("want exactly one active DEPENDS_ON from the service to @acme/ui, got %v", active)
 			}
+			// ALL active manifest DEPENDS_ON into the package, whatever the origin
+			// node: the model-first order must not leave one on the file node.
+			var manifestEdges []string
+			for _, e := range edges {
+				if e.Active && strings.Contains(e.ToNodeKey, "@acme/ui") &&
+					(e.DependencySource == "manifest" || e.DependencySource == "manifest_peer") {
+					manifestEdges = append(manifestEdges, e.FromNodeKey)
+				}
+			}
+			if len(manifestEdges) != 1 || !strings.HasPrefix(manifestEdges[0], "service:service:") {
+				t.Fatalf("want exactly one active manifest DEPENDS_ON, from the service; got %v", manifestEdges)
+			}
 		})
 	}
 }
