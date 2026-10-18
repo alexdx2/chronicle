@@ -397,21 +397,23 @@ func (g *Graph) RecalculateTrustAfterJournalSync() error {
 // RecalculateAllTrust recomputes trust for every current node and edge.
 // Used after journal replay — trust is derived, never journaled.
 func (g *Graph) RecalculateAllTrust() error {
-	nodes, err := g.store.ListNodes(store.NodeFilter{})
-	if err != nil {
-		return err
-	}
-	for _, n := range nodes {
-		if err := g.RecalculateNodeTrust(n.NodeID); err != nil {
-			return err
-		}
-	}
+	// Edges first: nodeHasLiveEdge reads the edge active flag, which must
+	// already be current when a node's liveness is decided.
 	edges, err := g.store.ListEdges(store.EdgeFilter{})
 	if err != nil {
 		return err
 	}
 	for _, e := range edges {
 		if err := g.RecalculateEdgeTrust(e.EdgeID); err != nil {
+			return err
+		}
+	}
+	nodes, err := g.store.ListNodes(store.NodeFilter{})
+	if err != nil {
+		return err
+	}
+	for _, n := range nodes {
+		if err := g.RecalculateNodeTrust(n.NodeID); err != nil {
 			return err
 		}
 	}
@@ -507,6 +509,9 @@ func (g *Graph) nodeHasLiveEdge(nodeID int64) bool {
 func isPositiveLive(e store.EvidenceRow) bool {
 	if e.EvidencePolarity != "positive" {
 		return false
+	}
+	if e.SourceKind == "declared" {
+		return false // a declaration is a ruling, not an observation
 	}
 	if e.EvidenceStatus != "valid" && e.EvidenceStatus != "revalidated" {
 		return false
