@@ -273,3 +273,59 @@ func TestDepRules(t *testing.T) {
 		t.Error("orphan package not uncovered")
 	}
 }
+
+func TestLooseEndpointNeedsLiteralSegment(t *testing.T) {
+	snap := mkSnap(t, "src/a.cs")
+	// "/{}" must not loosely match "/api/orders/{}".
+	if g := one(t, snap, fact(truth.ClassEndpoints, "GET /{}", "src/a.cs", nil)); g != truth.Missing {
+		t.Errorf("GET /{}: got %s want missing", g)
+	}
+	// A literal tail still matches loosely.
+	if g := one(t, snap, fact(truth.ClassEndpoints, "GET /orders/{}", "src/a.cs", nil)); g != truth.ConfirmedLoose {
+		t.Errorf("GET /orders/{}: got %s", g)
+	}
+}
+
+func TestOwnServiceNeverExternal(t *testing.T) {
+	snap := mkSnap(t, "Dockerfile")
+	own := fact(truth.ClassServices, "own:tom-api", "Dockerfile", map[string]string{"name": "tom-api", "kind": "own"})
+	if g := one(t, snap, own); g != truth.Missing {
+		t.Errorf("own vs external_system: got %s want missing", g)
+	}
+	infra := fact(truth.ClassServices, "infra:tom-api", "Dockerfile", map[string]string{"name": "tom-api", "kind": "infra"})
+	if g := one(t, snap, infra); g != truth.Confirmed {
+		t.Errorf("infra vs external_system: got %s want confirmed", g)
+	}
+}
+
+func TestChannelKindMustAgree(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{
+		nd("contract:queue:d:jobs", "queue", "jobs"),
+		nd("contract:topic:d:events", "topic", "events"),
+	}, nil, "src/a.cs")
+	ch := func(kind, name string) truth.Fact {
+		return fact(truth.ClassChannels, kind+":"+name+"#declare", "src/a.cs", map[string]string{"name": name, "kind": kind, "side": "declare"})
+	}
+	for _, c := range []struct {
+		kind, name string
+		want       truth.Status
+	}{
+		{"queue", "events", truth.Missing},
+		{"topic", "jobs", truth.Missing},
+		{"queue", "jobs", truth.Confirmed},
+		{"topic", "events", truth.Confirmed},
+		{"bus", "events", truth.Confirmed},
+		{"bus", "jobs", truth.Missing},
+	} {
+		if g := one(t, snap, ch(c.kind, c.name)); g != c.want {
+			t.Errorf("%s/%s: got %s want %s", c.kind, c.name, g, c.want)
+		}
+	}
+}
+
+func TestEmptyVerdictListsAreArrays(t *testing.T) {
+	v := Compare(&truth.Report{}, nil)
+	if v.Facts == nil || v.Uncovered == nil {
+		t.Fatalf("facts=%v uncovered=%v", v.Facts, v.Uncovered)
+	}
+}

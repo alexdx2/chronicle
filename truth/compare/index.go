@@ -14,8 +14,8 @@ type epNode struct {
 }
 
 type chNode struct {
-	key, name, canon string
-	produce, consume bool
+	key, name, canon, typ string
+	produce, consume      bool
 }
 
 type pkgNode struct {
@@ -120,7 +120,7 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 			if name == "" {
 				name = rest
 			}
-			ix.channels = append(ix.channels, chNode{key: id, name: name, canon: truth.CanonName(name), produce: pub[id], consume: con[id]})
+			ix.channels = append(ix.channels, chNode{key: id, name: name, canon: truth.CanonName(name), typ: typ, produce: pub[id], consume: con[id]})
 		case "package":
 			eco, name := "", rest
 			if i := strings.Index(rest, ":"); i >= 0 {

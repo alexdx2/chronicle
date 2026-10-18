@@ -11,7 +11,7 @@ import (
 // Compare judges every fact of rep against snap. It never panics: a nil
 // snapshot yields all facts "missing" with the warning "no snapshot".
 func Compare(rep *truth.Report, snap *snapshot.Snapshot) *truth.Verdict {
-	v := &truth.Verdict{}
+	v := &truth.Verdict{Facts: []truth.JudgedFact{}}
 	if rep == nil {
 		rep = &truth.Report{}
 	}
@@ -131,7 +131,9 @@ func (ix *index) matchEndpoint(f truth.Fact) (truth.Status, string) {
 		if len(short) > len(long) {
 			long, short = short, long
 		}
-		if strings.HasSuffix(long, short) {
+		// A shorter path made only of parameters ("/{}") would match any
+		// endpoint ending in a parameter; it must carry a literal segment.
+		if strings.HasSuffix(long, short) && hasLiteralSegment(short) {
 			if d := len(long) - len(short); bestDiff < 0 || d < bestDiff || (d == bestDiff && g.key < best) {
 				best, bestDiff = g.key, d
 			}
@@ -143,6 +145,27 @@ func (ix *index) matchEndpoint(f truth.Fact) (truth.Status, string) {
 	return "", ""
 }
 
+func hasLiteralSegment(p string) bool {
+	for _, s := range strings.Split(p, "/") {
+		if s != "" && s != "{}" {
+			return true
+		}
+	}
+	return false
+}
+
+// channelKindOK requires the fact's kind to agree with the graph node type:
+// queue with queue, topic and bus (an event bus is a topic node) with topic.
+func channelKindOK(kind, typ string) bool {
+	switch kind {
+	case "queue":
+		return typ == "queue"
+	case "topic", "bus":
+		return typ == "topic"
+	}
+	return true
+}
+
 func (ix *index) matchChannel(f truth.Fact) (truth.Status, string) {
 	c := truth.CanonName(f.Attrs["name"])
 	if c == "" {
@@ -150,7 +173,7 @@ func (ix *index) matchChannel(f truth.Fact) (truth.Status, string) {
 	}
 	best := ""
 	for _, g := range ix.channels {
-		if g.canon != c {
+		if g.canon != c || !channelKindOK(f.Attrs["kind"], g.typ) {
 			continue
 		}
 		var ok bool
@@ -219,6 +242,11 @@ func (ix *index) matchService(f truth.Fact) (truth.Status, string) {
 	}
 	best := ""
 	for _, s := range ix.services {
+		// An own service is a deployable of this repo: it confirms only
+		// against a service node, never an external system.
+		if f.Attrs["kind"] == "own" && s.typ != "service" {
+			continue
+		}
 		for _, c := range cands {
 			if c != "" && s.names[c] && (best == "" || s.key < best) {
 				best = s.key
@@ -270,7 +298,7 @@ func (ix *index) matchHTTP(f truth.Fact) (truth.Status, string) {
 
 // uncovered lists graph entities of the five classes that no fact matched.
 func (ix *index) uncovered(matched map[truth.Class]map[string]bool) []truth.GraphFact {
-	var out []truth.GraphFact
+	out := []truth.GraphFact{}
 	add := func(c truth.Class, key, name string) {
 		if !matched[c][key] {
 			out = append(out, truth.GraphFact{Class: c, NodeKey: key, Name: name})

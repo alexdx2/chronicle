@@ -108,6 +108,19 @@ func TestTruthCompareJSON(t *testing.T) {
 	if _, ok := raw["Classes"]; ok {
 		t.Error("unexpected CamelCase key Classes")
 	}
+	// An empty report still serialises facts as [] and uncovered never as null.
+	empty := t.TempDir()
+	eout := runTruth(t, "compare", "--root", empty, "--graph", gp, "--json")
+	var eraw map[string]json.RawMessage
+	if err := json.Unmarshal(eout, &eraw); err != nil {
+		t.Fatal(err)
+	}
+	if string(bytes.TrimSpace(eraw["facts"])) != "[]" {
+		t.Errorf("facts = %s, want []", eraw["facts"])
+	}
+	if string(bytes.TrimSpace(eraw["uncovered"])) == "null" {
+		t.Errorf("uncovered is null")
+	}
 	// --report gives the same verdict as extracting inline.
 	rp := filepath.Join(dir, "report.json")
 	if err := os.WriteFile(rp, runTruth(t, "extract", "--root", dir, "--json"), 0o644); err != nil {
@@ -150,5 +163,23 @@ func TestTruthExtractBadSha(t *testing.T) {
 	root.SetArgs([]string{"truth", "extract", "--root", dir, "--sha", "deadbeef", "--json"})
 	if err := root.Execute(); err == nil {
 		t.Fatal("expected error for bad sha")
+	}
+}
+
+func TestTruthShaRejectsDash(t *testing.T) {
+	defer func() { projectPath = "" }()
+	root := NewRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"truth", "extract", "--root", t.TempDir(), "--sha", "--output=/tmp/x"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("sha starting with '-' accepted")
+	}
+}
+
+func TestPctRoundsDown(t *testing.T) {
+	m := truth.Metrics{HasData: true}
+	if got := pct(m, 0.999); got != "99%" {
+		t.Errorf("pct(0.999) = %s", got)
 	}
 }

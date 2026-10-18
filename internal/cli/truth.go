@@ -71,7 +71,7 @@ func newTruthExtractCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&root, "root", "", "Directory to read (default: --project or cwd)")
-	cmd.Flags().StringVar(&sha, "sha", "", "Read this git revision instead of the working tree")
+	cmd.Flags().StringVar(&sha, "sha", "", "Read this git revision instead of the working tree (files marked export-ignore in .gitattributes are not read)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit the report as JSON")
 	return cmd
 }
@@ -125,7 +125,7 @@ func newTruthCompareCmd() *cobra.Command {
 	cmd.Flags().StringVar(&graphPath, "graph", "", "Path to graph.jsonl snapshot (required)")
 	cmd.Flags().StringVar(&reportPath, "report", "", "Path to a saved extract report (JSON); extracts when absent")
 	cmd.Flags().StringVar(&root, "root", "", "Directory to read (default: --project or cwd)")
-	cmd.Flags().StringVar(&sha, "sha", "", "Read this git revision instead of the working tree")
+	cmd.Flags().StringVar(&sha, "sha", "", "Read this git revision instead of the working tree (files marked export-ignore in .gitattributes are not read)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit the verdict as JSON")
 	return cmd
 }
@@ -138,13 +138,16 @@ func truthExtract(ctx context.Context, root, sha string) (*truth.Report, error) 
 	if sha == "" {
 		return extract.Extract(os.DirFS(root))
 	}
+	if strings.HasPrefix(sha, "-") {
+		return nil, fmt.Errorf("invalid --sha %q: must not start with '-'", sha)
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, truthGitTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, "git", "-C", root, "archive", "--format=tar", sha)
+	c := exec.CommandContext(ctx, "git", "-C", root, "archive", "--format=tar", "--", sha)
 	c.Stderr = &stderr
 	out, err := c.StdoutPipe()
 	if err != nil {
@@ -224,7 +227,7 @@ func pct(m truth.Metrics, v float64) string {
 	if !m.HasData {
 		return truthNoDataLabel
 	}
-	return fmt.Sprintf(truthPercentFormat, int(v*100+0.5))
+	return fmt.Sprintf(truthPercentFormat, int(v*100))
 }
 
 // printVerdict renders the summary table. The "confirmed" column is
