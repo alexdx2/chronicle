@@ -72,10 +72,18 @@ var npmEntryRe = regexp.MustCompile(`^"(?:[^"\\]|\\.)*"\s*:\s*"(?:[^"\\]|\\.)*"`
 var npmAppDeps = map[string]bool{
 	"@nestjs/core": true, "@nestjs/common": true, "@nestjs/platform-express": true,
 	"@nestjs/platform-fastify": true, "express": true, "fastify": true, "koa": true,
+	"next": true, "nuxt": true, "@angular/core": true, "astro": true,
+	"@remix-run/node": true, "hono": true, "@hapi/hapi": true, "@apollo/server": true,
 }
 
 // npmIsApp reports whether a package.json describes something that runs: a
-// start or serve script, a bin, or a server framework among its dependencies.
+// start or serve script, a server or web-framework dependency, a vite project
+// with a dev script, or a private package that exposes no library entry point
+// (none of main/exports/types). A bin alone does not make an application: a
+// CLI published to a registry is a package.
+//
+// Known gap: Go modules, JVM projects and setup.cfg get no service node from
+// the deps pass (their App is never set); the model declares those services.
 func npmIsApp(doc map[string]json.RawMessage) bool {
 	var scripts map[string]json.RawMessage
 	if raw, ok := doc["scripts"]; ok && json.Unmarshal(raw, &scripts) == nil {
@@ -85,16 +93,38 @@ func npmIsApp(doc map[string]json.RawMessage) bool {
 			}
 		}
 	}
-	if raw, ok := doc["bin"]; ok && len(raw) > 0 && string(raw) != "null" && string(raw) != `""` && string(raw) != "{}" {
-		return true
+	names := func(section string) map[string]json.RawMessage {
+		var entries map[string]json.RawMessage
+		if raw, ok := doc[section]; ok && json.Unmarshal(raw, &entries) == nil {
+			return entries
+		}
+		return nil
 	}
-	var entries map[string]json.RawMessage
-	if raw, ok := doc["dependencies"]; ok && json.Unmarshal(raw, &entries) == nil {
-		for name := range entries {
-			if npmAppDeps[name] {
-				return true
+	for name := range names("dependencies") {
+		if npmAppDeps[name] {
+			return true
+		}
+	}
+	if _, dev := scripts["dev"]; dev {
+		if _, ok := names("devDependencies")["vite"]; ok {
+			return true
+		}
+		if _, ok := names("dependencies")["vite"]; ok {
+			return true
+		}
+	}
+	var private bool
+	if raw, ok := doc["private"]; ok && json.Unmarshal(raw, &private) == nil && private {
+		// A private workspace root is not a runnable package.
+		if _, ws := doc["workspaces"]; ws {
+			return false
+		}
+		for _, k := range []string{"main", "exports", "types"} {
+			if _, ok := doc[k]; ok {
+				return false
 			}
 		}
+		return true
 	}
 	return false
 }
