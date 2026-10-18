@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/deps"
+	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/manifest"
 )
 
@@ -53,7 +54,8 @@ func TestGuardScope_ModelCoveringOneOfFourServicesKeepsItsScopeAndReAddsTheRest(
 	if source != "model" || proposed == nil {
 		t.Fatalf("source=%s scope=%+v", source, scope)
 	}
-	if len(scope.Include) != 4 || len(scope.Exclude) != 1 || scope.Exclude[0].Glob != "**/*.spec.ts" {
+	// arena-api's include plus, per re-added dir, its source and manifest globs.
+	if len(scope.Include) != 7 || len(scope.Exclude) != 1+len(bootstrapExclude) || scope.Exclude[0].Glob != "**/*.spec.ts" {
 		t.Fatalf("model excludes must survive and dirs be appended: %+v", scope)
 	}
 	for _, d := range []string{"jerry-api", "tom-api", "spectators-api"} {
@@ -80,7 +82,7 @@ func TestGuardScope_ApplicationDirectoryMayNotBeDropped(t *testing.T) {
 	p, _ := ParseProfile(partialScopeProfile)
 	p.Scope.Include = []ScopeRule{{Glob: "a/**/*.ts", Reason: "app"}}
 	scope, source, _, warn := GuardScope(p, seed, inv, appsReport("b"))
-	if source != "model" || !strings.Contains(warn, "b") || scope.Include[len(scope.Include)-1].Glob != "b/**" {
+	if source != "model" || !strings.Contains(warn, "b") || scope.Include[len(scope.Include)-1].Glob != "b/**/*.ts" {
 		t.Fatalf("source=%s scope=%+v warn=%q", source, scope, warn)
 	}
 	// A library package in that directory does not protect it.
@@ -105,7 +107,7 @@ func TestGuardScope_ExamplesWithLibraryManifestAndManyFilesIsNotReAdded(t *testi
 	}
 }
 
-func TestGuardScope_ControllerDirectoryIsReAddedWithoutAManifestAndExcludeRootedThereGoes(t *testing.T) {
+func TestGuardScope_ControllerDirectoryIsReAddedWithoutAManifestAndExcludeHidingItGoes(t *testing.T) {
 	inv := &Inventory{}
 	for _, p := range []string{"app/main.ts", "app/a.ts", "app/b.ts", "svc/users.controller.ts", "svc/util.ts"} {
 		inv.Files = append(inv.Files, InvFile{Path: p})
@@ -113,10 +115,67 @@ func TestGuardScope_ControllerDirectoryIsReAddedWithoutAManifestAndExcludeRooted
 	seed := SeedResult{Include: []string{"**/*.ts"}, Exclude: bootstrapExclude}
 	p, _ := ParseProfile(partialScopeProfile)
 	p.Scope.Include = []ScopeRule{{Glob: "app/**/*.ts", Reason: "app"}}
-	p.Scope.Exclude = []ScopeRule{{Glob: "**/*.spec.ts", Reason: "t"}, {Glob: "svc/legacy/**", Reason: "old"}}
+	p.Scope.Exclude = []ScopeRule{{Glob: "**/*.spec.ts", Reason: "t"}, {Glob: "svc/*.controller.ts", Reason: "hides it"}, {Glob: "svc/legacy/**", Reason: "old"}}
 	scope, source, _, _ := GuardScope(p, seed, inv, deps.Report{})
-	if source != "model" || len(scope.Exclude) != 1 || scope.Exclude[0].Glob != "**/*.spec.ts" || scope.Include[len(scope.Include)-1].Glob != "svc/**" {
+	globs := func(rs []ScopeRule) string {
+		var g []string
+		for _, r := range rs {
+			g = append(g, r.Glob)
+		}
+		return strings.Join(g, " ")
+	}
+	if source != "model" || globs(scope.Exclude) != "**/*.spec.ts svc/legacy/** "+strings.Join(bootstrapExclude, " ") ||
+		scope.Include[len(scope.Include)-1].Glob != "svc/**/*.ts" {
 		t.Fatalf("%s %+v", source, scope)
+	}
+}
+
+// Re-adding a protected directory keeps the model's excludes of generated and
+// built output inside it, keeps the seed's exclusions, and limits the include to
+// code: json, markdown and images next to the controller stay out of scope.
+func TestGuardScope_ReAddedDirectoryKeepsGeneratedExcludesAndStaysCodeOnly(t *testing.T) {
+	files := []string{
+		"app/main.ts", "app/a.ts", "app/b.ts",
+		"svc/users.controller.ts", "svc/util.ts", "svc/package.json",
+		"svc/generated/api.ts", "svc/dist/main.ts", "svc/node_modules/x/index.ts",
+		"svc/data.json", "svc/README.md", "svc/logo.svg",
+	}
+	inv := &Inventory{}
+	for _, f := range files {
+		inv.Files = append(inv.Files, InvFile{Path: f})
+	}
+	seed := SeedResult{Include: []string{"**/*.ts", "**/package.json"}, Exclude: bootstrapExclude}
+	p, _ := ParseProfile(partialScopeProfile)
+	p.Scope.Include = []ScopeRule{{Glob: "app/**/*.ts", Reason: "app"}}
+	p.Scope.Exclude = []ScopeRule{{Glob: "svc/generated/**", Reason: "g"}, {Glob: "svc/dist/**", Reason: "d"}, {Glob: "svc/node_modules/**", Reason: "n"}}
+	scope, source, _, warn := GuardScope(p, seed, inv, deps.Report{})
+	if source != "model" || !strings.Contains(warn, "svc") {
+		t.Fatalf("%s %q %+v", source, warn, scope)
+	}
+	cfg := ScopeToScanConfig(scope)
+	in := map[string]bool{}
+	for _, f := range files {
+		in[f] = graph.InScope(f, &cfg)
+	}
+	for _, f := range []string{"svc/users.controller.ts", "svc/util.ts", "svc/package.json"} {
+		if !in[f] {
+			t.Errorf("%s must be in scope", f)
+		}
+	}
+	for _, f := range []string{"svc/generated/api.ts", "svc/dist/main.ts", "svc/node_modules/x/index.ts", "svc/data.json", "svc/README.md", "svc/logo.svg"} {
+		if in[f] {
+			t.Errorf("%s must stay out of scope", f)
+		}
+	}
+	// Even a model exclude list that lacks the seed's floor ends up with it.
+	have := map[string]bool{}
+	for _, r := range scope.Exclude {
+		have[r.Glob] = true
+	}
+	for _, g := range bootstrapExclude {
+		if !have[g] {
+			t.Errorf("seed exclude %s missing from %+v", g, scope.Exclude)
+		}
 	}
 }
 

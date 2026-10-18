@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -486,24 +487,35 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory, rep deps.Report) (Sc
 		Tests:   append([]ScopeRule(nil), p.Scope.Tests...),
 	}
 	for _, d := range dropped {
-		scope.Include = append(scope.Include, ScopeRule{Glob: d + "/**", Reason: "application directory the profile scope dropped"})
+		for _, g := range droppedDirGlobs(d, p.Scope, seed) {
+			scope.Include = append(scope.Include, ScopeRule{Glob: g, Reason: "application directory the profile scope dropped"})
+		}
 	}
-	// An exclude rooted inside a re-added directory would still hide it.
-	cfg = ScopeToScanConfig(scope)
+	// An exclude rooted inside a re-added directory that hides the very
+	// application or controller files which made the directory protected would
+	// defeat the re-add. Excludes of generated output, vendored code or build
+	// products in that directory (svc/generated/**, svc/dist/**) do not.
 	var kept2 []ScopeRule
 	for _, r := range scope.Exclude {
-		rooted := false
-		for _, d := range dropped {
-			if strings.HasPrefix(r.Glob, d+"/") {
-				rooted = true
-			}
-		}
-		if rooted {
+		if excludeHidesProtected(r.Glob, dropped, base, rep) {
 			continue
 		}
 		kept2 = append(kept2, r)
 	}
 	scope.Exclude = kept2
+	// The seed's exclusions are the floor of every scope (vendored and
+	// generated code never carries the application); a model exclude list that
+	// lacks them gets them back, since the re-added directories are now broader
+	// than anything the model looked at.
+	have := map[string]bool{}
+	for _, r := range scope.Exclude {
+		have[r.Glob] = true
+	}
+	for _, g := range bootstrapExclude {
+		if !have[g] {
+			scope.Exclude = append(scope.Exclude, ScopeRule{Glob: g, Reason: "seed"})
+		}
+	}
 	proposed := p.Scope
 	warn := "scope kept from the model; re-added application directories it dropped: " + strings.Join(dropped, ", ")
 	return scope, "model", &proposed, warn
@@ -648,4 +660,89 @@ func AdoptCatalogPacks(p *Profile, cat *prompts.Catalog) []string {
 		}
 	}
 	return adopted
+}
+
+// protectedFiles are the files that make a dropped directory protected: its
+// controller/handler files and the manifest of an application package.
+func protectedFiles(dir string, base []string, rep deps.Report) []string {
+	var out []string
+	for _, f := range base {
+		if topDirOf(f) == dir && isStructureFile(f) {
+			out = append(out, f)
+		}
+	}
+	for _, pk := range rep.Publishes {
+		if pk.App && topDirOf(pk.File) == dir {
+			out = append(out, pk.File)
+		}
+	}
+	return out
+}
+
+// excludeHidesProtected reports whether an exclude is rooted inside one of the
+// re-added directories and matches a file that made that directory protected.
+func excludeHidesProtected(glob string, dropped, base []string, rep deps.Report) bool {
+	for _, d := range dropped {
+		if !strings.HasPrefix(glob, d+"/") {
+			continue
+		}
+		for _, f := range protectedFiles(d, base, rep) {
+			if manifest.MatchGlob(f, glob) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// droppedDirGlobs are the include globs that bring a dropped directory back:
+// "<dir>/**/<pattern>" for the file patterns the model's own includes use (or
+// the seed's, when the model's name no extension), plus the seed's build and
+// deployment files. A bare "<dir>/**" would pull json, markdown and images in
+// next to the code.
+func droppedDirGlobs(dir string, model Scope, seed SeedResult) []string {
+	isSourceExt := func(pat string) bool {
+		if !strings.HasPrefix(pat, "*.") {
+			return false
+		}
+		for _, e := range bootstrapSourceExts {
+			if pat == "*"+e {
+				return true
+			}
+		}
+		return false
+	}
+	seen := map[string]bool{}
+	var pats []string
+	add := func(pat string) {
+		if pat != "" && !seen[pat] {
+			seen[pat] = true
+			pats = append(pats, pat)
+		}
+	}
+	for _, r := range model.Include {
+		if pat := path.Base(r.Glob); isSourceExt(pat) {
+			add(pat)
+		}
+	}
+	modelHasExt := len(pats) > 0
+	for _, g := range seed.Include {
+		pat := path.Base(g)
+		if isSourceExt(pat) {
+			if !modelHasExt {
+				add(pat)
+			}
+			continue
+		}
+		add(pat) // build and deployment files: package.json, go.mod, *.csproj, Dockerfile
+	}
+	sort.Strings(pats)
+	out := make([]string, 0, len(pats))
+	for _, pat := range pats {
+		out = append(out, dir+"/**/"+pat)
+	}
+	if len(out) == 0 {
+		out = append(out, dir+"/**")
+	}
+	return out
 }
