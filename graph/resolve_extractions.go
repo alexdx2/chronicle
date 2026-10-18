@@ -632,6 +632,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	// Second pass: parent facts that failed on file ordering.
 	for _, pf := range parentRetries {
 		g.detSetFile(pf.filePath, 0)
+		g.currentFilePath = pf.filePath
 		created, unresolved, err := g.resolveOneFact(domainKey, revisionID, pf.filePath, pf.fact, knownEntities, opts.IncludeDevDeps)
 		if err != nil {
 			return nil, fmt.Errorf("resolving %s fact in %s: %w", pf.fact.Kind, pf.filePath, err)
@@ -643,6 +644,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 			result.Unresolved = append(result.Unresolved, *unresolved)
 		}
 	}
+	g.currentFilePath = ""
 
 	// Third pass (deterministic only): the name-resolved facts held back
 	// until every structural node in the batch exists.
@@ -929,7 +931,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// retires, so it must not win the alias lookup. It loses its
 			// evidence as each importing file is rescanned.
 			if pkgKey != "" && len(candidates) == 1 && toName == pkgAsWritten &&
-				candidates[0].NodeKey == legacyKey && candidates[0].NodeType == "provider" {
+				candidates[0].NodeKey == legacyKey && candidates[0].NodeType == "provider" &&
+				candidates[0].FilePath == "" && candidates[0].Name == pkgAsWritten {
 				candidates = nil
 			}
 			if err == nil && len(candidates) == 1 {

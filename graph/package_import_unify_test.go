@@ -430,3 +430,54 @@ func TestResolveClassNameTargetPackageShapeIsGated(t *testing.T) {
 		}
 	}
 }
+
+// A real in-repo provider whose key equals the package-shaped key (a root-level
+// config.ts is code:provider:<d>:config) is not the legacy twin: it has a file,
+// so a bare import "config" keeps going to it.
+func TestBareImportOfRootLevelInRepoProviderStaysInRepo(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	g.SaveFileExtraction(revID, "testapp", "config.ts", "extracted", "provider",
+		`[{"kind":"import","to":"@okeep/ui"}]`, "")
+	g.SaveFileExtraction(revID, "testapp", "app/main.ts", "extracted", "provider",
+		`[{"kind":"import","to":"config","symbols":["x"]}]`, "")
+	if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+		t.Fatal(err)
+	}
+	if n := pkgNodesNamed(t, s, ":npm:config"); len(n) != 0 {
+		t.Fatalf("in-repo config.ts became a package: %+v", n)
+	}
+	edges, _ := s.ListEdges(store.EdgeFilter{})
+	var found bool
+	for _, e := range edges {
+		if strings.Contains(e.FromNodeKey, "app/main") && e.ToNodeKey == "code:provider:testapp:config" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no app/main -> code:provider:testapp:config edge: %+v", edges)
+	}
+}
+
+// The parent retry pass runs with the importing file set, like the deferred
+// pass; an @scope/pkg parent target that only exists after the first pass
+// lands on the package node.
+func TestParentRetryResolvesScopedPackageTarget(t *testing.T) {
+	g, s, revID := setupTestGraph(t)
+	g.SaveFileExtraction(revID, "testapp", "src/a.ts", "extracted", "provider",
+		`[{"kind":"parent","to":"@acme/ui","reason":"registered"}]`, "")
+	g.SaveFileExtraction(revID, "testapp", "src/z.ts", "extracted", "provider",
+		`[{"kind":"import","to":"@acme/ui"}]`, "")
+	if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+		t.Fatal(err)
+	}
+	edges, _ := s.ListEdges(store.EdgeFilter{})
+	var found bool
+	for _, e := range edges {
+		if e.EdgeType == "CONTAINS" && e.FromNodeKey == "code:package:testapp:npm:@acme/ui" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no CONTAINS from the package node: %+v", edges)
+	}
+}
