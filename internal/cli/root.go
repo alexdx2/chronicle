@@ -306,7 +306,13 @@ func maybePrintWiringNotice(dir string, w io.Writer) {
 	if stampDir == "" || stampDir == "." {
 		stampDir = chronicleDir
 	}
-	printWiringNotice(dir, stampDir, w, stdoutIsTTY() && os.Getenv("CI") == "")
+	printWiringNotice(dir, stampDir, w, wiringNoticeInteractive(stdoutIsTTY(), os.Getenv))
+}
+
+// wiringNoticeInteractive decides whether the wiring hint may be shown: only
+// for a person at a terminal, never when CI is set.
+func wiringNoticeInteractive(isTTY bool, env func(string) string) bool {
+	return isTTY && env("CI") == ""
 }
 
 func printWiringNotice(dir, stampDir string, w io.Writer, interactive bool) {

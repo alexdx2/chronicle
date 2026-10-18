@@ -110,3 +110,23 @@ func TestEnsureDepbotDirDoesNotCreateWiringFiles(t *testing.T) {
 		t.Fatal("ensureDepbotDir must not create AGENTS.md anymore")
 	}
 }
+
+func TestWiringNoticeInteractive(t *testing.T) {
+	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	cases := []struct {
+		name string
+		tty  bool
+		env  map[string]string
+		want bool
+	}{
+		{"terminal, no CI", true, nil, true},
+		{"terminal, CI set", true, map[string]string{"CI": "true"}, false},
+		{"pipe, no CI", false, nil, false},
+		{"pipe, CI set", false, map[string]string{"CI": "1"}, false},
+	}
+	for _, c := range cases {
+		if got := wiringNoticeInteractive(c.tty, env(c.env)); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
