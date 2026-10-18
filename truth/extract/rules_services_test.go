@@ -132,6 +132,8 @@ func TestServiceRules(t *testing.T) {
 		{"dockerfile in generic docker dir uses suffix", map[string]string{"docker/Dockerfile.api": "docker/Dockerfile"}, []wantFact{
 			{"python.entry", "own:api", false},
 		}},
+		{"dockerfile in docker dir with env suffix prod", map[string]string{"docker/Dockerfile.prod": "docker/Dockerfile"}, nil},
+		{"dockerfile in deploy dir with env suffix dev", map[string]string{"deploy/Dockerfile.dev": "docker/Dockerfile"}, nil},
 		{"dockerfile in generic dir without suffix", map[string]string{"docker/Dockerfile": "docker/Dockerfile"}, nil},
 		{"dockerfile node", map[string]string{"svc/web/Dockerfile": "docker/Dockerfile.node"}, nil},
 		{"root dockerfile", map[string]string{"Dockerfile": "docker/Dockerfile"}, nil},

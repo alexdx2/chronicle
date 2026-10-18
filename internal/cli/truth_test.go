@@ -182,4 +182,9 @@ func TestPctRoundsDown(t *testing.T) {
 	if got := pct(m, 0.999); got != "99%" {
 		t.Errorf("pct(0.999) = %s", got)
 	}
+	for v, want := range map[float64]string{0.29: "29%", 0.57: "57%", 299.0 / 300: "99%"} {
+		if got := pct(m, v); got != want {
+			t.Errorf("pct(%v) = %s, want %s", v, got, want)
+		}
+	}
 }

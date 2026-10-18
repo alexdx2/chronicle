@@ -382,6 +382,15 @@ var (
 	pythonServer = regexp.MustCompile(`\b(?:uvicorn|gunicorn)\b|\bmanage\.py\b`)
 )
 
+// envDockerSuffix lists Dockerfile.<suffix> values that name an environment or
+// build flavour rather than a service.
+var envDockerSuffix = map[string]bool{
+	"prod": true, "production": true, "dev": true, "development": true,
+	"staging": true, "stage": true, "test": true, "testing": true, "local": true,
+	"base": true, "ci": true, "debug": true, "release": true, "build": true,
+	"builder": true, "runtime": true, "alpine": true, "slim": true,
+}
+
 func applyPythonEntry(f *FileCtx) []truth.Fact {
 	if f.Dir == "." {
 		return nil // a root Dockerfile cannot name the service
@@ -397,6 +406,9 @@ func applyPythonEntry(f *FileCtx) []truth.Fact {
 					return nil
 				}
 				name = b[i+1:]
+				if envDockerSuffix[strings.ToLower(name)] {
+					return nil // docker/Dockerfile.prod names an environment, not a service
+				}
 			}
 			if fc, ok := serviceFact("python.entry", f, "own", name, "", "", l); ok {
 				return []truth.Fact{fc}

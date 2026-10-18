@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"strings"
@@ -227,7 +228,7 @@ func pct(m truth.Metrics, v float64) string {
 	if !m.HasData {
 		return truthNoDataLabel
 	}
-	return fmt.Sprintf(truthPercentFormat, int(v*100))
+	return fmt.Sprintf(truthPercentFormat, int(math.Floor(v*100+1e-9)))
 }
 
 // printVerdict renders the summary table. The "confirmed" column is
