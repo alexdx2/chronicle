@@ -141,6 +141,21 @@ func FullScan(ctx context.Context, g *graph.Graph, o FullOptions) (*FullReport, 
 		return rep, err
 	}
 
+	// The dependency layer is deterministic (no model): a plain scan builds
+	// it the way the layered build does, so manifests yield package nodes
+	// and DEPENDS_ON edges on every path.
+	if o.Deps == nil {
+		inv, err := BuildInventory(o.RepoRoot, defaultMaxFileBytes)
+		if err != nil {
+			return rep, err
+		}
+		dr, err := deps.Scan(o.RepoRoot, inv.Manifests)
+		if err != nil {
+			return rep, err
+		}
+		o.Deps = &dr
+	}
+
 	run := &fullRun{g: g, o: o, m: m, env: Env{RepoDir: o.RepoRoot, ManifestPath: boot.Path}, head: head, rep: rep}
 	var runErr error
 	for _, d := range domains {

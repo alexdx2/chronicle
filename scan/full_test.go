@@ -480,3 +480,42 @@ func TestFullScan_OnFileDoneReportsEveryFileBeforeItsWave(t *testing.T) {
 		t.Fatalf("OnFileDone files = %d, seen before first wave callback = %d; want 5/5", len(done), atWave)
 	}
 }
+
+func TestFullScan_PlainRunWritesDeterministicDependencies(t *testing.T) {
+	files := fiveFiles()
+	files["package.json"] = `{"name":"acme-api","version":"1.0.0","dependencies":{"@nestjs/common":"^10.0.0","kafkajs":"^2.0.0"}}`
+	e := newScanRepoT(t, files, true)
+	o := fullOpts(e, &countingBackend{})
+	o.NoExtract = true
+	for i := 0; i < 2; i++ { // second run: idempotent
+		if _, err := FullScan(context.Background(), e.g, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes, _ := e.s.ListNodes(store.NodeFilter{})
+	have := map[string]bool{}
+	for _, n := range nodes {
+		have[n.NodeKey] = true
+	}
+	for _, want := range []string{"@nestjs/common", "kafkajs"} {
+		found := false
+		for k := range have {
+			if strings.HasPrefix(k, "code:package:") && strings.HasSuffix(k, ":npm:"+want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no code:package node for %s in %v", want, have)
+		}
+	}
+	edges, _ := e.s.ListEdges(store.EdgeFilter{})
+	dep := 0
+	for _, ed := range edges {
+		if ed.EdgeType == "DEPENDS_ON" && ed.Active && strings.HasPrefix(ed.ToNodeKey, "code:package:") {
+			dep++
+		}
+	}
+	if dep != 2 {
+		t.Fatalf("DEPENDS_ON to code:package = %d, want 2", dep)
+	}
+}

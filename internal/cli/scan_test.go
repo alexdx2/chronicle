@@ -208,3 +208,22 @@ func TestScanCmd_UsageOutWithOut(t *testing.T) {
 		t.Fatalf("usage report = %s (%v)", raw, err)
 	}
 }
+
+func TestScanCmd_StructuralOnlyWritesDependencies(t *testing.T) {
+	e := scanRepoEnv(t)
+	write(t, e.root, "package.json", `{"name":"acme-api","version":"1.0.0","dependencies":{"@nestjs/common":"^10.0.0","kafkajs":"^2.0.0"}}`)
+	commitAll(t, e.root, "manifest")
+	var buf bytes.Buffer
+	code, err := runScanFull(context.Background(), &buf, e.g, e.root, scanCLIOptions{Full: true, StructuralOnly: true}, noEnv)
+	if code != 0 || err != nil {
+		t.Fatalf("code=%d err=%v\n%s", code, err, buf.String())
+	}
+	data, err := os.ReadFile(filepath.Join(e.dir, "graph.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `"id":"code:package:`) || !strings.Contains(s, `:DEPENDS_ON`) {
+		t.Fatalf("exported graph has no package nodes / DEPENDS_ON:\n%s", s)
+	}
+}
