@@ -572,3 +572,35 @@ func TestClassify_MovedNeverClassified(t *testing.T) {
 		t.Errorf("ClassifyDelta = %+v, want empty (Moved is never classified)", changes)
 	}
 }
+
+// A call to an external (boundary placeholder) endpoint is ONE integration,
+// never "contract added" + "integration added": the placeholder is not a
+// contract of this repo.
+func TestClassify_ExternalEndpointFoldsIntoOneIntegration(t *testing.T) {
+	ext := snapshot.Node{ID: "contract:endpoint:d:post:/events", Layer: "contract", Type: "endpoint", Status: "external"}
+	call := snapshot.Edge{ID: "code:provider:d:client->" + ext.ID + ":CALLS_ENDPOINT", Type: "CALLS_ENDPOINT", From: "code:provider:d:client", To: ext.ID}
+
+	for _, side := range []string{"added", "removed"} {
+		facts := []Fact{nodeFact(ext.ID, ext), edgeFact(call.ID, call)}
+		delta := &GraphDelta{}
+		want := IntegrationAdded
+		if side == "added" {
+			delta.Added = facts
+		} else {
+			delta.Removed = facts
+			want = IntegrationRemoved
+		}
+		changes := ClassifyDelta(delta)
+		if len(changes) != 1 || changes[0].Kind != want || changes[0].Counterpart != ext.ID {
+			t.Fatalf("%s: ClassifyDelta = %+v, want exactly one %s toward %s", side, changes, want, ext.ID)
+		}
+	}
+
+	// A real (non-external) endpoint node is still a contract.
+	local := ext
+	local.Status = "active"
+	changes := ClassifyDelta(&GraphDelta{Added: []Fact{nodeFact(local.ID, local)}})
+	if len(changes) != 1 || changes[0].Kind != ContractAdded {
+		t.Fatalf("local endpoint: %+v, want ContractAdded", changes)
+	}
+}
