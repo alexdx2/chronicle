@@ -2383,6 +2383,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, fact.To, filePath,
 				"chronicle:resolve:declares_service", "service_declaration"))
 			counts.evidence++
+			counts.evidence += g.addDepsServiceEvidence(nodeKey, revisionID, filePath, extractorID, fact)
 			return counts, nil, nil
 		}
 
@@ -2409,9 +2410,31 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		g.noteEvidenceErr(g.addCreationEvidence(nodeKey, revisionID, fact.To, filePath,
 			"chronicle:resolve:declares_service", "service_declaration"))
 		counts.evidence++
+		counts.evidence += g.addDepsServiceEvidence(nodeKey, revisionID, filePath, extractorID, fact)
 	}
 
 	return counts, nil, nil
+}
+
+// addDepsServiceEvidence anchors a service the deterministic deps pass
+// declared to its manifest line (the publishes_package line). Model-declared
+// services carry no such anchor and get nothing here.
+func (g *Graph) addDepsServiceEvidence(nodeKey string, revisionID int64, filePath, extractorID string, fact Fact) int {
+	if fact.Origin != depsOrigin {
+		return 0
+	}
+	kind, assertion := buildManifestLineAssertion(fact)
+	if _, err := g.resolverNodeEvidence(nodeKey, validate.EvidenceInput{
+		TargetKind: "node", SourceKind: "file", FilePath: filePath,
+		LineStart: fact.Line, LineEnd: fact.Line, // a row of its own beside the creation evidence
+		ExtractorID: extractorID, ExtractorVersion: "1.0",
+		Confidence: 1.0, RevisionID: revisionID,
+		AssertionKind: kind, Assertion: assertion,
+	}); err != nil {
+		g.noteEvidenceErr(err)
+		return 0
+	}
+	return 1
 }
 
 // registerNodeAlias stores a name as an alias for a node.

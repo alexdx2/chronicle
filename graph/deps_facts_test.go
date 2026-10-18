@@ -347,7 +347,8 @@ func TestWriteDepsExtractions_NpmWorkspaceReferenceResolvesToSibling(t *testing.
 	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
 		t.Fatal(err)
 	}
-	owner := typedNodeKeyFromFile("testapp", "ui/package.json", "file")
+	// The publisher is a service node now (deps-declared), the sibling's owner.
+	owner := canonicalNodeKey("service:service:testapp:@acme/ui")
 	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
 	if len(edges) != 1 || edges[0].ToNodeKey != owner {
 		t.Fatalf("workspace dependency should land on %s, edges = %+v", owner, edges)
@@ -464,5 +465,59 @@ func TestWriteDepsExtractions_FrameworksAreFactsInfrastructureIsNoise(t *testing
 		if strings.Contains(l, "system.") || strings.Contains(l, "microsoft.") || strings.Contains(l, "@types") {
 			t.Errorf("infrastructure became a node: %s", n.NodeKey)
 		}
+	}
+}
+
+func TestWriteDepsExtractions_PublishedPackageMintsServiceNode(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	// A model-less run met jerry-api as a call target before the manifest.
+	extKey := "service:external_system:d:jerry-api"
+	if _, err := st.UpsertNode(store.NodeRow{NodeKey: extKey, Layer: "service", NodeType: "external_system", DomainKey: "d", Name: "jerry-api", Status: "active", LastSeenRevisionID: rev}); err != nil {
+		t.Fatal(err)
+	}
+	rep := deps.Report{
+		Publishes: []deps.Package{
+			{Name: "jerry-api", Ecosystem: "npm", File: "jerry-api/package.json", Line: 2, Text: `"name": "jerry-api"`},
+			{Name: "scoreboardapi", Ecosystem: "nuget", File: "sb/ScoreboardApi.csproj", Line: 3, Text: `<AssemblyName>ScoreboardApi</AssemblyName>`},
+		},
+		Depends: []deps.Dependency{
+			{Name: "kafkajs", Version: "^2", Section: "dependencies", Ecosystem: "npm", File: "jerry-api/package.json", Line: 6, Text: `"kafkajs"`},
+		},
+	}
+	if _, err := g.WriteDepsExtractions("d", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := st.GetNodeByKey("service:service:d:jerry-api")
+	if err != nil || svc == nil || svc.Status != "active" || svc.FilePath != "jerry-api/package.json" {
+		t.Fatalf("service node = %+v, %v", svc, err)
+	}
+	ev, _ := st.ListEvidenceByNode(svc.NodeID)
+	var line bool
+	for _, e := range ev {
+		if e.ExtractorID == DepsExtractorID && e.AssertionKind == "manifest_line" {
+			line = true
+		}
+	}
+	if !line {
+		t.Errorf("no manifest_line evidence on the service: %+v", ev)
+	}
+	if sb, _ := st.GetNodeByKey("service:service:d:scoreboardapi"); sb == nil {
+		t.Error("csproj service missing")
+	}
+	if ext, _ := st.GetNodeByKey(extKey); ext != nil && ext.Status == "active" {
+		t.Errorf("external twin of an own service survived: %+v", ext)
+	}
+	edges, _ := st.ListEdges(store.EdgeFilter{})
+	var pub, dep bool
+	for _, e := range edges {
+		if e.EdgeType == "PUBLISHES" && e.FromNodeKey == "service:service:d:jerry-api" {
+			pub = true
+		}
+		if e.EdgeType == "DEPENDS_ON" && e.FromNodeKey == "service:service:d:jerry-api" {
+			dep = true
+		}
+	}
+	if !pub || !dep {
+		t.Errorf("edges must start at the service: publishes=%v depends=%v", pub, dep)
 	}
 }
