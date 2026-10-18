@@ -412,13 +412,39 @@ func (g *Graph) RecalculateAllTrust() error {
 	if err != nil {
 		return err
 	}
+	// nodeHasLiveEdge reads the counterpart's stored status, which may still
+	// be last run's value when the counterpart is recomputed later in the
+	// pass. Repeat the pass (ListNodes orders by node_key, so it is deterministic) until
+	// no status changes; bounded because mutually-dependent pairs can
+	// oscillate.
+	prev := make(map[int64]string, len(nodes))
 	for _, n := range nodes {
-		if err := g.RecalculateNodeTrust(n.NodeID); err != nil {
-			return err
+		prev[n.NodeID] = n.Status
+	}
+	for iter := 0; iter < maxTrustPasses; iter++ {
+		changed := false
+		for _, n := range nodes {
+			if err := g.RecalculateNodeTrust(n.NodeID); err != nil {
+				return err
+			}
+			cur, err := g.store.GetNodeByID(n.NodeID)
+			if err != nil {
+				continue
+			}
+			if cur.Status != prev[n.NodeID] {
+				prev[n.NodeID] = cur.Status
+				changed = true
+			}
+		}
+		if !changed {
+			break
 		}
 	}
 	return nil
 }
+
+// maxTrustPasses bounds the node-pass fixpoint in RecalculateAllTrust.
+const maxTrustPasses = 3
 
 // RecalculateNodeTrust recomputes trust for a node from its evidence.
 func (g *Graph) RecalculateNodeTrust(nodeID int64) error {
