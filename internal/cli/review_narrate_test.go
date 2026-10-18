@@ -170,3 +170,45 @@ func TestNarrate_ChangedFileParsing(t *testing.T) {
 		t.Fatalf("missing --changed: code=%d err=%v", code, err)
 	}
 }
+
+func TestNarrate_UnwrapsObjectAndFencedBodies(t *testing.T) {
+	const sentence = "Billing now calls ledger; test the payment path."
+	for name, body := range map[string]string{
+		"object":        `{"text": "` + sentence + `"}`,
+		"fenced object": "```json\n{\"text\": \"" + sentence + "\"}\n```",
+		"fenced prose":  "```\n" + sentence + "\n```",
+		"json string":   `"` + sentence + `"`,
+		"single field":  `{"answer": "` + sentence + `"}`,
+	} {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "n.md")
+		code, err := runNarrate(context.Background(), &bytes.Buffer{}, narrateOptions{
+			ReviewFile: writeNarrateReview(t, dir), Model: fakeFixtures(t, dir, body), Out: out,
+		}, noEnv)
+		if code != 0 || err != nil {
+			t.Fatalf("%s: code=%d err=%v", name, code, err)
+		}
+		b, _ := os.ReadFile(out)
+		s := string(b)
+		if !strings.Contains(s, "\n\n"+sentence+"\n\n") {
+			t.Errorf("%s: paragraph not found bare:\n%s", name, s)
+		}
+		if strings.ContainsAny(strings.SplitN(s, "*Written by", 2)[0], "{}`") {
+			t.Errorf("%s: wrapper leaked into the output:\n%s", name, s)
+		}
+	}
+}
+
+func TestNarrate_EmptyObjectExit1NoOut(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "n.md")
+	code, err := runNarrate(context.Background(), &bytes.Buffer{}, narrateOptions{
+		ReviewFile: writeNarrateReview(t, dir), Model: fakeFixtures(t, dir, `{"text": ""}`), Out: out,
+	}, noEnv)
+	if code != 1 || err == nil {
+		t.Fatalf("code=%d err=%v", code, err)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("out file written for an empty answer")
+	}
+}

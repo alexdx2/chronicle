@@ -147,7 +147,7 @@ func BuildNarratePrompt(r *review.ReviewResult, changed []string, maxWords int) 
 		}
 		user += "… and more\n"
 	}
-	return llm.Request{System: system, User: user, MaxTokens: 1024}
+	return llm.Request{System: system, User: user, MaxTokens: 1024, Text: true}
 }
 
 func findingPath(f review.ReviewFinding) string {

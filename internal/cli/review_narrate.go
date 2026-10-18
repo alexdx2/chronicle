@@ -80,11 +80,7 @@ func runNarrate(ctx context.Context, w io.Writer, opts narrateOptions, env func(
 			return 1, fmt.Errorf("chronicle review narrate: write usage: %w", err)
 		}
 	}
-	text := strings.TrimSpace(resp.Text)
-	var s string
-	if json.Unmarshal([]byte(text), &s) == nil { // fixtures are JSON strings
-		text = strings.TrimSpace(s)
-	}
+	text := unwrapNarration(resp.Text)
 	if text == "" {
 		return 1, errors.New("chronicle review narrate: the model returned an empty answer")
 	}
@@ -137,4 +133,63 @@ Exit code 0: ok. 1: error (provider failure, empty answer). 3: no API key (print
 	f.StringVar(&o.Out, "out", "", "Write the markdown here (default stdout)")
 	f.StringVar(&o.UsageOut, "usage-out", "", "Write token usage and cost JSON to this file")
 	return cmd
+}
+
+// unwrapNarration turns whatever a model sent into the bare paragraph. The
+// request asks for plain text, but a backend or model may still answer with a
+// JSON string (the fake fixtures), a {"text": "..."} object (JSON-mode
+// transports) or a fenced block; none of these may reach the comment verbatim.
+func unwrapNarration(raw string) string {
+	text := strings.TrimSpace(raw)
+	for i := 0; i < 3; i++ { // fence around an object around a string
+		prev := text
+		text = stripCodeFence(text)
+		var s string
+		if json.Unmarshal([]byte(text), &s) == nil {
+			text = strings.TrimSpace(s)
+			continue
+		}
+		var obj map[string]any
+		if json.Unmarshal([]byte(text), &obj) == nil {
+			if v, ok := narrationFromObject(obj); ok {
+				text = v
+			}
+		}
+		if text == prev {
+			break
+		}
+	}
+	return strings.TrimSpace(text)
+}
+
+// narrationFromObject picks the paragraph out of a one-field answer: a known
+// key first, otherwise the only string value.
+func narrationFromObject(obj map[string]any) (string, bool) {
+	for _, k := range []string{"text", "paragraph", "summary", "narration"} {
+		if v, ok := obj[k].(string); ok {
+			return strings.TrimSpace(v), true
+		}
+	}
+	if len(obj) == 1 {
+		for _, v := range obj {
+			if sv, ok := v.(string); ok {
+				return strings.TrimSpace(sv), true
+			}
+		}
+	}
+	return "", false
+}
+
+// stripCodeFence removes one surrounding ``` fence (with an optional info
+// string such as json) and returns the inside.
+func stripCodeFence(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") || !strings.HasSuffix(s, "```") || len(s) < 6 {
+		return s
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(s, "```"), "```")
+	if nl := strings.IndexByte(inner, '\n'); nl >= 0 && !strings.ContainsAny(inner[:nl], " \t{}\"") {
+		inner = inner[nl+1:] // drop the info string line
+	}
+	return strings.TrimSpace(inner)
 }
