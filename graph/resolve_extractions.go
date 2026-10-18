@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/alexdx2/chronicle-core/deps"
 	"github.com/alexdx2/chronicle-core/extract/structural"
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/store"
@@ -1038,6 +1039,13 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// path, a NuGet id, a Maven coordinate); the npm-shaped import
 			// parser would reduce "github.com/x/y" to its host.
 			toNodeKey = packageNodeKey(domainKey, fact.Ecosystem, fact.To)
+		} else if eco := deps.EcosystemOfManifest(filePath); !fromDeps && eco != "" && fact.Section != "project" {
+			// A model-origin dependency read from a manifest names the same
+			// package the deterministic pass mints (code:package:<eco>:<name>).
+			// Routing it there keeps ONE node and one DEPENDS_ON per package
+			// on the MCP path, which has no sanitizer, whichever pass lands
+			// first.
+			toNodeKey = packageNodeKey(domainKey, eco, deps.Normalize(eco, fact.To))
 		} else {
 			// Not ours: the SAME package node shape code imports produce
 			// (SQ-Contract 1) — one node per package whether it's reached

@@ -294,7 +294,7 @@ func TestOracleManifestDeps_SiblingPackageResolvesToServiceNode(t *testing.T) {
 
 	// (c) a genuine third-party dependency still gets the package stub — the
 	// sibling lookup must not swallow every dependency into the service layer.
-	if _, err := s.GetNodeByKey("code:provider:testapp:@stripe/stripe-js"); err != nil {
+	if _, err := s.GetNodeByKey("code:package:testapp:npm:@stripe/stripe-js"); err != nil {
 		t.Errorf("third-party dependency lost its package node: %v", err)
 	}
 }

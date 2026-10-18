@@ -76,6 +76,29 @@ func IsManifest(path string) bool {
 	return false
 }
 
+// EcosystemOfManifest names the ecosystem of a manifest path ("npm", "nuget",
+// "go", "python", "maven", "gradle"), or "" when path is not a manifest. It
+// lets a resolver route a model-origin dependency fact found in a manifest to
+// the same package identity the deterministic pass mints.
+func EcosystemOfManifest(path string) string {
+	b := base(path)
+	switch {
+	case npm{}.matches(path):
+		return "npm"
+	case nuget{}.matches(path):
+		return "nuget"
+	case gomod{}.matches(path):
+		return "go"
+	case python{}.matches(path):
+		return "python"
+	case b == "pom.xml":
+		return "maven"
+	case jvm{}.matches(path):
+		return "gradle"
+	}
+	return ""
+}
+
 // Normalize applies the ecosystem's identity rule.
 func Normalize(ecosystem, name string) string {
 	name = strings.TrimSpace(name)

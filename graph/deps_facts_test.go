@@ -95,51 +95,74 @@ func TestClassifyDependencyIn_NuGetInfrastructure(t *testing.T) {
 }
 
 // A dependency resolved by the deps pass and the same dependency resolved from
-// an LLM fact must land on ONE node: cross-repo package links are built from
-// the consumer nodes dependency facts create.
+// a model fact (MCP/API path, no sanitizer) must land on ONE package node and
+// ONE active DEPENDS_ON, in either layering order.
 func TestWriteDepsExtractions_SameNodeAsLegacyDependency(t *testing.T) {
-	g, st, rev := setupTestGraph(t)
-	rep := deps.Report{Depends: []deps.Dependency{
-		{Name: "@acme/ui", Version: "1.0.0", Section: "dependencies", Ecosystem: "npm", File: "web/package.json", Line: 5, Text: `"@acme/ui"`},
-	}}
-	if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
-		t.Fatal(err)
-	}
-	rev2, _ := st.CreateRevision("testapp", "scan_2", "", "manual", "full", "{}")
-	g.SaveFileExtraction(rev2, "testapp", "web/package.json", "extracted", "manifest",
-		`[{"kind":"dependency","to":"@acme/ui","section":"dependencies"}]`, "")
-	if _, err := g.ResolveExtractions("testapp", rev2); err != nil {
-		t.Fatal(err)
-	}
-
-	nodes, _ := st.ListNodes(store.NodeFilter{Domain: "testapp"})
-	var uiKeys []string
-	for _, n := range nodes {
-		// The manifest pass mints code:package; a model-origin fact keeps the
-		// import-shaped code:provider node (a separate contract). The deps
-		// edge must land on the package node and nothing else of the deps
-		// pass may duplicate it.
-		if strings.HasPrefix(n.NodeKey, "code:package:") && strings.Contains(n.NodeKey, "@acme/ui") {
-			uiKeys = append(uiKeys, n.NodeKey)
+	for _, depsFirst := range []bool{false, true} {
+		name := "model_first"
+		if depsFirst {
+			name = "deps_first"
 		}
-	}
-	if len(uiKeys) != 1 {
-		t.Fatalf("want exactly one package node for @acme/ui, got %v", uiKeys)
-	}
-	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
-	var viaDeps bool
-	for _, e := range edges {
-		if e.ToNodeKey == uiKeys[0] {
-			ev, _ := st.ListEvidenceByEdge(e.EdgeID)
-			for _, x := range ev {
-				if x.ExtractorID == DepsExtractorID {
-					viaDeps = true
+		t.Run(name, func(t *testing.T) {
+			g, st, rev := setupTestGraph(t)
+			rep := deps.Report{
+				Publishes: []deps.Package{{Name: "web", Ecosystem: "npm", File: "web/package.json", Line: 2, Text: `"name"`, App: true}},
+				Depends: []deps.Dependency{
+					{Name: "@acme/ui", Version: "1.0.0", Section: "dependencies", Ecosystem: "npm", File: "web/package.json", Line: 5, Text: `"@acme/ui"`},
+				}}
+			rev2, _ := st.CreateRevision("testapp", "scan_2", "", "manual", "full", "{}")
+			model := func() {
+				g.SaveFileExtraction(rev2, "testapp", "web/package.json", "extracted", "manifest",
+					`[{"kind":"dependency","to":"@acme/ui","section":"dependencies"}]`, "")
+				if _, err := g.ResolveExtractions("testapp", rev2); err != nil {
+					t.Fatal(err)
 				}
 			}
-		}
+			depsPass := func() {
+				if _, err := g.WriteDepsExtractions("testapp", rev, rep); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if depsFirst {
+				depsPass()
+				model()
+			} else {
+				model()
+				depsPass()
+			}
+
+			nodes, _ := st.ListNodes(store.NodeFilter{Domain: "testapp"})
+			var uiKeys []string
+			for _, n := range nodes {
+				if strings.Contains(n.NodeKey, "@acme/ui") {
+					uiKeys = append(uiKeys, n.NodeKey)
+				}
+			}
+			if len(uiKeys) != 1 || !strings.HasPrefix(uiKeys[0], "code:package:") {
+				t.Fatalf("want exactly one code:package node for @acme/ui, got %v", uiKeys)
+			}
+			edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+			var active []string
+			for _, e := range edges {
+				if e.Active && strings.Contains(e.ToNodeKey, "@acme/ui") && strings.HasPrefix(e.FromNodeKey, "service:service:") {
+					active = append(active, e.FromNodeKey+"->"+e.ToNodeKey)
+				}
+			}
+			if len(active) != 1 {
+				t.Fatalf("want exactly one active DEPENDS_ON from the service to @acme/ui, got %v", active)
+			}
+		})
 	}
-	if !viaDeps {
-		t.Fatalf("deps-origin DEPENDS_ON edge does not point at %s: %+v", uiKeys[0], edges)
+}
+
+func TestEcosystemOfManifest(t *testing.T) {
+	for path, want := range map[string]string{
+		"a/package.json": "npm", "x/Api.csproj": "nuget", "go.mod": "go", "py/pyproject.toml": "python",
+		"requirements-dev.txt": "python", "pom.xml": "maven", "svc/build.gradle.kts": "gradle", "README.md": "",
+	} {
+		if got := deps.EcosystemOfManifest(path); got != want {
+			t.Errorf("EcosystemOfManifest(%q) = %q, want %q", path, got, want)
+		}
 	}
 }
 
