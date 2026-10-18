@@ -597,6 +597,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 		// This allows provides/parent resolution to consult this file's imports first,
 		// making CONTAINS edges deterministic and immune to same-class-name collisions.
 		g.currentFileImportMap = buildFileImportMap(ff.filePath, ff.facts)
+		g.currentFilePath = ff.filePath
 		g.detSetFile(ff.filePath, ff.extractionID)
 		// Definitions before references within a file: a model_relation processed
 		// before its enum/model definition materializes a phantom node.
@@ -625,6 +626,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 			}
 		}
 		g.currentFileImportMap = nil
+		g.currentFilePath = ""
 	}
 
 	// Second pass: parent facts that failed on file ordering.
@@ -653,6 +655,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 			// injects/provides resolve the specifier first, so the file's own
 			// import declarations have to come back with the fact.
 			g.currentFileImportMap = df.importMap
+			g.currentFilePath = df.filePath
 			created, unresolved, err := g.resolveOneFact(domainKey, revisionID, df.filePath, df.fact, knownEntities, opts.IncludeDevDeps)
 			if err != nil {
 				return nil, fmt.Errorf("resolving %s fact in %s: %w", df.fact.Kind, df.filePath, err)
@@ -665,6 +668,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 			}
 		}
 		g.currentFileImportMap = nil
+		g.currentFilePath = ""
 	}
 
 	// Everything past this point is derived from the graph, not read out of a
@@ -934,6 +938,14 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			} else {
 				if pkgKey != "" {
 					toNodeKey = pkgKey
+					// A package this domain publishes itself is its service
+					// node, not a second code:package: the manifest branch
+					// resolves it through the same snapshot (a sibling's
+					// declares_service may not have run yet, which is why
+					// the snapshot and not the store is asked).
+					if svcKey, ok := g.domainOwnPackages[flattenName(pkgAsWritten)]; ok {
+						toNodeKey = svcKey
+					}
 				} else {
 					pkgName = toName
 				}
@@ -4146,10 +4158,11 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 	identity := className
 	if pkg, _ := ParsePackageSpecifier(className); pkg != "" {
 		identity = pkg
-		// "@scope/pkg" and "pkg/sub" are npm specifiers by shape: they land on
-		// the node the manifest pass and the import handler mint for the
-		// package, not on a code:provider twin.
-		if strings.HasPrefix(className, "@") || strings.Contains(className, "/") {
+		// "@scope/pkg" and "pkg/sub" are npm specifiers by shape — but only
+		// in a file whose imports name npm packages, and only when the name
+		// is not a path ("src/user/user.service", "./x", "orders/OrderService"
+		// from a .py or .cs file are class or path names, not packages).
+		if isNpmPackageSpecifier(importEcosystemOfFile(g.currentFilePath), className, pkg) {
 			key := packageNodeKey(domainKey, "npm", deps.Normalize("npm", pkg))
 			return key, g.ensureNodeID(domainKey, revisionID, key, pkg, "")
 		}
@@ -5009,4 +5022,39 @@ func (g *Graph) retireFileNodeManifestEdges(filePath string, svcID, toID int64) 
 		}
 		g.noteEvidenceErr(g.store.DeactivateEdge(e.EdgeID, "manifest_owner_service"))
 	}
+}
+
+// isNpmPackageSpecifier decides whether an injects/provides target is an npm
+// package specifier. It must come from an npm-ecosystem file (Python imports
+// are dotted, never slashed; C# and Go names are not package names), be
+// package-shaped ("@scope/pkg[/sub]" or "pkg/sub"), and not look like a path:
+// no src/./.. prefix, at most one slash when unscoped, and no source-file
+// extension on a subpath.
+func isNpmPackageSpecifier(eco, name, pkg string) bool {
+	if eco != "npm" || pkg == "" {
+		return false
+	}
+	scoped := strings.HasPrefix(name, "@")
+	if !scoped && !strings.Contains(name, "/") {
+		return false
+	}
+	for _, p := range []string{"src/", "./", "../", "/"} {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
+	}
+	if scoped {
+		if !strings.Contains(pkg, "/") {
+			return false // "@decorator" is not a scoped package
+		}
+	} else if strings.Count(name, "/") > 1 {
+		return false
+	}
+	if _, sub := ParsePackageSpecifier(name); sub != "" {
+		switch strings.ToLower(path.Ext(sub)) {
+		case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".py", ".cs", ".go", ".css", ".scss", ".svg":
+			return false
+		}
+	}
+	return true
 }

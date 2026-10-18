@@ -36,6 +36,11 @@ type Graph struct {
 	// symbol → resolved file path (no extension, relative to module file dir)
 	currentFileImportMap map[string]string
 
+	// currentFilePath is the file whose facts are being resolved; it tells
+	// path-or-package decisions (resolveClassNameTarget) which language the
+	// name was written in.
+	currentFilePath string
+
 	// pendingExtEndpoints accumulates endpoint references from http_call facts
 	// whose host stayed unresolved (external_system placeholder) during
 	// ResolveExtractions. Evidence can't carry them — its dedup key collapses

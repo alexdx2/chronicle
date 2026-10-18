@@ -337,3 +337,96 @@ func TestPackageNodeNameIsAsWrittenWhicheverPathMintsIt(t *testing.T) {
 		}
 	}
 }
+
+// A package the domain publishes itself is its service node for imports too,
+// as it is for manifest dependencies (declares_service wins, either file order).
+func TestBareImportOfOwnPublishedPackageLandsOnServiceNode(t *testing.T) {
+	cases := []struct {
+		name, decl, declFile, impFile, impTo, needle string
+	}{
+		{"npm", `[{"kind":"declares_service","to":"@okeep/tokens"}]`, "packages/tokens/package.json",
+			"src/app.ts", "@okeep/tokens/colors", "@okeep/tokens"},
+		{"python", `[{"kind":"declares_service","to":"myapp"}]`, "pyproject.toml",
+			"worker/job.py", "myapp.core", "myapp"},
+	}
+	for _, c := range cases {
+		for _, declFirst := range []bool{true, false} {
+			t.Run(c.name, func(t *testing.T) {
+				g, s, revID := setupTestGraph(t)
+				imp := `[{"kind":"import","to":"` + c.impTo + `","symbols":["x"]}]`
+				if declFirst {
+					g.SaveFileExtraction(revID, "testapp", c.declFile, "extracted", "manifest", c.decl, "")
+					if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+						t.Fatal(err)
+					}
+					g.SaveFileExtraction(revID, "testapp", c.impFile, "extracted", "provider", imp, "")
+				} else {
+					// Same batch: the snapshot covers the declaration even though
+					// the importing file may resolve first.
+					g.SaveFileExtraction(revID, "testapp", c.impFile, "extracted", "provider", imp, "")
+					g.SaveFileExtraction(revID, "testapp", c.declFile, "extracted", "manifest", c.decl, "")
+				}
+				if _, err := g.ResolveExtractions("testapp", revID); err != nil {
+					t.Fatal(err)
+				}
+				for _, n := range pkgNodesNamed(t, s, c.needle) {
+					if strings.HasPrefix(n.NodeKey, "code:package:") || strings.HasPrefix(n.NodeKey, "code:provider:") {
+						t.Fatalf("twin node minted for the own package: %s", n.NodeKey)
+					}
+				}
+				edges, _ := s.ListEdges(store.EdgeFilter{})
+				var found bool
+				for _, e := range edges {
+					if e.Active && strings.Contains(e.FromNodeKey, strings.TrimSuffix(strings.TrimSuffix(c.impFile, ".ts"), ".py")) {
+						if !strings.HasPrefix(e.ToNodeKey, "service:service:testapp:") || !strings.Contains(e.ToNodeKey, c.needle) {
+							t.Fatalf("import edge target = %s, want the service node", e.ToNodeKey)
+						}
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("no import edge from %s: %+v", c.impFile, edges)
+				}
+			})
+		}
+	}
+}
+
+// A className with a slash or a leading @ is a package only when it is written
+// in an npm file and is not a path.
+func TestResolveClassNameTargetPackageShapeIsGated(t *testing.T) {
+	cases := []struct {
+		file, name string
+		pkg        bool
+	}{
+		{"src/app.ts", "@acme/ui", true},
+		{"src/app.ts", "@acme/ui/button", true},
+		{"src/app.ts", "lodash/fp", true},
+		{"src/app.ts", "@scope/chart.js", true},
+		{"src/app.ts", "src/user/user.service", false},
+		{"src/app.ts", "./user.service", false},
+		{"src/app.ts", "../shared/user", false},
+		{"src/app.ts", "a/b/c", false},
+		{"src/app.ts", "@acme/ui/button.tsx", false},
+		{"worker/job.py", "orders/OrderService", false},
+		{"worker/job.py", "@acme/ui", false},
+		{"src/Orders.cs", "orders/OrderService", false},
+	}
+	for _, c := range cases {
+		g, s, revID := setupTestGraph(t)
+		g.currentFilePath = c.file
+		key, id := g.resolveClassNameTarget("testapp", revID, c.name)
+		if c.pkg {
+			if !strings.HasPrefix(key, "code:package:testapp:npm:") || id == 0 {
+				t.Errorf("%s from %s: key %q, want an npm package node", c.name, c.file, key)
+			}
+			continue
+		}
+		if strings.HasPrefix(key, "code:package:") {
+			t.Errorf("%s from %s became a package: %s", c.name, c.file, key)
+		}
+		for _, n := range pkgNodesNamed(t, s, "code:package:") {
+			t.Errorf("%s from %s minted package node %s", c.name, c.file, n.NodeKey)
+		}
+	}
+}
