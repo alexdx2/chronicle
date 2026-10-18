@@ -267,6 +267,13 @@ func ComputeEdgeStatus(evidence []store.EvidenceRow) string {
 		if e.EvidencePolarity == "positive" {
 			switch e.EvidenceStatus {
 			case "valid", "revalidated":
+				// A row verification rejected (or could not find) asserts
+				// nothing: same predicate as PositiveConfidence. It leaves
+				// allInvalidated alone, so rejected-only evidence ends up
+				// "removed" rather than "active" at confidence 0.
+				if e.VerificationStatus == "rejected" || e.VerificationStatus == "missing" {
+					continue
+				}
 				hasValidPositive = true
 				allInvalidated = false
 			case "stale":

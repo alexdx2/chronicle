@@ -71,10 +71,14 @@ func partitionLearned(d *GraphDelta, changed []gitdiff.ChangedFile) (code *Graph
 			partner[p.edge], partner[p.node] = p.node, p.edge
 		}
 		for i, f := range facts {
-			learnedFact := isLearned(factFiles(f))
+			files := factFiles(f)
 			if j, ok := partner[i]; ok {
-				learnedFact = learnedFact && isLearned(factFiles(facts[j]))
+				// A partner without evidence files (the synthetic target
+				// node of a merge pair) neither vetoes nor decides: the pair
+				// is judged by the files of the members that have any.
+				files = appendUnique(files, factFiles(facts[j])...)
 			}
+			learnedFact := isLearned(files)
 			if learnedFact {
 				l = append(l, f)
 			} else {
