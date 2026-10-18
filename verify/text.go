@@ -204,6 +204,11 @@ func containsToken(line, sub string) bool {
 	if sub == "" {
 		return false
 	}
+	// A dotted name ("arena.scores") must not be a segment of a longer dotted
+	// name, so '.' counts as a token char for its boundaries; for an undotted
+	// name '.' stays a separator ("user" inside "prisma.user.findMany").
+	// Non-ASCII bytes are separators (isTokenChar is ASCII only).
+	dotted := strings.Contains(sub, ".")
 	for from := 0; from <= len(line)-len(sub); {
 		i := strings.Index(line[from:], sub)
 		if i < 0 {
@@ -211,8 +216,8 @@ func containsToken(line, sub string) bool {
 		}
 		start := from + i
 		end := start + len(sub)
-		okBefore := !isTokenChar(sub[0]) || start == 0 || !isTokenChar(line[start-1])
-		okAfter := !isTokenChar(sub[len(sub)-1]) || end == len(line) || !isTokenChar(line[end])
+		okBefore := !isTokenChar(sub[0]) || start == 0 || !isTokenChar(line[start-1]) && !(dotted && line[start-1] == '.' && start >= 2 && isTokenChar(line[start-2]))
+		okAfter := !isTokenChar(sub[len(sub)-1]) || end == len(line) || !isTokenChar(line[end]) && !(dotted && line[end] == '.' && end+1 < len(line) && isTokenChar(line[end+1]))
 		if okBefore && okAfter {
 			return true
 		}
