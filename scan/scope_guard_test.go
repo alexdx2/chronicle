@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/deps"
 	"github.com/alexdx2/chronicle-core/manifest"
 )
 
@@ -33,14 +34,27 @@ func fourServicesInv() *Inventory {
 
 const partialScopeProfile = `{"technologies":[{"id":"typescript","language":"typescript","role":"other","evidence":["arena-api/src/main.ts"],"pack":"typescript"}],"scope":{"include":[{"glob":"arena-api/src/**/*.ts","reason":"app"}],"exclude":[]}}`
 
-func TestGuardScope_ModelCoveringOneOfFourServicesLosesToSeed(t *testing.T) {
+func appsReport(dirs ...string) deps.Report {
+	var r deps.Report
+	for _, d := range dirs {
+		r.Publishes = append(r.Publishes, deps.Package{Name: d, Ecosystem: "npm", File: d + "/package.json", App: true})
+	}
+	return r
+}
+
+func TestGuardScope_ModelCoveringOneOfFourServicesKeepsItsScopeAndReAddsTheRest(t *testing.T) {
 	inv := fourServicesInv()
 	seed := SeedResult{Include: []string{"**/*.ts", "**/package.json"}, Exclude: bootstrapExclude}
 	p, _ := ParseProfile(partialScopeProfile)
+	p.Scope.Exclude = []ScopeRule{{Glob: "**/*.spec.ts", Reason: "tests"}}
+	rep := appsReport("jerry-api", "tom-api", "spectators-api", "arena-api")
 	// 4 of 16 files kept: above the 10% floor, the old guard let it through.
-	scope, source, proposed, warn := GuardScope(p, seed, inv)
-	if source != "seed" || proposed == nil || len(scope.Include) != 2 {
+	scope, source, proposed, warn := GuardScope(p, seed, inv, rep)
+	if source != "model" || proposed == nil {
 		t.Fatalf("source=%s scope=%+v", source, scope)
+	}
+	if len(scope.Include) != 4 || len(scope.Exclude) != 1 || scope.Exclude[0].Glob != "**/*.spec.ts" {
+		t.Fatalf("model excludes must survive and dirs be appended: %+v", scope)
 	}
 	for _, d := range []string{"jerry-api", "tom-api", "spectators-api"} {
 		if !strings.Contains(warn, d) {
@@ -50,14 +64,14 @@ func TestGuardScope_ModelCoveringOneOfFourServicesLosesToSeed(t *testing.T) {
 	if strings.Contains(warn, "arena-api") {
 		t.Errorf("warning names a covered directory: %q", warn)
 	}
-	// Covering every service directory keeps the model's scope.
+	// Covering every service directory leaves the scope alone.
 	p.Scope.Include = []ScopeRule{{Glob: "*-api/src/**/*.ts", Reason: "app"}, {Glob: "*-api/package.json", Reason: "manifests"}}
-	if _, source, _, _ = GuardScope(p, seed, inv); source != "model" {
-		t.Fatalf("complete model scope rejected: %s", source)
+	if scope, source, proposed, _ = GuardScope(p, seed, inv, rep); source != "model" || proposed != nil || len(scope.Include) != 2 {
+		t.Fatalf("complete model scope changed: %s %+v", source, scope)
 	}
 }
 
-func TestGuardScope_DirectoryWithItsOwnManifestMayNotBeDropped(t *testing.T) {
+func TestGuardScope_ApplicationDirectoryMayNotBeDropped(t *testing.T) {
 	inv := &Inventory{Manifests: []string{"b/package.json"}}
 	for _, p := range []string{"a/x.ts", "a/y.ts", "a/z.ts", "b/x.ts"} {
 		inv.Files = append(inv.Files, InvFile{Path: p})
@@ -65,13 +79,44 @@ func TestGuardScope_DirectoryWithItsOwnManifestMayNotBeDropped(t *testing.T) {
 	seed := SeedResult{Include: []string{"**/*.ts"}, Exclude: bootstrapExclude}
 	p, _ := ParseProfile(partialScopeProfile)
 	p.Scope.Include = []ScopeRule{{Glob: "a/**/*.ts", Reason: "app"}}
-	if _, source, _, warn := GuardScope(p, seed, inv); source != "seed" || !strings.Contains(warn, "b") {
-		t.Fatalf("source=%s warn=%q", source, warn)
+	scope, source, _, warn := GuardScope(p, seed, inv, appsReport("b"))
+	if source != "model" || !strings.Contains(warn, "b") || scope.Include[len(scope.Include)-1].Glob != "b/**" {
+		t.Fatalf("source=%s scope=%+v warn=%q", source, scope, warn)
 	}
-	// A lone stray file in a directory without a manifest may be dropped.
-	inv.Manifests = nil
-	if _, source, _, _ := GuardScope(p, seed, inv); source != "model" {
-		t.Fatalf("stray directory forced the seed: %s", source)
+	// A library package in that directory does not protect it.
+	lib := deps.Report{Publishes: []deps.Package{{Name: "b", Ecosystem: "npm", File: "b/package.json"}}}
+	if _, source, _, warn := GuardScope(p, seed, inv, lib); source != "model" || warn != "" {
+		t.Fatalf("library dir re-added: %s %q", source, warn)
+	}
+}
+
+func TestGuardScope_ExamplesWithLibraryManifestAndManyFilesIsNotReAdded(t *testing.T) {
+	inv := &Inventory{Manifests: []string{"examples/package.json"}}
+	for _, p := range []string{"app/main.ts", "app/a.ts", "app/b.ts", "examples/package.json", "examples/1.ts", "examples/2.ts", "examples/3.ts", "examples/4.ts", "examples/5.ts"} {
+		inv.Files = append(inv.Files, InvFile{Path: p})
+	}
+	seed := SeedResult{Include: []string{"**/*.ts"}, Exclude: bootstrapExclude}
+	p, _ := ParseProfile(partialScopeProfile)
+	p.Scope.Include = []ScopeRule{{Glob: "app/**/*.ts", Reason: "app"}}
+	lib := deps.Report{Publishes: []deps.Package{{Name: "examples", Ecosystem: "npm", File: "examples/package.json"}}}
+	scope, source, proposed, warn := GuardScope(p, seed, inv, lib)
+	if source != "model" || proposed != nil || warn != "" || len(scope.Include) != 1 {
+		t.Fatalf("examples/ re-added: %s %+v %q", source, scope, warn)
+	}
+}
+
+func TestGuardScope_ControllerDirectoryIsReAddedWithoutAManifestAndExcludeRootedThereGoes(t *testing.T) {
+	inv := &Inventory{}
+	for _, p := range []string{"app/main.ts", "app/a.ts", "app/b.ts", "svc/users.controller.ts", "svc/util.ts"} {
+		inv.Files = append(inv.Files, InvFile{Path: p})
+	}
+	seed := SeedResult{Include: []string{"**/*.ts"}, Exclude: bootstrapExclude}
+	p, _ := ParseProfile(partialScopeProfile)
+	p.Scope.Include = []ScopeRule{{Glob: "app/**/*.ts", Reason: "app"}}
+	p.Scope.Exclude = []ScopeRule{{Glob: "**/*.spec.ts", Reason: "t"}, {Glob: "svc/legacy/**", Reason: "old"}}
+	scope, source, _, _ := GuardScope(p, seed, inv, deps.Report{})
+	if source != "model" || len(scope.Exclude) != 1 || scope.Exclude[0].Glob != "**/*.spec.ts" || scope.Include[len(scope.Include)-1].Glob != "svc/**" {
+		t.Fatalf("%s %+v", source, scope)
 	}
 }
 
@@ -136,11 +181,11 @@ func TestBuildSnapshot_PartialProfileScopeStillCoversEveryServiceDirectory(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Profile.ScopeSource != "seed" || res.Profile.ScopeProposed == nil ||
+	if res.Profile.ScopeSource != "model" || res.Profile.ScopeProposed == nil ||
 		!strings.Contains(res.Profile.SeedReason, "jerry-api, spectators-api, tom-api") {
 		t.Fatalf("source=%s proposed=%v reason=%q", res.Profile.ScopeSource, res.Profile.ScopeProposed, res.Profile.SeedReason)
 	}
-	if !hasLimitation(res.Limitations, "scope taken from the seed") {
+	if !hasLimitation(res.Limitations, "re-added application directories") {
 		t.Fatalf("limitations %v", res.Limitations)
 	}
 	for name, r := range map[string]*BuildResult{"no-profile": seeded, "partial-model": res} {

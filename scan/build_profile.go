@@ -145,11 +145,11 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 		pf.Profile = p
 		pf.ScopeSource = "model"
 		if !treeHasManifest {
-			scope, source, proposed, warn := GuardScope(p, seed, inv)
+			scope, source, proposed, warn := GuardScope(p, seed, inv, st.deps)
 			pf.Profile.Scope, pf.ScopeSource, pf.ScopeProposed = scope, source, proposed
 			if warn != "" {
 				st.limitations = append(st.limitations, warn)
-				pf.SeedReason = warn // the model's profile stands; its scope was replaced
+				pf.SeedReason = warn // the model's profile stands; its scope was replaced or extended
 			}
 		}
 	case prev != nil && !full:

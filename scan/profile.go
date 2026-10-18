@@ -430,7 +430,13 @@ func ScopeToScanConfig(s Scope) manifest.ScanConfig {
 // GuardScope applies the scope safeguards (spec 7.2) to the model's scope. It
 // returns the scope to use, its source ("model" or "seed"), the rejected
 // proposal when the seed won, and a warning.
-func GuardScope(p Profile, seed SeedResult, inv *Inventory) (Scope, string, *Scope, string) {
+//
+// Two triggers. A suspicious scope (it keeps under a tenth of the seed's files,
+// or an exclude swallows over nine tenths) is replaced by the seed. A scope
+// that is otherwise sane but drops a whole directory that holds an application
+// or its controllers keeps the model's work: those directories are appended to
+// its includes and the warning names them.
+func GuardScope(p Profile, seed SeedResult, inv *Inventory, rep deps.Report) (Scope, string, *Scope, string) {
 	seedCfg := manifest.ScanConfig{Include: seed.Include, Exclude: seed.Exclude}
 	var base []string
 	for _, f := range inv.Paths() {
@@ -461,27 +467,58 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory) (Scope, string, *Sco
 			suspicious = true
 		}
 	}
-	dropped := droppedDirs(base, &cfg, inv)
+	dropped := droppedDirs(base, &cfg, rep)
 	if !suspicious && len(dropped) == 0 {
 		return p.Scope, "model", nil, ""
 	}
-	proposed := p.Scope
-	warn := fmt.Sprintf("scope taken from the seed: the model's scope kept %d of %d files", kept, n)
-	if len(dropped) > 0 {
-		warn += " and none of " + strings.Join(dropped, ", ")
+	if suspicious {
+		proposed := p.Scope
+		warn := fmt.Sprintf("scope taken from the seed: the model's scope kept %d of %d files", kept, n)
+		if len(dropped) > 0 {
+			warn += " and none of " + strings.Join(dropped, ", ")
+		}
+		return seedScope(seed), "seed", &proposed, warn
 	}
-	return seedScope(seed), "seed", &proposed, warn
+	// Keep the model's scope; re-add only the dropped application directories.
+	scope := Scope{
+		Include: append([]ScopeRule(nil), p.Scope.Include...),
+		Exclude: append([]ScopeRule(nil), p.Scope.Exclude...),
+		Tests:   append([]ScopeRule(nil), p.Scope.Tests...),
+	}
+	for _, d := range dropped {
+		scope.Include = append(scope.Include, ScopeRule{Glob: d + "/**", Reason: "application directory the profile scope dropped"})
+	}
+	// An exclude rooted inside a re-added directory would still hide it.
+	cfg = ScopeToScanConfig(scope)
+	var kept2 []ScopeRule
+	for _, r := range scope.Exclude {
+		rooted := false
+		for _, d := range dropped {
+			if strings.HasPrefix(r.Glob, d+"/") {
+				rooted = true
+			}
+		}
+		if rooted {
+			continue
+		}
+		kept2 = append(kept2, r)
+	}
+	scope.Exclude = kept2
+	proposed := p.Scope
+	warn := "scope kept from the model; re-added application directories it dropped: " + strings.Join(dropped, ", ")
+	return scope, "model", &proposed, warn
 }
 
-// minDroppedDirFiles is how many seed-source files make a top-level directory
-// one the model may not drop whole (a directory with its own manifest counts
-// regardless: it is a service or a package).
-const minDroppedDirFiles = 3
-
-// droppedDirs lists the top-level directories that hold seed-source files
-// (base) or a manifest of the inventory and keep none of them under cfg.
-func droppedDirs(base []string, cfg *manifest.ScanConfig, inv *Inventory) []string {
-	type tally struct{ n, kept int }
+// droppedDirs lists the top-level directories the model scope keeps no file of
+// and that must not be dropped: one holding an application package (per the
+// deps report, the same classification that mints service nodes) or a
+// controller/handler file. Plain source files, however many, do not protect a
+// directory: examples/, docs-site/ and scripts/ are the model's call.
+func droppedDirs(base []string, cfg *manifest.ScanConfig, rep deps.Report) []string {
+	type tally struct {
+		kept      int
+		structure bool
+	}
 	byDir := map[string]*tally{}
 	for _, f := range base {
 		d := topDirOf(f)
@@ -493,18 +530,22 @@ func droppedDirs(base []string, cfg *manifest.ScanConfig, inv *Inventory) []stri
 			t = &tally{}
 			byDir[d] = t
 		}
-		t.n++
 		if graph.InScope(f, cfg) {
 			t.kept++
 		}
+		if isStructureFile(f) {
+			t.structure = true
+		}
 	}
-	hasManifest := map[string]bool{}
-	for _, m := range inv.Manifests {
-		hasManifest[topDirOf(m)] = true
+	app := map[string]bool{}
+	for _, pk := range rep.Publishes {
+		if pk.App {
+			app[topDirOf(pk.File)] = true
+		}
 	}
 	var out []string
 	for d, t := range byDir {
-		if t.kept == 0 && (t.n >= minDroppedDirFiles || hasManifest[d]) {
+		if t.kept == 0 && (t.structure || app[d]) {
 			out = append(out, d)
 		}
 	}

@@ -92,12 +92,12 @@ func TestGuardScope_SeedWinsWhenModelExcludesEverything(t *testing.T) {
 	seed := SeedResult{Include: []string{"**/*.cs"}, Exclude: bootstrapExclude}
 	p, _ := ParseProfile(goodProfile)
 	p.Scope.Exclude = []ScopeRule{{Glob: "src/**", Reason: "oops"}}
-	scope, source, proposed, warn := GuardScope(p, seed, inv)
+	scope, source, proposed, warn := GuardScope(p, seed, inv, deps.Report{})
 	if source != "seed" || proposed == nil || warn == "" || len(scope.Include) != 1 || scope.Include[0].Glob != "**/*.cs" {
 		t.Fatalf("source=%s scope=%+v warn=%q", source, scope, warn)
 	}
 	p.Scope.Exclude = []ScopeRule{{Glob: "**/Migrations/**", Reason: "generated"}}
-	if _, source, _, _ = GuardScope(p, seed, inv); source != "model" {
+	if _, source, _, _ = GuardScope(p, seed, inv, deps.Report{}); source != "model" {
 		t.Fatalf("sane scope rejected: %s", source)
 	}
 }
@@ -152,7 +152,7 @@ func TestScopeInScope_TestsAdmittedExcludeWins(t *testing.T) {
 func TestGuardScope_ZeroInScopeSeedNeverTriggers(t *testing.T) {
 	inv := &Inventory{Files: []InvFile{{Path: "a.md"}}}
 	p, _ := ParseProfile(goodProfile)
-	_, source, _, _ := GuardScope(p, SeedResult{Include: []string{"**/*.cs"}}, inv)
+	_, source, _, _ := GuardScope(p, SeedResult{Include: []string{"**/*.cs"}}, inv, deps.Report{})
 	if source != "model" {
 		t.Fatal(source)
 	}
