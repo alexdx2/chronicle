@@ -119,6 +119,20 @@ func TestServiceRules(t *testing.T) {
 		{"dockerfile shell form gunicorn", map[string]string{"svc/gw/Dockerfile.prod": "docker/Dockerfile.shell"}, []wantFact{
 			{"python.entry", "own:gw", false},
 		}},
+		{"cdk ts non-literal names yield nothing", map[string]string{"infra/dynamic.ts": "cdk/dynamic.ts"}, nil},
+		{"cdk py non-literal names yield nothing", map[string]string{"infra/dynamic.py": "cdk/dynamic.py"}, nil},
+		{"compose x- extension keys skipped", map[string]string{"docker-compose.yml": "compose/ext.yml"}, []wantFact{
+			{"compose.service", "own:api", false},
+		}},
+		{"nest generic src dir with nameless package.json", map[string]string{
+			"src/main.ts":  "nest/main.ts",
+			"package.json": "nest/package_noname.json",
+		}, nil},
+		{"nest generic dir without package.json", map[string]string{"server/main.ts": "nest/main.ts"}, nil},
+		{"dockerfile in generic docker dir uses suffix", map[string]string{"docker/Dockerfile.api": "docker/Dockerfile"}, []wantFact{
+			{"python.entry", "own:api", false},
+		}},
+		{"dockerfile in generic dir without suffix", map[string]string{"docker/Dockerfile": "docker/Dockerfile"}, nil},
 		{"dockerfile node", map[string]string{"svc/web/Dockerfile": "docker/Dockerfile.node"}, nil},
 		{"root dockerfile", map[string]string{"Dockerfile": "docker/Dockerfile"}, nil},
 	}

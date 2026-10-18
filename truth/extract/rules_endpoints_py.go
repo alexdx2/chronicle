@@ -34,6 +34,7 @@ var (
 type pyPrefix struct {
 	prefix string
 	line   lex.Line
+	lines  []lex.Line // every line that contributed to prefix (derived evidence)
 }
 
 // pyPrefixes collects `name = <ctor>(... <kw>="/p" ...)` assignments.
@@ -45,7 +46,7 @@ func pyPrefixes(f *FileCtx, ctor, kw *regexp.Regexp) map[string]pyPrefix {
 			continue
 		}
 		if p := kw.FindStringSubmatch(callText(f.Lines, i, 8)); p != nil {
-			out[m[1]] = pyPrefix{p[1], l}
+			out[m[1]] = pyPrefix{p[1], l, []lex.Line{l}}
 		}
 	}
 	return out
@@ -58,9 +59,55 @@ func prefixFact(rule string, f *FileCtx, l lex.Line, method, route string, pfx m
 	}
 	var derived []truth.Evidence
 	if has && p.prefix != "" {
-		derived = append(derived, evidence(f, p.line))
+		for _, pl := range p.lines {
+			derived = append(derived, evidence(f, pl))
+		}
 	}
 	return endpointFact(rule, f, l, method, joinPath(p.prefix, route, false), derived...), true
+}
+
+var pyInclude = regexp.MustCompile(`\.include_router\(\s*(\w+)\s*[,)]`)
+
+// applyIncludePrefixes folds same-file `x.include_router(name, prefix="/p")`
+// into the router's prefix (the include prefix comes first). A router that is
+// included more than once, or without a literal prefix, is left as declared.
+func applyIncludePrefixes(f *FileCtx, pfx map[string]pyPrefix) {
+	type inc struct {
+		prefix string
+		line   lex.Line
+		n      int
+	}
+	incs := map[string]*inc{}
+	for i, l := range f.Lines {
+		if !strings.Contains(l.Code, ".include_router(") {
+			continue
+		}
+		text := callText(f.Lines, i, 8)
+		m := pyInclude.FindStringSubmatch(text)
+		if m == nil {
+			continue
+		}
+		in := incs[m[1]]
+		if in == nil {
+			in = &inc{}
+			incs[m[1]] = in
+		}
+		in.n++
+		if p := pyPrefixKw.FindStringSubmatch(text); p != nil {
+			in.prefix, in.line = p[1], l
+		}
+	}
+	for name, in := range incs {
+		if in.n != 1 || in.prefix == "" {
+			continue
+		}
+		own := pfx[name]
+		pfx[name] = pyPrefix{
+			prefix: joinPath(in.prefix, own.prefix, false),
+			line:   own.line,
+			lines:  append([]lex.Line{in.line}, own.lines...),
+		}
+	}
 }
 
 func applyFastAPI(f *FileCtx) []truth.Fact {
@@ -68,6 +115,7 @@ func applyFastAPI(f *FileCtx) []truth.Fact {
 		return nil
 	}
 	pfx := pyPrefixes(f, pyAPIRouter, pyPrefixKw)
+	applyIncludePrefixes(f, pfx)
 	var out []truth.Fact
 	for i, l := range f.Lines {
 		if !strings.HasPrefix(strings.TrimSpace(l.Code), "@") {

@@ -5,9 +5,11 @@ services:
       - TOM_API_URL=http://tom.internal:8080
       - LOG_LEVEL=debug
       - LOCAL=http://localhost:1
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
   web:
     image: web
     environment:
       PAY_URL: https://pay.example.com/v2
       SELF: http://127.0.0.1:80
       N: 5
+      DB_PASS: ${DB_PASS}

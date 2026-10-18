@@ -8,3 +8,5 @@ app.get('port');
 // router.get('/commented', h);
 fastify.patch('/p', h);
 router.all('/any', h);
+const app = express();
+const fastify = Fastify();

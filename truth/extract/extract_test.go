@@ -105,6 +105,9 @@ func TestIsTestPath(t *testing.T) {
 		"a/b.spec.ts": true, "a/b.test.ts": true, "a/b.test.js": true, "a/b.ts": false,
 		"pkg/test_x.py": true, "pkg/x_test.py": false,
 		"tests/a.py": true, "src/__tests__/a.js": true, "src/contest/a.js": false,
+		"Shop.Api.IntegrationTests/Fakes/FakeController.cs": true, "src/Shop.Tests/A.cs": true,
+		"src/LoginTest/A.cs": true, "src/test/A.cs": true, "src/Spec/A.cs": true, "src/shop.test/A.cs": true,
+		"src/Latest/A.cs": false, "src/Contest/A.cs": false, "src/Shop.Api/Controllers/A.cs": false,
 	}
 	for p, want := range cases {
 		if IsTestPath(p) != want {

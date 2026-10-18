@@ -122,6 +122,9 @@ func applyComposeService(f *FileCtx) []truth.Fact {
 	var out []truth.Fact
 	for i := 0; i+1 < len(services.Content); i += 2 {
 		key, svc := services.Content[i], yamlResolve(services.Content[i+1])
+		if strings.HasPrefix(key.Value, "x-") { // compose extension field, not a service
+			continue
+		}
 		if svc.Kind != yaml.MappingNode {
 			continue
 		}
@@ -217,10 +220,12 @@ func applyTerraformCompute(f *FileCtx) []truth.Fact {
 // ---- cdk ----
 
 var (
-	cdkFnTS    = regexp.MustCompile(`new\s+(?:\w*lambda\w*\.)?(?:Function|NodejsFunction|DockerImageFunction|PythonFunction)\(\s*\w+\s*,\s*['"]([^'"]+)['"]`)
-	cdkFnPy    = regexp.MustCompile(`\b\w*lambda\w*\.(?:Function|DockerImageFunction|PythonFunction)\(\s*\w+\s*,\s*['"]([^'"]+)['"]`)
-	cdkNameTS  = regexp.MustCompile(`\bfunctionName\s*:\s*(['"])([^'"]*)['"]\s*[,}]?`)
-	cdkNamePy  = regexp.MustCompile(`\bfunction_name\s*=\s*(['"])([^'"]*)['"]`)
+	cdkFnTS = regexp.MustCompile(`new\s+(?:\w*lambda\w*\.)?(?:Function|NodejsFunction|DockerImageFunction|PythonFunction)\(\s*\w+\s*,\s*['"]([^'"]+)['"]\s*,`)
+	cdkFnPy = regexp.MustCompile(`\b\w*lambda\w*\.(?:Function|DockerImageFunction|PythonFunction)\(\s*\w+\s*,\s*['"]([^'"]+)['"]\s*,`)
+	// The name literal must be closed by a separator: 'fn-' + stage and
+	// 'Up'.toLowerCase() are expressions, not literals.
+	cdkNameTS  = regexp.MustCompile(`\bfunctionName\s*:\s*(['"])([^'"]*)['"]\s*[,}]`)
+	cdkNamePy  = regexp.MustCompile(`\bfunction_name\s*=\s*(['"])([^'"]*)['"]\s*[,)]`)
 	cdkNameAny = regexp.MustCompile(`\b(?:functionName\s*:|function_name\s*=)`)
 )
 
@@ -315,6 +320,13 @@ func applyCsproj(f *FileCtx) []truth.Fact {
 
 // ---- nest ----
 
+// genericServiceDir lists directory names that say what a folder is for, not
+// which service lives in it; they never name a service.
+var genericServiceDir = map[string]bool{
+	"src": true, "app": true, "apps": true, "lib": true, "server": true, "docker": true,
+	"dockerfiles": true, "deploy": true, "build": true, "ci": true, "infra": true,
+}
+
 func applyNestBootstrap(f *FileCtx) []truth.Fact {
 	var at *lex.Line
 	for i := range f.Lines {
@@ -347,7 +359,7 @@ func applyNestBootstrap(f *FileCtx) []truth.Fact {
 		name = segs[1] // Nest monorepo: the root package.json names the workspace, not the app
 	case name != "":
 		name = name[strings.LastIndex(name, "/")+1:] // strip the npm scope
-	case f.Dir != ".":
+	case f.Dir != "." && !genericServiceDir[strings.ToLower(segs[0])]:
 		name = segs[0]
 	default:
 		return nil
@@ -376,7 +388,17 @@ func applyPythonEntry(f *FileCtx) []truth.Fact {
 	}
 	for _, l := range f.Lines {
 		if m := dockerCmd.FindStringSubmatch(l.Code); m != nil && pythonServer.MatchString(m[1]) {
-			if fc, ok := serviceFact("python.entry", f, "own", path.Base(f.Dir), "", "", l); ok {
+			name := path.Base(f.Dir)
+			if genericServiceDir[strings.ToLower(name)] {
+				// docker/Dockerfile.api: the suffix names the service.
+				b := baseName(f.Path)
+				i := strings.Index(b, ".")
+				if i < 0 || i == len(b)-1 || !strings.EqualFold(b[:i], "dockerfile") {
+					return nil
+				}
+				name = b[i+1:]
+			}
+			if fc, ok := serviceFact("python.entry", f, "own", name, "", "", l); ok {
 				return []truth.Fact{fc}
 			}
 			return nil

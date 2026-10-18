@@ -1,0 +1,7 @@
+x-common: &common
+  restart: always
+x-logging:
+  driver: json-file
+services:
+  api:
+    build: .

@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Orders.Core\Orders.Core.csproj" />
+    <PackageReference Include="$(PkgName)" Version="1.0.0" />
   </ItemGroup>
 </Project>

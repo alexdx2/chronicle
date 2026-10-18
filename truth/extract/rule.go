@@ -53,7 +53,7 @@ func IsTestPath(p string) bool {
 	p = strings.ReplaceAll(p, "\\", "/")
 	parts := strings.Split(p, "/")
 	for _, d := range parts[:len(parts)-1] {
-		if d == "tests" || d == "__tests__" {
+		if isTestDir(d) {
 			return true
 		}
 	}
@@ -69,6 +69,30 @@ func IsTestPath(p string) bool {
 			if strings.HasSuffix(base, mid+ext) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// isTestDir reports whether a directory name marks tests: test, tests, spec,
+// __tests__, a name ending in "tests" (Shop.Api.IntegrationTests) or a
+// camel-case / separated "Test" suffix (LoginTest, shop.test). A bare
+// lower-case "...test" such as "contest" does not count.
+func isTestDir(d string) bool {
+	l := strings.ToLower(d)
+	switch l {
+	case "test", "tests", "spec", "specs", "__tests__":
+		return true
+	}
+	if strings.HasSuffix(l, "tests") {
+		return true
+	}
+	if strings.HasSuffix(d, "Test") {
+		return true
+	}
+	for _, sep := range []string{".", "_", "-"} {
+		if strings.HasSuffix(l, sep+"test") {
+			return true
 		}
 	}
 	return false

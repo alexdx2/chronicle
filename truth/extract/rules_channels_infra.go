@@ -75,7 +75,7 @@ func applyCDK(f *FileCtx) []truth.Fact {
 	return out
 }
 
-var composeTopics = regexp.MustCompile(`\bKAFKA_CREATE_TOPICS\s*[=:]\s*["']?([^"'\s]+)`)
+var composeTopics = regexp.MustCompile(`\bKAFKA_CREATE_TOPICS\s*[=:]\s*["']?([^"'\r\n]+)`)
 
 func applyComposeTopics(f *FileCtx) []truth.Fact {
 	if f.IsTest {
@@ -88,7 +88,7 @@ func applyComposeTopics(f *FileCtx) []truth.Fact {
 			continue
 		}
 		for _, spec := range strings.Split(m[1], ",") {
-			name, _, _ := strings.Cut(spec, ":")
+			name, _, _ := strings.Cut(strings.TrimSpace(spec), ":")
 			if fc, ok := channelFact("compose.kafka_topics", f, l, "topic", name, "declare"); ok {
 				out = append(out, fc)
 			}

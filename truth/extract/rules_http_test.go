@@ -84,11 +84,13 @@ func TestHTTPRules(t *testing.T) {
 			"dotenv.url | tom.example.com",
 			"dotenv.url | pay.example.com",
 			"dotenv.url | var:SVC_HOST_VAR",
+			"dotenv.url | var:API_URL",
 		}},
 		{"dotenv variant", "svc/.env.production", "config/env.sample", []string{
 			"dotenv.url | tom.example.com",
 			"dotenv.url | pay.example.com",
 			"dotenv.url | var:SVC_HOST_VAR",
+			"dotenv.url | var:API_URL",
 		}},
 		{"compose", "docker-compose.yml", "config/docker-compose.yml", []string{
 			"compose.env | tom.internal",
@@ -114,7 +116,7 @@ func TestHTTPRules(t *testing.T) {
 					continue
 				}
 				g = append(g, f.Sources[0]+" | "+f.Key)
-				if f.Primary.File != c.vpath || f.Primary.Line == 0 || f.Primary.Text == "" || len(f.Derived) != 0 {
+				if f.Primary.File != c.vpath || f.Primary.Line == 0 || f.Primary.Text == "" || (len(f.Derived) != 0 && f.Sources[0] != "axios.create") {
 					t.Errorf("%s: bad evidence %+v", f.Key, f.Primary)
 				}
 				if _, ok := f.Attrs["host"]; !ok {
@@ -196,5 +198,14 @@ func TestHTTPConfigKeyRegex(t *testing.T) {
 		if cfgURLKey.MatchString(k) != want {
 			t.Errorf("%s: want %v", k, want)
 		}
+	}
+}
+
+// A multi-line axios.create keeps the baseURL line as primary evidence and the
+// create line as derived.
+func TestAxiosMultiLineEvidence(t *testing.T) {
+	f := findHTTP(t, httpFacts(t, "src/api.ts", "ts/api.ts"), "api.payments.io")
+	if f.Primary.Line != 5 || len(f.Derived) != 1 || f.Derived[0].Line != 3 {
+		t.Errorf("primary %+v derived %+v", f.Primary, f.Derived)
 	}
 }

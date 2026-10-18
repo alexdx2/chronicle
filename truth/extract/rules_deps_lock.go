@@ -47,7 +47,7 @@ func newDepSet(rule string, f *FileCtx) *depSet {
 // add records a dependency; anchors narrow the line search (see findDepLine).
 func (s *depSet) add(eco, name, version, section string, anchors ...string) *truth.Fact {
 	name = strings.TrimSpace(name)
-	if name == "" {
+	if name == "" || !literalDepName(name) {
 		return nil
 	}
 	key := truth.DepKey(eco, name)
@@ -63,6 +63,17 @@ func (s *depSet) add(eco, name, version, section string, anchors ...string) *tru
 		Sources: []string{s.rule},
 	})
 	return &s.facts[len(s.facts)-1]
+}
+
+// literalDepName refuses names that are templates or expressions rather than
+// package names: MSBuild $( ) @( ) %( ), ${ }, {{ }}, quotes and whitespace.
+func literalDepName(name string) bool {
+	for _, bad := range []string{"$(", "@(", "%(", "${", "{{"} {
+		if strings.Contains(name, bad) {
+			return false
+		}
+	}
+	return !strings.ContainsAny(name, "\"'`\t\r\n ")
 }
 
 func nameBoundary(s string) *regexp.Regexp {

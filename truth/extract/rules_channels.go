@@ -78,12 +78,93 @@ type chanSpec struct {
 	side string
 	list bool
 	win  int // lines joined for the match (default 1)
+	// sideFn, when set, derives the side from the code before the match
+	// (up to 3 preceding lines and the start of this one).
+	sideFn func(prefix string) string
 	// gate, when set, means capture 1 is a receiver identifier and capture 2
 	// the name(s); the match counts only if gate(f, receiver) is true.
 	gate func(f *FileCtx, recv string) bool
 }
 
-var quotedLit = regexp.MustCompile(`['"]([^'"]+)['"]`)
+// literalItems returns the plain string literals of a bracket fragment such as
+// `"a", 'b'`. An element that is not exactly one literal (`"a-" + env`,
+// `prefix + "b"`, a call) yields nothing, so a concatenation never leaks its
+// literal half as a channel name. Trailing closers of the enclosing call or
+// list (`)`, `]`, `}`) after a literal are tolerated.
+func literalItems(frag string) []string {
+	var parts []string
+	start, quote := 0, byte(0)
+	for i := 0; i < len(frag); i++ {
+		c := frag[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == ',':
+			parts = append(parts, frag[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, frag[start:])
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if len(p) < 3 || (p[0] != '\'' && p[0] != '"') {
+			continue
+		}
+		j := strings.IndexByte(p[1:], p[0])
+		if j <= 0 {
+			continue
+		}
+		if strings.Trim(p[j+2:], ")]} \t") != "" {
+			continue
+		}
+		out = append(out, p[1:j+1])
+	}
+	return out
+}
+
+// enclosingCall returns the identifier of the innermost call whose parenthesis
+// is still open at the end of prefix ("" when there is none).
+func enclosingCall(prefix string) string {
+	depth := 0
+	for i := len(prefix) - 1; i >= 0; i-- {
+		switch prefix[i] {
+		case ')':
+			depth++
+		case '(':
+			if depth > 0 {
+				depth--
+				continue
+			}
+			j := i
+			for j > 0 && (isIdentByte(prefix[j-1])) {
+				j--
+			}
+			return prefix[j:i]
+		}
+	}
+	return ""
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+// topicPartitionSide classifies `new TopicPartition(...)` by the call that
+// encloses it: Assign/Seek/Commit consume, Produce* produce, else declare.
+func topicPartitionSide(prefix string) string {
+	switch enclosingCall(prefix) {
+	case "Assign", "Incremental_Assign", "IncrementalAssign", "Seek", "Commit", "Pause", "Resume":
+		return "consume"
+	case "Produce", "ProduceAsync":
+		return "produce"
+	}
+	return "declare"
+}
 
 func specRule(name string, pre func(f *FileCtx) bool, specs ...chanSpec) func(f *FileCtx) []truth.Fact {
 	return func(f *FileCtx) []truth.Fact {
@@ -115,14 +196,24 @@ func specRule(name string, pre func(f *FileCtx) bool, specs ...chanSpec) func(f 
 				}
 				var names []string
 				if s.list {
-					for _, q := range quotedLit.FindAllStringSubmatch(m[1], -1) {
-						names = append(names, q[1])
-					}
+					names = literalItems(m[1])
 				} else {
 					names = []string{m[1]}
 				}
+				side := s.side
+				if s.sideFn != nil {
+					var pre strings.Builder
+					for j := i - 3; j < i; j++ {
+						if j >= 0 {
+							pre.WriteString(f.Lines[j].Code)
+							pre.WriteByte(' ')
+						}
+					}
+					pre.WriteString(l.Code[:loc[0]])
+					side = s.sideFn(pre.String())
+				}
 				for _, n := range names {
-					if fc, ok := channelFact(name, f, l, s.kind, n, s.side); ok {
+					if fc, ok := channelFact(name, f, l, s.kind, n, side); ok {
 						out = append(out, fc)
 					}
 				}
@@ -225,7 +316,7 @@ func init() {
 			chanSpec{re: csSubOne, kind: "topic", side: "consume"},
 			chanSpec{re: csSubArr, kind: "topic", side: "consume", list: true},
 			chanSpec{re: csProduce, kind: "topic", side: "produce"},
-			chanSpec{re: csTopicPar, kind: "topic", side: "consume"})},
+			chanSpec{re: csTopicPar, kind: "topic", sideFn: topicPartitionSide})},
 		funcRule{"sqs.dotnet", isCS, applySQSDotnet},
 		// Keyed by DetailType: EventBusName is almost always a variable.
 		funcRule{"eventbridge.dotnet", isCS, specRule("eventbridge.dotnet", isEventBridgeDotnet,
@@ -282,9 +373,7 @@ func applyKafkaJS(f *FileCtx) []truth.Fact {
 			names := []string{m[1]}
 			if m[2] != "" {
 				names = names[:0]
-				for _, q := range quotedLit.FindAllStringSubmatch(m[2], -1) {
-					names = append(names, q[1])
-				}
+				names = literalItems(m[2])
 			}
 			for _, n := range names {
 				if fc, ok := channelFact("kafkajs", f, l, "topic", n, "consume"); ok {

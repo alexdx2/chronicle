@@ -83,7 +83,9 @@ func httpTarget(value string, allowBare bool) (key, host, path, variable string,
 
 // httpFact builds a fact. cfgKey is non-empty for config rules.
 func httpFact(rule string, f *FileCtx, l lex.Line, value, cfgKey string) (truth.Fact, bool) {
-	key, host, path, variable, ok := httpTarget(value, cfgKey != "")
+	// A bare ${VAR} value counts only under a URL-like key: POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+	// is an environment pass-through, not an outbound target.
+	key, host, path, variable, ok := httpTarget(value, cfgKey != "" && cfgURLKey.MatchString(cfgKey))
 	if !ok {
 		return truth.Fact{}, false
 	}
@@ -194,7 +196,10 @@ func lineRule(name string, re *regexp.Regexp) func(f *FileCtx) []truth.Fact {
 // windowRule matches re on the joined code of a 4-line window (a baseURL more
 // than three lines below its axios.create( is not found) that starts at
 // every line containing anchor; the fact points at the anchor line.
-func windowRule(name, anchor string, re *regexp.Regexp) func(f *FileCtx) []truth.Fact {
+//
+// With atCapture the fact points at the line holding the captured URL and the
+// anchor line (when different) becomes derived evidence.
+func windowRule(name, anchor string, re *regexp.Regexp, atCapture bool) func(f *FileCtx) []truth.Fact {
 	return func(f *FileCtx) []truth.Fact {
 		if f.IsTest {
 			return nil
@@ -217,6 +222,17 @@ func windowRule(name, anchor string, re *regexp.Regexp) func(f *FileCtx) []truth
 				continue
 			}
 			if fc, ok := httpFact(name, f, l, win[idx[2]:idx[3]], ""); ok {
+				if atCapture {
+					off, j := 0, i
+					for j < len(f.Lines) && off+len(f.Lines[j].Code)+1 <= idx[2] {
+						off += len(f.Lines[j].Code) + 1
+						j++
+					}
+					if j != i && j < len(f.Lines) {
+						fc.Primary = evidence(f, f.Lines[j])
+						fc.Derived = append(fc.Derived, evidence(f, l))
+					}
+				}
 				out = append(out, fc)
 			}
 		}
@@ -225,7 +241,7 @@ func windowRule(name, anchor string, re *regexp.Regexp) func(f *FileCtx) []truth
 }
 
 var (
-	applyCSharpBase = windowRule("csharp.httpclient_base", "BaseAddress", csBaseAddr)
+	applyCSharpBase = windowRule("csharp.httpclient_base", "BaseAddress", csBaseAddr, false)
 	// [^;]*? keeps the gap inside one statement; the fact points at the create line.
-	applyAxiosCreate = windowRule("axios.create", "axios.create(", regexp.MustCompile(`axios\.create\([^;]*?`+axBase.String()))
+	applyAxiosCreate = windowRule("axios.create", "axios.create(", regexp.MustCompile(`axios\.create\([^;]*?`+axBase.String()), true)
 )

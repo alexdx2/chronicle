@@ -21,3 +21,4 @@ const r = await sqs.send(new SendMessageCommand({ QueueUrl: 'https://sqs.us-east
 // ------
 const m = await sqs.send(new ReceiveMessageCommand({ QueueUrl: 'https://sqs.us-east-1.amazonaws.com/111/js-in' }))
 await producer.send({ topic: 'orders-' + env, messages: [] })
+await consumer.subscribe({ topics: ['a-' + env, "kept-ts"] })

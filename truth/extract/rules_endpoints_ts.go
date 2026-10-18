@@ -21,7 +21,10 @@ var (
 	tsStringOnly   = regexp.MustCompile("^\\s*(['\"`])([^'\"`]*)['\"`]\\s*$")
 	tsStringIn     = regexp.MustCompile("['\"`]([^'\"`]*)['\"`]")
 	tsObjPath      = regexp.MustCompile(`\bpath\s*:\s*(\[[^\]]*\]|'[^']*'|"[^"]*"|[^\s,}]+)`)
-	express        = regexp.MustCompile("\\b(router|app|fastify|server|api)\\.(get|post|put|delete|patch|all)\\(\\s*['\"`]([^'\"`]+)['\"`]")
+	// tsServerFramework gates the express rule: a server framework name as a
+	// word (not "expression" or "useRouter(") or a bare Router( call.
+	tsServerFramework = regexp.MustCompile(`(?i)\b(?:express|koa|hono|fastify)\b|@hapi/hapi|\bRouter\s*\(`)
+	express           = regexp.MustCompile("\\b(router|app|fastify|server|api)\\.(get|post|put|delete|patch|all)\\(\\s*['\"`]([^'\"`]+)['\"`]")
 )
 
 // decoratorArgs returns the literal path list of a Nest decorator whose call
@@ -47,6 +50,9 @@ func decoratorArgs(text string) (paths []string, ok bool) {
 		return nil, false
 	}
 	arg := strings.TrimSpace(text[i+1 : end])
+	if strings.Contains(arg, "${") {
+		return nil, false // interpolated path
+	}
 	if arg == "" {
 		return []string{""}, true
 	}
@@ -118,8 +124,17 @@ func applyExpress(f *FileCtx) []truth.Fact {
 	if f.IsTest {
 		return nil
 	}
-	frameworkSeen := codeContains(f, "express", "router(", "koa", "hono", "@hapi", "fastify")
+	var code strings.Builder
+	for _, l := range f.Lines {
+		code.WriteString(l.Code)
+		code.WriteByte('\n')
+	}
+	text := code.String()
+	if !tsServerFramework.MatchString(text) {
+		return nil
+	}
 	axiosSeen := codeContains(f, "axios")
+	built := map[string]bool{} // receivers constructed in this file
 	var out []truth.Fact
 	for _, l := range f.Lines {
 		for _, m := range express.FindAllStringSubmatch(l.Code, -1) {
@@ -127,8 +142,13 @@ func applyExpress(f *FileCtx) []truth.Fact {
 			if !strings.HasPrefix(route, "/") || strings.Contains(route, "${") {
 				continue // app.get('port') is a settings getter, not a route
 			}
-			if recv != "fastify" && !frameworkSeen {
-				continue
+			ok, seen := built[recv]
+			if !seen {
+				ok = tsServerCtor(recv).MatchString(text)
+				built[recv] = ok
+			}
+			if !ok {
+				continue // not a server created here: an HTTP client or a router hook
 			}
 			if recv == "api" && axiosSeen {
 				continue // an HTTP client named api, not a server
@@ -137,4 +157,11 @@ func applyExpress(f *FileCtx) []truth.Fact {
 		}
 	}
 	return out
+}
+
+// tsServerCtor matches the construction of a server or router object assigned
+// to recv: express(), express.Router(), Router(), Fastify(), new Hono(), new Koa().
+func tsServerCtor(recv string) *regexp.Regexp {
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(recv) + `\s*(?::[^=\n]+)?=\s*(?:await\s+)?(?:` +
+		`express\s*\(|express\.Router\s*\(|(?:\w+\.)?Router\s*\(|(?i:fastify)\s*\(|new\s+(?:Hono|Koa)\b)`)
 }

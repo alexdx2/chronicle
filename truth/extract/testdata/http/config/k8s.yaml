@@ -18,6 +18,8 @@ spec:
           env:
             - name: TOM_API_URL
               value: http://tom.example.com
+            - name: POSTGRES_PASSWORD
+              value: $(POSTGRES_PASSWORD)
             - name: LOG
               value: info
             - name: FROM_SECRET

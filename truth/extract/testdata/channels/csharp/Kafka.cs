@@ -13,5 +13,10 @@ public class Bus
         consumer.Assign(new TopicPartition("inventory", 0));
         consumer.Subscribe($"orders-{env}");
         await producer.ProduceAsync("orders-" + env, msg);
+        consumer.Subscribe(new[] { "pre-" + env, "kept-cs" });
+        consumer.Seek(new TopicPartitionOffset("seek-ignored", 0, 5));
+        consumer.Commit(new[] { new TopicPartition("committed", 0) });
+        await producer.ProduceAsync(new TopicPartition("tp-out", 1), msg);
+        var tp = new TopicPartition("bare-tp", 2);
     }
 }

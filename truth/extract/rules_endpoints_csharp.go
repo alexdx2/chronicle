@@ -16,11 +16,17 @@ func init() {
 }
 
 var (
-	csClass   = regexp.MustCompile(`\bclass\s+(\w+)`)
-	csVerb    = regexp.MustCompile(`[\[,.]\s*Http(Get|Post|Put|Delete|Patch)\b(?:\s*\(\s*"([^"]*)")?`)
-	csRoute   = regexp.MustCompile(`[\[,.]\s*Route\s*\(\s*"([^"]*)"`)
-	csAPICtrl = regexp.MustCompile(`[\[,.]\s*ApiController\b`)
-	csDecl    = regexp.MustCompile(`\b(\w+)\s*\(`)
+	csClass = regexp.MustCompile(`\bclass\s+(\w+)(?:\s*<[^>]*>)?(?:\s*:\s*([^{]*))?`)
+	// csVerb finds the verb name only; csVerbArgs then reads its argument list.
+	// The lead is "[" or "," (optionally a qualified name), never "(" or ".":
+	// [Obsolete(Consts.HttpGet)] is not a verb attribute.
+	csVerb = regexp.MustCompile(`[\[,]\s*(?:[\w.]+\.)?Http(Get|Post|Put|Delete|Patch)\b`)
+	// csVerbArgs accepts (), ("tpl"), (template: "tpl"), optionally followed by
+	// Name = ... / Order = ...; any other argument form fails closed.
+	csVerbArgs = regexp.MustCompile(`^\s*\(\s*(?:(?:template\s*:\s*)?"([^"]*)"\s*)?(?:,?\s*(?:Name|Order)\s*=\s*[^,)]+)*\s*\)`)
+	csRoute    = regexp.MustCompile(`[\[,.]\s*Route\s*\(\s*"([^"]*)"`)
+	csAPICtrl  = regexp.MustCompile(`[\[,.]\s*ApiController\b`)
+	csDecl     = regexp.MustCompile(`\b(\w+)\s*\(`)
 
 	csMinimal = regexp.MustCompile(`(\w*)\.Map(Get|Post|Put|Delete|Patch)\(\s*"([^"]+)"`)
 	csGroup   = regexp.MustCompile(`\b(?:var|[\w<>]+)\s+(\w+)\s*=\s*(\w+)((?:\.MapGroup\(\s*"[^"]+"\s*\))+)`)
@@ -111,6 +117,7 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 	apiCtrl := false
 	openDepth := 0
 	var className, prefix string
+	customBase := false // controller derives from an unknown base and has no own prefix
 	var prefixLine *lex.Line
 	reset := func() { verbs, routes, apiCtrl = nil, nil, false }
 
@@ -131,9 +138,20 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 				attrs = "[" + attrs
 			}
 			for _, m := range csVerb.FindAllStringSubmatchIndex(masked, -1) {
+				// only attribute-list level: not inside another attribute's arguments
+				if strings.Count(masked[:m[0]], "(") != strings.Count(masked[:m[0]], ")") {
+					continue
+				}
 				v := csVerbAttr{line: l, method: masked[m[2]:m[3]]}
-				if m[4] >= 0 {
-					v.path, v.hasPath = attrs[m[4]:m[5]], true
+				tail := masked[m[1]:]
+				if strings.HasPrefix(strings.TrimSpace(tail), "(") {
+					am := csVerbArgs.FindStringSubmatchIndex(tail)
+					if am == nil {
+						continue // unknown argument form: fail closed
+					}
+					if am[2] >= 0 {
+						v.path, v.hasPath = attrs[m[1]+am[2]:m[1]+am[3]], true
+					}
 				}
 				verbs = append(verbs, v)
 			}
@@ -151,6 +169,7 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 			if strings.HasSuffix(cm[1], "Controller") || len(routes) > 0 || apiCtrl {
 				className = strings.TrimSuffix(cm[1], "Controller")
 				prefix, prefixLine = "", nil
+				customBase = len(routes) == 0 && !apiCtrl && hasCustomBase(cm[2])
 				if len(routes) > 0 {
 					prefix = strings.ReplaceAll(routes[0].path, "[controller]", className)
 					ln := routes[0].line
@@ -162,7 +181,7 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 		}
 		if len(verbs)+len(routes) > 0 {
 			if dm := csDecl.FindStringSubmatch(rest); dm != nil {
-				out = append(out, csEmit(f, className, prefix, prefixLine, dm[1], verbs, routes)...)
+				out = append(out, csEmit(f, className, prefix, prefixLine, customBase, dm[1], verbs, routes)...)
 			}
 		}
 		reset()
@@ -170,17 +189,45 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 	return out
 }
 
-func csEmit(f *FileCtx, className, prefix string, prefixLine *lex.Line, action string, verbs []csVerbAttr, routes []csRouteAttr) []truth.Fact {
+// hasCustomBase reports whether the base list of a class declaration names a
+// class other than ControllerBase/Controller (interfaces are ignored).
+func hasCustomBase(list string) bool {
+	custom := false
+	for _, b := range strings.Split(list, ",") {
+		b = strings.TrimSpace(b)
+		if i := strings.Index(b, "<"); i >= 0 {
+			b = b[:i]
+		}
+		if i := strings.LastIndex(b, "."); i >= 0 {
+			b = b[i+1:]
+		}
+		switch {
+		case b == "":
+		case b == "ControllerBase" || b == "Controller":
+			return false
+		case len(b) > 1 && b[0] == 'I' && b[1] >= 'A' && b[1] <= 'Z':
+		default:
+			custom = true
+		}
+	}
+	return custom
+}
+
+func csEmit(f *FileCtx, className, prefix string, prefixLine *lex.Line, customBase bool, action string, verbs []csVerbAttr, routes []csRouteAttr) []truth.Fact {
 	expand := func(s string) string {
 		return strings.ReplaceAll(strings.ReplaceAll(s, "[controller]", className), "[action]", action)
 	}
 	var out []truth.Fact
 	emit := func(l lex.Line, method, route string) {
 		route = expand(route)
+		prefix := expand(prefix) // the class-level prefix may hold [controller] and [action]
 		if prefix == "" && route == "" {
 			return // nothing routes this action; do not invent "/"
 		}
 		abs := strings.HasPrefix(route, "/") || strings.HasPrefix(route, "~/")
+		if customBase && !abs {
+			return // the real prefix lives in an unseen base class
+		}
 		var derived []truth.Evidence
 		if prefix != "" && !abs && prefixLine != nil {
 			derived = append(derived, evidence(f, *prefixLine))

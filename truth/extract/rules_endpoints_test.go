@@ -72,6 +72,16 @@ func TestEndpointRules(t *testing.T) {
 			{"csharp.route_attr", "GET /api/a/split", true},
 			{"csharp.route_attr", "POST /api/a/qualified", true},
 		}},
+		{"csharp [controller]/[action] in class prefix, template:, fail-closed args", "src/ReportsController.cs", "csharp/ReportsController.cs", []wantFact{
+			{"csharp.route_attr", "GET /api/reports/daily", true},
+			{"csharp.route_attr", "GET /api/reports/named/named", true},
+			{"csharp.route_attr", "POST /api/reports/qualified/qualified", true},
+			{"csharp.route_attr", "DELETE /api/reports/del/{}", true},
+		}},
+		{"csharp custom base: only absolute routes", "src/WidgetsController.cs", "csharp/CustomBase.cs", []wantFact{
+			{"csharp.route_attr", "GET /health", false},
+			{"csharp.route_attr", "GET /{}", false},
+		}},
 		{"csharp chained MapGroup", "Program.cs", "csharp/ChainedGroup.cs", []wantFact{
 			{"csharp.minimal_api", "GET /api/v1/x", true},
 		}},
@@ -102,6 +112,7 @@ func TestEndpointRules(t *testing.T) {
 			{"express.router", "PATCH /p", false},
 			{"express.router", "ALL /any", false},
 		}},
+		{"next.js page with an api client yields nothing", "pages/index.tsx", "ts/nextpage.tsx", nil},
 		{"fastapi", "app/users.py", "py/users_router.py", []wantFact{
 			{"fastapi.decorator", "GET /users", true},
 			{"fastapi.decorator", "GET /users/{}", true},
@@ -110,6 +121,11 @@ func TestEndpointRules(t *testing.T) {
 			{"fastapi.decorator", "GET /users/multi", true},
 			{"fastapi.decorator", "POST /users/multi", true},
 			{"fastapi.decorator", "DELETE /admin/{}", true},
+		}},
+		{"fastapi include_router prefix", "app/main.py", "py/fastapi_include.py", []wantFact{
+			{"fastapi.decorator", "GET /api/v1/orders/{}", true},
+			{"fastapi.decorator", "GET /internal/ping", true},
+			{"fastapi.decorator", "GET /t/x", true},
 		}},
 		{"flask", "app/main.py", "py/flask_app.py", []wantFact{
 			{"flask.route", "GET /", false},
@@ -187,5 +203,14 @@ func TestEndpointPrimaryLines(t *testing.T) {
 		if f.Key == "GET /api/v1/items" && (f.Primary.Line != 4 || len(f.Derived) != 1 || f.Derived[0].Line != 3) {
 			t.Errorf("minimal api evidence %+v %+v", f.Primary, f.Derived)
 		}
+	}
+}
+
+func TestDecoratorArgsRejectsInterpolation(t *testing.T) {
+	if _, ok := decoratorArgs("@Get(`items/${id}`)"); ok {
+		t.Error("template literal with ${ accepted")
+	}
+	if p, ok := decoratorArgs("@Get('items')"); !ok || len(p) != 1 || p[0] != "items" {
+		t.Errorf("plain literal: %v %v", p, ok)
 	}
 }
