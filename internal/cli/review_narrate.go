@@ -80,7 +80,10 @@ func runNarrate(ctx context.Context, w io.Writer, opts narrateOptions, env func(
 			return 1, fmt.Errorf("chronicle review narrate: write usage: %w", err)
 		}
 	}
-	text := unwrapNarration(resp.Text)
+	text, uerr := unwrapNarration(resp.Text)
+	if uerr != nil {
+		return 1, fmt.Errorf("chronicle review narrate: %w", uerr)
+	}
 	if text == "" {
 		return 1, errors.New("chronicle review narrate: the model returned an empty answer")
 	}
@@ -139,7 +142,9 @@ Exit code 0: ok. 1: error (provider failure, empty answer). 3: no API key (print
 // request asks for plain text, but a backend or model may still answer with a
 // JSON string (the fake fixtures), a {"text": "..."} object (JSON-mode
 // transports) or a fenced block; none of these may reach the comment verbatim.
-func unwrapNarration(raw string) string {
+// An answer that is still structured data after unwrapping (an object with no
+// recognised key, truncated JSON) is an error, never a comment.
+func unwrapNarration(raw string) (string, error) {
 	text := strings.TrimSpace(raw)
 	for i := 0; i < 3; i++ { // fence around an object around a string
 		prev := text
@@ -159,7 +164,27 @@ func unwrapNarration(raw string) string {
 			break
 		}
 	}
-	return strings.TrimSpace(text)
+	text = strings.TrimSpace(text)
+	if looksStructured(text) {
+		return "", errors.New("model returned structured data instead of a paragraph")
+	}
+	return text, nil
+}
+
+// looksStructured reports whether text is, or visibly starts as, a JSON
+// object or array.
+func looksStructured(text string) bool {
+	if strings.HasPrefix(text, `{"`) || strings.HasPrefix(text, "[{") {
+		return true
+	}
+	var v any
+	if json.Unmarshal([]byte(text), &v) == nil {
+		switch v.(type) {
+		case map[string]any, []any:
+			return true
+		}
+	}
+	return false
 }
 
 // narrationFromObject picks the paragraph out of a one-field answer: a known
@@ -188,8 +213,10 @@ func stripCodeFence(s string) string {
 		return s
 	}
 	inner := strings.TrimSuffix(strings.TrimPrefix(s, "```"), "```")
+	// The info string is whatever shares the opening fence's line; the first
+	// line of the body ("```\nBilling\n...") is prose, not an info string.
 	if nl := strings.IndexByte(inner, '\n'); nl >= 0 && !strings.ContainsAny(inner[:nl], " \t{}\"") {
-		inner = inner[nl+1:] // drop the info string line
+		inner = inner[nl+1:] // drop the opening fence's own line
 	}
 	return strings.TrimSpace(inner)
 }

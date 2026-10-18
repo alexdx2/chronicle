@@ -212,3 +212,31 @@ func TestNarrate_EmptyObjectExit1NoOut(t *testing.T) {
 		t.Fatal("out file written for an empty answer")
 	}
 }
+
+func TestUnwrapNarration(t *testing.T) {
+	ok := []struct{ name, in, want string }{
+		{"plain", "Billing changed.", "Billing changed."},
+		{"json string", `"Billing changed."`, "Billing changed."},
+		{"text object", `{"text": "Billing changed."}`, "Billing changed."},
+		{"fenced json object", "```json\n{\"text\": \"Billing changed.\"}\n```", "Billing changed."},
+		{"fenced plain, one-word first line kept", "```\nBilling\nchanged a lot.\n```", "Billing\nchanged a lot."},
+		{"fenced with blank-space opener, one-word first line kept", "``` \nBilling\nchanged.\n```", "Billing\nchanged."},
+	}
+	for _, c := range ok {
+		got, err := unwrapNarration(c.in)
+		if err != nil || got != c.want {
+			t.Errorf("%s: got (%q, %v), want %q", c.name, got, err, c.want)
+		}
+	}
+	bad := []struct{ name, in string }{
+		{"multi-key object without known key", `{"a": "x", "b": "y"}`},
+		{"truncated json", `{"text": "Billing chang`},
+		{"array of objects", `[{"a": 1}]`},
+		{"fenced multi-key object", "```json\n{\"a\": 1, \"b\": 2}\n```"},
+	}
+	for _, c := range bad {
+		if got, err := unwrapNarration(c.in); err == nil {
+			t.Errorf("%s: want an error, got %q", c.name, got)
+		}
+	}
+}
