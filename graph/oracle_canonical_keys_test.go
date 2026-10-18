@@ -84,7 +84,7 @@ func TestOracleCanonicalKeys_FixedPoint(t *testing.T) {
 		"contract:endpoint:testapp:get:/invoices/[invoiceid]/lines",
 		"code:provider:testapp:session-cookie-store",
 		"code:provider:testapp:s3-client",
-		"code:provider:testapp:@okeep/ui",
+		"code:package:testapp:npm:@okeep/ui",
 		"service:external_system:testapp:hooks-example-com",
 		// Bare/undeclared internal-shaped host (no dot) — the http_call
 		// post-pass still materializes its endpoint (Task 5: isExternalHost

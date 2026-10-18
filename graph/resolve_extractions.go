@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -899,7 +900,29 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				toID = candidates[0].NodeID
 				toNodeKey = candidates[0].NodeKey
 			} else {
-				toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
+				pkgName := toName
+				// SQ-Contract 1: a bare import of a package no in-repo node
+				// claims lands on the SAME code:package node the manifest
+				// pass mints, so a package that is declared AND imported is
+				// one node. Only for provider-shaped targets from a file
+				// whose ecosystem the extension names; C# usings and Go
+				// import paths do not map to package names and keep the
+				// code:provider path.
+				if fact.ToType == "" || fact.ToType == "provider" {
+					if eco := importEcosystemOfFile(filePath); eco != "" {
+						pkg, _ := ParsePackageSpecifier(fact.To)
+						if eco == "python" {
+							// "a.b.c" names the distribution root "a".
+							pkg, _, _ = strings.Cut(pkg, ".")
+						}
+						if pkg != "" && toNodeKey == typedNodeKeyFromImport(domainKey, fact.To, fact.ToType) {
+							pkg = deps.Normalize(eco, pkg)
+							toNodeKey = packageNodeKey(domainKey, eco, pkg)
+							pkgName = pkg
+						}
+					}
+				}
+				toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, pkgName, "")
 			}
 		}
 
@@ -4098,6 +4121,13 @@ func (g *Graph) resolveClassNameTarget(domainKey string, revisionID int64, class
 	identity := className
 	if pkg, _ := ParsePackageSpecifier(className); pkg != "" {
 		identity = pkg
+		// "@scope/pkg" and "pkg/sub" are npm specifiers by shape: they land on
+		// the node the manifest pass and the import handler mint for the
+		// package, not on a code:provider twin.
+		if strings.HasPrefix(className, "@") || strings.Contains(className, "/") {
+			key := packageNodeKey(domainKey, "npm", deps.Normalize("npm", pkg))
+			return key, g.ensureNodeID(domainKey, revisionID, key, pkg, "")
+		}
 	}
 	dotCase := normalizePascalCase(identity)
 	nodeType := inferNodeTypeFromClassName(className)
@@ -4906,6 +4936,19 @@ func (g *Graph) importTargetFile(resolvedPath string) string {
 		if _, ok := g.scanFileIndex.byPath[resolvedPath+ext]; ok {
 			return resolvedPath + ext
 		}
+	}
+	return ""
+}
+
+// importEcosystemOfFile is the package ecosystem a source file's bare imports
+// name, by extension. Empty for languages whose import specifiers are not
+// package names (C# namespaces, Go import paths).
+func importEcosystemOfFile(filePath string) string {
+	switch strings.ToLower(path.Ext(filePath)) {
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
+		return "npm"
+	case ".py":
+		return "python"
 	}
 	return ""
 }
