@@ -138,6 +138,7 @@ for the instant demo.)
 | `chronicle review A...B` | Compare two committed graph versions; `--head-snapshot` and `--bundle` for CI |
 | `chronicle review import` | Unpack a review bundle and publish its marked diagram to the local dashboard |
 | `chronicle hook install` | Nudge your AI agent to query the graph before grepping |
+| `chronicle truth extract\|compare` | Self-check: derive a source-only reference (endpoints, http, channels, deps, services) and compare it with the graph: coverage, scope, recall |
 
 New MCP tools for agents: `chronicle_node_search` (resolve a name to a node key), `chronicle_subgraph` (one-call neighborhood), and `chronicle_insights` (hubs, low-trust edges to verify, structural gaps).
 
