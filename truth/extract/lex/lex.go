@@ -2,6 +2,8 @@
 // see them. String literals are kept intact: rules read route paths from them.
 // Known over-blanking by design: a JS regex literal containing /* opens a block
 // comment the lexer cannot tell apart, so the rest of the file is blanked.
+// Known under-blanking: a JS regex literal containing a quote opens a string
+// the lexer cannot tell apart, so a trailing same-line // comment can stay in Code.
 package lex
 
 import (
@@ -43,7 +45,7 @@ func FamilyFor(path string) Family {
 		return Hash
 	}
 	switch filepath.Ext(base) {
-	case ".cs", ".ts", ".tsx", ".js", ".mjs", ".cjs":
+	case ".cs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
 		return CLike
 	case ".py":
 		return Python

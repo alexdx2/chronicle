@@ -46,6 +46,13 @@ func factPriority(f truth.Fact) int {
 	return p
 }
 
+// identityAttrs are the attrs that say what a fact is; a disagreement on them
+// is worth a warning. Per-evidence attrs (path, version, importer, section,
+// config_key) legitimately differ between sources and never warn.
+var identityAttrs = map[string]bool{
+	"method": true, "host": true, "var": true, "kind": true, "side": true, "ecosystem": true, "tech": true,
+}
+
 var classOrder = func() map[truth.Class]int {
 	m := map[truth.Class]int{}
 	for i, c := range truth.Classes {
@@ -69,6 +76,7 @@ func Merge(facts []truth.Fact) ([]truth.Fact, []string) {
 	}
 	var out []truth.Fact
 	var warns []string
+	warned := map[string]bool{}
 	for _, k := range order {
 		g := groups[k]
 		sort.SliceStable(g, func(i, j int) bool { return factPriority(g[i]) > factPriority(g[j]) })
@@ -115,8 +123,12 @@ func Merge(facts []truth.Fact) ([]truth.Fact, []string) {
 							m.Attrs = map[string]string{}
 						}
 						m.Attrs[a] = v
-					} else if kept != v {
-						warns = append(warns, fmt.Sprintf("conflict %s %s %s: %s vs %s (kept %s)", m.Class, m.Key, a, kept, v, kept))
+					} else if kept != v && identityAttrs[a] {
+						w := fmt.Sprintf("conflict %s %s %s: %s vs %s (kept %s)", m.Class, m.Key, a, kept, v, kept)
+						if !warned[w] {
+							warned[w] = true
+							warns = append(warns, w)
+						}
 					}
 				}
 			}

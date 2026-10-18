@@ -28,13 +28,13 @@ func TestMergeUnion(t *testing.T) {
 }
 
 func TestMergeConflictKeepsPriority(t *testing.T) {
-	lo := truth.Fact{Class: truth.ClassDeps, Key: "k", Attrs: map[string]string{"v": "1"}, Sources: []string{"dotenv.x"}}
-	hi := truth.Fact{Class: truth.ClassDeps, Key: "k", Attrs: map[string]string{"v": "2", "w": "z"}, Sources: []string{"lock.npm"}}
+	lo := truth.Fact{Class: truth.ClassDeps, Key: "k", Attrs: map[string]string{"method": "1"}, Sources: []string{"dotenv.x"}}
+	hi := truth.Fact{Class: truth.ClassDeps, Key: "k", Attrs: map[string]string{"method": "2", "w": "z"}, Sources: []string{"lock.npm"}}
 	out, warns := Merge([]truth.Fact{lo, hi})
-	if out[0].Attrs["v"] != "2" || out[0].Attrs["w"] != "z" {
+	if out[0].Attrs["method"] != "2" || out[0].Attrs["w"] != "z" {
 		t.Fatalf("attrs %v", out[0].Attrs)
 	}
-	if len(warns) != 1 || warns[0] != "conflict deps k v: 2 vs 1 (kept 2)" {
+	if len(warns) != 1 || warns[0] != "conflict deps k method: 2 vs 1 (kept 2)" {
 		t.Fatalf("warns %v", warns)
 	}
 }
@@ -74,5 +74,23 @@ func TestMergeZeroPrimaryNotDerived(t *testing.T) {
 	out, _ := Merge([]truth.Fact{a, b})
 	if len(out[0].Derived) != 0 {
 		t.Fatalf("derived %v", out[0].Derived)
+	}
+}
+
+func TestMergePerEvidenceAttrNoWarning(t *testing.T) {
+	a := truth.Fact{Class: truth.ClassDeps, Key: "k", Attrs: map[string]string{"path": "a/x.csproj", "version": "1"}, Sources: []string{"lock.npm"}}
+	b := truth.Fact{Class: truth.ClassDeps, Key: "k", Attrs: map[string]string{"path": "b/x.csproj", "version": "2"}, Sources: []string{"manifest.npm"}}
+	if _, warns := Merge([]truth.Fact{a, b}); len(warns) != 0 {
+		t.Fatalf("warns %v", warns)
+	}
+}
+
+func TestMergeWarningsDeduped(t *testing.T) {
+	mk := func(src, m string) truth.Fact {
+		return truth.Fact{Class: truth.ClassEndpoints, Key: "k", Attrs: map[string]string{"method": m}, Sources: []string{src}}
+	}
+	_, warns := Merge([]truth.Fact{mk("csharp.a", "GET"), mk("openapi.b", "POST"), mk("openapi.c", "POST")})
+	if len(warns) != 1 {
+		t.Fatalf("warns %v", warns)
 	}
 }

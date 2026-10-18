@@ -12,6 +12,8 @@ var (
 	braceParam = regexp.MustCompile(`^\{[^{}]*\}$`)
 	pep503     = regexp.MustCompile(`[-_.]+`)
 	camelSplit = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+
+	multiUnderscore = regexp.MustCompile(`_+`)
 )
 
 // CanonEndpoint returns "METHOD /canonical/path"; an empty method means GET.
@@ -27,9 +29,7 @@ func CanonEndpoint(method, path string) string {
 // and trailing "/", and replaces every parameter segment with "{}".
 func CanonPath(path string) string {
 	p := strings.TrimSpace(path)
-	if i := strings.IndexAny(p, "?#"); i >= 0 {
-		p = p[:i]
-	}
+	p = cutQuery(p)
 	p = strings.ToLower(p)
 	segs := strings.Split(p, "/")
 	out := make([]string, 0, len(segs))
@@ -43,6 +43,27 @@ func CanonPath(path string) string {
 		out = append(out, s)
 	}
 	return "/" + strings.Join(out, "/")
+}
+
+// cutQuery drops a "?query" or "#fragment" tail, but not a '?' inside braces
+// (ASP.NET optional parameter "{id?}").
+func cutQuery(p string) string {
+	depth := 0
+	for i := 0; i < len(p); i++ {
+		switch p[i] {
+		case '{':
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+		case '?', '#':
+			if depth == 0 {
+				return p[:i]
+			}
+		}
+	}
+	return p
 }
 
 func isParamSegment(s string) bool {
@@ -100,7 +121,8 @@ func HostFromVar(name string) string {
 			break
 		}
 	}
-	return strings.ToLower(strings.ReplaceAll(s, "_", "-"))
+	s = strings.ToLower(multiUnderscore.ReplaceAllString(s, "_"))
+	return strings.Trim(strings.ReplaceAll(s, "_", "-"), "-")
 }
 
 // CanonName is the tolerant form for topic/service/package names: lowercase
@@ -113,7 +135,10 @@ func CanonName(s string) string {
 func CanonDep(ecosystem, name string) string {
 	eco := strings.ToLower(strings.TrimSpace(ecosystem))
 	n := strings.ToLower(strings.TrimSpace(name))
-	if eco == "python" || eco == "pypi" {
+	if eco == "pypi" {
+		eco = "python"
+	}
+	if eco == "python" {
 		n = pep503.ReplaceAllString(n, "-")
 	}
 	return eco + ":" + n

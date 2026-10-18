@@ -15,6 +15,9 @@ func TestCanonEndpointAndPath(t *testing.T) {
 		{CanonPath("/u/<id>"), "/u/{}"},
 		{CanonPath("/a/[id]/b/${x}"), "/a/{}/b/{}"},
 		{CanonPath("/a/b?x=1"), "/a/b"},
+		{CanonPath("/api/orders/{id?}"), "/api/orders/{}"},
+		{CanonPath("/api/orders/{id:int}"), "/api/orders/{}"},
+		{CanonPath("/api/orders/{id?}?x=1#f"), "/api/orders/{}"},
 		{EndpointKey("PUT", "/v1/Items/{itemId}"), "PUT /v1/items/{}"},
 	}
 	for _, c := range cases {
@@ -42,10 +45,12 @@ func TestCanonHost(t *testing.T) {
 
 func TestHostFromVar(t *testing.T) {
 	cases := map[string]string{
-		"TOM_API_URL":     "tom-api",
-		"PaymentsBaseUrl": "payments",
-		"ORDERS_BASE_URL": "orders",
-		"AUTH_HOST":       "auth",
+		"TOM_API_URL":        "tom-api",
+		"PaymentsBaseUrl":    "payments",
+		"ORDERS_BASE_URL":    "orders",
+		"AUTH_HOST":          "auth",
+		"Services__Tom__Url": "services-tom",
+		"_TOM_URL":           "tom",
 	}
 	for in, want := range cases {
 		if got := HostFromVar(in); got != want {
@@ -60,6 +65,7 @@ func TestCanonNameDepKeys(t *testing.T) {
 	}
 	cases := []struct{ got, want string }{
 		{CanonDep("python", "Foo_Bar.baz"), "python:foo-bar-baz"},
+		{CanonDep("pypi", "Foo_Bar"), "python:foo-bar"},
 		{CanonDep("nuget", "Newtonsoft.Json"), "nuget:newtonsoft.json"},
 		{DepKey("npm", "Express"), "npm:express"},
 		{ChannelKey("topic", "order-created", "produce"), "topic:order-created#produce"},

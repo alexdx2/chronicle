@@ -129,7 +129,7 @@ func TestNoneAndCRLF(t *testing.T) {
 
 func TestFamilyFor(t *testing.T) {
 	cases := map[string]Family{
-		"a/b.cs": CLike, "x.TSX": CLike, "x.mjs": CLike, "x.py": Python,
+		"a/b.cs": CLike, "x.TSX": CLike, "x.mjs": CLike, "App.jsx": CLike, "x.py": Python,
 		"Dockerfile": Hash, "Dockerfile.dev": Hash, ".env": Hash, ".env.local": Hash,
 		"a.yml": Hash, "a.tf": Hash, "a.toml": Hash, "a.json": None, "a.csproj": None, "a.xml": None, "a.zzz": None,
 	}
@@ -184,5 +184,12 @@ func TestCLikeCRLFComment(t *testing.T) {
 	r := code(t, "a // c\r\nb\r\n", CLike)
 	if len(r.Lines) != 2 || r.Lines[0].Code != "a     \r" || r.Lines[1].Code != "b\r" {
 		t.Fatalf("%q", r.Lines)
+	}
+}
+
+func TestJSXCommentsBlanked(t *testing.T) {
+	r := code(t, "const a = 1 // api.get('/x')\n", FamilyFor("App.jsx"))
+	if strings.Contains(r.Lines[0].Code, "api.get") {
+		t.Fatalf("comment leaked: %q", r.Lines[0].Code)
 	}
 }
