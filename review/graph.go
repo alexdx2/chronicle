@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitutil"
 	"github.com/alexdx2/chronicle-core/graph"
@@ -330,6 +331,7 @@ func summarizeDecodeWarnings(ws []snapshot.Warning) []string {
 	out := make([]string, 0, len(order))
 	for _, code := range order {
 		list := byCode[code]
+		list[0].Msg = strings.ReplaceAll(list[0].Msg, "\"", "`")
 		line := fmt.Sprintf("%d %s record(s) dropped from the graph snapshot (first: line %d, %s)", len(list), code, list[0].Line, list[0].Msg)
 		if code == "dangling_edge" {
 			line = fmt.Sprintf("%d relationship(s) dropped from the graph snapshot: an endpoint node is missing (first: line %d, %s)", len(list), list[0].Line, list[0].Msg)

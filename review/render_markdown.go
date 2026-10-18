@@ -301,7 +301,7 @@ func renderNormal(r *ReviewResult, o MarkdownOptions) (string, error) {
 	if len(r.Warnings) > 0 {
 		b.WriteString("### Limitations\n\n")
 		for _, w := range r.Warnings {
-			b.WriteString("- " + escapeText(w) + "\n")
+			b.WriteString("- " + strings.ReplaceAll(w, "<", "&lt;") + "\n")
 		}
 		b.WriteString("\n")
 	}
