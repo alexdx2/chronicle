@@ -149,6 +149,7 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 			pf.Profile.Scope, pf.ScopeSource, pf.ScopeProposed = scope, source, proposed
 			if warn != "" {
 				st.limitations = append(st.limitations, warn)
+				pf.SeedReason = warn // the model's profile stands; its scope was replaced
 			}
 		}
 	case prev != nil && !full:

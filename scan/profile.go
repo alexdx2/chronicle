@@ -461,12 +461,55 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory) (Scope, string, *Sco
 			suspicious = true
 		}
 	}
-	if !suspicious {
+	dropped := droppedDirs(base, &cfg, inv)
+	if !suspicious && len(dropped) == 0 {
 		return p.Scope, "model", nil, ""
 	}
 	proposed := p.Scope
-	return seedScope(seed), "seed", &proposed,
-		fmt.Sprintf("scope taken from the seed: the model's scope kept %d of %d files", kept, n)
+	warn := fmt.Sprintf("scope taken from the seed: the model's scope kept %d of %d files", kept, n)
+	if len(dropped) > 0 {
+		warn += " and none of " + strings.Join(dropped, ", ")
+	}
+	return seedScope(seed), "seed", &proposed, warn
+}
+
+// minDroppedDirFiles is how many seed-source files make a top-level directory
+// one the model may not drop whole (a directory with its own manifest counts
+// regardless: it is a service or a package).
+const minDroppedDirFiles = 3
+
+// droppedDirs lists the top-level directories that hold seed-source files
+// (base) or a manifest of the inventory and keep none of them under cfg.
+func droppedDirs(base []string, cfg *manifest.ScanConfig, inv *Inventory) []string {
+	type tally struct{ n, kept int }
+	byDir := map[string]*tally{}
+	for _, f := range base {
+		d := topDirOf(f)
+		if d == "." {
+			continue
+		}
+		t := byDir[d]
+		if t == nil {
+			t = &tally{}
+			byDir[d] = t
+		}
+		t.n++
+		if graph.InScope(f, cfg) {
+			t.kept++
+		}
+	}
+	hasManifest := map[string]bool{}
+	for _, m := range inv.Manifests {
+		hasManifest[topDirOf(m)] = true
+	}
+	var out []string
+	for d, t := range byDir {
+		if t.kept == 0 && (t.n >= minDroppedDirFiles || hasManifest[d]) {
+			out = append(out, d)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // WriteProfiledManifest writes the domain manifest (bootstrap format plus

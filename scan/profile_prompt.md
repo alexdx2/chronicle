@@ -5,6 +5,7 @@ You profile one repository for a code-graph extractor. You are given an inventor
 Include: code that runs in production; infrastructure as code; contracts (openapi, proto, graphql, avro, json schema, event schemas); schema migrations of the data layer when they are the only source of the models.
 Exclude: generated code (by markers in the first lines and by typical folders), vendored code, build artifacts, test fixtures and snapshots, lock files, binaries, documentation and examples.
 Tests are a separate category: they are in scope but marked. Only contracts and calls (endpoints, topics, http_call) are extracted from them, not services or models. List test globs under "tests".
+In a repository with several services or applications, give one include glob per service or application directory, and never omit a directory that has its own manifest (package.json, *.csproj, pyproject.toml, go.mod, pom.xml).
 Give every glob a one-line reason. Globs are repository-relative, use "/" and "**" segments, never start with "/" and never contain "..".
 
 ## Evidence rule

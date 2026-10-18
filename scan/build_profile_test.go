@@ -312,7 +312,7 @@ func TestBuildSnapshot_ProfileFileCarriesChecksAndPacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	pf, _ := ParseProfileFile(res.Files.Profile)
-	if len(pf.Checks) != 5 || len(pf.Packs) == 0 {
+	if len(pf.Checks) != 6 || len(pf.Packs) == 0 {
 		t.Fatalf("checks=%d packs=%+v", len(pf.Checks), pf.Packs)
 	}
 	// The coverage check must see the files this very domain sent: a full

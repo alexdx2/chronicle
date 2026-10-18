@@ -3,9 +3,11 @@ package scan
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/manifest"
 	"github.com/alexdx2/chronicle-core/store"
 )
 
@@ -27,6 +29,135 @@ func LayerChecks(g *graph.Graph, domainKey string, prof Profile, rep *FullReport
 		checkIntegrations(g, domainKey),
 		checkCoverage(domainKey, rep),
 	}
+}
+
+// LayerChecksScoped is LayerChecks plus the scope check, and a coverage check
+// that reports against the inventory: scope is the domain's scan config and
+// owns says which inventory files belong to the domain (nil = all of them).
+// The scope check follows the structure check.
+func LayerChecksScoped(g *graph.Graph, domainKey string, prof Profile, rep *FullReport, inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool) []LayerCheck {
+	base := LayerChecks(g, domainKey, prof, rep, inv)
+	out := make([]LayerCheck, 0, len(base)+1)
+	for _, c := range base {
+		if c.Layer == "coverage" {
+			c = checkCoverageInventory(c, domainKey, rep, inv, scope, owns)
+		}
+		out = append(out, c)
+		if c.Layer == "structure" {
+			out = append(out, checkScope(inv, scope, owns))
+		}
+	}
+	return out
+}
+
+// ownedPaths are the inventory files of the domain.
+func ownedPaths(inv *Inventory, owns func(string) bool) []string {
+	var out []string
+	for _, p := range invPaths(inv) {
+		if owns == nil || owns(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// isSourceFile: a file a bootstrap manifest would send (source extension,
+// not under the bootstrap exclusions).
+func isSourceFile(p string) bool {
+	ext := strings.ToLower(filepath.Ext(p))
+	ok := false
+	for _, e := range bootstrapSourceExts {
+		if e == ext {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return false
+	}
+	for _, g := range bootstrapExclude {
+		if manifest.MatchGlob(p, g) {
+			return false
+		}
+	}
+	return true
+}
+
+// topDirOf is the first path segment ("." for a file at the root).
+func topDirOf(p string) string {
+	p = filepath.ToSlash(p)
+	if i := strings.Index(p, "/"); i > 0 {
+		return p[:i]
+	}
+	return "."
+}
+
+// checkScope fails when controller or handler files of the inventory lie
+// outside the scan scope: they are never sent to the model, so their
+// endpoints cannot exist in the graph and nothing else would say so.
+func checkScope(inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool) LayerCheck {
+	na := LayerCheck{Layer: "scope", Status: CheckNA, Detail: "no controller or handler files"}
+	if scope == nil {
+		return LayerCheck{Layer: "scope", Status: CheckNA, Detail: "no scan scope"}
+	}
+	total, out := 0, 0
+	dirs := map[string]bool{}
+	for _, p := range ownedPaths(inv, owns) {
+		if !isStructureFile(p) {
+			continue
+		}
+		total++
+		if !graph.InScope(p, scope) {
+			out++
+			dirs[topDirOf(p)] = true
+		}
+	}
+	if total == 0 {
+		return na
+	}
+	if out == 0 {
+		return LayerCheck{Layer: "scope", Status: CheckOK, Detail: fmt.Sprintf("all %d controller or handler files are in scope", total)}
+	}
+	names := make([]string, 0, len(dirs))
+	for d := range dirs {
+		names = append(names, d)
+	}
+	sort.Strings(names)
+	return LayerCheck{Layer: "scope", Status: CheckFailed,
+		Detail: fmt.Sprintf("%d of %d controller or handler files are outside the scan scope (%s)", out, total, strings.Join(names, ", "))}
+}
+
+// checkCoverageInventory extends the coverage check with the inventory: the
+// files the scope reaches against the source files the repository has.
+func checkCoverageInventory(c LayerCheck, domainKey string, rep *FullReport, inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool) LayerCheck {
+	if scope == nil || inv == nil {
+		return c
+	}
+	total, in := 0, 0
+	for _, p := range ownedPaths(inv, owns) {
+		if !isSourceFile(p) {
+			continue
+		}
+		total++
+		if graph.InScope(p, scope) {
+			in++
+		}
+	}
+	if total == 0 {
+		return c
+	}
+	inv2 := fmt.Sprintf("%d of %d inventory source files in scope", in, total)
+	if c.Status == CheckNA {
+		c.Detail = inv2
+	} else {
+		c.Detail += "; " + inv2
+	}
+	if in*2 < total {
+		c.Status = CheckFailed
+	} else if c.Status == CheckNA {
+		c.Status = CheckOK
+	}
+	return c
 }
 
 // checkLimitations turns failed checks into limitation lines.

@@ -630,7 +630,7 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	if err := r.writeDeps(d, multi); err != nil {
 		return err
 	}
-	r.runChecks(d, dr)
+	r.runChecks(d, dr, &cfg, multi)
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
 	return ctx.Err()

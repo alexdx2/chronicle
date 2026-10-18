@@ -317,7 +317,7 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	if err := r.writeDeps(d, multi); err != nil {
 		return err
 	}
-	r.runChecks(d, dr)
+	r.runChecks(d, dr, scanCfg, multi)
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
 	return ctx.Err()
@@ -362,13 +362,17 @@ func (r *fullRun) writeDeps(d manifest.DomainEntry, multi bool) error {
 // own report entry joins r.rep.Domains only when scanDomain returns, so the
 // checks read a view that already includes it (the coverage check counts
 // the files it sent).
-func (r *fullRun) runChecks(d manifest.DomainEntry, dr DomainReport) {
+func (r *fullRun) runChecks(d manifest.DomainEntry, dr DomainReport, scanCfg *manifest.ScanConfig, multi bool) {
 	if r.o.Profile == nil || r.o.Inventory == nil {
 		return
 	}
 	view := *r.rep
 	view.Domains = append(append([]DomainReport{}, r.rep.Domains...), dr)
-	r.rep.Checks = append(r.rep.Checks, LayerChecks(r.g, d.Key, *r.o.Profile, &view, r.o.Inventory)...)
+	var owns func(string) bool
+	if multi {
+		owns = func(p string) bool { return r.m.DomainForFile(p) == d.Key }
+	}
+	r.rep.Checks = append(r.rep.Checks, LayerChecksScoped(r.g, d.Key, *r.o.Profile, &view, r.o.Inventory, scanCfg, owns)...)
 }
 
 // pendingFiles splits candidates into the files the model still has to see
