@@ -150,8 +150,8 @@ func TestEndToEnd(t *testing.T) {
 		"channels topic:battle-results#produce removed":  reviewcheck.Reported,
 		"channels topic:battle-results-v2#produce added": reviewcheck.Reported,
 		// The review delta carries no structural facts: a new dependency
-		// (package node + DEPENDS_ON edge) is invisible to it.
-		"deps npm:lodash added": reviewcheck.MissedByReview,
+		// (package node + DEPENDS_ON edge) is not tracked by it.
+		"deps npm:lodash added": reviewcheck.NotTracked,
 	}
 	got := map[string]reviewcheck.Status{}
 	for _, f := range res.Facts {
@@ -165,10 +165,10 @@ func TestEndToEnd(t *testing.T) {
 	if len(got) != len(want) {
 		t.Errorf("facts: got %v", got)
 	}
-	if res.Reported != 4 || res.Missed != 1 || res.NotInGraph != 0 {
+	if res.Reported != 4 || res.Missed != 0 || res.NotInGraph != 0 || res.NotTracked != 1 {
 		t.Errorf("counts: %+v", res)
 	}
-	if res.Recall == nil || *res.Recall != 0.8 {
+	if res.Recall == nil || *res.Recall != 1 {
 		t.Errorf("recall: %v", res.Recall)
 	}
 	if len(res.Unexplained) != 1 || res.Unexplained[0].ID != "contract:topic:tj:ghost" || res.Unexplained[0].Change != "added" {

@@ -30,6 +30,14 @@ const (
 	MissedByReview Status = "missed_by_review"
 	// NotInGraph: the graph snapshot has no node for the fact (a scan gap).
 	NotInGraph Status = "not_in_graph"
+	// NotTracked: the review does not list this kind of change. Every delta
+	// fact of the classes deps and packages that has a graph node gets this
+	// status, never missed_by_review: review.Diff routes ClassStructural facts
+	// (code:package nodes, DEPENDS_ON edges) only into the
+	// GraphDelta.StructuralAdded/StructuralRemoved counters (review/diff.go,
+	// route(), line 225-232) and never into Delta.Added/Removed, so the
+	// review cannot name them. not_in_graph takes precedence (no node at all).
+	NotTracked Status = "not_tracked"
 )
 
 // Change direction of a delta fact.
@@ -75,6 +83,7 @@ type ClassCount struct {
 	Reported   int         `json:"reported"`
 	Missed     int         `json:"missed"`
 	NotInGraph int         `json:"not_in_graph"`
+	NotTracked int         `json:"not_tracked"`
 }
 
 // Result is the outcome of Check. Recall is nil when reported+missed is 0.
@@ -85,7 +94,14 @@ type Result struct {
 	Reported    int           `json:"reported"`
 	Missed      int           `json:"missed"`
 	NotInGraph  int           `json:"not_in_graph"`
-	Recall      *float64      `json:"recall"`
+	NotTracked  int           `json:"not_tracked"`
+	// ReviewStructuralAdded/Removed are the review's own counters of
+	// structural facts (all of them, not only packages and DEPENDS_ON) added
+	// and removed, so a reader can compare them with the not_tracked count.
+	ReviewStructuralAdded   int `json:"review_structural_added"`
+	ReviewStructuralRemoved int `json:"review_structural_removed"`
+	// Recall counts reported and missed only.
+	Recall *float64 `json:"recall"`
 }
 
 type factKey struct {
@@ -206,7 +222,9 @@ func Check(in Input) Result {
 		} else {
 			df.NodeKey = nk
 			mapped[nk] = true
-			if set[nk] {
+			if f.Class == truth.ClassDeps || f.Class == truth.ClassPackages {
+				df.Status = NotTracked
+			} else if set[nk] {
 				df.Status = Reported
 			} else {
 				df.Status = MissedByReview
@@ -253,6 +271,9 @@ func Check(in Input) Result {
 		case MissedByReview:
 			res.Missed++
 			cc.Missed++
+		case NotTracked:
+			res.NotTracked++
+			cc.NotTracked++
 		default:
 			res.NotInGraph++
 			cc.NotInGraph++
@@ -268,6 +289,7 @@ func Check(in Input) Result {
 
 	if in.Review != nil && in.Review.Delta != nil {
 		d := in.Review.Delta
+		res.ReviewStructuralAdded, res.ReviewStructuralRemoved = d.StructuralAdded, d.StructuralRemoved
 		types := nodeTypes(in.BaseSnap, in.HeadSnap)
 		for _, f := range d.Added {
 			if u, ok := unexplained(f, Added, mappedAdded, types); ok {

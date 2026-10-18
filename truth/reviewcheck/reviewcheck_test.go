@@ -156,3 +156,31 @@ func TestServicesIgnoredAndDeterministic(t *testing.T) {
 		t.Fatalf("%+v", a.Facts)
 	}
 }
+
+func TestDepsPackagesNotTracked(t *testing.T) {
+	dep := truth.Fact{Class: truth.ClassDeps, Key: "npm:lodash"}
+	pkg := truth.Fact{Class: truth.ClassPackages, Key: "npm:mine"}
+	gone := truth.Fact{Class: truth.ClassDeps, Key: "npm:nograph"}
+	s := &snapshot.Snapshot{Nodes: []snapshot.Node{
+		{ID: "code:package:d:npm:lodash", Layer: "code", Type: "package", Name: "lodash"},
+		{ID: "code:package:d:npm:mine", Layer: "code", Type: "package", Name: "mine"},
+	}, Edges: []snapshot.Edge{
+		{ID: "e1", Type: "DEPENDS_ON", From: "service:service:d:s", To: "code:package:d:npm:lodash", Active: true},
+		{ID: "e2", Type: "PUBLISHES", From: "service:service:d:s", To: "code:package:d:npm:mine", Active: true},
+	}}
+	rv := &review.ReviewResult{Delta: &review.GraphDelta{StructuralAdded: 3, StructuralRemoved: 1}}
+	res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{Facts: []truth.Fact{dep, pkg, gone}}, HeadSnap: s, Review: rv})
+	got := map[string]Status{}
+	for _, f := range res.Facts {
+		got[f.Fact.Key] = f.Status
+	}
+	if got["npm:lodash"] != NotTracked || got["npm:mine"] != NotTracked || got["npm:nograph"] != NotInGraph {
+		t.Fatalf("%v", got)
+	}
+	if res.NotTracked != 2 || res.NotInGraph != 1 || res.Recall != nil {
+		t.Fatalf("%+v", res)
+	}
+	if res.ReviewStructuralAdded != 3 || res.ReviewStructuralRemoved != 1 {
+		t.Fatalf("%+v", res)
+	}
+}

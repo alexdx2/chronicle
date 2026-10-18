@@ -99,15 +99,16 @@ func reviewCheckSnapshot(ctx context.Context, repo, rev, path string) (*snapshot
 }
 
 func printReviewCheck(w io.Writer, res reviewcheck.Result) {
-	fmt.Fprintf(w, "%-10s | %8s | %6s | %12s\n", "class", "reported", "missed", "not_in_graph")
+	fmt.Fprintf(w, "%-10s | %8s | %6s | %12s | %11s\n", "class", "reported", "missed", "not_in_graph", "not_tracked")
 	for _, c := range res.ByClass {
-		fmt.Fprintf(w, "%-10s | %8d | %6d | %12d\n", c.Class, c.Reported, c.Missed, c.NotInGraph)
+		fmt.Fprintf(w, "%-10s | %8d | %6d | %12d | %11d\n", c.Class, c.Reported, c.Missed, c.NotInGraph, c.NotTracked)
 	}
 	recall := truthNoDataLabel
 	if res.Recall != nil {
 		recall = fmt.Sprintf(truthPercentFormat, int(*res.Recall*100+1e-9))
 	}
 	fmt.Fprintf(w, "\nrecall: %s (reported %d, missed %d, not in graph %d)\n", recall, res.Reported, res.Missed, res.NotInGraph)
+	fmt.Fprintf(w, "not tracked by the review: %d (review structural counters: +%d -%d)\n", res.NotTracked, res.ReviewStructuralAdded, res.ReviewStructuralRemoved)
 	for _, st := range []reviewcheck.Status{reviewcheck.MissedByReview, reviewcheck.NotInGraph} {
 		var lines []string
 		for _, f := range res.Facts {
