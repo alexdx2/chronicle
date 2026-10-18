@@ -487,7 +487,7 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory, rep deps.Report) (Sc
 		Tests:   append([]ScopeRule(nil), p.Scope.Tests...),
 	}
 	for _, d := range dropped {
-		for _, g := range droppedDirGlobs(d, p.Scope, seed) {
+		for _, g := range droppedDirGlobs(d, p.Scope, seed, base) {
 			scope.Include = append(scope.Include, ScopeRule{Glob: g, Reason: "application directory the profile scope dropped"})
 		}
 	}
@@ -503,17 +503,21 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory, rep deps.Report) (Sc
 		kept2 = append(kept2, r)
 	}
 	scope.Exclude = kept2
-	// The seed's exclusions are the floor of every scope (vendored and
-	// generated code never carries the application); a model exclude list that
-	// lacks them gets them back, since the re-added directories are now broader
-	// than anything the model looked at.
+	// The seed's exclusions are the floor of the re-added directories (vendored
+	// and generated code never carries the application): they are rooted in
+	// those directories only, so the model's own includes and excludes elsewhere
+	// stay as the model wrote them.
 	have := map[string]bool{}
 	for _, r := range scope.Exclude {
 		have[r.Glob] = true
 	}
-	for _, g := range bootstrapExclude {
-		if !have[g] {
-			scope.Exclude = append(scope.Exclude, ScopeRule{Glob: g, Reason: "seed"})
+	for _, d := range dropped {
+		for _, g := range bootstrapExclude {
+			rooted := d + "/" + g
+			if !have[rooted] {
+				have[rooted] = true
+				scope.Exclude = append(scope.Exclude, ScopeRule{Glob: rooted, Reason: "seed"})
+			}
 		}
 	}
 	proposed := p.Scope
@@ -696,11 +700,12 @@ func excludeHidesProtected(glob string, dropped, base []string, rep deps.Report)
 }
 
 // droppedDirGlobs are the include globs that bring a dropped directory back:
-// "<dir>/**/<pattern>" for the file patterns the model's own includes use (or
-// the seed's, when the model's name no extension), plus the seed's build and
-// deployment files. A bare "<dir>/**" would pull json, markdown and images in
-// next to the code.
-func droppedDirGlobs(dir string, model Scope, seed SeedResult) []string {
+// "<dir>/**/<pattern>" for the source extensions of the files actually present
+// in that directory (base is the seed-scope inventory), plus the seed's build
+// and deployment files. When the directory's files are not known, the union of
+// the model's and the seed's source patterns stands in. A bare "<dir>/**"
+// would pull json, markdown and images in next to the code.
+func droppedDirGlobs(dir string, model Scope, seed SeedResult, base []string) []string {
 	isSourceExt := func(pat string) bool {
 		if !strings.HasPrefix(pat, "*.") {
 			return false
@@ -720,16 +725,27 @@ func droppedDirGlobs(dir string, model Scope, seed SeedResult) []string {
 			pats = append(pats, pat)
 		}
 	}
-	for _, r := range model.Include {
-		if pat := path.Base(r.Glob); isSourceExt(pat) {
-			add(pat)
+	present := false
+	for _, f := range base {
+		if !strings.HasPrefix(f, dir+"/") {
+			continue
+		}
+		if ext := path.Ext(f); ext != "" && isSourceExt("*"+ext) {
+			add("*" + ext)
+			present = true
 		}
 	}
-	modelHasExt := len(pats) > 0
+	if !present {
+		for _, r := range model.Include {
+			if pat := path.Base(r.Glob); isSourceExt(pat) {
+				add(pat)
+			}
+		}
+	}
 	for _, g := range seed.Include {
 		pat := path.Base(g)
 		if isSourceExt(pat) {
-			if !modelHasExt {
+			if !present {
 				add(pat)
 			}
 			continue

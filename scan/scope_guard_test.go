@@ -55,7 +55,7 @@ func TestGuardScope_ModelCoveringOneOfFourServicesKeepsItsScopeAndReAddsTheRest(
 		t.Fatalf("source=%s scope=%+v", source, scope)
 	}
 	// arena-api's include plus, per re-added dir, its source and manifest globs.
-	if len(scope.Include) != 7 || len(scope.Exclude) != 1+len(bootstrapExclude) || scope.Exclude[0].Glob != "**/*.spec.ts" {
+	if len(scope.Include) != 7 || len(scope.Exclude) != 1+3*len(bootstrapExclude) || scope.Exclude[0].Glob != "**/*.spec.ts" {
 		t.Fatalf("model excludes must survive and dirs be appended: %+v", scope)
 	}
 	for _, d := range []string{"jerry-api", "tom-api", "spectators-api"} {
@@ -124,7 +124,7 @@ func TestGuardScope_ControllerDirectoryIsReAddedWithoutAManifestAndExcludeHiding
 		}
 		return strings.Join(g, " ")
 	}
-	if source != "model" || globs(scope.Exclude) != "**/*.spec.ts svc/legacy/** "+strings.Join(bootstrapExclude, " ") ||
+	if source != "model" || globs(scope.Exclude) != "**/*.spec.ts svc/legacy/** svc/**/node_modules/** svc/**/vendor/** svc/**/dist/** svc/**/generated/**" ||
 		scope.Include[len(scope.Include)-1].Glob != "svc/**/*.ts" {
 		t.Fatalf("%s %+v", source, scope)
 	}
@@ -173,7 +173,7 @@ func TestGuardScope_ReAddedDirectoryKeepsGeneratedExcludesAndStaysCodeOnly(t *te
 		have[r.Glob] = true
 	}
 	for _, g := range bootstrapExclude {
-		if !have[g] {
+		if !have["svc/"+g] {
 			t.Errorf("seed exclude %s missing from %+v", g, scope.Exclude)
 		}
 	}
@@ -278,5 +278,66 @@ func TestLayerChecks_UserManifestScopeIsReportedOKNotFailed(t *testing.T) {
 	cs = LayerChecksScopedFrom(g, "d", Profile{}, &FullReport{}, inv, cfg, nil, false)
 	if byLayer(cs)["scope"].Status != CheckFailed || byLayer(cs)["coverage"].Status != CheckFailed {
 		t.Fatalf("%+v", cs)
+	}
+}
+
+func TestGuardScope_ReAddKeepsModelGeneratedIncludeAndRootsFloorInReAddedDir(t *testing.T) {
+	files := []string{"app/main.ts", "app/a.ts", "src/generated/api.ts", "src/b.ts", "svc/users.controller.ts", "svc/generated/x.ts"}
+	inv := &Inventory{}
+	for _, f := range files {
+		inv.Files = append(inv.Files, InvFile{Path: f})
+	}
+	seed := SeedResult{Include: []string{"**/*.ts"}, Exclude: []string{"**/vendor/**"}}
+	p, _ := ParseProfile(partialScopeProfile)
+	p.Scope.Include = []ScopeRule{{Glob: "app/**/*.ts", Reason: "app"}, {Glob: "src/generated/**", Reason: "kept on purpose"}, {Glob: "src/**/*.ts", Reason: "src"}}
+	p.Scope.Exclude = nil
+	scope, source, _, warn := GuardScope(p, seed, inv, deps.Report{})
+	if source != "model" || !strings.Contains(warn, "svc") {
+		t.Fatalf("%s %q %+v", source, warn, scope)
+	}
+	// graph.alwaysExclude has its own generated/ net, so assert on the rules:
+	// the model's include stands and the floor is rooted in svc/ only.
+	hasInc := false
+	for _, r := range scope.Include {
+		if r.Glob == "src/generated/**" {
+			hasInc = true
+		}
+	}
+	if !hasInc {
+		t.Errorf("the model's own src/generated include was lost: %+v", scope)
+	}
+	for _, r := range scope.Exclude {
+		if !strings.HasPrefix(r.Glob, "svc/") {
+			t.Errorf("floor leaked outside the re-added dir: %s", r.Glob)
+		}
+	}
+	cfg := ScopeToScanConfig(scope)
+	if graph.InScope("svc/generated/x.ts", &cfg) || !graph.InScope("svc/users.controller.ts", &cfg) {
+		t.Errorf("svc floor wrong: %+v", scope)
+	}
+}
+
+func TestGuardScope_ReAddedDirGetsExtensionsOfItsOwnFiles(t *testing.T) {
+	files := []string{"app/main.ts", "app/a.ts", "app/b.ts", "svc/Controllers/ScoreController.cs", "svc/Api.csproj"}
+	inv := &Inventory{}
+	for _, f := range files {
+		inv.Files = append(inv.Files, InvFile{Path: f})
+	}
+	seed := SeedResult{Include: []string{"**/*.ts", "**/*.cs", "**/*.csproj"}, Exclude: bootstrapExclude}
+	p, _ := ParseProfile(partialScopeProfile)
+	p.Scope.Include = []ScopeRule{{Glob: "app/**/*.ts", Reason: "app"}}
+	p.Scope.Exclude = nil
+	scope, _, _, _ := GuardScope(p, seed, inv, deps.Report{})
+	var inc []string
+	for _, r := range scope.Include {
+		inc = append(inc, r.Glob)
+	}
+	j := strings.Join(inc, " ")
+	if !strings.Contains(j, "svc/**/*.cs") || !strings.Contains(j, "svc/**/*.csproj") {
+		t.Fatalf("includes %s", j)
+	}
+	cfg := ScopeToScanConfig(scope)
+	if !graph.InScope("svc/Controllers/ScoreController.cs", &cfg) {
+		t.Errorf("controller not in scope: %+v", scope)
 	}
 }
