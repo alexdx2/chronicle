@@ -2,6 +2,7 @@ package truth
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -186,4 +187,37 @@ func Noise(ecosystem, name string) bool {
 		}
 	}
 	return false
+}
+
+var genericHostTokens = map[string]bool{
+	"service": true, "svc": true, "srv": true, "server": true, "api": true, "client": true,
+	"http": true, "https": true, "base": true, "internal": true, "external": true,
+	"url": true, "gateway": true, "backend": true, "host": true,
+}
+
+// LooseTokens returns the sorted, "|"-joined content tokens of a service name
+// or var-derived host: camelCase and "-_. " split, generic tokens (service,
+// api, url, gateway, ...) dropped, one trailing plural "s" trimmed. It returns
+// "" when no content token is left, so generic-only names never match.
+func LooseTokens(s string) string {
+	s = camelSplit.ReplaceAllString(strings.TrimSpace(s), "${1}_${2}")
+	parts := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	})
+	seen := map[string]bool{}
+	var toks []string
+	for _, p := range parts {
+		if genericHostTokens[p] {
+			continue
+		}
+		if len(p) > 3 && strings.HasSuffix(p, "s") && !strings.HasSuffix(p, "ss") && !strings.HasSuffix(p, "us") && !strings.HasSuffix(p, "is") {
+			p = p[:len(p)-1]
+		}
+		if !seen[p] {
+			seen[p] = true
+			toks = append(toks, p)
+		}
+	}
+	sort.Strings(toks)
+	return strings.Join(toks, "|")
 }

@@ -34,6 +34,7 @@ type httpNode struct {
 	external  bool            // external_system node
 	hosts     map[string]bool // CanonHost forms
 	names     map[string]bool // CanonName forms
+	loose     map[string]bool // LooseTokens of single-label names/aliases only
 }
 
 // index holds the active part of a snapshot, organised per fact class.
@@ -46,6 +47,7 @@ type index struct {
 	services  []svcNode
 	http      []httpNode
 	coverage  map[string]bool
+	warns     []string // matching warnings, drained by Compare
 }
 
 func isActiveNode(n snapshot.Node) bool { return n.Status == "" || n.Status == "active" }
@@ -148,13 +150,18 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 		// CALLS_ENDPOINT targets are endpoint nodes judged under endpoints, so
 		// the http index holds service/external_system nodes only.
 		if typ == "external_system" || (typ == "service" && callTargets[id]) {
-			h := httpNode{key: id, name: n.Name, external: typ == "external_system", hosts: map[string]bool{}, names: map[string]bool{}}
+			h := httpNode{key: id, name: n.Name, external: typ == "external_system", hosts: map[string]bool{}, names: map[string]bool{}, loose: map[string]bool{}}
 			addName := func(s string) {
 				if c := truth.CanonName(s); c != "" {
 					h.names[c] = true
 				}
 				if c := truth.CanonHost(s); c != "" {
 					h.hosts[c] = true
+				}
+				if singleLabel(s) {
+					if t := truth.LooseTokens(s); t != "" {
+						h.loose[t] = true
+					}
 				}
 			}
 			addName(n.Name)
@@ -165,4 +172,9 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 		}
 	}
 	return ix
+}
+
+// singleLabel reports whether s is a bare name: no dot, scheme or path.
+func singleLabel(s string) bool {
+	return s != "" && !strings.ContainsAny(s, "./:") && !strings.Contains(s, "://")
 }

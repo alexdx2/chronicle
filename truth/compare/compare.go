@@ -42,6 +42,10 @@ func Compare(rep *truth.Report, snap *snapshot.Snapshot) *truth.Verdict {
 	for _, f := range rep.Facts {
 		jf := truth.JudgedFact{Fact: f}
 		status, node := ix.match(f)
+		for _, w := range ix.warns {
+			addWarn(w)
+		}
+		ix.warns = nil
 		if status == "" {
 			switch {
 			case f.Class == truth.ClassDeps && truth.Noise(f.Attrs["ecosystem"], depName(f)):
@@ -292,6 +296,37 @@ func (ix *index) matchHTTP(f truth.Fact) (truth.Status, string) {
 	}
 	if best != "" {
 		return truth.Confirmed, best
+	}
+	// Loose tier: var-derived facts and single-label hosts only; a dotted
+	// literal host never loosens. Exactly one candidate node may match.
+	var lk []string
+	if varName != "" {
+		if t := truth.LooseTokens(truth.HostFromVar(varName)); t != "" {
+			lk = append(lk, t)
+		}
+	}
+	if host != "" && !strings.Contains(host, ".") {
+		if t := truth.LooseTokens(host); t != "" {
+			lk = append(lk, t)
+		}
+	}
+	var cands []string
+	for _, n := range ix.http {
+		for _, k := range lk {
+			if n.loose[k] {
+				cands = append(cands, n.key)
+				break
+			}
+		}
+	}
+	sort.Strings(cands)
+	switch len(cands) {
+	case 0:
+	case 1:
+		return truth.ConfirmedLoose, cands[0]
+	default:
+		key := f.Key
+		ix.warns = append(ix.warns, "ambiguous loose http match for "+key+": "+strings.Join(cands, ", "))
 	}
 	return "", ""
 }

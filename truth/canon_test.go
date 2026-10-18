@@ -149,3 +149,23 @@ func TestClassSummaryMarshalSnakeCase(t *testing.T) {
 		t.Errorf("unexpected key Known in %s", b)
 	}
 }
+
+func TestLooseTokens(t *testing.T) {
+	cases := map[string]string{
+		"notifications":        "notification",
+		"notification-service": "notification",
+		"address":              "address",
+		"status":               "status",
+		"PaymentsBaseUrl":      "payment",
+		"payment-gateway":      "payment",
+		"order-events":         "event|order",
+		"api-url":              "",
+		"service":              "",
+		"":                     "",
+	}
+	for in, want := range cases {
+		if got := LooseTokens(in); got != want {
+			t.Errorf("LooseTokens(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

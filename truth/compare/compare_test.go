@@ -2,6 +2,7 @@ package compare
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/snapshot"
@@ -327,5 +328,84 @@ func TestEmptyVerdictListsAreArrays(t *testing.T) {
 	v := Compare(&truth.Report{}, nil)
 	if v.Facts == nil || v.Uncovered == nil {
 		t.Fatalf("facts=%v uncovered=%v", v.Facts, v.Uncovered)
+	}
+}
+
+func httpVar(key, v string) truth.Fact {
+	return fact(truth.ClassHTTP, key, "src/b.ts", map[string]string{"var": v})
+}
+
+func ext(name string) snapshot.Node {
+	return nd("service:external_system:d:"+name, "external_system", name)
+}
+
+func TestHTTPLooseVarDerived(t *testing.T) {
+	cases := []struct{ key, node string }{
+		{"var:NOTIFICATION_SERVICE_URL", "notifications"},
+		{"var:USER_SERVICE_URL", "users"},
+		{"var:PAYMENTS_API_URL", "payment-gateway"},
+		{"var:paymentsBaseUrl", "payments-svc"},
+	}
+	for _, c := range cases {
+		snap := mkSnapWith(t, []snapshot.Node{ext(c.node)}, nil, "src/b.ts")
+		v := Compare(&truth.Report{Facts: []truth.Fact{httpVar(c.key, c.key[4:])}}, snap)
+		jf := v.Facts[0]
+		if jf.Status != truth.ConfirmedLoose || jf.GraphNodeKey != "service:external_system:d:"+c.node {
+			t.Errorf("%s vs %s: %s %s", c.key, c.node, jf.Status, jf.GraphNodeKey)
+		}
+		for _, u := range v.Uncovered {
+			if u.NodeKey == jf.GraphNodeKey {
+				t.Errorf("%s: matched node still uncovered", c.node)
+			}
+		}
+	}
+}
+
+func TestHTTPLooseNegatives(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{ext("auth.okeep.io"), ext("orders"), ext("api-service")}, nil, "src/b.ts")
+	for _, f := range []truth.Fact{
+		httpVar("var:AUTH_URL", "AUTH_URL"),
+		httpVar("var:ORDER_EVENTS", "ORDER_EVENTS"),
+		httpVar("var:API_URL", "API_URL"),
+		httpVar("var:SERVICE_URL", "SERVICE_URL"),
+	} {
+		if s := one(t, snap, f); s != truth.Missing {
+			t.Errorf("%s: %s, want missing", f.Key, s)
+		}
+	}
+	// A dotted literal host never loosens against a bare node name.
+	snap2 := mkSnapWith(t, []snapshot.Node{ext("auth")}, nil, "src/b.ts")
+	f := fact(truth.ClassHTTP, "auth.okeep.io", "src/b.ts", map[string]string{"host": "auth.okeep.io"})
+	if s := one(t, snap2, f); s != truth.Missing {
+		t.Errorf("dotted literal: %s", s)
+	}
+}
+
+func TestHTTPLooseAmbiguous(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{ext("notifications"), ext("notification-api")}, nil, "src/b.ts")
+	f1 := httpVar("var:NOTIFICATION_URL", "NOTIFICATION_URL")
+	f2 := fact(truth.ClassHTTP, "var:NOTIFICATION_URL", "src/b.ts", map[string]string{"var": "NOTIFICATION_URL"})
+	v := Compare(&truth.Report{Facts: []truth.Fact{f1, f2}}, snap)
+	for _, jf := range v.Facts {
+		if jf.Status != truth.Missing {
+			t.Errorf("ambiguous matched: %s", jf.Status)
+		}
+	}
+	n := 0
+	for _, w := range v.Warnings {
+		if strings.HasPrefix(w, "ambiguous loose http match for var:NOTIFICATION_URL: ") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("want one deduped warning, got %v", v.Warnings)
+	}
+}
+
+func TestHTTPStrictBeatsLoose(t *testing.T) {
+	snap := mkSnapWith(t, []snapshot.Node{ext("notification-service"), ext("notifications")}, nil, "src/b.ts")
+	v := Compare(&truth.Report{Facts: []truth.Fact{httpVar("var:NOTIFICATION_SERVICE_URL", "NOTIFICATION_SERVICE_URL")}}, snap)
+	if v.Facts[0].Status != truth.Confirmed || len(v.Warnings) != 0 {
+		t.Errorf("strict: %s %v", v.Facts[0].Status, v.Warnings)
 	}
 }
