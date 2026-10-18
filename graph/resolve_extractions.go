@@ -969,7 +969,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if fromDeps {
 			// An internal (project/workspace) reference is the repository's
 			// own structure and is never dropped as noise.
-			if fact.Section != "project" && !ShouldTrackDependencyIn(fact.Ecosystem, fact.To) {
+			// Only infrastructure is noise to the manifest pass: frameworks
+			// and drivers (@nestjs/*, kafkajs, Confluent.Kafka) are facts.
+			if fact.Section != "project" && ClassifyDependencyIn(fact.Ecosystem, fact.To) == DepInfrastructure {
 				return counts, nil, nil
 			}
 		} else if !ShouldTrackDependency(fact.To) {
@@ -1035,7 +1037,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			// The deterministic pass names the package exactly (a Go module
 			// path, a NuGet id, a Maven coordinate); the npm-shaped import
 			// parser would reduce "github.com/x/y" to its host.
-			toNodeKey = typedNodeKey(domainKey, fact.To, fact.ToType)
+			toNodeKey = packageNodeKey(domainKey, fact.Ecosystem, fact.To)
 		} else {
 			// Not ours: the SAME package node shape code imports produce
 			// (SQ-Contract 1) — one node per package whether it's reached

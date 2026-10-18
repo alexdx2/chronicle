@@ -34,7 +34,7 @@ func TestWriteDepsExtractions_NuGetPublisherAndConsumer(t *testing.T) {
 	}
 
 	pkgs, _ := st.ListNodes(store.NodeFilter{Domain: "testapp", NodeType: "package"})
-	if len(pkgs) != 1 { // only acme.shared (published): consumed packages keep the legacy node shape
+	if len(pkgs) != 2 { // acme.shared (published) and confluent.kafka (consumed); System.* is noise
 		var keys []string
 		for _, n := range pkgs {
 			keys = append(keys, n.NodeKey)
@@ -65,7 +65,7 @@ func TestWriteDepsExtractions_NuGetPublisherAndConsumer(t *testing.T) {
 
 	// The project reference lands on the node the sibling publishes from, not on a stub.
 	for _, e := range edges {
-		if e.EdgeType == "DEPENDS_ON" && e.ToNodeKey != typedNodeKeyFromImport("testapp", "confluent.kafka", "") &&
+		if e.EdgeType == "DEPENDS_ON" && e.ToNodeKey != packageNodeKey("testapp", "nuget", "confluent.kafka") &&
 			e.ToNodeKey != typedNodeKeyFromFile("testapp", "Shared/Shared.csproj", "file") {
 			t.Errorf("internal dependency target = %s", e.ToNodeKey)
 		}
@@ -115,12 +115,16 @@ func TestWriteDepsExtractions_SameNodeAsLegacyDependency(t *testing.T) {
 	nodes, _ := st.ListNodes(store.NodeFilter{Domain: "testapp"})
 	var uiKeys []string
 	for _, n := range nodes {
-		if strings.Contains(n.NodeKey, "@acme/ui") {
+		// The manifest pass mints code:package; a model-origin fact keeps the
+		// import-shaped code:provider node (a separate contract). The deps
+		// edge must land on the package node and nothing else of the deps
+		// pass may duplicate it.
+		if strings.HasPrefix(n.NodeKey, "code:package:") && strings.Contains(n.NodeKey, "@acme/ui") {
 			uiKeys = append(uiKeys, n.NodeKey)
 		}
 	}
 	if len(uiKeys) != 1 {
-		t.Fatalf("want exactly one node for @acme/ui, got %v", uiKeys)
+		t.Fatalf("want exactly one package node for @acme/ui, got %v", uiKeys)
 	}
 	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
 	var viaDeps bool
@@ -250,7 +254,7 @@ func TestWriteDepsExtractions_GoModulesStayDistinct(t *testing.T) {
 		t.Fatalf("want three distinct to-nodes, got %v", targets)
 	}
 	for _, name := range []string{"github.com/segmentio/kafka-go", "github.com/nats-io/nats.go", "github.com/redis/go-redis"} {
-		if !targets[typedNodeKey("testapp", name, "")] {
+		if !targets[packageNodeKey("testapp", "go", name)] {
 			t.Fatalf("node for %s missing: %v", name, targets)
 		}
 	}
@@ -423,5 +427,42 @@ func TestWriteDepsExtractions_GoIndirectFollowsIncludeDevDeps(t *testing.T) {
 	}
 	if n := count(true); n != 2 {
 		t.Errorf("with include_dev_deps: %d edges, want 2", n)
+	}
+}
+
+func TestWriteDepsExtractions_FrameworksAreFactsInfrastructureIsNoise(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{
+		Publishes: []deps.Package{{Name: "acme-api", Ecosystem: "npm", File: "package.json", Line: 2, Text: `"name": "acme-api"`}},
+		Depends: []deps.Dependency{
+			{Name: "@nestjs/common", Version: "^10", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 5, Text: `"@nestjs/common"`},
+			{Name: "kafkajs", Version: "^2", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 6, Text: `"kafkajs"`},
+			{Name: "@types/node", Version: "^20", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 7, Text: `"@types/node"`},
+			{Name: "confluent.kafka", Version: "2.3.0", Section: "dependencies", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 6, Text: `PackageReference Include="Confluent.Kafka"`},
+			{Name: "system.text.json", Version: "8", Section: "dependencies", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 7, Text: `PackageReference Include="System.Text.Json"`},
+			{Name: "microsoft.extensions.logging", Version: "8", Section: "dependencies", Ecosystem: "nuget", File: "Api/Api.csproj", Line: 8, Text: `PackageReference Include="Microsoft.Extensions.Logging"`},
+		},
+	}
+	if _, err := g.WriteDepsExtractions("d", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		packageNodeKey("d", "npm", "@nestjs/common"), packageNodeKey("d", "npm", "kafkajs"), packageNodeKey("d", "nuget", "confluent.kafka"),
+	} {
+		n, err := st.GetNodeByKey(want)
+		if err != nil || n == nil {
+			t.Fatalf("no node %s: %v", want, err)
+		}
+		edges, _ := st.ListEdges(store.EdgeFilter{ToNodeID: n.NodeID, EdgeType: "DEPENDS_ON"})
+		if len(edges) != 1 {
+			t.Errorf("%s: DEPENDS_ON edges = %d", want, len(edges))
+		}
+	}
+	nodes, _ := st.ListNodes(store.NodeFilter{Domain: "d"})
+	for _, n := range nodes {
+		l := strings.ToLower(n.NodeKey)
+		if strings.Contains(l, "system.") || strings.Contains(l, "microsoft.") || strings.Contains(l, "@types") {
+			t.Errorf("infrastructure became a node: %s", n.NodeKey)
+		}
 	}
 }
