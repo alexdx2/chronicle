@@ -13,6 +13,11 @@ func TestInferExternalSystemName(t *testing.T) {
 		{"${JERRY_API_URL}/jerry/traps", "jerry-api"},
 		{"$SCOREBOARD_HOST/api/score", "scoreboard"},
 		{"process.env.TOM_API_URL + '/tom/status'", "tom-api"},
+		// accessor inside the template wrapper
+		{"${process.env.AUDIT_SERVICE_URL}/events", "audit-service"},
+		{"${os.environ.PAYMENTS_URL}/pay", "payments"},
+		{"${env.TOM_API_URL}/tom/status", "tom-api"},
+		{"process.env.AUDIT_SERVICE_URL + '/events'", "audit-service"},
 		{"${NOTIFICATIONS_BASE_URL}/push", "notifications"},
 		{"${PAYMENTS_SERVICE_ENDPOINT}/charge", "payments-service"},
 		{"grpc://bookmaker-api:50051/bookmaker.OddsService/GetOdds", "bookmaker-api"},

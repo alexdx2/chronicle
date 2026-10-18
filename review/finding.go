@@ -1,6 +1,11 @@
 package review
 
-import "github.com/alexdx2/chronicle-core/snapshot"
+import (
+	"sort"
+	"strings"
+
+	"github.com/alexdx2/chronicle-core/snapshot"
+)
 
 // Severity is how sure/serious a ReviewFinding is.
 type Severity string
@@ -39,10 +44,14 @@ const (
 	ReasonContractRemoved      = "contract_removed"
 	ReasonContractChanged      = "contract_changed"
 	ReasonNewTopicNoConsumers  = "new_topic_no_consumers"
-	ReasonHeadStaleFile        = "head_stale_file"
-	ReasonBaseStaleFile        = "base_stale_file"
-	ReasonHeadMissingGraph     = "head_missing_graph"
-	ReasonBaseMissingGraph     = "base_missing_graph"
+	// ReasonNewSubscriptionNoPublisher: a consumer moved onto a topic nobody
+	// publishes to in the graph. Informational, not a break: the mirror of
+	// ReasonNewTopicNoConsumers.
+	ReasonNewSubscriptionNoPublisher = "new_subscription_no_publisher"
+	ReasonHeadStaleFile              = "head_stale_file"
+	ReasonBaseStaleFile              = "base_stale_file"
+	ReasonHeadMissingGraph           = "head_missing_graph"
+	ReasonBaseMissingGraph           = "base_missing_graph"
 	// ReasonLearnedOutsideDiff marks a top-level Informational finding: a
 	// fact whose evidence files are all outside the diff.
 	ReasonLearnedOutsideDiff = "learned_outside_diff"
@@ -284,6 +293,18 @@ func analyzeIntegration(finding *ReviewFinding, c Change, q ImpactQuerier, depth
 		return
 	}
 
+	// A consumer that starts consuming a topic no one publishes to is not a
+	// break for anyone: say so, and drop the reverse-impact walk (nothing
+	// downstream of the consumer changed).
+	if edgeType == "CONSUMES_TOPIC" && c.Kind == IntegrationAdded && topicHasNoPublisher(q, c.Counterpart) {
+		finding.Reason = ReasonNewSubscriptionNoPublisher
+		finding.Downstream = []ReviewFinding{{
+			Severity: SeverityInformational, System: safeCollapse(q, c.Counterpart),
+			Reason: ReasonNewSubscriptionNoPublisher,
+		}}
+		return
+	}
+
 	reason := ReasonProviderGainsCaller
 	if c.Kind == IntegrationRemoved {
 		reason = ReasonProviderLostConsumer
@@ -306,6 +327,18 @@ func affectedFrom(q ImpactQuerier, seed string, depth int) []ReviewFinding {
 		return nil
 	}
 	return affectedFindingsFrom(impacts)
+}
+
+// topicHasNoPublisher is true only when q can answer and the answer is "no
+// active PUBLISHES_TOPIC edge reaches the topic"; a querier that cannot
+// answer (or errors) never claims it.
+func topicHasNoPublisher(q ImpactQuerier, topic string) bool {
+	pq, ok := q.(TopicPublisherQuerier)
+	if !ok || topic == "" {
+		return false
+	}
+	pubs, err := pq.TopicPublishers(topic)
+	return err == nil && len(pubs) == 0
 }
 
 func affectedFromTopic(q ImpactQuerier, topic string) []ReviewFinding {
@@ -341,8 +374,10 @@ func safeCollapse(q ImpactQuerier, key string) SystemRef {
 	return ref
 }
 
-// flattenEvidence turns Change.Facts into EvidenceRef, one per underlying
-// snapshot.Evidence entry on each fact's Node or Edge (whichever Kind says).
+// flattenEvidence turns Change.Facts into EvidenceRef, one per distinct
+// (fact, file, blob, range): two extractors observing the same lines of one
+// fact are one reference, listing both extractors and keeping the higher
+// confidence.
 func flattenEvidence(facts []Fact) []EvidenceRef {
 	var out []EvidenceRef
 	for _, f := range facts {
@@ -353,12 +388,61 @@ func flattenEvidence(facts []Fact) []EvidenceRef {
 		case f.Kind == KindEdge && f.Edge != nil:
 			evs = f.Edge.Evidence
 		}
+		var d evidenceDedup
 		for _, e := range evs {
-			out = append(out, EvidenceRef{
+			d.add("", EvidenceRef{
 				File: e.File, Blob: e.Blob, Range: e.Range, Extractor: e.Extractor,
 				Confidence: e.Confidence,
 			})
 		}
+		out = append(out, d.refs()...)
+	}
+	return out
+}
+
+// evidenceDedup folds evidence references that point at the same place for
+// the same fact. The first occurrence fixes the position; later ones add
+// their extractor and raise the confidence.
+type evidenceDedup struct {
+	keys  map[string]int
+	items []EvidenceRef
+	exts  [][]string
+	facts []string
+}
+
+func (d *evidenceDedup) add(fact string, ref EvidenceRef) {
+	if d.keys == nil {
+		d.keys = map[string]int{}
+	}
+	key := fact + "\x00" + ref.File + "\x00" + ref.Blob + "\x00" + ref.Range
+	i, seen := d.keys[key]
+	if !seen {
+		d.keys[key] = len(d.items)
+		d.items = append(d.items, ref)
+		d.exts = append(d.exts, nil)
+		d.facts = append(d.facts, fact)
+		i = len(d.items) - 1
+	} else if ref.Confidence > d.items[i].Confidence {
+		d.items[i].Confidence = ref.Confidence
+	}
+	if ref.Extractor != "" {
+		for _, e := range d.exts[i] {
+			if e == ref.Extractor {
+				return
+			}
+		}
+		d.exts[i] = append(d.exts[i], ref.Extractor)
+	}
+}
+
+// refs returns the folded references; Extractor lists every extractor that
+// observed the place, sorted and joined with "+".
+func (d *evidenceDedup) refs() []EvidenceRef {
+	out := make([]EvidenceRef, len(d.items))
+	for i, it := range d.items {
+		sort.Strings(d.exts[i])
+		it.Extractor = strings.Join(d.exts[i], "+")
+		out[i] = it
 	}
 	return out
 }

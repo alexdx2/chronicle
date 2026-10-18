@@ -304,3 +304,25 @@ func TestReview_MixedDelta_LearnedSectionAfterTable(t *testing.T) {
 		t.Errorf("diagram spec lacks the changed system: %s", spec)
 	}
 }
+
+// The synthetic target node of a merge pair has no evidence file: it must not
+// veto "learned" for an edge whose file lies outside the diff, and it must
+// not rescue an edge whose file is inside it.
+func TestPartitionLearned_FilelessPartnerDoesNotVeto(t *testing.T) {
+	changed := []gitdiff.ChangedFile{{Status: "M", Path: "src/seed.ts"}}
+
+	e, n := pairFacts("src/other.ts", "")
+	code, learned := partitionLearned(&GraphDelta{Added: []Fact{e, n}}, changed)
+	if len(code.Added) != 0 || len(learned) != 1 {
+		t.Fatalf("outside edge + fileless node: code.Added=%d learned=%d, want 0/1", len(code.Added), len(learned))
+	}
+	if len(learned[0].Change.Facts) != 2 || learned[0].File != "src/other.ts" {
+		t.Errorf("learned = %+v, want the pair attributed to src/other.ts", learned[0])
+	}
+
+	e, n = pairFacts("src/seed.ts", "")
+	code, learned = partitionLearned(&GraphDelta{Added: []Fact{e, n}}, changed)
+	if len(code.Added) != 2 || len(learned) != 0 {
+		t.Fatalf("inside edge + fileless node: code.Added=%d learned=%d, want 2/0", len(code.Added), len(learned))
+	}
+}

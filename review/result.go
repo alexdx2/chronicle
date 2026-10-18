@@ -290,6 +290,12 @@ func Review(ctx context.Context, in ReviewInput) (*ReviewResult, error) {
 		Delta:         delta,
 		ChangedFiles:  changedFiles,
 	}
+	for _, w := range base.Warnings {
+		result.Warnings = append(result.Warnings, "base graph: "+w)
+	}
+	for _, w := range head.Warnings {
+		result.Warnings = append(result.Warnings, "head graph: "+w)
+	}
 	result.Verdict = verdictFrom(findings)
 	return result, nil
 }

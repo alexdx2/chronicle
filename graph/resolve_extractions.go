@@ -4437,9 +4437,9 @@ var envVarSuffixNoise = map[string]bool{
 // as a hostname, not an env var.
 func envVarServiceName(host string) (string, bool) {
 	h := strings.TrimSpace(host)
-	for _, w := range []string{"process.env.", "os.environ.", "env.", "ENV."} {
-		h = strings.TrimPrefix(h, w)
-	}
+	// Unwrap the template/placeholder FIRST, then strip the env accessor:
+	// "${process.env.AUDIT_SERVICE_URL}" carries the accessor inside the
+	// wrapper, "process.env.X + '/p'" has no wrapper at all.
 	hadWrapper := false
 	for _, pre := range []string{"${", "$", "{"} {
 		if strings.HasPrefix(h, pre) {
@@ -4448,6 +4448,9 @@ func envVarServiceName(host string) (string, bool) {
 		}
 	}
 	h = strings.TrimSuffix(h, "}")
+	for _, w := range []string{"process.env.", "os.environ.", "env.", "ENV."} {
+		h = strings.TrimPrefix(h, w)
+	}
 	if h != strings.TrimSpace(host) {
 		hadWrapper = true
 	}

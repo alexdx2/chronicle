@@ -267,6 +267,13 @@ func ComputeEdgeStatus(evidence []store.EvidenceRow) string {
 		if e.EvidencePolarity == "positive" {
 			switch e.EvidenceStatus {
 			case "valid", "revalidated":
+				// A row verification rejected (or could not find) asserts
+				// nothing: same predicate as PositiveConfidence. It leaves
+				// allInvalidated alone, so rejected-only evidence ends up
+				// "removed" rather than "active" at confidence 0.
+				if e.VerificationStatus == "rejected" || e.VerificationStatus == "missing" {
+					continue
+				}
 				hasValidPositive = true
 				allInvalidated = false
 			case "stale":
@@ -433,7 +440,16 @@ func (g *Graph) RecalculateNodeTrust(nodeID int64) error {
 	// Map edge-specific statuses to valid node statuses.
 	switch status {
 	case "contradicted", "removed":
-		status = "deleted"
+		// A node whose own existence evidence has gone (a superseded
+		// structural row, say) is still alive while an active edge with live
+		// evidence points at it: that edge is independent proof the thing is
+		// there (a topic one consumer stopped asserting, still consumed by
+		// another and published by a third). Contradiction always wins.
+		if status == "removed" && g.nodeHasLiveEdge(nodeID) {
+			status = "active"
+		} else {
+			status = "deleted"
+		}
 	}
 	// Preserve boundary markers: evidence supports an external node's existence,
 	// not its locality. Only contradiction (→ deleted) may override "external".
@@ -443,4 +459,57 @@ func (g *Graph) RecalculateNodeTrust(nodeID int64) error {
 		}
 	}
 	return g.store.UpdateNodeTrust(nodeID, confidence, freshness, trustScore, status)
+}
+
+// nodeHasLiveEdge reports whether an active, non-derived edge touching the
+// node carries at least one positive, valid, not-rejected evidence row and
+// leads to a counterpart that is itself not deleted.
+func (g *Graph) nodeHasLiveEdge(nodeID int64) bool {
+	active := true
+	for _, f := range []store.EdgeFilter{
+		{ToNodeID: nodeID, Active: &active},
+		{FromNodeID: nodeID, Active: &active},
+	} {
+		edges, err := g.store.ListEdges(f)
+		if err != nil {
+			continue
+		}
+		for _, e := range edges {
+			if e.EdgeType == "CHANGES_WITH" || e.EdgeType == "SIMILAR_TO" {
+				continue // derived analytics, not extracted facts
+			}
+			other := e.FromNodeID
+			if other == nodeID {
+				other = e.ToNodeID
+			}
+			if other == nodeID {
+				continue
+			}
+			if n, err := g.store.GetNodeByID(other); err != nil || n.Status == "deleted" {
+				continue
+			}
+			ev, err := g.store.ListEvidenceByEdge(e.EdgeID)
+			if err != nil {
+				continue
+			}
+			for _, r := range ev {
+				if isPositiveLive(r) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// isPositiveLive is the predicate PositiveConfidence uses: a positive row that
+// is valid/revalidated and was not rejected or found missing by verification.
+func isPositiveLive(e store.EvidenceRow) bool {
+	if e.EvidencePolarity != "positive" {
+		return false
+	}
+	if e.EvidenceStatus != "valid" && e.EvidenceStatus != "revalidated" {
+		return false
+	}
+	return e.VerificationStatus != "rejected" && e.VerificationStatus != "missing"
 }

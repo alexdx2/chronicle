@@ -125,3 +125,11 @@ func TestBuildNarratePrompt_ChangedFilesCapped(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildNarratePrompt_AsksForPlainText(t *testing.T) {
+	// Text: true keeps OpenAI-compatible backends out of json_object mode,
+	// which made models wrap the paragraph as {"text": "..."}.
+	if req := BuildNarratePrompt(narrateFixture(), nil, 90); !req.Text {
+		t.Fatal("narrate request must set Text: true")
+	}
+}

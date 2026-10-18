@@ -210,8 +210,13 @@ func TestReview_E2E_RealPipeline_CriticalBugs(t *testing.T) {
 	if result.Base.Commit != baseSHA || result.Head.Commit != headSHA {
 		t.Errorf("Provenance commits = (%q, %q), want (%q, %q)", result.Base.Commit, result.Head.Commit, baseSHA, headSHA)
 	}
-	if len(result.Warnings) != 0 {
-		t.Errorf("Warnings = %+v, want empty", result.Warnings)
+	// The tom-and-jerry fixture carries one known node with a malformed key
+	// ("infra:broker:battle-result"): decode drops it and the review now says
+	// so. Anything else in Warnings would be a real regression.
+	for _, w := range result.Warnings {
+		if !strings.Contains(w, "bad_key record(s) dropped") {
+			t.Errorf("unexpected Warning %q", w)
+		}
 	}
 	if result.Verdict.UnknownFiles != 0 {
 		t.Errorf("Verdict.UnknownFiles = %d, want 0 (jerry.client.ts is deliberately out of this repo's scan scope)", result.Verdict.UnknownFiles)

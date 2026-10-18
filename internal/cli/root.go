@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -293,16 +295,47 @@ func ensureDepbotDir() {
 	maybePrintWiringNotice(base, os.Stderr)
 }
 
-// maybePrintWiringNotice prints a single stderr hint when the project HAS
-// chronicle wiring (marker present) and the managed section is outdated.
-// Unwired projects stay silent — attach is opt-in.
+// maybePrintWiringNotice prints a stderr hint when the project HAS chronicle
+// wiring (marker present) and the managed section is outdated. Unwired
+// projects stay silent — attach is opt-in. The hint is for a person at a
+// terminal: it is never printed when stdout is not a TTY or CI is set, and
+// at most once per template version (a stamp file .depbot/wiring-notice.<hash>
+// remembers it), so a pipeline of six commands cannot repeat it six times.
 func maybePrintWiringNotice(dir string, w io.Writer) {
+	stampDir := filepath.Dir(dbPath)
+	if stampDir == "" || stampDir == "." {
+		stampDir = chronicleDir
+	}
+	printWiringNotice(dir, stampDir, w, stdoutIsTTY() && os.Getenv("CI") == "")
+}
+
+func printWiringNotice(dir, stampDir string, w io.Writer, interactive bool) {
+	if !interactive {
+		return
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
 	if err != nil || !strings.Contains(string(data), wiring.AgentsMarkerStart) {
 		return
 	}
-	action, _ := wiring.PlanMarkedSection(data, true, wiring.ProjectAgentsSection())
-	if action != wiring.ActionUnchanged {
-		fmt.Fprintln(w, "chronicle: project wiring is outdated — run 'chronicle attach --upgrade'")
+	section := wiring.ProjectAgentsSection()
+	action, _ := wiring.PlanMarkedSection(data, true, section)
+	if action == wiring.ActionUnchanged {
+		return
 	}
+	sum := sha256.Sum256([]byte(section))
+	stamp := filepath.Join(stampDir, "wiring-notice."+hex.EncodeToString(sum[:])[:12])
+	if _, err := os.Stat(stamp); err == nil {
+		return
+	}
+	fmt.Fprintln(w, "chronicle: project wiring is outdated — run 'chronicle attach --upgrade'")
+	// Best effort: a read-only .depbot only means the hint may repeat.
+	if os.MkdirAll(stampDir, 0o755) == nil {
+		_ = os.WriteFile(stamp, []byte("shown\n"), 0o644)
+	}
+}
+
+// stdoutIsTTY reports whether stdout is a character device (a terminal).
+func stdoutIsTTY() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }

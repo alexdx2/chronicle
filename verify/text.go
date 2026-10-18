@@ -32,7 +32,7 @@ func (v *TextVerifier) Verify(fileContent []byte, assertion json.RawMessage, old
 
 	var matches []int
 	for i, line := range lines {
-		if strings.Contains(line, a.Substring) {
+		if containsToken(line, a.Substring) {
 			// If context specified, check that the line also matches context
 			if a.Context != "" {
 				if !lineMatchesContext(line, a.Context) {
@@ -91,7 +91,7 @@ func verifyCaseInsensitive(lines []string, a TextAssertion) *Result {
 	lowered := strings.ToLower(a.Substring)
 	var matches []int
 	for i, line := range lines {
-		if strings.Contains(strings.ToLower(line), lowered) {
+		if containsToken(strings.ToLower(line), lowered) {
 			if a.Context != "" && !lineMatchesContext(line, a.Context) {
 				continue
 			}
@@ -192,4 +192,36 @@ func lineMatchesContext(line, context string) bool {
 	default:
 		return strings.Contains(trimmed, context)
 	}
+}
+
+// containsToken reports whether sub occurs in line as a whole token: when the
+// substring starts (ends) with an identifier character, the character before
+// (after) the match must not be one. "battle-results" therefore does not
+// verify inside "battle-results-v2" or "my-battle-results", while route
+// paths ("/arena/attack"), which start and end with punctuation or whose
+// neighbours are free-form, keep matching as before.
+func containsToken(line, sub string) bool {
+	if sub == "" {
+		return false
+	}
+	for from := 0; from <= len(line)-len(sub); {
+		i := strings.Index(line[from:], sub)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(sub)
+		okBefore := !isTokenChar(sub[0]) || start == 0 || !isTokenChar(line[start-1])
+		okAfter := !isTokenChar(sub[len(sub)-1]) || end == len(line) || !isTokenChar(line[end])
+		if okBefore && okAfter {
+			return true
+		}
+		from = start + 1
+	}
+	return false
+}
+
+// isTokenChar is a character that continues an identifier or a topic name.
+func isTokenChar(c byte) bool {
+	return c == '_' || c == '-' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

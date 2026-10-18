@@ -126,6 +126,13 @@ func classifyEdgeType(edgeType string) FactClass {
 }
 
 func classifyNode(n *snapshot.Node) FactClass {
+	// An external endpoint is a boundary placeholder minted for a call this
+	// repo makes ("defined elsewhere"), not a contract of this repo: it never
+	// yields ContractAdded/Removed on its own. The call edge that created it
+	// carries the integration.
+	if n.Status == "external" {
+		return ClassStructural
+	}
 	switch n.Layer {
 	case "contract":
 		return ClassContract
