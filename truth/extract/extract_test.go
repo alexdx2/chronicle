@@ -169,3 +169,10 @@ func (f failFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	}
 	return f.MapFS.ReadDir(name)
 }
+
+func TestExtractSetsRulesVersion(t *testing.T) {
+	rep, err := Extract(fstest.MapFS{})
+	if err != nil || rep.RulesVersion != truth.RulesVersion {
+		t.Fatalf("rules version %d err %v", rep.RulesVersion, err)
+	}
+}

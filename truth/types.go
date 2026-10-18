@@ -46,8 +46,16 @@ type Fact struct {
 	Sources []string          `json:"sources"`
 }
 
+// RulesVersion identifies the generation of the extractor rules and the class
+// list. Bump it whenever an extractor rule or the class list changes, so
+// stored reports are recomputed. 2: the packages class exists.
+const RulesVersion = 2
+
 // Report is the output of an extraction run.
 type Report struct {
+	// RulesVersion is truth.RulesVersion at extraction time; reports stored
+	// before the field existed decode with 0.
+	RulesVersion int      `json:"rules_version"`
 	Facts        []Fact   `json:"facts"`
 	SkippedFiles []string `json:"skipped_files,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`

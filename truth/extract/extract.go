@@ -25,7 +25,7 @@ func silentSkip(name string) bool {
 
 // Extract walks fsys, applies every matching rule and merges the facts.
 func Extract(fsys fs.FS) (*truth.Report, error) {
-	rep := &truth.Report{}
+	rep := &truth.Report{RulesVersion: truth.RulesVersion}
 	tree := fsTree{fsys}
 	var all []truth.Fact
 	skipped := map[string]bool{}

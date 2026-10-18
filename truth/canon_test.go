@@ -3,6 +3,7 @@ package truth
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -167,5 +168,16 @@ func TestLooseTokens(t *testing.T) {
 		if got := LooseTokens(in); got != want {
 			t.Errorf("LooseTokens(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestReportRulesVersion(t *testing.T) {
+	b, err := json.Marshal(Report{RulesVersion: RulesVersion})
+	if err != nil || !strings.Contains(string(b), `"rules_version":2`) {
+		t.Fatalf("marshal: %s %v", b, err)
+	}
+	var old Report
+	if err := json.Unmarshal([]byte(`{"facts":[],"files":3}`), &old); err != nil || old.RulesVersion != 0 {
+		t.Fatalf("old report must decode with 0: %+v %v", old, err)
 	}
 }
