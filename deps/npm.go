@@ -26,6 +26,7 @@ func (npm) parse(_, rel string, body []byte) (Report, error) {
 			r.Publishes = append(r.Publishes, Package{
 				Name: Normalize("npm", name), Ecosystem: "npm", File: rel,
 				Line: lineOf(body, strings.Index(text, `"name"`)), Text: `"name"`,
+				App: npmIsApp(doc),
 			})
 		}
 	}
@@ -66,3 +67,34 @@ func (npm) parse(_, rel string, body []byte) (Report, error) {
 
 // npmEntryRe matches a `"name": "version"` pair at the start of its input.
 var npmEntryRe = regexp.MustCompile(`^"(?:[^"\\]|\\.)*"\s*:\s*"(?:[^"\\]|\\.)*"`)
+
+// npmAppDeps are the dependencies that make a package an application.
+var npmAppDeps = map[string]bool{
+	"@nestjs/core": true, "@nestjs/common": true, "@nestjs/platform-express": true,
+	"@nestjs/platform-fastify": true, "express": true, "fastify": true, "koa": true,
+}
+
+// npmIsApp reports whether a package.json describes something that runs: a
+// start or serve script, a bin, or a server framework among its dependencies.
+func npmIsApp(doc map[string]json.RawMessage) bool {
+	var scripts map[string]json.RawMessage
+	if raw, ok := doc["scripts"]; ok && json.Unmarshal(raw, &scripts) == nil {
+		for _, k := range []string{"start", "serve"} {
+			if _, ok := scripts[k]; ok {
+				return true
+			}
+		}
+	}
+	if raw, ok := doc["bin"]; ok && len(raw) > 0 && string(raw) != "null" && string(raw) != `""` && string(raw) != "{}" {
+		return true
+	}
+	var entries map[string]json.RawMessage
+	if raw, ok := doc["dependencies"]; ok && json.Unmarshal(raw, &entries) == nil {
+		for name := range entries {
+			if npmAppDeps[name] {
+				return true
+			}
+		}
+	}
+	return false
+}

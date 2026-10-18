@@ -33,7 +33,8 @@ var (
 func parsePyproject(rel string, body []byte) Report {
 	var r Report
 	var section string // the current table header, e.g. "[project]"
-	listSection := ""  // set while inside a multi-line list
+	hasScripts := false
+	listSection := "" // set while inside a multi-line list
 	for i, raw := range strings.Split(string(body), "\n") {
 		n := i + 1
 		line := strings.TrimSpace(raw)
@@ -50,6 +51,9 @@ func parsePyproject(rel string, body []byte) Report {
 		}
 		if strings.HasPrefix(line, "[") {
 			section = line
+			if section == "[project.scripts]" || section == "[tool.poetry.scripts]" {
+				hasScripts = true
+			}
 			continue
 		}
 		key, value, hasEq := strings.Cut(line, "=")
@@ -94,6 +98,11 @@ func parsePyproject(rel string, body []byte) Report {
 			if !closed {
 				listSection = listName
 			}
+		}
+	}
+	if hasScripts {
+		for i := range r.Publishes {
+			r.Publishes[i].App = true
 		}
 	}
 	return r

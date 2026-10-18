@@ -339,7 +339,7 @@ func TestDepsExtractorIsStructuralTier(t *testing.T) {
 func TestWriteDepsExtractions_NpmWorkspaceReferenceResolvesToSibling(t *testing.T) {
 	g, st, rev := setupTestGraph(t)
 	rep := deps.Report{
-		Publishes: []deps.Package{{Name: "@acme/ui", Ecosystem: "npm", File: "ui/package.json", Line: 2, Text: `"name"`}},
+		Publishes: []deps.Package{{Name: "@acme/ui", Ecosystem: "npm", File: "ui/package.json", Line: 2, Text: `"name"`, App: true}},
 		Depends: []deps.Dependency{
 			{Name: "@acme/ui", Version: "workspace:*", Section: "dependencies", Ecosystem: "npm", File: "web/package.json", Line: 5, Internal: true, Text: `"@acme/ui": "workspace:*"`},
 		},
@@ -477,8 +477,9 @@ func TestWriteDepsExtractions_PublishedPackageMintsServiceNode(t *testing.T) {
 	}
 	rep := deps.Report{
 		Publishes: []deps.Package{
-			{Name: "jerry-api", Ecosystem: "npm", File: "jerry-api/package.json", Line: 2, Text: `"name": "jerry-api"`},
-			{Name: "scoreboardapi", Ecosystem: "nuget", File: "sb/ScoreboardApi.csproj", Line: 3, Text: `<AssemblyName>ScoreboardApi</AssemblyName>`},
+			{Name: "jerry-api", Ecosystem: "npm", File: "jerry-api/package.json", Line: 2, Text: `"name": "jerry-api"`, App: true},
+			{Name: "scoreboardapi", Ecosystem: "nuget", File: "sb/ScoreboardApi.csproj", Line: 3, Text: `<AssemblyName>ScoreboardApi</AssemblyName>`, App: true},
+			{Name: "@acme/shared", Ecosystem: "npm", File: "shared/package.json", Line: 2, Text: `"name": "@acme/shared"`},
 		},
 		Depends: []deps.Dependency{
 			{Name: "kafkajs", Version: "^2", Section: "dependencies", Ecosystem: "npm", File: "jerry-api/package.json", Line: 6, Text: `"kafkajs"`},
@@ -503,6 +504,13 @@ func TestWriteDepsExtractions_PublishedPackageMintsServiceNode(t *testing.T) {
 	}
 	if sb, _ := st.GetNodeByKey("service:service:d:scoreboardapi"); sb == nil {
 		t.Error("csproj service missing")
+	}
+	// A library is a package, not a service.
+	if lib, _ := st.GetNodeByKey("service:service:d:@acme/shared"); lib != nil {
+		t.Errorf("library became a service: %+v", lib)
+	}
+	if pk, _ := st.GetNodeByKey(packageNodeKey("d", "npm", "@acme/shared")); pk == nil {
+		t.Error("library package node missing")
 	}
 	if ext, _ := st.GetNodeByKey(extKey); ext != nil && ext.Status == "active" {
 		t.Errorf("external twin of an own service survived: %+v", ext)

@@ -12,6 +12,8 @@ var (
 	nugetVersionRe = regexp.MustCompile(`\bVersion="([^"]*)"`)
 	nugetIDRe      = regexp.MustCompile(`<PackageId>\s*([^<]*?)\s*</PackageId>`)
 	nugetAsmRe     = regexp.MustCompile(`<AssemblyName>\s*([^<]*?)\s*</AssemblyName>`)
+	nugetWebRe     = regexp.MustCompile(`Sdk="Microsoft\.NET\.Sdk\.Web"|<Project\s+Sdk="Microsoft\.NET\.Sdk\.Web`)
+	nugetExeRe     = regexp.MustCompile(`<OutputType>\s*(?:Exe|WinExe)\s*</OutputType>`)
 	nugetUnpackRe  = regexp.MustCompile(`<IsPackable>\s*false\s*</IsPackable>`)
 )
 
@@ -34,7 +36,7 @@ func (nuget) parse(_, rel string, body []byte) (Report, error) {
 	var packageID, assembly string
 	var idLine, asmLine int
 	var idText, asmText string
-	unpackable := false
+	unpackable, isApp := false, false
 	for i, line := range strings.Split(string(body), "\n") {
 		n := i + 1
 		if m := nugetRefRe.FindStringSubmatch(line); m != nil {
@@ -69,6 +71,9 @@ func (nuget) parse(_, rel string, body []byte) (Report, error) {
 		if m := nugetAsmRe.FindStringSubmatch(line); m != nil && assembly == "" {
 			assembly, asmLine, asmText = m[1], n, m[0]
 		}
+		if nugetWebRe.MatchString(line) || nugetExeRe.MatchString(line) {
+			isApp = true
+		}
 		if nugetUnpackRe.MatchString(line) {
 			unpackable = true
 		}
@@ -84,7 +89,7 @@ func (nuget) parse(_, rel string, body []byte) (Report, error) {
 		name, line = strings.TrimSuffix(base(rel), pathExt(rel)), 1
 		text = strings.TrimSpace(strings.TrimPrefix(strings.SplitN(string(body), "\n", 2)[0], "\ufeff"))
 	}
-	r.Publishes = append(r.Publishes, Package{Name: Normalize("nuget", name), Ecosystem: "nuget", File: rel, Line: line, Text: text})
+	r.Publishes = append(r.Publishes, Package{Name: Normalize("nuget", name), Ecosystem: "nuget", File: rel, Line: line, Text: text, App: isApp})
 	return r, nil
 }
 

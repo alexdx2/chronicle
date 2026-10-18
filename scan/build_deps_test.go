@@ -76,7 +76,8 @@ func (b *callerBackend) Complete(ctx context.Context, req llm.Request) (llm.Resp
 }
 
 var twoServiceFiles = map[string]string{
-	"tom-api/package.json":   `{"name":"tom-api","dependencies":{"kafkajs":"^2.0.0"}}`,
+	"tom-api/package.json":   `{"name":"tom-api","scripts":{"start":"node dist/main"},"dependencies":{"kafkajs":"^2.0.0"}}`,
+	"shared/package.json":    `{"name":"@acme/shared","main":"index.js"}`,
 	"jerry-api/package.json": `{"name":"jerry-api","dependencies":{"@nestjs/common":"^10.0.0"}}`,
 	"src/a.ts":               "export const a = 1",
 }
@@ -110,6 +111,11 @@ func TestBuildSnapshot_ManifestsMintServiceNodesWithoutTheModel(t *testing.T) {
 			t.Errorf("no service:service node for %s in %v", id, have)
 		}
 	}
+	for k := range have {
+		if strings.HasPrefix(k, "service:service:") && strings.Contains(k, "shared") {
+			t.Errorf("library became a service: %s", k)
+		}
+	}
 }
 
 func TestFullScan_PlainRunMintsServiceNodesFromManifests(t *testing.T) {
@@ -131,5 +137,8 @@ func TestFullScan_PlainRunMintsServiceNodesFromManifests(t *testing.T) {
 	}
 	if !got["tom-api"] || !got["jerry-api"] {
 		t.Fatalf("service nodes = %v", got)
+	}
+	if got["@acme/shared"] {
+		t.Errorf("library became a service: %v", got)
 	}
 }

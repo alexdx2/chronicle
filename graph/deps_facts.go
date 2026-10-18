@@ -39,14 +39,17 @@ type DepsOptions struct {
 func (g *Graph) WriteDepsExtractionsOpts(domainKey string, revisionID int64, rep deps.Report, opts DepsOptions) (*ResolveExtractionsResult, error) {
 	byFile := map[string][]Fact{}
 	for _, p := range rep.Publishes {
-		// A published package implies the service that publishes it, so the
+		// A published APPLICATION implies the service that runs it, so the
 		// headless path does not depend on a model to declare it: the
 		// manifest line is the evidence, and DEPENDS_ON/PUBLISHES start at
-		// the service node.
-		byFile[p.File] = append(byFile[p.File], Fact{
-			Kind: "declares_service", To: p.Name, Ecosystem: p.Ecosystem, FromType: "file",
-			Line: p.Line, Text: p.Text, Origin: depsOrigin,
-		})
+		// the service node. A library (no start script, no web framework,
+		// no Web/Exe project) is a package only.
+		if p.App {
+			byFile[p.File] = append(byFile[p.File], Fact{
+				Kind: "declares_service", To: p.Name, Ecosystem: p.Ecosystem, FromType: "file",
+				Line: p.Line, Text: p.Text, Origin: depsOrigin,
+			})
+		}
 		byFile[p.File] = append(byFile[p.File], Fact{
 			Kind: "publishes_package", To: p.Name, Ecosystem: p.Ecosystem, FromType: "file",
 			Line: p.Line, Text: p.Text, Origin: depsOrigin,

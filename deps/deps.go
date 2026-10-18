@@ -25,6 +25,10 @@ type Package struct {
 	// Text is a fragment that sits on Line of the manifest; the evidence for
 	// the publication is checked against it.
 	Text string `json:"text,omitempty"`
+	// App marks a package that is an application (it runs: a start script,
+	// a bin, a web framework dependency, a Web SDK or Exe csproj, project
+	// scripts) rather than a library. Only applications are services.
+	App bool `json:"app,omitempty"`
 }
 
 // Dependency is one dependency entry of a manifest. Text is the exact
