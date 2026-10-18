@@ -1097,3 +1097,29 @@ func TestStructuralRefresh_RecordsCoverageWithBlob(t *testing.T) {
 		}
 	}
 }
+
+// A C# controller is not a structural language: the phase never opens it, so
+// it must leave NO coverage row. A row would claim "this extractor looked and
+// found nothing", turning a file the scan never read into a reportable
+// `missing` instead of the honest `out_of_scope` truth compare gives it.
+func TestStructuralRefresh_UnsupportedLanguageLeavesNoCoverage(t *testing.T) {
+	g, s, f := srSetup(t)
+	const cs = "api/Controllers/ScoreController.cs"
+	f.content[cs] = "[ApiController]\npublic class ScoreController { [HttpGet(\"api/score\")] public int Get() => 1; }\n"
+	res := srRun(t, g, srInput(f, "head-1", srController, cs))
+	if res.Processed != 1 || f.reads[cs] != 0 {
+		t.Fatalf("only the .ts file should be read: processed=%d csReads=%d", res.Processed, f.reads[cs])
+	}
+	rows, err := s.ListCoverage(srDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ts, csRow bool
+	for _, r := range rows {
+		ts = ts || r.FilePath == srController
+		csRow = csRow || r.FilePath == cs
+	}
+	if !ts || csRow {
+		t.Fatalf("coverage: ts=%v (want true) cs=%v (want false): %+v", ts, csRow, rows)
+	}
+}
