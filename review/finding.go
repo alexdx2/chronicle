@@ -1,6 +1,11 @@
 package review
 
-import "github.com/alexdx2/chronicle-core/snapshot"
+import (
+	"sort"
+	"strings"
+
+	"github.com/alexdx2/chronicle-core/snapshot"
+)
 
 // Severity is how sure/serious a ReviewFinding is.
 type Severity string
@@ -369,8 +374,10 @@ func safeCollapse(q ImpactQuerier, key string) SystemRef {
 	return ref
 }
 
-// flattenEvidence turns Change.Facts into EvidenceRef, one per underlying
-// snapshot.Evidence entry on each fact's Node or Edge (whichever Kind says).
+// flattenEvidence turns Change.Facts into EvidenceRef, one per distinct
+// (fact, file, blob, range): two extractors observing the same lines of one
+// fact are one reference, listing both extractors and keeping the higher
+// confidence.
 func flattenEvidence(facts []Fact) []EvidenceRef {
 	var out []EvidenceRef
 	for _, f := range facts {
@@ -381,12 +388,61 @@ func flattenEvidence(facts []Fact) []EvidenceRef {
 		case f.Kind == KindEdge && f.Edge != nil:
 			evs = f.Edge.Evidence
 		}
+		var d evidenceDedup
 		for _, e := range evs {
-			out = append(out, EvidenceRef{
+			d.add("", EvidenceRef{
 				File: e.File, Blob: e.Blob, Range: e.Range, Extractor: e.Extractor,
 				Confidence: e.Confidence,
 			})
 		}
+		out = append(out, d.refs()...)
+	}
+	return out
+}
+
+// evidenceDedup folds evidence references that point at the same place for
+// the same fact. The first occurrence fixes the position; later ones add
+// their extractor and raise the confidence.
+type evidenceDedup struct {
+	keys  map[string]int
+	items []EvidenceRef
+	exts  [][]string
+	facts []string
+}
+
+func (d *evidenceDedup) add(fact string, ref EvidenceRef) {
+	if d.keys == nil {
+		d.keys = map[string]int{}
+	}
+	key := fact + "\x00" + ref.File + "\x00" + ref.Blob + "\x00" + ref.Range
+	i, seen := d.keys[key]
+	if !seen {
+		d.keys[key] = len(d.items)
+		d.items = append(d.items, ref)
+		d.exts = append(d.exts, nil)
+		d.facts = append(d.facts, fact)
+		i = len(d.items) - 1
+	} else if ref.Confidence > d.items[i].Confidence {
+		d.items[i].Confidence = ref.Confidence
+	}
+	if ref.Extractor != "" {
+		for _, e := range d.exts[i] {
+			if e == ref.Extractor {
+				return
+			}
+		}
+		d.exts[i] = append(d.exts[i], ref.Extractor)
+	}
+}
+
+// refs returns the folded references; Extractor lists every extractor that
+// observed the place, sorted and joined with "+".
+func (d *evidenceDedup) refs() []EvidenceRef {
+	out := make([]EvidenceRef, len(d.items))
+	for i, it := range d.items {
+		sort.Strings(d.exts[i])
+		it.Extractor = strings.Join(d.exts[i], "+")
+		out[i] = it
 	}
 	return out
 }

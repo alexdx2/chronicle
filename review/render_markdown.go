@@ -576,7 +576,8 @@ func codeChangedLine(f ReviewFinding, fact Fact) string {
 // Changed) — the Evidence appendix backs the relationships table shown
 // above it, not every touched-but-inert fact too. See task-13-report.md.
 func evidenceSection(r *ReviewResult, maxRows int) string {
-	var rows []mdRow
+	var d evidenceDedup
+	removedOf := map[string]bool{}
 	for _, f := range r.ChangedRelationships() {
 		removed := f.Kind == IntegrationRemoved || f.Kind == ContractRemoved
 		for _, fact := range f.Facts {
@@ -587,15 +588,23 @@ func evidenceSection(r *ReviewResult, maxRows int) string {
 			case fact.Kind == KindNode && fact.Node != nil:
 				evs = fact.Node.Evidence
 			}
+			phrase := evidenceFactPhrase(f, fact)
+			removedOf[phrase] = removed
 			for _, ev := range evs {
-				ref := EvidenceRef{File: ev.File, Blob: ev.Blob, Range: ev.Range, Extractor: ev.Extractor, Confidence: ev.Confidence}
-				rows = append(rows, mdRow{
-					evidenceFactPhrase(f, fact),
-					evidenceSourceText(ref, removed),
-					fmt.Sprintf("%.2f", ev.Confidence),
-				})
+				d.add(phrase, EvidenceRef{File: ev.File, Blob: ev.Blob, Range: ev.Range, Extractor: ev.Extractor, Confidence: ev.Confidence})
 			}
 		}
+	}
+	// One row per distinct (fact, file, blob, range); extractors that
+	// observed the same lines are listed in the Source cell.
+	var rows []mdRow
+	for i, ref := range d.refs() {
+		phrase := d.facts[i]
+		source := evidenceSourceText(ref, removedOf[phrase])
+		if strings.Contains(ref.Extractor, "+") {
+			source += " · " + escapeText(strings.ReplaceAll(ref.Extractor, "chronicle-", ""))
+		}
+		rows = append(rows, mdRow{phrase, source, fmt.Sprintf("%.2f", ref.Confidence)})
 	}
 	if len(rows) == 0 {
 		return ""

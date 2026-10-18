@@ -550,3 +550,35 @@ func TestRenderMarkdown_RowLimit(t *testing.T) {
 		t.Errorf("output does not contain %q:\n%s", "+25 more", got)
 	}
 }
+
+// Two extractors observing the same lines of one fact are one evidence row
+// (Source names both); a different range stays its own row.
+func TestEvidenceSection_DedupesAcrossExtractors(t *testing.T) {
+	edge := &snapshot.Edge{
+		Type: "CONSUMES_TOPIC", From: "consumer", To: "battle-results-v2",
+		Evidence: []snapshot.Evidence{
+			{File: "svc/c.ts", Blob: "aaaaaaa1", Range: "20-20", Extractor: "chronicle-ast", Confidence: 0.5},
+			{File: "svc/c.ts", Blob: "aaaaaaa1", Range: "20-20", Extractor: "chronicle-structural", Confidence: 0.6},
+			{File: "svc/c.ts", Blob: "aaaaaaa1", Range: "31-33", Extractor: "chronicle-ast", Confidence: 0.5},
+		},
+	}
+	f := ReviewFinding{
+		Severity: SeverityChanged, Kind: IntegrationAdded, System: SystemRef{Name: "svc"},
+		Facts: []Fact{{ID: "consumer->battle-results-v2:CONSUMES_TOPIC", Kind: KindEdge, Edge: edge}},
+	}
+	got := flattenEvidence(f.Facts)
+	if len(got) != 2 || got[0].Extractor != "chronicle-ast+chronicle-structural" || got[0].Confidence != 0.6 || got[1].Range != "31-33" {
+		t.Fatalf("flattenEvidence = %+v, want 2 refs, the first folded (both extractors, 0.6)", got)
+	}
+
+	sec := evidenceSection(&ReviewResult{Findings: []ReviewFinding{f}}, 20)
+	if !strings.Contains(sec, "Evidence (2 facts)") {
+		t.Errorf("summary count not the deduped row count:\n%s", sec)
+	}
+	if strings.Count(sec, "svc/c.ts:20-20") != 1 || !strings.Contains(sec, "ast+structural") {
+		t.Errorf("duplicate 20-20 rows or extractor list missing:\n%s", sec)
+	}
+	if strings.Count(sec, "svc/c.ts:31-33") != 1 {
+		t.Errorf("distinct range lost:\n%s", sec)
+	}
+}
