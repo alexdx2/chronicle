@@ -35,7 +35,7 @@ func newTruthCmd() *cobra.Command {
 		Use:   "truth",
 		Short: "Deterministic ground truth from sources, compared against the graph",
 	}
-	cmd.AddCommand(newTruthExtractCmd(), newTruthCompareCmd())
+	cmd.AddCommand(newTruthExtractCmd(), newTruthCompareCmd(), newTruthReviewCheckCmd())
 	return cmd
 }
 

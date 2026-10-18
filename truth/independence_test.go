@@ -49,6 +49,11 @@ func checkDirectImports(pkg string, imports []string) error {
 		case imp == truthPrefix || strings.HasPrefix(imp, truthPrefix+"/"):
 		case imp == "gopkg.in/yaml.v3", imp == "github.com/BurntSushi/toml":
 		case pkg == truthPrefix+"/compare" && imp == modulePath+"/snapshot":
+		// reviewcheck is a comparer, not part of the independent reference
+		// path: it may import review/ and snapshot/, but never graph/ or
+		// scan/ directly (their transitive presence via review/ is allowed
+		// in TestIndependence).
+		case pkg == truthPrefix+"/reviewcheck" && (imp == modulePath+"/snapshot" || imp == modulePath+"/review"):
 		case !strings.Contains(strings.SplitN(imp, "/", 2)[0], "."):
 			// std library: first path element has no dot
 		default:
@@ -69,6 +74,10 @@ func TestCheckDirectImports(t *testing.T) {
 		{"compare importing graph", cmp, []string{"fmt", modulePath + "/graph"}, true},
 		{"compare importing snapshot", cmp, []string{"fmt", modulePath + "/snapshot"}, false},
 		{"extract importing snapshot", modulePath + "/truth/extract", []string{modulePath + "/snapshot"}, true},
+		{"reviewcheck importing review", modulePath + "/truth/reviewcheck", []string{modulePath + "/review", modulePath + "/snapshot"}, false},
+		{"reviewcheck importing graph", modulePath + "/truth/reviewcheck", []string{modulePath + "/graph"}, true},
+		{"reviewcheck importing scan", modulePath + "/truth/reviewcheck", []string{modulePath + "/scan"}, true},
+		{"compare importing review", cmp, []string{modulePath + "/review"}, true},
 		{"extract importing yaml and truth", modulePath + "/truth/extract", []string{"gopkg.in/yaml.v3", modulePath + "/truth"}, false},
 	}
 	for _, c := range cases {
@@ -82,7 +91,8 @@ func TestCheckDirectImports(t *testing.T) {
 // own extraction pipeline. Direct imports of every truth package are
 // allowlisted (see checkDirectImports). Transitive dependencies are allowed
 // only for the base set (truth, yaml.v3, toml and its subpackages) and, for
-// truth/compare alone, the non-std closure of the snapshot package.
+// truth/compare alone, the non-std closure of the snapshot package, and for
+// truth/reviewcheck alone, the closure of review and snapshot.
 func TestIndependence(t *testing.T) {
 	root := moduleRoot(t)
 	truthPrefix := modulePath + "/truth"
@@ -94,6 +104,11 @@ func TestIndependence(t *testing.T) {
 	snapshotSet := map[string]bool{}
 	for _, p := range listDeps(t, root, "./snapshot") {
 		snapshotSet[p] = true
+	}
+
+	reviewSet := map[string]bool{}
+	for _, p := range listDeps(t, root, "./review") {
+		reviewSet[p] = true
 	}
 
 	listPkgs := exec.Command("go", "list", "./truth/...")
@@ -113,8 +128,9 @@ func TestIndependence(t *testing.T) {
 			t.Error(err)
 		}
 		allowSnapshot := pkg == truthPrefix+"/compare"
+		allowReview := pkg == truthPrefix+"/reviewcheck"
 		for _, dep := range listDeps(t, root, pkg) {
-			if base(dep) || (allowSnapshot && snapshotSet[dep]) {
+			if base(dep) || (allowSnapshot && snapshotSet[dep]) || (allowReview && (reviewSet[dep] || snapshotSet[dep])) {
 				continue
 			}
 			t.Errorf("%s depends on %q, which is not on the allowlist", pkg, dep)
