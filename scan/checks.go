@@ -36,15 +36,23 @@ func LayerChecks(g *graph.Graph, domainKey string, prof Profile, rep *FullReport
 // owns says which inventory files belong to the domain (nil = all of them).
 // The scope check follows the structure check.
 func LayerChecksScoped(g *graph.Graph, domainKey string, prof Profile, rep *FullReport, inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool) []LayerCheck {
+	return LayerChecksScopedFrom(g, domainKey, prof, rep, inv, scope, owns, false)
+}
+
+// LayerChecksScopedFrom is LayerChecksScoped that knows whether the scope is
+// the user's own (their manifest). A scope the user wrote is not a defect the
+// scan can fix: the scope and coverage checks report it as ok, with the same
+// detail, instead of failed.
+func LayerChecksScopedFrom(g *graph.Graph, domainKey string, prof Profile, rep *FullReport, inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool, userScope bool) []LayerCheck {
 	base := LayerChecks(g, domainKey, prof, rep, inv)
 	out := make([]LayerCheck, 0, len(base)+1)
 	for _, c := range base {
 		if c.Layer == "coverage" {
-			c = checkCoverageInventory(c, domainKey, rep, inv, scope, owns)
+			c = checkCoverageInventory(c, domainKey, rep, inv, scope, owns, userScope)
 		}
 		out = append(out, c)
 		if c.Layer == "structure" {
-			out = append(out, checkScope(inv, scope, owns))
+			out = append(out, checkScope(inv, scope, owns, userScope))
 		}
 	}
 	return out
@@ -95,7 +103,7 @@ func topDirOf(p string) string {
 // checkScope fails when controller or handler files of the inventory lie
 // outside the scan scope: they are never sent to the model, so their
 // endpoints cannot exist in the graph and nothing else would say so.
-func checkScope(inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool) LayerCheck {
+func checkScope(inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool, userScope bool) LayerCheck {
 	na := LayerCheck{Layer: "scope", Status: CheckNA, Detail: "no controller or handler files"}
 	if scope == nil {
 		return LayerCheck{Layer: "scope", Status: CheckNA, Detail: "no scan scope"}
@@ -123,13 +131,17 @@ func checkScope(inv *Inventory, scope *manifest.ScanConfig, owns func(string) bo
 		names = append(names, d)
 	}
 	sort.Strings(names)
-	return LayerCheck{Layer: "scope", Status: CheckFailed,
-		Detail: fmt.Sprintf("%d of %d controller or handler files are outside the scan scope (%s)", out, total, strings.Join(names, ", "))}
+	detail := fmt.Sprintf("%d of %d controller or handler files are outside the scan scope (%s)", out, total, strings.Join(names, ", "))
+	if userScope {
+		return LayerCheck{Layer: "scope", Status: CheckOK,
+			Detail: fmt.Sprintf("%d of %d controller or handler files excluded by the scan scope; endpoints in %s are not in the graph", out, total, strings.Join(names, ", "))}
+	}
+	return LayerCheck{Layer: "scope", Status: CheckFailed, Detail: detail}
 }
 
 // checkCoverageInventory extends the coverage check with the inventory: the
 // files the scope reaches against the source files the repository has.
-func checkCoverageInventory(c LayerCheck, domainKey string, rep *FullReport, inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool) LayerCheck {
+func checkCoverageInventory(c LayerCheck, domainKey string, rep *FullReport, inv *Inventory, scope *manifest.ScanConfig, owns func(string) bool, userScope bool) LayerCheck {
 	if scope == nil || inv == nil {
 		return c
 	}
@@ -152,7 +164,7 @@ func checkCoverageInventory(c LayerCheck, domainKey string, rep *FullReport, inv
 	} else {
 		c.Detail += "; " + inv2
 	}
-	if in*2 < total {
+	if in*2 < total && !userScope {
 		c.Status = CheckFailed
 	} else if c.Status == CheckNA {
 		c.Status = CheckOK

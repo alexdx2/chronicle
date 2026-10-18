@@ -197,3 +197,27 @@ func TestBuildSnapshot_PartialProfileScopeStillCoversEveryServiceDirectory(t *te
 		}
 	}
 }
+
+func TestLayerChecks_UserManifestScopeIsReportedOKNotFailed(t *testing.T) {
+	g, _ := checksGraph(t)
+	inv := fourServicesInv()
+	inv.Files = append(inv.Files, InvFile{Path: "shared/user.controller.ts"})
+	cfg := &manifest.ScanConfig{Include: []string{"arena-api/**/*.ts"}}
+	cs := LayerChecksScopedFrom(g, "d", Profile{}, &FullReport{}, inv, cfg, nil, true)
+	c := byLayer(cs)["scope"]
+	if c.Status != CheckOK || !strings.Contains(c.Detail, "excluded by the scan scope; endpoints in jerry-api, shared, spectators-api, tom-api are not in the graph") {
+		t.Fatalf("%+v", c)
+	}
+	cov := byLayer(cs)["coverage"]
+	if cov.Status != CheckOK || !strings.Contains(cov.Detail, "3 of 13 inventory source files in scope") {
+		t.Fatalf("%+v", cov)
+	}
+	if lim := strings.Join(checkLimitations(cs), "|"); strings.Contains(lim, "layer scope:") || strings.Contains(lim, "layer coverage:") {
+		t.Fatalf("user scope must not be a limitation: %s", lim)
+	}
+	// The same scope from the model or the seed still fails.
+	cs = LayerChecksScopedFrom(g, "d", Profile{}, &FullReport{}, inv, cfg, nil, false)
+	if byLayer(cs)["scope"].Status != CheckFailed || byLayer(cs)["coverage"].Status != CheckFailed {
+		t.Fatalf("%+v", cs)
+	}
+}
