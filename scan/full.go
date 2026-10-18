@@ -46,6 +46,10 @@ type FullOptions struct {
 	// checks that run after extraction (FullReport.Checks).
 	Profile   *Profile
 	Inventory *Inventory
+	// ScopeSource says where the scan scope came from (ProfileFile.ScopeSource:
+	// model | seed | repo | base). The scope check reports a scope the user
+	// wrote ("repo") as a fact, not a failure.
+	ScopeSource string
 	// OnFiles is called after each committed wave with that wave's metrics.
 	OnFiles func([]FileMetric)
 	// OnFileDone is called when a file's extraction finishes, before its wave
@@ -145,9 +149,12 @@ func FullScan(ctx context.Context, g *graph.Graph, o FullOptions) (*FullReport, 
 	// it the way the layered build does, so manifests yield package nodes
 	// and DEPENDS_ON edges on every path.
 	if o.Deps == nil {
-		inv, err := BuildInventory(o.RepoRoot, defaultMaxFileBytes)
-		if err != nil {
-			return rep, err
+		inv := o.Inventory
+		if inv == nil {
+			var err error
+			if inv, err = BuildInventory(o.RepoRoot, defaultMaxFileBytes); err != nil {
+				return rep, err
+			}
 		}
 		dr, err := deps.Scan(o.RepoRoot, inv.Manifests)
 		if err != nil {
@@ -342,8 +349,8 @@ func (r *fullRun) writeDeps(d manifest.DomainEntry, multi bool) error {
 		}
 	}
 	rev, _, err := r.g.Store().ClaimRevision(store.RevisionClaim{
-		DomainKey: d.Key, AfterSHA: r.head, TriggerKind: "ci_pipeline", Mode: "incremental",
-		Metadata: `{"kind":"headless"}`,
+		DomainKey: d.Key, AfterSHA: r.head, TriggerKind: "manual", Mode: "incremental",
+		Metadata: `{"kind":"scan"}`,
 	})
 	if err != nil {
 		return fmt.Errorf("scan: claim revision for dependencies: %w", err)
@@ -372,7 +379,7 @@ func (r *fullRun) runChecks(d manifest.DomainEntry, dr DomainReport, scanCfg *ma
 	if multi {
 		owns = func(p string) bool { return r.m.DomainForFile(p) == d.Key }
 	}
-	r.rep.Checks = append(r.rep.Checks, LayerChecksScoped(r.g, d.Key, *r.o.Profile, &view, r.o.Inventory, scanCfg, owns)...)
+	r.rep.Checks = append(r.rep.Checks, LayerChecksScopedFrom(r.g, d.Key, *r.o.Profile, &view, r.o.Inventory, scanCfg, owns, r.o.ScopeSource == "repo")...)
 }
 
 // pendingFiles splits candidates into the files the model still has to see

@@ -325,7 +325,7 @@ func BuildSnapshot(ctx context.Context, in BuildInput) (*BuildResult, error) {
 	opts := FullOptions{
 		RepoRoot: wt, ProjectPath: projectPath, Backend: in.Backend, Concurrency: in.Concurrency,
 		ContextWindow: in.ContextWindow, FileTimeout: in.FileTimeout, OnFiles: onFiles, OnFileDone: in.OnFileDone, OnPlan: in.OnPlan,
-		Catalog: stage.catalog, Deps: &stage.deps, Profile: &stage.file.Profile, Inventory: stage.inv,
+		Catalog: stage.catalog, Deps: &stage.deps, Profile: &stage.file.Profile, Inventory: stage.inv, ScopeSource: stage.file.ScopeSource,
 	}
 	var (
 		rep    *FullReport
