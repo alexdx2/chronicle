@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -534,5 +535,67 @@ func TestFromStore_CoverageTieOnTimeTakesTheRowWithABlob(t *testing.T) {
 	}
 	if len(snap.Coverage) != 1 || snap.Coverage[0].Blob != "kept" {
 		t.Fatalf("coverage = %+v, want blob kept", snap.Coverage)
+	}
+}
+
+// An edge whose endpoint node is deleted is not exported (Decode would drop
+// it as dangling_edge); the drop is reported through ExportOptions.Warn.
+func TestFromStore_DropsDanglingEdgesAndWarns(t *testing.T) {
+	s := copyFixtureStore(t)
+
+	edges, err := s.ListEdges(store.EdgeFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var victim *store.EdgeRow
+	for i := range edges {
+		if !IsDerivedEdgeType(edges[i].EdgeType) {
+			victim = &edges[i]
+			break
+		}
+	}
+	if victim == nil {
+		t.Fatal("fixture has no non-derived edge")
+	}
+	if err := s.UpdateNodeTrust(victim.ToNodeID, 0, 0, 0, "deleted"); err != nil {
+		t.Fatal(err)
+	}
+
+	var warns []string
+	snap, err := FromStore(s, ExportOptions{Warn: func(m string) { warns = append(warns, m) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := map[string]bool{}
+	for _, n := range snap.Nodes {
+		present[n.ID] = true
+	}
+	for _, e := range snap.Edges {
+		if !present[e.From] || !present[e.To] {
+			t.Errorf("edge %s exported with a missing endpoint (%s -> %s)", e.ID, e.From, e.To)
+		}
+	}
+	found := false
+	for _, w := range warns {
+		if strings.Contains(w, "dangling_edge") && strings.Contains(w, victim.EdgeKey) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no dangling_edge warning naming %s; warnings: %v", victim.EdgeKey, warns)
+	}
+
+	var buf bytes.Buffer
+	if err := Encode(&buf, snap); err != nil {
+		t.Fatal(err)
+	}
+	_, decoded, err := Decode(&buf, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range decoded {
+		if w.Code == "dangling_edge" {
+			t.Errorf("round trip still produces a dangling_edge warning: %+v", w)
+		}
 	}
 }

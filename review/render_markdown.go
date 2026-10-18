@@ -298,6 +298,14 @@ func renderNormal(r *ReviewResult, o MarkdownOptions) (string, error) {
 	b.WriteString(fullDiagramSection(r, o))
 	b.WriteString("\n")
 
+	if len(r.Warnings) > 0 {
+		b.WriteString("### Limitations\n\n")
+		for _, w := range r.Warnings {
+			b.WriteString("- " + escapeText(w) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString(footer(o))
 
 	return b.String(), nil

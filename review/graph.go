@@ -63,6 +63,10 @@ type VersionGraph struct {
 	// Origin is one of the values above.
 	Origin string
 
+	// Warnings are the decode-time problems of the snapshot (dropped
+	// dangling edges, malformed records), already phrased for a reader.
+	Warnings []string
+
 	// Close releases any resources backing Graph (its temp SQLite store).
 	// Never nil, even when Origin == "missing" and Graph/Export are nil, so
 	// callers can unconditionally `defer vg.Close()`.
@@ -170,7 +174,7 @@ func (s SnapshotSource) loadAtRev(ctx context.Context) (*VersionGraph, error) {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: resolve version: %w", err)
 	}
 
-	snap, _, err := snapshot.AtCommit(s.RepoRoot, version)
+	snap, decodeWarnings, err := snapshot.AtCommit(s.RepoRoot, version)
 	if err != nil {
 		return nil, fmt.Errorf("review: SnapshotSource.Load: load graph at %s: %w", version.Commit, err)
 	}
@@ -205,6 +209,8 @@ func (s SnapshotSource) loadAtRev(ctx context.Context) (*VersionGraph, error) {
 		Version: version, Freshness: fr,
 		Origin: OriginSnapshot,
 		Close:  closer,
+
+		Warnings: summarizeDecodeWarnings(decodeWarnings),
 	}, nil
 }
 
@@ -251,7 +257,7 @@ func (s SnapshotSource) loadWorkingTree(ctx context.Context) (*VersionGraph, err
 // VersionGraph's Ref and version.Commit its Commit. The graph's store is
 // closed on every error after it is opened.
 func buildVersionGraph(ctx context.Context, repoRoot, ref string, data []byte, srcPath string, version snapshot.GraphVersion, rev, who string, skipFreshness bool) (*VersionGraph, error) {
-	snap, _, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
+	snap, decodeWarnings, err := snapshot.Decode(bytes.NewReader(data), snapshot.DefaultLimits())
 	if err != nil {
 		return nil, fmt.Errorf("review: %s.Load: decode %s: %w", who, srcPath, err)
 	}
@@ -293,7 +299,44 @@ func buildVersionGraph(ctx context.Context, repoRoot, ref string, data []byte, s
 		Version: version, Freshness: fr,
 		Origin: OriginSnapshot,
 		Close:  closer,
+
+		Warnings: summarizeDecodeWarnings(decodeWarnings),
 	}, nil
+}
+
+// summarizeDecodeWarnings folds snapshot.Decode's per-record warnings into
+// reader-facing lines: one per code with a count and the first message, so a
+// snapshot with a hundred dropped edges is one line, not a hundred.
+func summarizeDecodeWarnings(ws []snapshot.Warning) []string {
+	if len(ws) == 0 {
+		return nil
+	}
+	var order []string
+	byCode := map[string][]snapshot.Warning{}
+	for _, w := range ws {
+		// counts_mismatch is only the header noticing records that were
+		// already dropped (or reported) under their own code.
+		if w.Code == "counts_mismatch" {
+			continue
+		}
+		if _, ok := byCode[w.Code]; !ok {
+			order = append(order, w.Code)
+		}
+		byCode[w.Code] = append(byCode[w.Code], w)
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(order))
+	for _, code := range order {
+		list := byCode[code]
+		line := fmt.Sprintf("%d %s record(s) dropped from the graph snapshot (first: line %d, %s)", len(list), code, list[0].Line, list[0].Msg)
+		if code == "dangling_edge" {
+			line = fmt.Sprintf("%d relationship(s) dropped from the graph snapshot: an endpoint node is missing (first: line %d, %s)", len(list), list[0].Line, list[0].Msg)
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // loadRegistryFor resolves the type registry for repoRoot: a project-local

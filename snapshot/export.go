@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 
 	"github.com/alexdx2/chronicle-core/registry"
@@ -22,6 +23,10 @@ import (
 type ExportOptions struct {
 	PrevSeq  int    // seq of the file being replaced; the new one is PrevSeq+1
 	Registry string // fingerprint of the active registry (RegistryFingerprint)
+	// Warn receives one line per export-time inconsistency (an edge dropped
+	// because an endpoint is not exported). Nil writes to stderr, so a
+	// dropped relationship is never silent.
+	Warn func(msg string)
 }
 
 // FromStore exports the live, current state of st into a Snapshot — the
@@ -37,6 +42,9 @@ type ExportOptions struct {
 //   - an edge whose type is derived (IsDerivedEdgeType) is dropped
 //     entirely: the edge itself is the recomputable part, not just its
 //     evidence.
+//   - an edge with an endpoint that is not exported (deleted, or missing) is
+//     dropped and reported through ExportOptions.Warn: Decode would drop it
+//     as a dangling_edge anyway, and it must not do so silently.
 //   - evidence rows that are derived (IsDerivedEvidence) are dropped from
 //     whichever node or edge carried them. A node or edge that loses ALL of
 //     its evidence this way is still written, with an empty evidence list —
@@ -50,7 +58,11 @@ func FromStore(st *store.Store, opt ExportOptions) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	snapEdges, err := exportEdges(st)
+	warn := opt.Warn
+	if warn == nil {
+		warn = func(msg string) { fmt.Fprintln(os.Stderr, "chronicle: snapshot: "+msg) }
+	}
+	snapEdges, err := exportEdges(st, snapNodes, warn)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +139,11 @@ func exportNodes(st *store.Store) ([]Node, error) {
 
 // exportEdges lists every current edge whose type is not itself derived,
 // batch-loading their evidence in one round trip.
-func exportEdges(st *store.Store) ([]Edge, error) {
+func exportEdges(st *store.Store, nodes []Node, warn func(string)) ([]Edge, error) {
+	present := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		present[n.ID] = true
+	}
 	rows, err := st.ListEdges(store.EdgeFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: FromStore: list edges: %w", err)
@@ -137,6 +153,11 @@ func exportEdges(st *store.Store) ([]Edge, error) {
 	ids := make([]int64, 0, len(rows))
 	for _, e := range rows {
 		if IsDerivedEdgeType(e.EdgeType) {
+			continue
+		}
+		if !present[e.FromNodeKey] || !present[e.ToNodeKey] {
+			warn(fmt.Sprintf("dangling_edge: edge %q dropped from the export: endpoint %q or %q is not an exported node",
+				e.EdgeKey, e.FromNodeKey, e.ToNodeKey))
 			continue
 		}
 		kept = append(kept, e)

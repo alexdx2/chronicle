@@ -171,6 +171,63 @@ func (q CoreImpactQuerier) TopicSubscribers(topic string) ([]SystemImpact, error
 	return sortedImpacts(best), nil
 }
 
+// TopicPublisherQuerier is the optional second half of TopicSubscribers: it
+// lets Analyze say "this topic has no publisher in the graph". A querier that
+// does not implement it (a federated one, a test fake) simply never produces
+// that note.
+type TopicPublisherQuerier interface {
+	// TopicPublishers collapses every active PUBLISHES_TOPIC edge onto
+	// topicNodeKey to the system that owns the publishing node.
+	TopicPublishers(topicNodeKey string) ([]SystemImpact, error)
+}
+
+var _ TopicPublisherQuerier = CoreImpactQuerier{}
+
+// TopicPublishers is TopicSubscribers' mirror over PUBLISHES_TOPIC edges.
+func (q CoreImpactQuerier) TopicPublishers(topic string) ([]SystemImpact, error) {
+	st := q.Graph.Store()
+	topicNode, err := st.GetNodeByKey(topic)
+	if err != nil {
+		return nil, fmt.Errorf("review: CoreImpactQuerier.TopicPublishers: %w", err)
+	}
+	active := true
+	edges, err := st.ListEdges(store.EdgeFilter{ToNodeID: topicNode.NodeID, EdgeType: "PUBLISHES_TOPIC", Active: &active})
+	if err != nil {
+		return nil, fmt.Errorf("review: CoreImpactQuerier.TopicPublishers: list edges: %w", err)
+	}
+	if len(edges) == 0 {
+		return nil, nil
+	}
+	own, err := viewmodel.OwnershipMap(st)
+	if err != nil {
+		return nil, fmt.Errorf("review: CoreImpactQuerier.TopicPublishers: ownership: %w", err)
+	}
+	idx, err := nodeIndex(st)
+	if err != nil {
+		return nil, fmt.Errorf("review: CoreImpactQuerier.TopicPublishers: node index: %w", err)
+	}
+	flowTrigger, err := flowTriggerIndex(st)
+	if err != nil {
+		return nil, fmt.Errorf("review: CoreImpactQuerier.TopicPublishers: flow triggers: %w", err)
+	}
+	best := make(map[string]SystemImpact, len(edges))
+	for _, e := range edges {
+		ref, ok := collapseKey(own, idx, flowTrigger, e.FromNodeKey)
+		if !ok {
+			continue
+		}
+		if _, dup := best[ref.Key]; dup {
+			continue
+		}
+		best[ref.Key] = SystemImpact{
+			System:     ref,
+			Path:       []PathStep{{Node: topicNode.Name, Edge: "PUBLISHES_TOPIC"}},
+			Confidence: e.TrustScore,
+		}
+	}
+	return sortedImpacts(best), nil
+}
+
 // Collapse resolves nodeKey with no traversal: OwningService's single-lookup
 // case (see its own doc comment) — fine to call directly here since Collapse
 // itself is a single lookup, never a per-entry step inside a larger loop.

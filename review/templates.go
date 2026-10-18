@@ -275,6 +275,8 @@ func informationalEffect(info ReviewFinding) string {
 		return fmt.Sprintf("%s loses a caller", code(info.System.Name))
 	case ReasonProviderGainsCaller:
 		return fmt.Sprintf("%s gains a caller", code(info.System.Name))
+	case ReasonNewSubscriptionNoPublisher:
+		return "new subscription has no publisher"
 	default:
 		return fmt.Sprintf("%s affected", code(info.System.Name))
 	}

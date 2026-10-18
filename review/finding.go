@@ -39,10 +39,14 @@ const (
 	ReasonContractRemoved      = "contract_removed"
 	ReasonContractChanged      = "contract_changed"
 	ReasonNewTopicNoConsumers  = "new_topic_no_consumers"
-	ReasonHeadStaleFile        = "head_stale_file"
-	ReasonBaseStaleFile        = "base_stale_file"
-	ReasonHeadMissingGraph     = "head_missing_graph"
-	ReasonBaseMissingGraph     = "base_missing_graph"
+	// ReasonNewSubscriptionNoPublisher: a consumer moved onto a topic nobody
+	// publishes to in the graph. Informational, not a break: the mirror of
+	// ReasonNewTopicNoConsumers.
+	ReasonNewSubscriptionNoPublisher = "new_subscription_no_publisher"
+	ReasonHeadStaleFile              = "head_stale_file"
+	ReasonBaseStaleFile              = "base_stale_file"
+	ReasonHeadMissingGraph           = "head_missing_graph"
+	ReasonBaseMissingGraph           = "base_missing_graph"
 	// ReasonLearnedOutsideDiff marks a top-level Informational finding: a
 	// fact whose evidence files are all outside the diff.
 	ReasonLearnedOutsideDiff = "learned_outside_diff"
@@ -284,6 +288,18 @@ func analyzeIntegration(finding *ReviewFinding, c Change, q ImpactQuerier, depth
 		return
 	}
 
+	// A consumer that starts consuming a topic no one publishes to is not a
+	// break for anyone: say so, and drop the reverse-impact walk (nothing
+	// downstream of the consumer changed).
+	if edgeType == "CONSUMES_TOPIC" && c.Kind == IntegrationAdded && topicHasNoPublisher(q, c.Counterpart) {
+		finding.Reason = ReasonNewSubscriptionNoPublisher
+		finding.Downstream = []ReviewFinding{{
+			Severity: SeverityInformational, System: safeCollapse(q, c.Counterpart),
+			Reason: ReasonNewSubscriptionNoPublisher,
+		}}
+		return
+	}
+
 	reason := ReasonProviderGainsCaller
 	if c.Kind == IntegrationRemoved {
 		reason = ReasonProviderLostConsumer
@@ -306,6 +322,18 @@ func affectedFrom(q ImpactQuerier, seed string, depth int) []ReviewFinding {
 		return nil
 	}
 	return affectedFindingsFrom(impacts)
+}
+
+// topicHasNoPublisher is true only when q can answer and the answer is "no
+// active PUBLISHES_TOPIC edge reaches the topic"; a querier that cannot
+// answer (or errors) never claims it.
+func topicHasNoPublisher(q ImpactQuerier, topic string) bool {
+	pq, ok := q.(TopicPublisherQuerier)
+	if !ok || topic == "" {
+		return false
+	}
+	pubs, err := pq.TopicPublishers(topic)
+	return err == nil && len(pubs) == 0
 }
 
 func affectedFromTopic(q ImpactQuerier, topic string) []ReviewFinding {
