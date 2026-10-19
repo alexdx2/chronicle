@@ -101,7 +101,7 @@ func TestTreeAndCtx(t *testing.T) {
 
 func TestIsTestPath(t *testing.T) {
 	cases := map[string]bool{
-		"src/OrderTests.cs": true, "src/Order.cs": false,
+		"src/OrderTests.cs": true, "src/OrderTest.java": true, "src/OrderTests.java": true, "src/Order.java": false, "src/Latest.java": false, "src/Order.cs": false,
 		"a/b.spec.ts": true, "a/b.test.ts": true, "a/b.test.js": true, "a/b.ts": false,
 		"pkg/test_x.py": true, "pkg/x_test.py": false,
 		"tests/a.py": true, "src/__tests__/a.js": true, "src/contest/a.js": false,

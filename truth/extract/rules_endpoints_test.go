@@ -165,6 +165,28 @@ func TestEndpointRules(t *testing.T) {
 		{"ktor without routing import", "src/main/kotlin/Client.kt", "kotlin/Client.kt", nil},
 		{"ktor test dir ignored", "src/test/kotlin/Routes.kt", "kotlin/Routes.kt", nil},
 		{"ktor test file name ignored", "src/main/kotlin/PaymentRoutesTest.kt", "kotlin/PaymentRoutesTest.kt", nil},
+		{"spring controller", "src/main/java/shop/OrdersController.java", "java/OrdersController.java", []wantFact{
+			{"spring.controller", "GET /api/orders", true},
+			{"spring.controller", "GET /api/orders/{}", true},
+			{"spring.controller", "POST /api/orders/{}/pay", true},
+			{"spring.controller", "PUT /api/orders/a", true},
+			{"spring.controller", "PUT /api/orders/b", true},
+			{"spring.controller", "DELETE /api/orders/{}", true},
+			{"spring.controller", "PATCH /api/orders/{}/note", true},
+			{"spring.controller", "GET /api/orders/search", true},
+			{"spring.controller", "POST /api/orders/both", true},
+			{"spring.controller", "PUT /api/orders/both", true},
+			{"spring.controller", "ANY /api/orders/any", true},
+			{"spring.controller", "GET /api/orders/legacy", true},
+		}},
+		{"spring controller in a test dir yields nothing", "src/test/java/shop/OrdersController.java", "java/OrdersController.java", nil},
+		{"spring controller named *Test.java yields nothing", "src/main/java/shop/OrdersControllerTest.java", "java/OrdersController.java", nil},
+		{"spring feign interface yields nothing", "src/main/java/shop/CatalogApi.java", "java/Noise.java", nil},
+		{"spring several classes per file", "src/main/java/shop/Mixed.java", "java/Mixed.java", []wantFact{
+			{"spring.controller", "GET /health", false},
+			{"spring.controller", "GET /v1/ping", true},
+			{"spring.controller", "GET /v2/ping", true},
+		}},
 		{"openapi in tests dir ignored", "tests/openapi.yaml", "openapi/openapi.yaml", nil},
 	}
 	for _, c := range cases {

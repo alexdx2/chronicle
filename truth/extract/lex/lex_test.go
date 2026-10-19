@@ -129,7 +129,7 @@ func TestNoneAndCRLF(t *testing.T) {
 
 func TestFamilyFor(t *testing.T) {
 	cases := map[string]Family{
-		"a/b.cs": CLike, "x.TSX": CLike, "x.mjs": CLike, "App.jsx": CLike, "x.py": Python,
+		"a/b.cs": CLike, "a/B.java": CLike, "x.TSX": CLike, "x.mjs": CLike, "App.jsx": CLike, "x.py": Python,
 		"Dockerfile": Hash, "Dockerfile.dev": Hash, ".env": Hash, ".env.local": Hash,
 		"A.kt": CLike, "build.gradle.kts": CLike, "build.gradle": CLike, "application.conf": Hash, "a.yml": Hash, "a.tf": Hash, "a.toml": Hash, "a.json": None, "a.csproj": None, "a.xml": None, "a.zzz": None,
 	}
