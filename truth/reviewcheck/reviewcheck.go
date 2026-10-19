@@ -322,6 +322,13 @@ func Check(in Input) Result {
 			changed[strings.TrimPrefix(strings.ReplaceAll(c.Path, "\\", "/"), "./")] = true
 		}
 		explainByChangedCaller(d.Added, changed, headHTTPFacts(head), in.HeadSnap, mappedAdded)
+		// A caller moved inside the change (A -> T removed, B -> T added, both
+		// files in the diff) is one moved integration, not two unexplained edges.
+		for _, p := range review.MovedIntegrationPairs(d.Added, d.Removed, in.Review.ChangedFiles) {
+			a, r := d.Added[p[0]].Edge, d.Removed[p[1]].Edge
+			mappedAdded[a.From], mappedAdded[a.To] = true, true
+			mappedRemoved[r.From], mappedRemoved[r.To] = true, true
+		}
 		for _, f := range d.Added {
 			if u, ok := unexplained(f, Added, mappedAdded, types); ok {
 				res.Unexplained = append(res.Unexplained, u)

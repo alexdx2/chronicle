@@ -276,9 +276,11 @@ func Review(ctx context.Context, in ReviewInput) (*ReviewResult, error) {
 
 	delta := Diff(base, head, hunks)
 	codeDelta, learned := partitionLearned(delta, changedFiles)
+	codeDelta, moved := splitMovedIntegrations(codeDelta, changedFiles)
 	changes := ClassifyDelta(codeDelta)
 	baseQ, headQ := makeQuerier(base), makeQuerier(head)
 	findings := Analyze(changes, baseQ, headQ, depth)
+	findings = append(findings, movedFindings(moved, headQ)...)
 	findings = append(findings, learnedFindings(learned, baseQ, headQ)...)
 	findings = append(findings, unknownFindings(changedFiles, base.Freshness, head.Freshness)...)
 

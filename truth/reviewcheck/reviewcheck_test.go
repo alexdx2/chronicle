@@ -318,3 +318,25 @@ func TestUnchangedHTTPFactExplainsAddedCallInChangedFile(t *testing.T) {
 		t.Fatalf("caller file not changed must stay unexplained: %+v", res.Unexplained)
 	}
 }
+
+func TestMovedIntegrationIsNotUnexplained(t *testing.T) {
+	withFile := func(f review.Fact, file string) review.Fact {
+		f.Edge.Evidence = []snapshot.Evidence{{ID: "e-" + file, File: file, Range: "1-1"}}
+		return f
+	}
+	rv := &review.ReviewResult{
+		ChangedFiles: []gitdiff.ChangedFile{{Path: "a.cs"}, {Path: "b.cs"}},
+		Delta: &review.GraphDelta{
+			Added:   []review.Fact{withFile(edgeFact("code:p:d:b", "service:external_system:d:pricing-api", "CALLS_SERVICE"), "b.cs")},
+			Removed: []review.Fact{withFile(edgeFact("code:p:d:a", "service:external_system:d:pricing-api", "CALLS_SERVICE"), "a.cs")},
+		}}
+	res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{}, Review: rv})
+	if len(res.Unexplained) != 0 {
+		t.Errorf("moved pair unexplained: %+v", res.Unexplained)
+	}
+	// without the second changed file the edges are unexplained again
+	rv.ChangedFiles = rv.ChangedFiles[:1]
+	if res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{}, Review: rv}); len(res.Unexplained) != 2 {
+		t.Errorf("unpaired: %+v", res.Unexplained)
+	}
+}

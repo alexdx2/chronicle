@@ -175,6 +175,10 @@ func renderNoSystemChange(r *ReviewResult, o MarkdownOptions) string {
 		b.WriteString("\n")
 		b.WriteString(sec)
 	}
+	if sec := movedSection(r, resolveMaxRows(o.MaxRows)); sec != "" {
+		b.WriteString("\n")
+		b.WriteString(sec)
+	}
 	if sec := learnedSection(r, resolveMaxRows(o.MaxRows)); sec != "" {
 		b.WriteString("\n")
 		b.WriteString(sec)
@@ -271,6 +275,11 @@ func renderNormal(r *ReviewResult, o MarkdownOptions) (string, error) {
 
 	if sec := changedRelationshipsSection(r, maxRows); sec != "" {
 		b.WriteString("### Changed system relationships\n\n")
+		b.WriteString(sec)
+		b.WriteString("\n")
+	}
+
+	if sec := movedSection(r, maxRows); sec != "" {
 		b.WriteString(sec)
 		b.WriteString("\n")
 	}
