@@ -5510,10 +5510,10 @@ func (g *Graph) hostFromConfigSymbol(filePath string, fact Fact, host, rest stri
 	if !rok {
 		return ConfigEntry{}, "", false
 	}
-	lowHost := strings.ToLower(host)
-	if strings.Contains(strings.ToLower(src), lowHost) {
-		return ConfigEntry{}, "", false
-	}
+	// The host may also appear in the file as plain text (an error message
+	// "pricing-api answered 500"); what decides is whether the file names a
+	// config symbol that maps to the host. Without one the caller keeps the
+	// literal-host path.
 	for _, e := range cfg.Entries {
 		if !strings.EqualFold(e.Host, host) {
 			continue

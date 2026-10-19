@@ -203,3 +203,24 @@ func TestConfigHost_LiteralHostTargetTypedClient(t *testing.T) {
 	ev := callServiceEvidence(t, g, s, "pricing-api", code, "sales-api/appsettings.json")
 	wantTwoValid(t, ev, code, "/prices/all", "sales-api/appsettings.json")
 }
+
+// notify-svc shape: the host also appears as plain text in an error message
+// of the same file, but the call itself uses the config symbol. The config
+// symbol decides: two valid rows, active edge.
+func TestConfigHost_LiteralHostTargetHostAlsoInText(t *testing.T) {
+	writeTree(t, map[string]string{
+		"notify-svc/.env": "PRICING_API_URL=http://pricing-api:8080\n",
+		"notify-svc/src/pricing.client.ts": "export async function price(sku: string) {\n" +
+			"  const res = await fetch(`${process.env.PRICING_API_URL}/prices/${sku}`);\n" +
+			"  if (!res.ok) throw new Error(`pricing-api answered ${res.status}`);\n" +
+			"  return res.json();\n}\n",
+	})
+	c := &ConfigHosts{}
+	c.Add("PRICING_API_URL", "http://pricing-api:8080", "notify-svc/.env")
+	code := "notify-svc/src/pricing.client.ts"
+	g, s, _ := resolveFiles(t, c, srcFacts{code, []Fact{
+		{Kind: "http_call", From: "pricing", FromType: "provider", Target: "pricing-api", Method: "GET"},
+	}})
+	ev := callServiceEvidence(t, g, s, "pricing-api", code, "notify-svc/.env")
+	wantTwoValid(t, ev, code, "PRICING_API_URL", "notify-svc/.env")
+}
