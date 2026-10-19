@@ -200,7 +200,14 @@ func (g *Graph) addPublishedPackages(domainKey string, allFiles []fileFacts, add
 			}
 			owner := g.manifestOwnerKey(domainKey, ff.filePath, f.FromType)
 			if f.Kind == "publishes_package" && f.To != "" {
-				add(f.To, owner)
+				if strings.HasPrefix(owner, "service:") {
+					add(f.To, owner)
+				} else {
+					// No service node owns the manifest: a sibling dependency
+					// lands on the package node the PUBLISHES edge targets,
+					// not on the manifest's file node.
+					add(f.To, packageNodeKey(domainKey, f.Ecosystem, f.To))
+				}
 			}
 			if isProject && !stemmed {
 				add(projectFileStem(ff.filePath), owner)

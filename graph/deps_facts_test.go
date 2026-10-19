@@ -564,3 +564,71 @@ func TestWriteDepsExtractions_PublishedPackageMintsServiceNode(t *testing.T) {
 		t.Errorf("edges must start at the service: publishes=%v depends=%v", pub, dep)
 	}
 }
+
+// Runtime frameworks are manifest facts; devDependencies stay out; the same
+// names remain noise for import-derived edges.
+func TestWriteDepsExtractions_RuntimeFrameworksFromManifest(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{
+		Publishes: []deps.Package{{Name: "acme-api", Ecosystem: "npm", File: "package.json", Line: 2, Text: `"name": "acme-api"`, App: true}},
+		Depends: []deps.Dependency{
+			{Name: "express", Version: "^4", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 5, Text: `"express"`},
+			{Name: "koa", Version: "^2", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 6, Text: `"koa"`},
+			{Name: "fastify", Version: "^4", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 7, Text: `"fastify"`},
+			{Name: "rxjs", Version: "^7", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 8, Text: `"rxjs"`},
+			{Name: "jest", Version: "^29", Section: "devDependencies", Ecosystem: "npm", File: "package.json", Line: 9, Text: `"jest"`},
+			{Name: "lodash", Version: "^4", Section: "dependencies", Ecosystem: "npm", File: "package.json", Line: 10, Text: `"lodash"`},
+		},
+	}
+	if _, err := g.WriteDepsExtractions("d", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"express", "koa", "fastify", "rxjs"} {
+		if k, _ := st.GetNodeByKey(packageNodeKey("d", "npm", n)); k == nil {
+			t.Errorf("%s missing from the graph", n)
+		}
+	}
+	for _, n := range []string{"jest", "lodash"} {
+		if k, _ := st.GetNodeByKey(packageNodeKey("d", "npm", n)); k != nil {
+			t.Errorf("%s should stay out", n)
+		}
+	}
+	for _, m := range []string{"express", "koa", "fastify", "rxjs"} {
+		if ShouldTrackDependency(m) {
+			t.Errorf("import-derived edge to %s must stay filtered", m)
+		}
+	}
+}
+
+// A workspace sibling without a service node: DEPENDS_ON targets the package
+// node that the PUBLISHES edge targets, not the sibling's package.json file node.
+func TestWriteDepsExtractions_LibrarySiblingDependsOnPackageNode(t *testing.T) {
+	g, st, rev := setupTestGraph(t)
+	rep := deps.Report{
+		Publishes: []deps.Package{
+			{Name: "@acme/shared", Ecosystem: "npm", File: "libs/shared/package.json", Line: 2, Text: `"name": "@acme/shared"`},
+			{Name: "@acme/catalog", Ecosystem: "npm", File: "services/catalog/package.json", Line: 2, Text: `"name": "@acme/catalog"`, App: true},
+		},
+		Depends: []deps.Dependency{
+			{Name: "@acme/shared", Version: "workspace:*", Section: "dependencies", Ecosystem: "npm", File: "services/catalog/package.json", Line: 6, Internal: true, Text: `"@acme/shared": "workspace:*"`},
+		},
+	}
+	if _, err := g.WriteDepsExtractions("d", rev, rep); err != nil {
+		t.Fatal(err)
+	}
+	want := packageNodeKey("d", "npm", "@acme/shared")
+	edges, _ := st.ListEdges(store.EdgeFilter{EdgeType: "DEPENDS_ON"})
+	if len(edges) != 1 || edges[0].ToNodeKey != want {
+		t.Fatalf("DEPENDS_ON should land on %s, got %+v", want, edges)
+	}
+	pub, _ := st.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES"})
+	var ok bool
+	for _, e := range pub {
+		if e.ToNodeKey == want {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Errorf("no PUBLISHES edge to %s", want)
+	}
+}

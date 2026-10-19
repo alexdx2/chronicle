@@ -164,6 +164,11 @@ func pythonInfrastructure(n string) bool {
 	return false
 }
 
+// manifestRuntimeKept are runtime packages that stay filtered for
+// import-derived edges (isInfrastructure) but must appear when a manifest
+// declares them in dependencies: the manifest line is the evidence.
+var manifestRuntimeKept = map[string]bool{"express": true, "koa": true, "fastify": true, "rxjs": true}
+
 // ClassifyDependencyIn is ClassifyDependency aware of the manifest's ecosystem.
 // Ecosystems without their own rules keep the legacy npm-shaped classifier.
 func ClassifyDependencyIn(ecosystem, name string) DependencyClass {
@@ -187,6 +192,11 @@ func ClassifyDependencyIn(ecosystem, name string) DependencyClass {
 		}
 		return ClassifyDependency(name)
 	default:
+		// npm-shaped manifests: a declared runtime framework is a fact of the
+		// manifest even though a bare import of it is noise.
+		if manifestRuntimeKept[n] {
+			return DepArchitectural
+		}
 		return ClassifyDependency(name)
 	}
 	for _, p := range prefixes {
