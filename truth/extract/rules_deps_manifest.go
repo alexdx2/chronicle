@@ -13,6 +13,7 @@ func init() {
 		funcRule{"manifest.csproj", func(p string) bool {
 			return hasExt(p, ".csproj", ".fsproj") || baseName(p) == "Directory.Packages.props"
 		}, applyManifestCsproj},
+		funcRule{"manifest.packages_config", func(p string) bool { return baseName(p) == "packages.config" }, applyManifestPackagesConfig},
 		funcRule{"manifest.npm", func(p string) bool { return baseName(p) == "package.json" }, applyManifestNpm},
 		funcRule{"manifest.pyproject", func(p string) bool { return baseName(p) == "pyproject.toml" }, applyManifestPyproject},
 		funcRule{"manifest.requirements", isRequirementsPath, applyManifestRequirements},
@@ -132,6 +133,38 @@ func applyManifestCsproj(f *FileCtx) []truth.Fact {
 		base := path.Base(strings.ReplaceAll(inc, "\\", "/"))
 		stem := strings.TrimSuffix(base, path.Ext(base))
 		if ft := s.add("project", stem, "", "project"); ft != nil {
+			ft.Primary = evidence(f, f.Lines[lineAt(f, text, m[0])])
+		}
+	}
+	return s.facts
+}
+
+// ---- legacy packages.config ------------------------------------------------
+
+var (
+	pkgConfigRoot = regexp.MustCompile(`(?s)<packages\b`)
+	pkgConfigItem = regexp.MustCompile(`(?s)<package\b([^>]*?)/?>`)
+)
+
+// applyManifestPackagesConfig reads the pre-PackageReference NuGet manifest:
+// <packages><package id="X" version="1.0" /></packages>. A packages.lock.json
+// beside it wins, as for csproj.
+func applyManifestPackagesConfig(f *FileCtx) []truth.Fact {
+	if len(f.Tree.Siblings(f.Dir, "packages.lock.json")) > 0 {
+		return nil
+	}
+	text := blankComments(string(f.Raw))
+	if !pkgConfigRoot.MatchString(text) {
+		return nil
+	}
+	s := newDepSet("manifest.packages_config", f)
+	for _, m := range pkgConfigItem.FindAllStringSubmatchIndex(text, -1) {
+		a := xmlAttrs(text[m[2]:m[3]])
+		name := a["id"]
+		if name == "" {
+			continue
+		}
+		if ft := s.add("nuget", name, a["version"], "dependencies"); ft != nil {
 			ft.Primary = evidence(f, f.Lines[lineAt(f, text, m[0])])
 		}
 	}

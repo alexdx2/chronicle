@@ -17,6 +17,7 @@ func init() {
 			b := strings.ToLower(baseName(p))
 			return strings.HasPrefix(b, "appsettings") && strings.HasSuffix(b, ".json")
 		}, applyAppSettings},
+		funcRule{"webconfig.url", isDotnetConfigPath, applyWebConfig},
 		funcRule{"ts.config_url", isTSConfigPath, applyTSConfig},
 		funcRule{"dotenv.url", func(p string) bool {
 			b := strings.ToLower(baseName(p))
@@ -346,6 +347,63 @@ func applyTSConfig(f *FileCtx) []truth.Fact {
 				continue
 			}
 			if fc, ok := httpFact("ts.config_url", f, l, m[2], m[1]); ok {
+				out = append(out, fc)
+			}
+		}
+	}
+	return out
+}
+
+// ---- .NET web.config / app.config appSettings ----
+
+// isDotnetConfigPath matches web.config, app.config and their transforms
+// (Web.Release.config, App.Staging.config).
+func isDotnetConfigPath(p string) bool {
+	b := strings.ToLower(baseName(p))
+	if !strings.HasSuffix(b, ".config") {
+		return false
+	}
+	return b == "web.config" || b == "app.config" || strings.HasPrefix(b, "web.") || strings.HasPrefix(b, "app.")
+}
+
+var (
+	cfgAppSettingsOpen  = regexp.MustCompile(`(?i)<appSettings\b[^>]*?(/?)>`)
+	cfgAppSettingsClose = regexp.MustCompile(`(?i)</appSettings\s*>`)
+	cfgAddRe            = regexp.MustCompile(`(?is)<add\b([^>]*?)/?>`)
+	// sqsHost: queue URLs belong to the channels class, not to http.
+	sqsHost = regexp.MustCompile(`(?i)^sqs[.-]([a-z0-9-]+\.)?amazonaws\.com(\.cn)?$`)
+)
+
+// applyWebConfig reads <add key="K" value="V" /> entries inside <appSettings>
+// with the same key/value criteria as appsettings.json.
+func applyWebConfig(f *FileCtx) []truth.Fact {
+	if f.IsTest {
+		return nil
+	}
+	text := blankComments(string(f.Raw))
+	var out []truth.Fact
+	for _, o := range cfgAppSettingsOpen.FindAllStringSubmatchIndex(text, -1) {
+		if o[2] >= 0 && o[3] > o[2] { // <appSettings ... /> is empty
+			continue
+		}
+		end := len(text)
+		if c := cfgAppSettingsClose.FindStringIndex(text[o[1]:]); c != nil {
+			end = o[1] + c[0]
+		}
+		block := text[o[1]:end]
+		for _, m := range cfgAddRe.FindAllStringSubmatchIndex(block, -1) {
+			a := xmlAttrs(block[m[2]:m[3]])
+			k, v := a["key"], strings.TrimSpace(a["value"])
+			if k == "" || v == "" {
+				continue
+			}
+			if !((cfgURLKey.MatchString(k) && !(httpsURL.MatchString(v) && notServiceKey.MatchString(k))) || anyServiceURL(k, v)) {
+				continue
+			}
+			if host := truth.CanonHost(v); sqsHost.MatchString(host) {
+				continue
+			}
+			if fc, ok := httpFact("webconfig.url", f, f.Lines[lineAt(f, text, o[1]+m[0])], v, k); ok {
 				out = append(out, fc)
 			}
 		}
