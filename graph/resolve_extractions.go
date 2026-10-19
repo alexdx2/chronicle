@@ -5560,6 +5560,7 @@ func (g *Graph) configEvidence(edgeKey string, e *ConfigEntry, fact Fact, method
 	_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 		TargetKind: "edge", SourceKind: "file", FilePath: e.File,
 		ExtractorID: extractorID, ExtractorVersion: "1.0",
+		ASTRule:    store.ConfigValueRule,
 		Confidence: conf, RevisionID: revisionID,
 		AssertionKind: "text_contains", Assertion: string(assertion),
 	})

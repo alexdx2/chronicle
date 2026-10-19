@@ -680,6 +680,12 @@ func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error
 	return int64(len(subjects)), nil
 }
 
+// ConfigValueRule marks an evidence row that only confirms a configuration
+// value (the config file line that holds a host). Such a row does not back the
+// call that was derived from it: RetireUnbackedByFiles ignores it when it looks
+// for a live row.
+const ConfigValueRule = "config_value"
+
 // RetireUnbackedByFiles deactivates the current edges and then the nodes of
 // domainKey that have evidence from one of files that is no longer live
 // (stale, superseded or invalidated) and no live positive evidence at all: the
@@ -702,7 +708,7 @@ func (s *Store) RetireUnbackedByFiles(domainKey string, files []string, revision
 		      AND de.file_path IN (%[3]s) AND de.evidence_status IN ('stale','superseded','invalidated'))
 		  AND NOT EXISTS (SELECT 1 FROM graph_evidence le WHERE le.%[1]s = %[2]s.%[1]s
 		      AND le.evidence_polarity = 'positive' AND le.evidence_status IN ('valid','revalidated')
-		      AND le.source_kind <> 'synthetic')`
+		      AND le.source_kind <> 'synthetic' AND COALESCE(le.ast_rule,'') <> '`+ConfigValueRule+`')`
 
 	type subject struct {
 		id       int64
@@ -813,7 +819,7 @@ func (s *Store) RetireUnbackedByFiles(domainKey string, files []string, revision
 		}
 		var backed int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM graph_edges e WHERE e.active=1 AND (e.from_node_id=? OR e.to_node_id=?)
-			AND EXISTS (SELECT 1 FROM graph_evidence x WHERE x.edge_id = e.edge_id AND x.source_kind <> 'synthetic')`, id, id).Scan(&backed); err != nil || backed > 0 {
+			AND EXISTS (SELECT 1 FROM graph_evidence x WHERE x.edge_id = e.edge_id AND x.source_kind <> 'synthetic' AND COALESCE(x.ast_rule,'') <> '`+ConfigValueRule+`')`, id, id).Scan(&backed); err != nil || backed > 0 {
 			continue
 		}
 		derived, err := collect(`SELECT e.edge_id, e.edge_key, e.from_node_id, e.to_node_id FROM graph_edges e
