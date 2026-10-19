@@ -48,8 +48,9 @@ type Fact struct {
 
 // RulesVersion identifies the generation of the extractor rules and the class
 // list. Bump it whenever an extractor rule or the class list changes, so
-// stored reports are recomputed. 2: the packages class exists.
-const RulesVersion = 2
+// stored reports are recomputed. 2: the packages class exists. 3: appsettings URLs under any key, ts config
+// URLs, example/generated code excluded.
+const RulesVersion = 3
 
 // Report is the output of an extraction run.
 type Report struct {

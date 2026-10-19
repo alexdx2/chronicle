@@ -68,6 +68,8 @@ func TestHTTPRules(t *testing.T) {
 			"appsettings.url | var:WIN_URL",
 			"appsettings.url | search.internal",
 			"appsettings.url | top.example.com",
+			"appsettings.url | nope.example.com",  // any key (was ignored under NotAUrl)
+			"appsettings.url | ghost.example.com", // any key
 		}},
 		{"appsettings env variant", "src/Api/AppSettings.Production.JSON", "config/appsettings.json", []string{
 			"appsettings.url | var:TOM_API_URL",
@@ -75,6 +77,8 @@ func TestHTTPRules(t *testing.T) {
 			"appsettings.url | var:WIN_URL",
 			"appsettings.url | search.internal",
 			"appsettings.url | top.example.com",
+			"appsettings.url | nope.example.com",  // any key (was ignored under NotAUrl)
+			"appsettings.url | ghost.example.com", // any key
 		}},
 		{"appsettings comment retry", "appsettings.json", "config/appsettings.comment.json", []string{"appsettings.url | x.example.com"}},
 		{"csharp pinned", "Pinned.cs", "csharp/Pinned.cs", []string{"csharp.httpclient_base | b.example.com"}},

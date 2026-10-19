@@ -17,6 +17,7 @@ func init() {
 			b := strings.ToLower(baseName(p))
 			return strings.HasPrefix(b, "appsettings") && strings.HasSuffix(b, ".json")
 		}, applyAppSettings},
+		funcRule{"ts.config_url", isTSConfigPath, applyTSConfig},
 		funcRule{"dotenv.url", func(p string) bool {
 			b := strings.ToLower(baseName(p))
 			return b == ".env" || strings.HasPrefix(b, ".env.")
@@ -82,7 +83,7 @@ func applyAppSettings(f *FileCtx) []truth.Fact {
 			sort.Strings(keys)
 			for _, k := range keys {
 				if s, ok := x[k].(string); ok {
-					if cfgURLKey.MatchString(k) {
+					if (cfgURLKey.MatchString(k) && !(httpsURL.MatchString(s) && notServiceKey.MatchString(k))) || anyServiceURL(k, s) {
 						if l, found := lineOf(lines, `"`+k+`"`, s); found {
 							if fc, ok := httpFact("appsettings.url", f, l, s, k); ok {
 								out = append(out, fc)
@@ -102,6 +103,25 @@ func applyAppSettings(f *FileCtx) []truth.Fact {
 	walk(root)
 	return out
 }
+
+// notServiceKey marks documentation and schema pointers, never services.
+var notServiceKey = regexp.MustCompile(`(?i)doc|help|schema|license|homepage|swagger`)
+
+// schemaHosts are well-known schema/spec hosts that appear as values.
+var schemaHosts = map[string]bool{"json-schema.org": true, "schemastore.org": true, "www.schemastore.org": true, "json.schemastore.org": true, "www.w3.org": true, "aka.ms": true}
+
+// anyServiceURL accepts an absolute http(s) URL under any key except
+// documentation/schema keys and well-known schema hosts. Local hosts yield no
+// fact later (CanonHost), which also covers the app's own Kestrel binding.
+func anyServiceURL(key, value string) bool {
+	v := strings.TrimSpace(value)
+	if !httpsURL.MatchString(v) || notServiceKey.MatchString(key) {
+		return false
+	}
+	return !schemaHosts[truth.CanonHost(v)]
+}
+
+var httpsURL = regexp.MustCompile(`(?i)^https?://`)
 
 func unquote(s string) string {
 	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
@@ -272,5 +292,37 @@ func k8sWalk(f *FileCtx, root *yaml.Node, configMap bool) []truth.Fact {
 		}
 	}
 	walk(root)
+	return out
+}
+
+// isTSConfigPath: environment*.ts, config*.ts and *.config.ts files.
+func isTSConfigPath(p string) bool {
+	b := strings.ToLower(baseName(p))
+	if !(strings.HasSuffix(b, ".ts") || strings.HasSuffix(b, ".js")) || strings.HasSuffix(b, ".d.ts") {
+		return false
+	}
+	return strings.HasPrefix(b, "environment") || strings.HasPrefix(b, "config") ||
+		strings.HasSuffix(b, ".config.ts") || strings.HasSuffix(b, ".config.js")
+}
+
+var tsConfigProp = regexp.MustCompile(`(?:^|[\s{,])['"]?([A-Za-z_$][A-Za-z0-9_$]*)['"]?\s*:\s*['"` + "`" + `]((?i:https?)://[^'"` + "`" + `\s]*)['"` + "`" + `]`)
+
+// applyTSConfig: an object property whose value is an absolute http(s)
+// string literal. The path is the literal's own path (use sites live in other files).
+func applyTSConfig(f *FileCtx) []truth.Fact {
+	if f.IsTest {
+		return nil
+	}
+	var out []truth.Fact
+	for _, l := range f.Lines {
+		for _, m := range tsConfigProp.FindAllStringSubmatch(l.Code, -1) {
+			if !anyServiceURL(m[1], m[2]) {
+				continue
+			}
+			if fc, ok := httpFact("ts.config_url", f, l, m[2], m[1]); ok {
+				out = append(out, fc)
+			}
+		}
+	}
 	return out
 }

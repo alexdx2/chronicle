@@ -173,7 +173,7 @@ func TestLooseTokens(t *testing.T) {
 
 func TestReportRulesVersion(t *testing.T) {
 	b, err := json.Marshal(Report{RulesVersion: RulesVersion})
-	if err != nil || !strings.Contains(string(b), `"rules_version":2`) {
+	if err != nil || !strings.Contains(string(b), `"rules_version":3`) {
 		t.Fatalf("marshal: %s %v", b, err)
 	}
 	var old Report
