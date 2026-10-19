@@ -90,3 +90,30 @@ func TestGoHTTPMux(t *testing.T) {
 	checkLines(t, got, wantLines("go.http_mux",
 		"GET /items", "POST /items/{}", "DELETE /items/{}/{}", "GET /", "GET /hosted", "PUT /default-mux"))
 }
+
+func TestGoChannels(t *testing.T) {
+	facts, got := goFacts(t, truth.ClassChannels, map[string]string{
+		"internal/messaging/consumer.go":      "franz_consumer.go",
+		"internal/messaging/topics.go":        "franz_topics.go",
+		"internal/messaging/consumer_test.go": "franz_consumer_test.go",
+		"internal/messaging/sarama.go":        "sarama_kafka.go",
+		"internal/other/other.go":             "not_kafka.go",
+	})
+	want := append(wantLines("kafka.go_franz",
+		"topic:orders-created#consume", "topic:orders-paid#consume", "topic:multi-line#consume",
+		"topic:orders-shipped#consume", "topic:orders-shipped#produce",
+		"topic:orders-audit#produce", "topic:fallback-topic#produce"),
+		wantLines("kafka.go_sarama",
+			"topic:invoices#produce", "topic:audit-events#produce",
+			"topic:partitioned#consume", "topic:grp-a#consume", "topic:audit-events#consume")...)
+	sort.Strings(want)
+	checkLines(t, got, want)
+	for _, f := range facts {
+		if f.Key == "topic:orders-shipped#produce" {
+			// resolved through a const of a sibling file: the const is the primary evidence
+			if f.Primary.File != "internal/messaging/topics.go" || f.Primary.Line != 3 || len(f.Derived) != 1 {
+				t.Errorf("%s: primary %+v derived %v", f.Key, f.Primary, f.Derived)
+			}
+		}
+	}
+}
