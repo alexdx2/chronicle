@@ -169,3 +169,37 @@ func TestConfigHost_LiteralHostKeepsItsEvidence(t *testing.T) {
 	}
 	_ = g
 }
+
+// The model writes the configured host itself as the target; the line holds
+// only the symbol. The call is treated as a substituted one.
+func TestConfigHost_LiteralHostTargetFromSymbolLine(t *testing.T) {
+	writeTree(t, map[string]string{
+		"notify-svc/.env":                  "PRICING_API_URL=http://pricing-api:8080\n",
+		"notify-svc/src/pricing.client.ts": "export const price = (sku: string) =>\n  fetch(`${process.env.PRICING_API_URL}/prices/${sku}`);\n",
+	})
+	c := &ConfigHosts{}
+	c.Add("PRICING_API_URL", "http://pricing-api:8080", "notify-svc/.env")
+	code := "notify-svc/src/pricing.client.ts"
+	g, s, _ := resolveFiles(t, c, srcFacts{code, []Fact{
+		{Kind: "http_call", From: "pricing", FromType: "provider", Target: "pricing-api/prices/${sku}", Method: "GET"},
+	}})
+	ev := callServiceEvidence(t, g, s, "pricing-api", code, "notify-svc/.env")
+	wantTwoValid(t, ev, code, "PRICING_API_URL", "notify-svc/.env")
+}
+
+func TestConfigHost_LiteralHostTargetTypedClient(t *testing.T) {
+	writeTree(t, map[string]string{
+		"sales-api/appsettings.json":          "{\n  \"Services\": {\n    \"PricingApi\": \"http://pricing-api:8080\"\n  }\n}\n",
+		"sales-api/Program.cs":                "builder.Services.AddHttpClient<PricingClient>(c => c.BaseAddress = new Uri(builder.Configuration[\"Services:PricingApi\"]!));\n",
+		"sales-api/Services/PricingClient.cs": "public class PricingClient {\n  public Task<Price> Get() => _http.GetFromJsonAsync<Price>(\"/prices/all\");\n}\n",
+	})
+	c := &ConfigHosts{}
+	c.Add("Services:PricingApi", "http://pricing-api:8080", "sales-api/appsettings.json")
+	c.AddClient(ClientBinding{Class: "PricingClient", Key: "Services:PricingApi", File: "sales-api/Program.cs"})
+	code := "sales-api/Services/PricingClient.cs"
+	g, s, _ := resolveFiles(t, c, srcFacts{code, []Fact{
+		{Kind: "http_call", From: "PricingClient", FromType: "provider", Target: "http://pricing-api:8080/prices/all", Method: "GET"},
+	}})
+	ev := callServiceEvidence(t, g, s, "pricing-api", code, "sales-api/appsettings.json")
+	wantTwoValid(t, ev, code, "/prices/all", "sales-api/appsettings.json")
+}

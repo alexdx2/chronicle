@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -5398,6 +5399,11 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 				return httpTarget{target: raw, cfg: &e, codeText: fact.Text}
 			}
 		}
+		if u, err := url.Parse(strings.TrimSpace(cleanCallTarget(raw))); err == nil && u.Hostname() != "" {
+			if e, text, ok := g.hostFromConfigSymbol(filePath, fact, u.Hostname(), u.EscapedPath()); ok {
+				return httpTarget{target: raw, cfg: &e, codeText: text}
+			}
+		}
 		return httpTarget{target: raw}
 	}
 	base, rest := SplitCallTarget(raw)
@@ -5422,6 +5428,18 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 				"the call address is a configuration key with no value in the repository's config files")}
 		}
 	}
+	if kind == SymNone {
+		// The model wrote the configured host itself as the target. When the
+		// line does not carry that host but carries a symbol the table maps to
+		// it, the call is a substituted one.
+		host := base
+		if i := strings.LastIndex(host, ":"); i > 0 {
+			host = host[:i]
+		}
+		if he, text, hok := g.hostFromConfigSymbol(filePath, fact, host, rest); hok {
+			return httpTarget{target: he.URL + rest, cfg: &he, codeText: text}
+		}
+	}
 	switch kind {
 	case SymEnv, SymConfig:
 		if ok {
@@ -5436,6 +5454,55 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 	}
 	return httpTarget{unresolved: g.unresolvedCall(filePath, strings.TrimSpace(raw),
 		"the call address is a configuration symbol with no value in the repository's config files")}
+}
+
+// hostFromConfigSymbol handles a call whose target is a host of the config
+// table written as such. If the source file does not contain the host but
+// contains a symbol that maps to it (env var name, config key, or the call path
+// of the typed client registered for the host), it returns that entry and the
+// text the code line holds instead. A file that has the host literally keeps
+// the plain behaviour.
+func (g *Graph) hostFromConfigSymbol(filePath string, fact Fact, host, rest string) (ConfigEntry, string, bool) {
+	cfg := g.domainConfig
+	if cfg == nil || host == "" {
+		return ConfigEntry{}, "", false
+	}
+	b, err := os.ReadFile(filePath)
+	if err != nil {
+		return ConfigEntry{}, "", false
+	}
+	src := string(b)
+	lowHost := strings.ToLower(host)
+	if strings.Contains(strings.ToLower(src), lowHost) {
+		return ConfigEntry{}, "", false
+	}
+	for _, e := range cfg.Entries {
+		if !strings.EqualFold(e.Host, host) {
+			continue
+		}
+		if got, ok := cfg.lookup(filePath, e.Key); !ok || !strings.EqualFold(got.Host, host) {
+			continue
+		}
+		got, _ := cfg.lookup(filePath, e.Key)
+		cands := []string{e.Key}
+		if i := strings.LastIndexAny(e.Key, ":."); i >= 0 && i < len(e.Key)-1 {
+			cands = append(cands, e.Key[i+1:])
+		}
+		for _, c := range cands {
+			if strings.Contains(src, c) {
+				return got, c, true
+			}
+		}
+	}
+	if be, ok := cfg.ClientBase(filePath, fact.From, inferNameFromPath(filePath)); ok && strings.EqualFold(be.Host, host) {
+		if rest != "" && strings.Contains(src, rest) {
+			return be, rest, true
+		}
+		if be.Key != "" && strings.Contains(src, be.Key) {
+			return be, be.Key, true
+		}
+	}
+	return ConfigEntry{}, "", false
 }
 
 // configCodeText is the text of a config-derived call address as it stands on
