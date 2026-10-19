@@ -245,7 +245,7 @@ var (
 	pyConsumer  = regexp.MustCompile(`\bKafkaConsumer\(((?:\s*['"][^'"]+['"]\s*(?:,|\)))+)`)
 	pySubList   = regexp.MustCompile(`([A-Za-z_][\w.]*)\.subscribe\(\s*(?:topics\s*=\s*)?\[([^\]]*)\]`)
 	pySubOne    = regexp.MustCompile(`([A-Za-z_][\w.]*)\.subscribe\(\s*(?:topics\s*=\s*)?(['"][^'"]+['"])\s*[,)]`)
-	pySend      = regexp.MustCompile(`([A-Za-z_][\w.]*)\.send\(\s*(['"][^'"]+['"])\s*[,)]`)
+	pySend      = regexp.MustCompile(`([A-Za-z_][\w.]*)\.send\(\s*(?:topic\s*=\s*)?(['"][^'"]+['"])\s*[,)]`)
 	pyQueueName = regexp.MustCompile(`\bget_queue_url\(\s*QueueName\s*=\s*['"]([^'"]+)['"]\s*[,)]`)
 	pyQueueURL  = regexp.MustCompile(`\bQueueUrl\s*=\s*['"](https?://[^'"]+)['"]\s*[,)]`)
 )
@@ -329,7 +329,7 @@ func init() {
 			chanSpec{re: pyConsumer, kind: "topic", side: "consume", list: true, win: 3},
 			chanSpec{re: pySubList, kind: "topic", side: "consume", list: true, win: 3, gate: pyKafkaReceiver},
 			chanSpec{re: pySubOne, kind: "topic", side: "consume", list: true, gate: pyKafkaReceiver},
-			chanSpec{re: pySend, kind: "topic", side: "produce", list: true, gate: pyKafkaReceiver})},
+			chanSpec{re: pySend, kind: "topic", side: "produce", list: true, win: 3, gate: pyKafkaReceiver})},
 		funcRule{"boto3.sqs", isPy, applyBoto3},
 	)
 }

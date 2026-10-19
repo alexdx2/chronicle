@@ -68,3 +68,21 @@ func TestRootDockerfileService(t *testing.T) {
 		}
 	}
 }
+
+func TestKafkaPySendMultiLine(t *testing.T) {
+	head := "from kafka import KafkaProducer\nproducer = KafkaProducer(bootstrap_servers=[\"k:9092\"])\n"
+	cases := []struct{ name, src, want string }{
+		{"literal on next line", head + "producer.send(\n    \"score-computed\",\n    value={\"id\": 1},\n)\n", "topic:score-computed#produce"},
+		{"topic keyword on next line", head + "producer.send(\n    topic='lead-created',\n    value=b'x',\n)\n", "topic:lead-created#produce"},
+		{"same line still works", head + "producer.send('a-b', b'x')\n", "topic:a-b#produce"},
+		{"variable topic", head + "producer.send(\n    TOPIC,\n    value=b'x',\n)\n", ""},
+		{"concatenated topic", head + "producer.send(\n    \"x-\" + env,\n    value=b'x',\n)\n", ""},
+		{"commented call", head + "# producer.send(\n#     \"old-topic\",\n# )\n", ""},
+		{"log message naming topic", head + "log.info(\n    \"sent to score-computed\",\n)\nsock.send(\n    \"score-computed\",\n)\n", ""},
+	}
+	for _, c := range cases {
+		if got := keysOf(t, map[string]string{"app/events.py": c.src}, truth.ClassChannels); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
