@@ -20,6 +20,7 @@ const (
 	Python               // #, '…', "…"; '''…''' and """…""" are blanked like comments (docstrings)
 	Hash                 // yaml, toml, hcl, dotenv, Dockerfile: # comments, single-line quotes
 	None                 // json, xml: no comments
+	PHP                  // //, #, /* */ (but not the #[Attribute] opener), '…', "…"
 )
 
 // Line is one source line (split on '\n'; a trailing '\r' stays).
@@ -45,8 +46,12 @@ func FamilyFor(path string) Family {
 		return Hash
 	}
 	switch filepath.Ext(base) {
-	case ".cs", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".kt", ".kts", ".gradle":
+	case ".cs", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".kt", ".kts", ".gradle", ".rs", ".proto":
 		return CLike
+	case ".php":
+		return PHP
+	case ".rb":
+		return Hash
 	case ".py":
 		return Python
 	case ".yml", ".yaml", ".toml", ".tf", ".conf":
@@ -99,14 +104,14 @@ func Scan(src []byte, f Family) Result {
 	for i := 0; f != None && i < n; {
 		c := src[i]
 		switch {
-		case (f == CLike && has(i, "//")) || ((f == Python || f == Hash) && c == '#'):
+		case ((f == CLike || f == PHP) && has(i, "//")) || ((f == Python || f == Hash || f == PHP) && c == '#' && !(f == PHP && has(i, "#["))):
 			j := bytes.IndexByte(src[i:], '\n')
 			if j < 0 {
 				j = n - i
 			}
 			blank(i, i+j)
 			i += j
-		case f == CLike && has(i, "/*"):
+		case (f == CLike || f == PHP) && has(i, "/*"):
 			i = multi(i, i+2, "*/", false, true)
 		case f == CLike && has(i, `@"`):
 			// C# verbatim: "" is an escaped quote, no backslash escapes.
