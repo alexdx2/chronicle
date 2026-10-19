@@ -493,7 +493,7 @@ func (s *Store) UpdateEdgeTrust(edgeID int64, confidence, freshness, trustScore 
 	switch status {
 	case "removed", "contradicted":
 		activeExpr = "0"
-	case "stale":
+	case "stale", "unknown":
 		activeExpr = "active"
 	}
 	_, err := s.db.Exec(`
