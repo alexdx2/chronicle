@@ -50,7 +50,7 @@ type Fact struct {
 // list. Bump it whenever an extractor rule or the class list changes, so
 // stored reports are recomputed. 2: the packages class exists. 3: appsettings URLs under any key, ts config
 // URLs, example/generated code excluded.
-const RulesVersion = 3
+const RulesVersion = 4
 
 // Report is the output of an extraction run.
 type Report struct {
