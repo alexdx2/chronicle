@@ -93,9 +93,17 @@ func TestGeneratedAndExampleCodeExcluded(t *testing.T) {
 	if got := keysOf(t, map[string]string{"src/ok.ts": "// handwritten, not auto generated\n" + route}, truth.ClassEndpoints); got != "GET /demo/hello" {
 		t.Errorf("plain comment: %q", got)
 	}
-	// deps stay
-	lock := keysOf(t, map[string]string{"examples/demo/package.json": `{"name":"d","dependencies":{"left-pad":"1.0.0"}}`}, truth.ClassDeps)
-	if !strings.Contains(lock, "left-pad") {
-		t.Errorf("deps in examples dropped: %q", lock)
+	// deps: generated code keeps them, example code contributes nothing
+	dep := `{"name":"d","dependencies":{"left-pad":"1.0.0"}}`
+	if lock := keysOf(t, map[string]string{"pkg/generated/package.json": dep}, truth.ClassDeps); !strings.Contains(lock, "left-pad") {
+		t.Errorf("deps in generated dropped: %q", lock)
+	}
+	for _, p := range []string{"examples/demo/package.json", "example/package.json", "samples/a/package.json", "demo/package.json", "apps/demos/x/package.json"} {
+		if got := keysOf(t, map[string]string{p: dep}, truth.ClassDeps); got != "" {
+			t.Errorf("%s deps: %q", p, got)
+		}
+		if got := keysOf(t, map[string]string{p: dep}, truth.ClassPackages); got != "" {
+			t.Errorf("%s packages: %q", p, got)
+		}
 	}
 }

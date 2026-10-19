@@ -317,6 +317,11 @@ func Check(in Input) Result {
 		}
 		explainByHTTP(d.Added, httpFacts(head, base, true), in.HeadSnap, mappedAdded)
 		explainByHTTP(d.Removed, httpFacts(head, base, false), in.BaseSnap, mappedRemoved)
+		changed := map[string]bool{}
+		for _, c := range in.Review.ChangedFiles {
+			changed[strings.TrimPrefix(strings.ReplaceAll(c.Path, "\\", "/"), "./")] = true
+		}
+		explainByChangedCaller(d.Added, changed, headHTTPFacts(head), in.HeadSnap, mappedAdded)
 		for _, f := range d.Added {
 			if u, ok := unexplained(f, Added, mappedAdded, types); ok {
 				res.Unexplained = append(res.Unexplained, u)
@@ -477,4 +482,53 @@ func endpointPath(key string) string {
 		return key[i:]
 	}
 	return ""
+}
+
+// headHTTPFacts returns every http fact of the head reference with a known
+// host (the reference has no per-call class, so an unchanged fact still
+// stands for a call added next to it).
+func headHTTPFacts(head map[factKey]truth.Fact) []truth.Fact {
+	var out []truth.Fact
+	for _, f := range head {
+		if f.Class != truth.ClassHTTP {
+			continue
+		}
+		known := f.Attrs["host"] != "" || f.Attrs["var"] != "" || (f.Key != "" && f.Key != "var:")
+		if known {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// explainByChangedCaller explains an added CALLS_ENDPOINT edge whose caller
+// file changed in the MR and carries an http fact in the head reference, even
+// when that fact (host) is not new: one more call in a file that already
+// reaches the host leaves the reference fact unchanged.
+func explainByChangedCaller(facts []review.Fact, changedSet map[string]bool, hf []truth.Fact, snap *snapshot.Snapshot, mapped map[string]bool) {
+	if len(hf) == 0 || len(changedSet) == 0 {
+		return
+	}
+	norm := func(p string) string { return strings.TrimPrefix(strings.ReplaceAll(p, "\\", "/"), "./") }
+	files := map[string]string{}
+	if snap != nil {
+		for _, n := range snap.Nodes {
+			files[n.ID] = n.File
+		}
+	}
+	for _, f := range facts {
+		e := f.Edge
+		if e == nil || e.Type != "CALLS_ENDPOINT" {
+			continue
+		}
+		for _, h := range hf {
+			file := norm(h.Primary.File)
+			if file == "" || !changedSet[file] || !fromInFile(e.From, files[e.From], file) {
+				continue
+			}
+			mapped[e.From] = true
+			mapped[e.To] = true
+			break
+		}
+	}
 }

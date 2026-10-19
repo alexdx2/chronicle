@@ -1,6 +1,7 @@
 package compare
 
 import (
+	"path"
 	"sort"
 	"strings"
 
@@ -48,7 +49,7 @@ func Compare(rep *truth.Report, snap *snapshot.Snapshot) *truth.Verdict {
 		ix.warns = nil
 		if status == "" {
 			switch {
-			case f.Class == truth.ClassDeps && truth.Noise(f.Attrs["ecosystem"], depName(f)):
+			case f.Class == truth.ClassDeps && (f.Attrs["section"] == "devDependencies" || truth.Noise(f.Attrs["ecosystem"], depName(f))):
 				status = truth.Ignored
 			case haveCoverage && scoped(f.Class) && !ix.coverage[strings.TrimPrefix(f.Primary.File, "./")]:
 				status = truth.OutOfScope
@@ -268,7 +269,7 @@ func (ix *index) matchDep(f truth.Fact) (truth.Status, string) {
 }
 
 func (ix *index) matchService(f truth.Fact) (truth.Status, string) {
-	cands := []string{truth.CanonName(f.Attrs["name"])}
+	cands := []string{truth.CanonName(f.Attrs["name"]), truth.CanonName(truth.StripScope(f.Attrs["name"]))}
 	if f.Attrs["kind"] == "infra" || f.Attrs["kind"] == "infrastructure" {
 		cands = append(cands, truth.CanonName(f.Attrs["tech"]))
 	}
@@ -287,6 +288,28 @@ func (ix *index) matchService(f truth.Fact) (truth.Status, string) {
 	}
 	if best != "" {
 		return truth.Confirmed, best
+	}
+	// An own service whose name differs from the graph's (a package name
+	// versus a directory name): the service node whose directory contains the
+	// fact's file is the same deployable. The deepest directory wins.
+	if f.Attrs["kind"] == "own" && f.Primary.File != "" {
+		file := strings.TrimPrefix(strings.ReplaceAll(f.Primary.File, "\\", "/"), "./")
+		bestDir := ""
+		for _, s := range ix.services {
+			if s.typ != "service" || s.file == "" {
+				continue
+			}
+			dir := path.Dir(strings.TrimPrefix(strings.ReplaceAll(s.file, "\\", "/"), "./"))
+			if dir == "." || dir == "/" || !strings.HasPrefix(file, dir+"/") {
+				continue
+			}
+			if len(dir) > len(bestDir) || (len(dir) == len(bestDir) && s.key < best) {
+				bestDir, best = dir, s.key
+			}
+		}
+		if best != "" {
+			return truth.Confirmed, best
+		}
 	}
 	return "", ""
 }
