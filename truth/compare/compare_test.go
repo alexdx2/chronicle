@@ -460,3 +460,42 @@ func TestPackageClass(t *testing.T) {
 		t.Errorf("classes: %+v", v.Classes)
 	}
 }
+
+func TestDevDependencyIsIgnoredNotDropped(t *testing.T) {
+	snap := mkSnap(t, "package.json")
+	dev := fact(truth.ClassDeps, "npm:somedevtool", "package.json", map[string]string{"ecosystem": "npm", "name": "somedevtool", "section": "devDependencies"})
+	run := fact(truth.ClassDeps, "npm:somelib", "package.json", map[string]string{"ecosystem": "npm", "name": "somelib", "section": "dependencies"})
+	v := Compare(&truth.Report{Facts: []truth.Fact{dev, run}}, snap)
+	if g := statusOf(v, "npm:somedevtool"); g != truth.Ignored {
+		t.Errorf("devDependency: got %s want ignored", g)
+	}
+	if g := statusOf(v, "npm:somelib"); g != truth.Missing {
+		t.Errorf("runtime dependency: got %s want missing", g)
+	}
+	if len(v.Facts) != 2 {
+		t.Errorf("fact dropped: %d", len(v.Facts))
+	}
+}
+
+func TestOwnServiceScopeAndDirectoryMatch(t *testing.T) {
+	scoped := nd("service:service:d:@acme/catalog", "service", "@acme/catalog")
+	scoped.File = "services/catalog/package.json"
+	byDir := nd("service:service:d:pkg-x", "service", "pkg-x")
+	byDir.File = "services/billing/package.json"
+	root := nd("service:service:d:rootpkg", "service", "rootpkg")
+	root.File = "package.json"
+	snap := mkSnapWith(t, []snapshot.Node{scoped, byDir, root}, nil, "services/catalog/Dockerfile")
+	own := func(name, file string) truth.Fact {
+		return fact(truth.ClassServices, "own:"+name, file, map[string]string{"name": name, "kind": "own"})
+	}
+	if g := one(t, snap, own("catalog", "services/catalog/Dockerfile")); g != truth.Confirmed {
+		t.Errorf("scope strip: %s", g)
+	}
+	if g := one(t, snap, own("billing", "services/billing/Dockerfile")); g != truth.Confirmed {
+		t.Errorf("directory match: %s", g)
+	}
+	// a service at the repo root must not absorb every other file
+	if g := one(t, snap, own("other", "tools/other/Dockerfile")); g != truth.Missing {
+		t.Errorf("root service absorbed: %s", g)
+	}
+}

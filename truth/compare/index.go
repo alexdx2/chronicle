@@ -26,7 +26,8 @@ type pkgNode struct {
 
 type svcNode struct {
 	key, name, typ string
-	names          map[string]bool // CanonName of name and every alias
+	names          map[string]bool // CanonName of name and every alias (also without an npm scope)
+	file           string          // repo-relative file the node was extracted from
 	publishes      bool            // source of a PUBLISHES edge
 }
 
@@ -142,12 +143,15 @@ func buildIndex(snap *snapshot.Snapshot) *index {
 				if c := truth.CanonName(s); c != "" {
 					names[c] = true
 				}
+				if c := truth.CanonName(truth.StripScope(s)); c != "" {
+					names[c] = true
+				}
 			}
 			add(n.Name)
 			for _, a := range n.Aliases {
 				add(a.Alias)
 			}
-			ix.services = append(ix.services, svcNode{key: id, name: n.Name, typ: typ, names: names, publishes: publishesOut[id]})
+			ix.services = append(ix.services, svcNode{key: id, name: n.Name, typ: typ, names: names, file: n.File, publishes: publishesOut[id]})
 		}
 		// CALLS_ENDPOINT targets are endpoint nodes judged under endpoints, so
 		// the http index holds service/external_system nodes only.

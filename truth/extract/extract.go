@@ -76,6 +76,9 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 			rep.SkippedFiles = append(rep.SkippedFiles, p)
 			return nil
 		}
+		if IsSamplePath(p) {
+			return nil // examples contribute nothing to the reference
+		}
 		raw, err := fs.ReadFile(fsys, p)
 		if err != nil {
 			return skipFile(err)
@@ -116,9 +119,24 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 	return rep, nil
 }
 
-// generatedDirs hold sample or machine-generated code: not part of the
-// repository's own behaviour.
-var generatedDirs = map[string]bool{"examples": true, "example": true, "generated": true, "__generated__": true}
+// sampleDirs hold example code: not part of the repository's own behaviour,
+// and its manifests declare nothing the product depends on.
+var sampleDirs = map[string]bool{"examples": true, "example": true, "samples": true, "sample": true, "demo": true, "demos": true}
+
+// IsSamplePath reports whether a directory of p marks example code.
+func IsSamplePath(p string) bool {
+	parts := strings.Split(strings.ReplaceAll(p, "\\", "/"), "/")
+	for _, d := range parts[:len(parts)-1] {
+		if sampleDirs[strings.ToLower(d)] {
+			return true
+		}
+	}
+	return false
+}
+
+// generatedDirs hold machine-generated code: only its manifests and
+// lockfiles keep their meaning.
+var generatedDirs = map[string]bool{"generated": true, "__generated__": true}
 
 // IsGeneratedPath reports whether a directory of p marks example or generated code.
 func IsGeneratedPath(p string) bool {

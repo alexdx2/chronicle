@@ -3,6 +3,7 @@ package reviewcheck
 import (
 	"testing"
 
+	"github.com/alexdx2/chronicle-core/gitdiff"
 	"github.com/alexdx2/chronicle-core/review"
 	"github.com/alexdx2/chronicle-core/snapshot"
 	"github.com/alexdx2/chronicle-core/truth"
@@ -290,5 +291,30 @@ func TestDependsOnExistingHeadDepNotUnexplained(t *testing.T) {
 	res := Check(Input{Base: base, Head: head, BaseSnap: pkgSnap(), HeadSnap: pkgSnap(), Review: rv})
 	if len(res.Unexplained) != 1 || res.Unexplained[0].ID != other.ID {
 		t.Fatalf("%+v", res.Unexplained)
+	}
+}
+
+// The http fact exists in base and head (host unchanged); a call added in the
+// same changed file is still explained, one in an untouched file is not.
+func TestUnchangedHTTPFactExplainsAddedCallInChangedFile(t *testing.T) {
+	file := "analytics-api/src/analytics/badge.client.ts"
+	from := "code:provider:d:analytics-api/src/analytics/badge-client"
+	hf := httpFact(file, "")
+	snap := httpSnap(file)
+	other := edgeFact("code:provider:d:other/thing", "contract:endpoint:d:post:/zzz", "CALLS_ENDPOINT")
+	mk := func(changed ...gitdiff.ChangedFile) *review.ReviewResult {
+		return &review.ReviewResult{ChangedFiles: changed, Delta: &review.GraphDelta{Added: []review.Fact{
+			edgeFact(from, "contract:endpoint:d:post:/badges/new", "CALLS_ENDPOINT"), other,
+		}}}
+	}
+	in := Input{Base: &truth.Report{Facts: []truth.Fact{hf}}, Head: &truth.Report{Facts: []truth.Fact{hf}}, BaseSnap: snap, HeadSnap: snap}
+	in.Review = mk(gitdiff.ChangedFile{Path: file, Status: "M"})
+	res := Check(in)
+	if len(res.Unexplained) != 1 || res.Unexplained[0].ID != other.ID {
+		t.Fatalf("changed caller: %+v", res.Unexplained)
+	}
+	in.Review = mk(gitdiff.ChangedFile{Path: "elsewhere.ts", Status: "M"})
+	if res := Check(in); len(res.Unexplained) != 2 {
+		t.Fatalf("caller file not changed must stay unexplained: %+v", res.Unexplained)
 	}
 }

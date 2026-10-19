@@ -132,6 +132,18 @@ func CanonName(s string) string {
 	return strings.ToLower(strings.NewReplacer(".", "", "-", "", "_", "", " ", "").Replace(s))
 }
 
+// StripScope removes an npm scope ("@acme/catalog" -> "catalog"); any other
+// name is returned unchanged.
+func StripScope(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "@") {
+		if i := strings.Index(s, "/"); i > 0 && i < len(s)-1 {
+			return s[i+1:]
+		}
+	}
+	return s
+}
+
 // CanonDep returns "ecosystem:name" in the ecosystem's canonical case.
 func CanonDep(ecosystem, name string) string {
 	eco := strings.ToLower(strings.TrimSpace(ecosystem))
