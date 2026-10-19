@@ -63,6 +63,8 @@ func IsTestPath(p string) bool {
 		return true
 	case strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py"):
 		return true
+	case strings.HasSuffix(base, "_test.go"):
+		return true
 	}
 	for _, mid := range []string{".spec", ".test"} {
 		for _, ext := range []string{".ts", ".tsx", ".js", ".jsx"} {
