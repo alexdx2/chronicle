@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path"
@@ -577,7 +578,8 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	g.domainOwnHosts = g.ownHostsForDomain(domainKey)
 	defer func() { g.domainOwnHosts = nil }()
 	g.domainConfig = g.configHosts[domainKey]
-	defer func() { g.domainConfig = nil }()
+	g.srcCache = map[string]string{}
+	defer func() { g.domainConfig = nil; g.srcCache = nil }()
 	g.injectConfigUses(allFiles)
 
 	// Snapshot the packages this domain publishes itself (existing service
@@ -5456,6 +5458,43 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 		"the call address is a configuration symbol with no value in the repository's config files")}
 }
 
+// maxConfigSourceRead caps how much of a source file hostFromConfigSymbol reads.
+const maxConfigSourceRead = 256 << 10
+
+// readSourceForConfig reads a repo-relative source file under the scan's repo
+// root (the config table's Root, else ProjectRoot()), at most 256 KB, once per
+// resolve.
+func (g *Graph) readSourceForConfig(filePath string) (string, bool) {
+	if src, ok := g.srcCache[filePath]; ok {
+		return src, true
+	}
+	full := filePath
+	if !filepath.IsAbs(full) {
+		root := ""
+		if g.domainConfig != nil {
+			root = g.domainConfig.Root
+		}
+		if root == "" {
+			root = ProjectRoot()
+		}
+		full = filepath.Join(root, filepath.FromSlash(filePath))
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigSourceRead))
+	if err != nil {
+		return "", false
+	}
+	if g.srcCache == nil {
+		g.srcCache = map[string]string{}
+	}
+	g.srcCache[filePath] = string(b)
+	return string(b), true
+}
+
 // hostFromConfigSymbol handles a call whose target is a host of the config
 // table written as such. If the source file does not contain the host but
 // contains a symbol that maps to it (env var name, config key, or the call path
@@ -5467,11 +5506,10 @@ func (g *Graph) hostFromConfigSymbol(filePath string, fact Fact, host, rest stri
 	if cfg == nil || host == "" {
 		return ConfigEntry{}, "", false
 	}
-	b, err := os.ReadFile(filePath)
-	if err != nil {
+	src, rok := g.readSourceForConfig(filePath)
+	if !rok {
 		return ConfigEntry{}, "", false
 	}
-	src := string(b)
 	lowHost := strings.ToLower(host)
 	if strings.Contains(strings.ToLower(src), lowHost) {
 		return ConfigEntry{}, "", false

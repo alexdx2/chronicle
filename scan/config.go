@@ -75,7 +75,7 @@ func isScriptSource(p string) bool {
 // and every C# client registration, and returns the table plus the config files
 // it parsed. A file it cannot read is skipped: the table is best effort.
 func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string) {
-	t := &graph.ConfigHosts{}
+	t := &graph.ConfigHosts{Root: root}
 	var parsed []string
 	sorted := append([]string(nil), files...)
 	sort.Strings(sorted)

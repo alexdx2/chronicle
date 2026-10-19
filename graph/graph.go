@@ -66,6 +66,9 @@ type Graph struct {
 	// table while ResolveExtractions runs. See ConfigHosts.
 	configHosts  map[string]*ConfigHosts
 	domainConfig *ConfigHosts
+	// srcCache holds the source files hostFromConfigSymbol read during one
+	// ResolveExtractions, by repo-relative path.
+	srcCache map[string]string
 
 	// domainOwnPackages maps flattenName(package) → the canonical
 	// service:service node key for every package THIS domain publishes:

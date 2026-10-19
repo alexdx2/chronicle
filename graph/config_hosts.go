@@ -32,6 +32,9 @@ type ClientBinding struct {
 // deterministically before extraction. The resolver uses it to give a host to
 // a call whose target is only a symbol; the prompt gets keys and hosts.
 type ConfigHosts struct {
+	// Root is the repository root the scan read the files from; source files
+	// named by repo-relative paths are read under it. Empty = ProjectRoot().
+	Root    string
 	Entries []ConfigEntry
 	Clients []ClientBinding
 	Uses    []ConfigUse
