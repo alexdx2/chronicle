@@ -415,3 +415,62 @@ func TestChangedCallerExplainsOnlyMatchingHost(t *testing.T) {
 		t.Errorf("hostless target, two hosts in file: %d unexplained", n)
 	}
 }
+
+// A new call in a client whose host fact lives in configuration: the caller
+// also calls the external named after the host, so the edge is explained.
+func TestCallerServiceHostExplainsCallEndpoint(t *testing.T) {
+	from := "code:provider:d:sales-api/services/pricing-client"
+	snap := &snapshot.Snapshot{
+		Nodes: []snapshot.Node{
+			{ID: from, Layer: "code", Type: "provider", File: "Services/PricingClient.cs"},
+			{ID: "service:external_system:d:pricing-api", Layer: "service", Type: "external_system", Name: "pricing-api"},
+			{ID: "service:external_system:d:other-api", Layer: "service", Type: "external_system", Name: "other-api"},
+		},
+		Edges: []snapshot.Edge{
+			{ID: "c1", From: from, To: "service:external_system:d:pricing-api", Type: "CALLS_SERVICE", Active: true},
+		},
+	}
+	cfg := truth.Fact{Class: truth.ClassHTTP, Key: "pricing-api", Attrs: map[string]string{"host": "http://pricing-api"},
+		Primary: truth.Evidence{File: "appsettings.json", Line: 4}, Sources: []string{"t"}}
+	rep := &truth.Report{Facts: []truth.Fact{cfg}}
+	ep := "contract:endpoint:d:get:/prices/{sku}/history"
+	foreign := "code:provider:d:sales-api/other"
+	mk := func(added, removed []review.Fact) Input {
+		return Input{Base: rep, Head: rep, BaseSnap: snap, HeadSnap: snap,
+			Review: &review.ReviewResult{Delta: &review.GraphDelta{Added: added, Removed: removed}}}
+	}
+	if res := Check(mk([]review.Fact{edgeFact(from, ep, "CALLS_ENDPOINT")}, nil)); len(res.Unexplained) != 0 {
+		t.Errorf("added: %+v", res.Unexplained)
+	}
+	if res := Check(mk(nil, []review.Fact{edgeFact(from, ep, "CALLS_ENDPOINT")})); len(res.Unexplained) != 0 {
+		t.Errorf("removed: %+v", res.Unexplained)
+	}
+	if res := Check(mk([]review.Fact{edgeFact(foreign, ep, "CALLS_ENDPOINT")}, nil)); len(res.Unexplained) != 1 {
+		t.Errorf("caller without the service edge explained: %+v", res.Unexplained)
+	}
+	// host not in the reference: stays unexplained
+	in := mk([]review.Fact{edgeFact(from, ep, "CALLS_ENDPOINT")}, nil)
+	in.Head = &truth.Report{}
+	if res := Check(in); len(res.Unexplained) != 1 {
+		t.Errorf("no host fact: %+v", res.Unexplained)
+	}
+}
+
+func TestSameSystemTopicEdgeNotUnexplained(t *testing.T) {
+	a, b := "code:p:d:a", "code:p:d:b"
+	topic := "contract:topic:d:price-changed"
+	snap := ownedSnap(map[string][]string{"pricing": {a, b}, "billing": {"code:p:d:c"}})
+	snap.Nodes = append(snap.Nodes, snapshot.Node{Kind: "node", ID: topic, Layer: "contract", Type: "topic", Domain: "d", Name: "price-changed", Status: "active"})
+	snap.Edges = append(snap.Edges, snapshot.Edge{Kind: "edge", Derivation: "hard", ID: "pub", From: a, To: topic, Type: "PUBLISHES_TOPIC", Active: true})
+	run := func(from string) int {
+		rv := &review.ReviewResult{Delta: &review.GraphDelta{Added: []review.Fact{edgeFact(from, topic, "PUBLISHES_TOPIC")}}}
+		res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{}, BaseSnap: snap, HeadSnap: snap, Review: rv})
+		return len(res.Unexplained)
+	}
+	if n := run(b); n != 0 {
+		t.Errorf("same system: %d unexplained", n)
+	}
+	if n := run("code:p:d:c"); n != 1 {
+		t.Errorf("new system: %d unexplained", n)
+	}
+}

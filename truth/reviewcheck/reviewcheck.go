@@ -322,6 +322,8 @@ func Check(in Input) Result {
 			changed[strings.TrimPrefix(strings.ReplaceAll(c.Path, "\\", "/"), "./")] = true
 		}
 		explainByChangedCaller(d.Added, changed, headHTTPFacts(head), in.HeadSnap, mappedAdded)
+		explainByCallerService(d.Added, headHTTPFacts(head), in.HeadSnap, mappedAdded)
+		explainByCallerService(d.Removed, headHTTPFacts(base), in.BaseSnap, mappedRemoved)
 		headSys, relHead := review.SnapshotCollapse(in.HeadSnap)
 		baseSys, relBase := review.SnapshotCollapse(in.BaseSnap)
 		defer relHead()
@@ -333,7 +335,16 @@ func Check(in Input) Result {
 			mappedAdded[a.From], mappedAdded[a.To] = true, true
 			mappedRemoved[r.From], mappedRemoved[r.To] = true, true
 		}
-		for _, f := range d.Added {
+		// An added topic edge from another node of a system already on the
+		// topic in base is informational in the review, not a change.
+		sameSys := map[int]bool{}
+		for _, i := range review.SameSystemTopicEdges(d.Added, in.BaseSnap, headSys, baseSys) {
+			sameSys[i] = true
+		}
+		for i, f := range d.Added {
+			if sameSys[i] {
+				continue
+			}
 			if u, ok := unexplained(f, Added, mappedAdded, types); ok {
 				res.Unexplained = append(res.Unexplained, u)
 			}
@@ -601,4 +612,39 @@ func targetHost(n snapshot.Node) string {
 		}
 	}
 	return ""
+}
+
+// explainByCallerService explains a CALLS_ENDPOINT edge of the review delta
+// whose caller node also has a CALLS_SERVICE edge to an external system named
+// after the host of an http fact (hf, from the same side as snap). The host
+// fact lives in configuration, not in the client file, so a new call in the
+// client changes no reference fact.
+func explainByCallerService(facts []review.Fact, hf []truth.Fact, snap *snapshot.Snapshot, mapped map[string]bool) {
+	if len(hf) == 0 || snap == nil {
+		return
+	}
+	hosts := map[string]bool{}
+	for _, h := range hf {
+		if x := factHost(h); x != "" {
+			hosts[x] = true
+		}
+	}
+	external := map[string]bool{} // external node whose name is a known host
+	for _, n := range snap.Nodes {
+		if n.Type == "external_system" && hosts[truth.CanonHost(n.Name)] {
+			external[n.ID] = true
+		}
+	}
+	callers := map[string]bool{}
+	for _, e := range snap.Edges {
+		if e.Type == "CALLS_SERVICE" && e.Active && external[e.To] {
+			callers[e.From] = true
+		}
+	}
+	for _, f := range facts {
+		if e := f.Edge; e != nil && e.Type == "CALLS_ENDPOINT" && callers[e.From] {
+			mapped[e.From] = true
+			mapped[e.To] = true
+		}
+	}
 }
