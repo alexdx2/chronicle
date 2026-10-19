@@ -196,3 +196,36 @@ func TestWebConfigAppSettingsURL(t *testing.T) {
 		}
 	}
 }
+
+func TestSQSQueueURLFromAppSettings(t *testing.T) {
+	cfg := `<configuration><appSettings>
+    <add key="OrdersQueueUrl" value="https://sqs.eu-central-1.amazonaws.com/123456789012/orders-inbound" />
+    <!-- <add key="OldQueueUrl" value="https://sqs.eu-central-1.amazonaws.com/123456789012/old-q" /> -->
+    <add key="NotAQueue" value="http://billing-api:8080/" />
+  </appSettings></configuration>`
+	send := func(expr string) string {
+		return "class Q {\n  async Task Go() {\n    var r = new SendMessageRequest {\n      QueueUrl = " + expr + ",\n      MessageBody = \"x\"\n    };\n    await _sqs.SendMessageAsync(r);\n  }\n}\n"
+	}
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"web.config in project root", map[string]string{"App/Web.config": cfg, "App/Services/Q.cs": send(`ConfigurationManager.AppSettings["OrdersQueueUrl"]`)}, "queue:orders-inbound#produce"},
+		{"app.config beside, Get form", map[string]string{"App/app.config": cfg, "App/Q.cs": send(`ConfigurationManager.AppSettings.Get("OrdersQueueUrl")`)}, "queue:orders-inbound#produce"},
+		{"WebConfigurationManager and case-insensitive key", map[string]string{"Web.config": cfg, "Q.cs": send(`WebConfigurationManager.AppSettings["ordersqueueurl"]`)}, "queue:orders-inbound#produce"},
+		{"receive side", map[string]string{"Web.config": cfg, "Q.cs": "class Q { void Go() { var r = new ReceiveMessageRequest { QueueUrl = ConfigurationManager.AppSettings[\"OrdersQueueUrl\"] }; _sqs.ReceiveMessageAsync(r); } }"}, "queue:orders-inbound#consume"},
+		{"key missing from config", map[string]string{"Web.config": cfg, "Q.cs": send(`ConfigurationManager.AppSettings["Nope"]`)}, ""},
+		{"commented-out config entry", map[string]string{"Web.config": cfg, "Q.cs": send(`ConfigurationManager.AppSettings["OldQueueUrl"]`)}, ""},
+		{"value is not a queue url", map[string]string{"Web.config": cfg, "Q.cs": send(`ConfigurationManager.AppSettings["NotAQueue"]`)}, ""},
+		{"no config file", map[string]string{"Q.cs": send(`ConfigurationManager.AppSettings["OrdersQueueUrl"]`)}, ""},
+		{"commented call", map[string]string{"Web.config": cfg, "Q.cs": "// QueueUrl = ConfigurationManager.AppSettings[\"OrdersQueueUrl\"],\nclass Q {}"}, ""},
+		{"log message naming the queue", map[string]string{"Web.config": cfg, "Q.cs": "class Q { void L() { Log.Info(\"pushed to orders-inbound\"); } }"}, ""},
+		{"test file", map[string]string{"Web.config": cfg, "App.Tests/QTests.cs": send(`ConfigurationManager.AppSettings["OrdersQueueUrl"]`)}, ""},
+	}
+	for _, c := range cases {
+		if got := keysOf(t, c.files, truth.ClassChannels); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}

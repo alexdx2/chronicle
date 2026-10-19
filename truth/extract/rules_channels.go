@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"path"
 	"regexp"
 	"strings"
 
@@ -336,7 +337,87 @@ func init() {
 
 // applySQSDotnet: QueueUrl with a side from nearby calls, plus GetQueueUrlAsync.
 func applySQSDotnet(f *FileCtx) []truth.Fact {
-	return append(sqsDotnetURL(f), sqsDotnetName(f)...)
+	return append(append(sqsDotnetURL(f), sqsDotnetName(f)...), sqsDotnetConfigURL(f)...)
+}
+
+// csQueueURLConfig: QueueUrl = ConfigurationManager.AppSettings["Key"] (also
+// WebConfigurationManager and AppSettings.Get("Key")).
+var csQueueURLConfig = regexp.MustCompile(`\bQueueUrl\s*=\s*(?:[\w.]+\.)?(?:Web)?ConfigurationManager\.AppSettings(?:\[\s*"([^"]+)"\s*\]|\.Get\(\s*"([^"]+)"\s*\))\s*(?:[,;})]|$)`)
+
+// sqsDotnetConfigURL resolves the key in the nearest web.config / app.config
+// (the file's directory first, then its ancestors); the config line becomes
+// derived evidence. An unresolvable key yields nothing.
+func sqsDotnetConfigURL(f *FileCtx) []truth.Fact {
+	if f.IsTest {
+		return nil
+	}
+	var out []truth.Fact
+	for i, l := range f.Lines {
+		for _, m := range csQueueURLConfig.FindAllStringSubmatch(l.Code, -1) {
+			key := m[1]
+			if key == "" {
+				key = m[2]
+			}
+			val, cfgPath, cfgLine, ok := appSettingValue(f, key)
+			if !ok {
+				continue
+			}
+			u := sqsURLName.FindStringSubmatch(val)
+			if u == nil {
+				continue
+			}
+			ev := truth.Evidence{File: cfgPath, Line: cfgLine, Text: strings.TrimSpace(cfgText(f, cfgPath, cfgLine))}
+			if fc, ok := channelFact("sqs.dotnet", f, l, "queue", u[1], sideAround(f.Lines, i), ev); ok {
+				out = append(out, fc)
+			}
+		}
+	}
+	return out
+}
+
+// appSettingValue looks key up in the appSettings of the nearest
+// web.config/app.config above the file. It returns the value, the config path
+// and its 1-based line.
+func appSettingValue(f *FileCtx, key string) (val, cfgPath string, line int, ok bool) {
+	for dir := f.Dir; ; dir = path.Dir(dir) {
+		for _, name := range []string{"Web.config", "web.config", "App.config", "app.config"} {
+			p := path.Join(dir, name)
+			raw, found := f.Tree.ReadFile(p)
+			if !found {
+				continue
+			}
+			text := blankComments(string(raw))
+			for _, o := range cfgAppSettingsOpen.FindAllStringSubmatchIndex(text, -1) {
+				end := len(text)
+				if c := cfgAppSettingsClose.FindStringIndex(text[o[1]:]); c != nil {
+					end = o[1] + c[0]
+				}
+				block := text[o[1]:end]
+				for _, m := range cfgAddRe.FindAllStringSubmatchIndex(block, -1) {
+					a := xmlAttrs(block[m[2]:m[3]])
+					if strings.EqualFold(a["key"], key) {
+						return strings.TrimSpace(a["value"]), p, strings.Count(text[:o[1]+m[0]], "\n") + 1, true
+					}
+				}
+			}
+		}
+		if dir == "." || dir == "/" || dir == "" {
+			return "", "", 0, false
+		}
+	}
+}
+
+// cfgText returns the raw text of a 1-based line of a tree file.
+func cfgText(f *FileCtx, p string, line int) string {
+	raw, ok := f.Tree.ReadFile(p)
+	if !ok {
+		return ""
+	}
+	ls := strings.Split(string(raw), "\n")
+	if line < 1 || line > len(ls) {
+		return ""
+	}
+	return strings.TrimRight(ls[line-1], "\r")
 }
 
 func applyBoto3(f *FileCtx) []truth.Fact {
