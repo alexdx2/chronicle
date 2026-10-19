@@ -27,8 +27,8 @@ func TestBuildSnapshot_IncrementalRetiresEndpointRemovedFromReextractedFile(t *t
 	del := `{"kind":"endpoint","method":"DELETE","target":"/orders/{id}","from_type":"controller"}`
 	get := `{"kind":"endpoint","method":"GET","target":"/orders","from_type":"controller"}`
 	repo, c1 := newCodeRepoT(t, map[string]string{
-		"src/orders.controller.ts": "// GET /orders\n// DELETE /orders/{id}\n",
-		"src/other.controller.ts":  "// GET /other\n",
+		"src/orders.controller.ts": "route(\"GET /orders\");\nroute(\"DELETE /orders/{id}\");\n",
+		"src/other.controller.ts":  "route(\"GET /other\");\n",
 	})
 	b := &perFileBackend{facts: map[string]string{
 		"src/orders.controller.ts": get + "," + del,
@@ -52,7 +52,7 @@ func TestBuildSnapshot_IncrementalRetiresEndpointRemovedFromReextractedFile(t *t
 		t.Fatalf("base must expose the DELETE endpoint: %+v", was.Edges)
 	}
 
-	writeT(t, repo, "src/orders.controller.ts", "// GET /orders\n")
+	writeT(t, repo, "src/orders.controller.ts", "route(\"GET /orders\");\n")
 	c2 := commitAllT(t, repo, "drop delete")
 	b.facts["src/orders.controller.ts"] = get
 	in := buildIn(repo, c2, t.TempDir(), b)

@@ -594,6 +594,9 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	if err != nil {
 		return err
 	}
+	if _, err := r.readConfig(domainRef{key: d.Key, multi: multi}); err != nil {
+		return err
+	}
 	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates, versionFrom(guide))
 	if err != nil {
 		return err

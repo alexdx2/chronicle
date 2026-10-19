@@ -574,6 +574,8 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	// once, before any http_call fact is classified — see isExternalHost.
 	g.domainOwnHosts = g.ownHostsForDomain(domainKey)
 	defer func() { g.domainOwnHosts = nil }()
+	g.domainConfig = g.configHosts[domainKey]
+	defer func() { g.domainConfig = nil }()
 
 	// Snapshot the packages this domain publishes itself (existing service
 	// nodes + every declares_service fact in this batch) before any
@@ -1149,6 +1151,13 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 
+		tgt := g.classifyHTTPTarget(filePath, fact)
+		if tgt.unresolved != nil {
+			return counts, tgt.unresolved, nil
+		}
+		fact.Target = tgt.target
+		pathOnly := tgt.pathOnly
+
 		targetName := inferExternalSystemName(fact.Target)
 		// gRPC targets ("grpc://host/pkg.Service/Method") are endpoints too —
 		// the method is the transport, not an HTTP verb.
@@ -1162,72 +1171,6 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// external_system boundary with no endpoint materialization. See
 		// isExternalHost for the full rule.
 		external := isExternalHost(g.domainOwnHosts, fact.Target)
-
-		// Check if hostname matches a known service via DNS alias
-		var toNodeKey string
-		var toID int64
-		resolved := false
-		if aliases, err := g.store.ListAliasesByNormalized(strings.ToLower(targetName), "dns"); err == nil && len(aliases) > 0 {
-			// Deterministic: a host that matches several services is a name
-			// with more than one meaning — no edge, and say which ones.
-			if g.detOn() && len(aliases) > 1 {
-				keys := make([]string, 0, len(aliases))
-				for _, a := range aliases {
-					if node, err := g.store.GetNodeByID(a.NodeID); err == nil {
-						keys = append(keys, node.NodeKey)
-					}
-				}
-				return counts, g.detNoteUnresolved(filePath, "http_call", targetName, keys), nil
-			}
-			// Found a matching alias — link to existing service node
-			if node, err := g.store.GetNodeByID(aliases[0].NodeID); err == nil {
-				toNodeKey = node.NodeKey
-				toID = node.NodeID
-				resolved = true
-			}
-		}
-		if !resolved {
-			// No alias match — create external_system node
-			toNodeKey = canonicalNodeKey("service:external_system:" + domainKey + ":" + targetName)
-			toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
-			// Remember the endpoint reference: if the host is still external
-			// after the merge pass, the post-pass materializes the endpoint
-			// as a boundary node so the contract path isn't lost. Only for
-			// internal-shaped hosts — a real third party's path (Telegram's
-			// "/bot<token>/sendMessage") is not this domain's contract.
-			// Deterministic mode never queues one: materializing it mints a
-			// contract node out of a client's guess, which is exactly what
-			// "no edge without a unique target" forbids. The path is
-			// recorded as unresolved below instead.
-			if p := extractPathFromURL(fact.Target); p != "" && !external && !g.detOn() {
-				g.pendingExtEndpoints = append(g.pendingExtEndpoints, pendingExtEndpoint{
-					FromNodeKey: fromNodeKey, FromNodeID: fromID,
-					ToNodeKey: toNodeKey, Method: callMethod, Path: p,
-				})
-			}
-		}
-
-		// Deterministic: an http call is never construction-fixed. Whether the
-		// alias table named the target or an external_system stood in for it,
-		// which service that host IS remains a guess — and an alias added
-		// later must look like the same claim getting better evidence, not
-		// like a downgrade from "hard".
-		callDerivation, callConfidence := "linked", 0.85
-		if g.detOn() {
-			callDerivation, callConfidence = "inferred", detNameMatchConfidence
-		}
-		edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
-		_, err := g.store.UpsertEdge(store.EdgeRow{
-			EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			FromNodeID: fromID,
-			ToNodeID:   toID,
-			EdgeType:   "CALLS_SERVICE", DerivationKind: callDerivation, Active: true,
-			LastSeenRevisionID: revisionID, Confidence: callConfidence, Freshness: 1.0, TrustScore: callConfidence,
-			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
-		})
-		if err == nil {
-			counts.edges++
-		}
 
 		// Evidence: text_contains assertion for the call. Assert the URL *path*,
 		// not the resolved URL — source builds URLs from env vars / template
@@ -1246,23 +1189,113 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			"context":   "fetch",
 			"method":    fact.Method,
 		})
-		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
-			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
-			ExtractorID: extractorID, ExtractorVersion: "1.0",
-			Confidence: callConfidence, RevisionID: revisionID,
-			AssertionKind: "text_contains", Assertion: string(assertion),
-		})
-		counts.evidence++
+		var aliasLocal bool // the host is a service node of THIS domain
+		if !pathOnly {
+			// Check if hostname matches a known service via DNS alias
+			var toNodeKey string
+			var toID int64
+			resolved := false
+			if aliases, err := g.store.ListAliasesByNormalized(strings.ToLower(targetName), "dns"); err == nil && len(aliases) > 0 {
+				// Deterministic: a host that matches several services is a name
+				// with more than one meaning — no edge, and say which ones.
+				if g.detOn() && len(aliases) > 1 {
+					keys := make([]string, 0, len(aliases))
+					for _, a := range aliases {
+						if node, err := g.store.GetNodeByID(a.NodeID); err == nil {
+							keys = append(keys, node.NodeKey)
+						}
+					}
+					return counts, g.detNoteUnresolved(filePath, "http_call", targetName, keys), nil
+				}
+				// Found a matching alias — link to existing service node
+				if node, err := g.store.GetNodeByID(aliases[0].NodeID); err == nil {
+					toNodeKey = node.NodeKey
+					toID = node.NodeID
+					resolved = true
+					aliasLocal = node.DomainKey == domainKey
+				}
+			}
+			if !resolved {
+				// No alias match — create external_system node
+				toNodeKey = canonicalNodeKey("service:external_system:" + domainKey + ":" + targetName)
+				toID = g.ensureNodeID(domainKey, revisionID, toNodeKey, targetName, "")
+				// Remember the endpoint reference: if the host is still external
+				// after the merge pass, the post-pass materializes the endpoint
+				// as a boundary node so the contract path isn't lost. Only for
+				// internal-shaped hosts — a real third party's path (Telegram's
+				// "/bot<token>/sendMessage") is not this domain's contract.
+				// Deterministic mode never queues one: materializing it mints a
+				// contract node out of a client's guess, which is exactly what
+				// "no edge without a unique target" forbids. The path is
+				// recorded as unresolved below instead.
+				if p := extractPathFromURL(fact.Target); p != "" && !external && !g.detOn() {
+					g.pendingExtEndpoints = append(g.pendingExtEndpoints, pendingExtEndpoint{
+						FromNodeKey: fromNodeKey, FromNodeID: fromID,
+						ToNodeKey: toNodeKey, Method: callMethod, Path: p,
+					})
+				}
+			}
+
+			// Deterministic: an http call is never construction-fixed. Whether the
+			// alias table named the target or an external_system stood in for it,
+			// which service that host IS remains a guess — and an alias added
+			// later must look like the same claim getting better evidence, not
+			// like a downgrade from "hard".
+			callDerivation, callConfidence := "linked", 0.85
+			if g.detOn() {
+				callDerivation, callConfidence = "inferred", detNameMatchConfidence
+			}
+			edgeKey := fromNodeKey + "->" + toNodeKey + ":CALLS_SERVICE"
+			_, err := g.store.UpsertEdge(store.EdgeRow{
+				EdgeKey: edgeKey, FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
+				FromNodeID: fromID,
+				ToNodeID:   toID,
+				EdgeType:   "CALLS_SERVICE", DerivationKind: callDerivation, Active: true,
+				LastSeenRevisionID: revisionID, Confidence: callConfidence, Freshness: 1.0, TrustScore: callConfidence,
+				Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
+			})
+			if err == nil {
+				counts.edges++
+			}
+
+			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
+				Confidence: callConfidence, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(assertion),
+			})
+			counts.evidence++
+		}
 
 		// Also create CALLS_ENDPOINT edge if we can extract a path from the URL —
 		// but never for a genuine external host: matching a third-party call's
 		// path onto a domain-internal endpoint node would misrepresent it as
 		// a local contract (and would also hide it from FindUnmatchedHTTPCalls
 		// via hasEndpoint, silently dropping it from HTTP reconcile).
+		//
+		// And never for a path that belongs to another service's host: a call to
+		// http://sales-api:8080/orders from a repo that exposes its own GET /orders
+		// is not a call to that endpoint. Only a host that is this domain's own
+		// service (an alias to one of its nodes, or a declared own host) keeps the
+		// local match; a path with no host is matched only to an endpoint that has
+		// an owner.
 		if endpointPath := extractPathFromURL(fact.Target); endpointPath != "" && !external {
 			epNodeKey, epDisplayName := normalizeEndpointKey(domainKey, callMethod, endpointPath)
 			// Only create edge if the endpoint node already exists (was exposed by another file)
 			epID, err2 := g.store.GetNodeIDByKey(epNodeKey)
+			if err2 == nil && pathOnly && !g.endpointHasOwner(epID, "") {
+				err2 = store.ErrNotFound
+			}
+			if err2 != nil && pathOnly {
+				return counts, g.unresolvedCall(filePath, epDisplayName, "a path with no host and no owning endpoint"), nil
+			}
+			if err2 == nil && !pathOnly && !aliasLocal && !g.hostIsOwn(targetName) && !g.endpointHasOwner(epID, targetName) {
+				// The endpoint exists here, but under another service's name.
+				err2 = store.ErrNotFound
+				if !g.detOn() {
+					return counts, nil, nil
+				}
+			}
 			if err2 != nil && g.detOn() {
 				// Nothing in the graph exposes this path: the call names an
 				// endpoint, and which one stays an open question.
@@ -3051,6 +3084,13 @@ func (g *Graph) materializeExternalEndpoints(domainKey string, revisionID int64)
 		epKey, epName := normalizeEndpointKey(domainKey, method, p.Path)
 		g.touchEndpoint(epKey)
 		epID, err := g.store.GetNodeIDByKey(epKey)
+		if err == nil {
+			// The path is also something THIS domain exposes: the call's host is
+			// another service's, so the local endpoint is not its target.
+			if n, nerr := g.store.GetNodeByID(epID); nerr == nil && n.Status != "external" {
+				continue
+			}
+		}
 		if err != nil {
 			epID, err = g.store.UpsertNode(store.NodeRow{
 				NodeKey: epKey, Layer: "contract", NodeType: "endpoint",
@@ -4766,6 +4806,11 @@ func envVarServiceName(host string) (string, bool) {
 		}
 	}
 	h = strings.TrimSuffix(h, "}")
+	if objPathRe.MatchString(h) {
+		// environment.apiUrl / config.api.url: a property of the code's own
+		// config object, not a service name. The config table resolves it.
+		return "", false
+	}
 	for _, w := range []string{"process.env.", "os.environ.", "env.", "ENV."} {
 		h = strings.TrimPrefix(h, w)
 	}
@@ -5299,4 +5344,86 @@ func isNpmPackageSpecifier(eco, name, pkg string) bool {
 		}
 	}
 	return true
+}
+
+// httpTarget is an http_call target after the config table was applied.
+type httpTarget struct {
+	target     string
+	pathOnly   bool           // no host: neither an external_system nor a CALLS_SERVICE
+	unresolved *UnresolvedRef // the host is a symbol nothing could resolve
+}
+
+// unresolvedCall records a call the resolver refuses to link, deterministic
+// pass or not.
+func (g *Graph) unresolvedCall(filePath, name, why string) *UnresolvedRef {
+	if ref := g.detNoteUnresolved(filePath, "http_call", name, nil); ref != nil {
+		return ref
+	}
+	return &UnresolvedRef{FromFile: filePath, Kind: "http_call", Target: name, Reason: why}
+}
+
+// classifyHTTPTarget gives an http_call target a host where the config table
+// knows one. A target that is only a symbol (Configuration["A:B"],
+// ${environment.apiUrl}, process.env.X) is replaced by the table's URL; a path
+// with no host takes the base address of the typed client the calling class is
+// registered with; a symbol nothing resolves is reported unresolved and never
+// becomes a node named after the symbol.
+func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
+	raw := fact.Target
+	if low := strings.ToLower(cleanCallTarget(raw)); strings.Contains(low[:min(len(low), 8)], "://") {
+		return httpTarget{target: raw}
+	}
+	base, rest := SplitCallTarget(raw)
+	if base == "" {
+		if rest == "" {
+			return httpTarget{target: raw}
+		}
+		if e, ok := g.domainConfig.ClientBase(filePath, fact.From, inferNameFromPath(filePath)); ok {
+			return httpTarget{target: e.URL + rest}
+		}
+		return httpTarget{target: rest, pathOnly: true}
+	}
+	kind, _, e, ok := g.domainConfig.ResolveSymbol(filePath, base)
+	switch kind {
+	case SymEnv, SymConfig:
+		if ok {
+			return httpTarget{target: e.URL + rest}
+		}
+		if kind == SymEnv {
+			return httpTarget{target: raw} // the variable's name still names the service
+		}
+	case SymUnknown:
+	default:
+		return httpTarget{target: raw}
+	}
+	return httpTarget{unresolved: g.unresolvedCall(filePath, strings.TrimSpace(raw),
+		"the call address is a configuration symbol with no value in the repository's config files")}
+}
+
+// hostIsOwn says whether the host name is one the domain declared as its own.
+func (g *Graph) hostIsOwn(name string) bool {
+	n := strings.ToLower(name)
+	return g.domainOwnHosts[n] || g.domainOwnHosts[flattenName(n)]
+}
+
+// endpointHasOwner says whether something other than a caller points at the
+// endpoint node: a controller, a handler, a service that exposes it.
+//
+// With host != "" the owner must also be named by the host (the exposing node's
+// key carries the service's name: "orders-api/src/orders.controller").
+func (g *Graph) endpointHasOwner(epID int64, host string) bool {
+	want := flattenName(strings.ToLower(host))
+	edges, err := g.store.ListEdges(store.EdgeFilter{ToNodeID: epID})
+	if err != nil {
+		return false
+	}
+	for _, e := range edges {
+		if e.EdgeType == "CALLS_ENDPOINT" {
+			continue
+		}
+		if want == "" || strings.Contains(flattenName(strings.ToLower(e.FromNodeKey)), want) {
+			return true
+		}
+	}
+	return false
 }

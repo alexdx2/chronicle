@@ -144,6 +144,11 @@ The TOPIC STRING is the consumes/produces target — never the payload class.
 `JsonSerializer.Deserialize<BattleResultEvent>(...)` is the payload type — do NOT
 emit a consumes fact for it.
 
+The topic is the string passed to `ProduceAsync` / `Subscribe`, even when the
+method takes a typed payload: `ProduceAsync("order-placed", new Message<string, OrderPlaced>{...})`
+is `{"kind":"produces","to":"order-placed"}`, never `to: "OrderPlaced"`. If the topic is a
+constant or a config value, report the string it holds; if you cannot read it, omit the fact.
+
 ## Events / Messaging
 
 For message bus integration (MassTransit, NServiceBus, CAP):

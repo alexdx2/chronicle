@@ -43,7 +43,10 @@ type RunInput struct {
 	VersionFor func(path string) string
 	// IsTest says whether a file is test code; such a file gets a line telling
 	// the model to report contracts and calls only. nil = no file is a test.
-	IsTest       func(path string) bool
+	IsTest func(path string) bool
+	// Note, when set, adds a block to the guide of one file (the scan's known
+	// config values). It must not contain secrets.
+	Note         func(path string) string
 	RepoRoot     string
 	ChronicleDir string // <RepoRoot>/.depbot (outbox lives under it)
 	Domain       string
@@ -509,6 +512,9 @@ func extractItem(ctx context.Context, in RunInput, b graph.CheckoutBatch, item g
 		sys, _ := guide.ForContent(item.FilePath, content)
 		if in.IsTest != nil && in.IsTest(item.FilePath) {
 			sys += testFileNote
+		}
+		if in.Note != nil {
+			sys += in.Note(item.FilePath)
 		}
 		req := BuildPrompt(sys, item.FilePath, content, cands)
 		req.MaxTokens = maxTokens

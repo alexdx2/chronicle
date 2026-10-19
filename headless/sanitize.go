@@ -1,6 +1,7 @@
 package headless
 
 import (
+	"bytes"
 	"encoding/json"
 	"path/filepath"
 	"regexp"
@@ -8,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/alexdx2/chronicle-core/deps"
+	"github.com/alexdx2/chronicle-core/internal/srccomment"
 )
 
 // manifestFile reports whether path is a package/build manifest, the only kind
@@ -136,6 +138,7 @@ func sanitizeFacts(path string, content []byte, facts json.RawMessage) (json.Raw
 	if jsLike(path) {
 		types = tsTypeNames(content)
 	}
+	commented, _ := srccomment.Mask(path, content)
 	out := make([]json.RawMessage, 0, len(items))
 	dropped, changed := 0, false
 	for _, raw := range items {
@@ -176,6 +179,10 @@ func sanitizeFacts(path string, content []byte, facts json.RawMessage) (json.Raw
 			dropped++
 			changed = true
 			continue
+		case commented != nil && commentedOut(path, content, commented, kind, f):
+			dropped++
+			changed = true
+			continue
 		}
 		out = append(out, raw)
 	}
@@ -187,4 +194,88 @@ func sanitizeFacts(path string, content []byte, facts json.RawMessage) (json.Raw
 		return facts, 0
 	}
 	return b, dropped
+}
+
+// commentedOut says whether the source lines a fact points at are all inside
+// comments: a commented-out `// app.MapGet("/legacy/ping", ...)` is not a
+// route. The fact carries no line, so it is found by its anchor text (the
+// route path, the call's path, the topic string); a fact whose anchor is not in
+// the file, or appears once outside a comment, is kept.
+func commentedOut(path string, content []byte, mask []bool, kind string, f map[string]any) bool {
+	str := func(k string) string { s, _ := f[k].(string); return strings.TrimSpace(s) }
+	var anchor string
+	switch kind {
+	case "endpoint", "calls_endpoint":
+		anchor = str("target")
+	case "http_call":
+		if i := strings.Index(str("target"), "/"); i >= 0 {
+			anchor = str("target")[i:]
+			if strings.HasPrefix(str("target"), "http") {
+				if j := strings.Index(str("target")[8:], "/"); j >= 0 {
+					anchor = str("target")[8+j:]
+				}
+			}
+		}
+	case "produces", "consumes":
+		anchor = str("to")
+	}
+	if line, ok := f["line"].(float64); ok && line >= 1 {
+		return lineInComment(content, mask, int(line))
+	}
+	// A route with parameters ("/orders/{id}") is written other ways in code;
+	// judge only the literal head of it.
+	if i := strings.IndexAny(anchor, "{:<["); i > 0 {
+		anchor = strings.TrimRight(anchor[:i], "/")
+	}
+	// "/api/orders" may be written "api/orders" in a route attribute: any live
+	// spelling keeps the fact.
+	anchor = strings.TrimPrefix(anchor, "/")
+	if len(anchor) < 3 {
+		return false
+	}
+	text := string(content)
+	found, live := false, false
+	for from := 0; ; {
+		i := strings.Index(text[from:], anchor)
+		if i < 0 {
+			break
+		}
+		at := from + i
+		found = true
+		if !mask[at] {
+			live = true
+			break
+		}
+		from = at + len(anchor)
+	}
+	return found && !live
+}
+
+// lineInComment is true when every non-blank byte of the 1-based line is
+// inside a comment.
+func lineInComment(content []byte, mask []bool, line int) bool {
+	start, n := 0, 1
+	for n < line {
+		i := bytes.IndexByte(content[start:], '\n')
+		if i < 0 {
+			return false
+		}
+		start += i + 1
+		n++
+	}
+	end := start
+	for end < len(content) && content[end] != '\n' {
+		end++
+	}
+	seen := false
+	for i := start; i < end; i++ {
+		if c := content[i]; c == ' ' || c == '\t' || c == '\r' {
+			continue
+		}
+		seen = true
+		if !mask[i] {
+			return false
+		}
+	}
+	return seen
 }

@@ -61,6 +61,12 @@ type Graph struct {
 	// See isExternalHost for the full classification rule.
 	domainOwnHosts map[string]bool
 
+	// configHosts holds, per domain, the config key -> URL table the scan read
+	// before extraction (SetConfigHosts); domainConfig is the current domain's
+	// table while ResolveExtractions runs. See ConfigHosts.
+	configHosts  map[string]*ConfigHosts
+	domainConfig *ConfigHosts
+
 	// domainOwnPackages maps flattenName(package) → the canonical
 	// service:service node key for every package THIS domain publishes:
 	// the service nodes already in the graph plus every declares_service
@@ -480,4 +486,13 @@ func verifyAssertionAtCreation(filePath, assertionKind, assertion string) creati
 			reason: "no verifier for " + assertionKind,
 		}
 	}
+}
+
+// SetConfigHosts installs the config table of a domain; the resolver uses it to
+// give a host to http calls whose target is only a symbol or a path.
+func (g *Graph) SetConfigHosts(domainKey string, t *ConfigHosts) {
+	if g.configHosts == nil {
+		g.configHosts = map[string]*ConfigHosts{}
+	}
+	g.configHosts[domainKey] = t
 }

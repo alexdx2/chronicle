@@ -1,0 +1,359 @@
+package scan
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/alexdx2/chronicle-core/gitutil"
+	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/internal/srccomment"
+	"github.com/alexdx2/chronicle-core/store"
+)
+
+// configExtractorID labels the coverage rows the config pass writes.
+const (
+	configExtractorID      = "chronicle-config"
+	configExtractorVersion = "1"
+	maxConfigBytes         = 262144
+)
+
+// IsConfigFile says whether p is a file the config pass reads: appsettings*.json,
+// .env and .env.*, docker-compose files, environment*.ts / config*.ts /
+// *.config.ts.
+func IsConfigFile(p string) bool {
+	base := path.Base(p)
+	lower := strings.ToLower(base)
+	switch {
+	case strings.HasPrefix(lower, "appsettings") && strings.HasSuffix(lower, ".json"):
+		return true
+	case lower == ".env" || strings.HasPrefix(lower, ".env."):
+		return true
+	case (strings.HasPrefix(lower, "docker-compose") || strings.HasPrefix(lower, "compose.")) &&
+		(strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".yaml")):
+		return true
+	case isTSConfigFile(lower):
+		return true
+	}
+	return false
+}
+
+func isTSConfigFile(lower string) bool {
+	if !strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".d.ts") || strings.HasSuffix(lower, ".spec.ts") {
+		return false
+	}
+	return strings.HasPrefix(lower, "environment") || strings.HasPrefix(lower, "config") || strings.HasSuffix(lower, ".config.ts")
+}
+
+// isRegistrationFile is a C# file that may register typed HTTP clients.
+func isRegistrationFile(p string) bool { return strings.HasSuffix(strings.ToLower(p), ".cs") }
+
+// ReadConfigHosts reads every config file among files (repo-relative, tracked)
+// and every C# client registration, and returns the table plus the config files
+// it parsed. A file it cannot read is skipped: the table is best effort.
+func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string) {
+	t := &graph.ConfigHosts{}
+	var parsed []string
+	sorted := append([]string(nil), files...)
+	sort.Strings(sorted)
+	for _, p := range sorted {
+		cfg := IsConfigFile(p)
+		reg := isRegistrationFile(p)
+		if !cfg && !reg {
+			continue
+		}
+		fp := filepath.Join(root, filepath.FromSlash(p))
+		fi, err := os.Lstat(fp)
+		if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxConfigBytes {
+			continue
+		}
+		body, err := os.ReadFile(fp)
+		if err != nil {
+			continue
+		}
+		if reg {
+			parseClientRegistrations(t, p, body)
+			continue
+		}
+		lower := strings.ToLower(path.Base(p))
+		switch {
+		case strings.HasSuffix(lower, ".json"):
+			parseAppsettings(t, p, body)
+		case strings.HasPrefix(lower, ".env"):
+			parseDotenv(t, p, body)
+		case strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".yaml"):
+			parseCompose(t, p, body)
+		default:
+			parseTSConfig(t, p, body)
+		}
+		parsed = append(parsed, p)
+	}
+	return t, parsed
+}
+
+// parseAppsettings flattens an appsettings JSON file; every string value that is
+// an absolute http(s) URL becomes an entry keyed "A:B:C".
+func parseAppsettings(t *graph.ConfigHosts, file string, body []byte) {
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
+		// appsettings tolerates comments and trailing commas
+		clean := regexp.MustCompile(`(?m)^\s*//.*$`).ReplaceAll(body, nil)
+		clean = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAll(clean, nil)
+		clean = regexp.MustCompile(`,(\s*[}\]])`).ReplaceAll(clean, []byte("$1"))
+		if err := json.Unmarshal(clean, &v); err != nil {
+			return
+		}
+	}
+	var walk func(prefix string, v any)
+	walk = func(prefix string, v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				key := k
+				if prefix != "" {
+					key = prefix + ":" + k
+				}
+				walk(key, x[k])
+			}
+		case []any:
+			for i, e := range x {
+				walk(fmt.Sprintf("%s:%d", prefix, i), e)
+			}
+		case string:
+			t.Add(prefix, x, file)
+		}
+	}
+	walk("", v)
+}
+
+// parseDotenv reads KEY=VALUE lines (optionally "export KEY=VALUE", quoted).
+func parseDotenv(t *graph.ConfigHosts, file string, body []byte) {
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if i := strings.Index(v, " #"); i >= 0 && !strings.HasPrefix(v, "\"") && !strings.HasPrefix(v, "'") {
+			v = strings.TrimSpace(v[:i])
+		}
+		v = strings.Trim(v, `"'`)
+		t.Add(strings.TrimSpace(k), v, file)
+	}
+}
+
+// parseCompose reads services.*.environment (map or KEY=VALUE list form).
+func parseCompose(t *graph.ConfigHosts, file string, body []byte) {
+	var doc struct {
+		Services map[string]struct {
+			Environment any `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		return
+	}
+	names := make([]string, 0, len(doc.Services))
+	for n := range doc.Services {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		switch env := doc.Services[n].Environment.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(env))
+			for k := range env {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if s, ok := env[k].(string); ok {
+					t.Add(k, composeDefault(s), file)
+				}
+			}
+		case []any:
+			for _, e := range env {
+				if s, ok := e.(string); ok {
+					if k, v, ok := strings.Cut(s, "="); ok {
+						t.Add(strings.TrimSpace(k), composeDefault(v), file)
+					}
+				}
+			}
+		}
+	}
+}
+
+// composeDefault unwraps "${VAR:-http://x}" to its default.
+func composeDefault(v string) string {
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {
+		if _, def, ok := strings.Cut(v[2:len(v)-1], ":-"); ok {
+			return def
+		}
+	}
+	return v
+}
+
+// tsToken is one meaningful token of a TS config object: a property holding an
+// absolute URL literal, a property opening an object, a bare brace, a closing brace.
+var tsToken = regexp.MustCompile("([A-Za-z_$][\\w$]*)[\"']?\\s*:\\s*[\"'`](https?://[^\"'`\\s]+)[\"'`]|([A-Za-z_$][\\w$]*)[\"']?\\s*:\\s*\\{|(\\{)|(\\})")
+
+// parseTSConfig reads object properties with absolute URL literals in
+// environment*.ts / config*.ts. The key is the property path inside the
+// exported object ("apiUrl", "api.url"); the object's own name is dropped.
+func parseTSConfig(t *graph.ConfigHosts, file string, body []byte) {
+	src := string(srccomment.Strip(file, body))
+	var stack []string
+	for _, m := range tsToken.FindAllStringSubmatch(src, -1) {
+		switch {
+		case m[1] != "":
+			var parts []string
+			for _, s := range stack {
+				if s != "" {
+					parts = append(parts, s)
+				}
+			}
+			t.Add(strings.Join(append(parts, m[1]), "."), m[2], file)
+		case m[3] != "":
+			stack = append(stack, m[3])
+		case m[4] != "":
+			stack = append(stack, "")
+		case m[5] != "":
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+}
+
+var (
+	clientRegRe = regexp.MustCompile(`Add(?:Http|Refit|Typed)Client\s*<\s*([\w.]+)\s*(?:,\s*([\w.]+))?\s*>`)
+	baseAddrRe  = regexp.MustCompile(`BaseAddress\s*=\s*new\s+Uri\s*\(`)
+)
+
+// parseClientRegistrations finds AddHttpClient<T>(c => c.BaseAddress = new Uri(X))
+// and AddRefitClient<T>().ConfigureHttpClient(c => c.BaseAddress = new Uri(X))
+// and binds the class (and its interface) to X: a config key or a literal URL.
+func parseClientRegistrations(t *graph.ConfigHosts, file string, body []byte) {
+	src := string(srccomment.Strip(file, body))
+	if !strings.Contains(src, "Client") {
+		return
+	}
+	locs := clientRegRe.FindAllStringSubmatchIndex(src, -1)
+	for i, loc := range locs {
+		end := len(src)
+		if i+1 < len(locs) {
+			end = locs[i+1][0]
+		}
+		if end > loc[1]+1500 {
+			end = loc[1] + 1500
+		}
+		seg := src[loc[1]:end]
+		bm := baseAddrRe.FindStringIndex(seg)
+		if bm == nil {
+			continue
+		}
+		expr := balancedArg(seg[bm[1]:])
+		if expr == "" {
+			continue
+		}
+		var key, lit string
+		if q := strings.TrimSpace(expr); len(q) > 1 && (q[0] == '"' || q[0] == '\'') {
+			if end := strings.IndexByte(q[1:], q[0]); end >= 0 {
+				lit = q[1 : 1+end]
+			}
+		} else if kind, k := graph.ClassifyCallBase(strings.TrimSpace(strings.TrimSuffix(expr, "!"))); (kind == graph.SymConfig || kind == graph.SymEnv) && k != "" {
+			key = k
+		}
+		for _, g := range []int{2, 4} {
+			if loc[g] >= 0 {
+				name := lastIdent(src[loc[g]:loc[g+1]])
+				t.AddClient(graph.ClientBinding{Class: name, Key: key, URL: lit, File: file})
+			}
+		}
+	}
+}
+
+func lastIdent(s string) string {
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
+// balancedArg returns the text up to the parenthesis that closes an already
+// opened one.
+func balancedArg(s string) string {
+	depth := 1
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return s[:i]
+			}
+		}
+	}
+	return ""
+}
+
+// readConfig builds the domain's config table, makes the graph use it for http
+// calls, records a coverage row for each config file it read (they are not sent
+// to the model, but they are covered) and returns the table.
+func (r *fullRun) readConfig(d domainRef) (*graph.ConfigHosts, error) {
+	out, err := gitutil.RunRaw(r.o.RepoRoot, "-c", "core.quotePath=false", "ls-files", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("scan: list tracked files: %w", err)
+	}
+	var files []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p == "" {
+			continue
+		}
+		if d.multi && r.m.DomainForFile(p) != d.key {
+			continue
+		}
+		files = append(files, p)
+	}
+	table, parsed := ReadConfigHosts(r.o.RepoRoot, files)
+	r.g.SetConfigHosts(d.key, table)
+	if r.configs == nil {
+		r.configs = map[string]*graph.ConfigHosts{}
+	}
+	r.configs[d.key] = table
+	st := r.g.Store()
+	for _, p := range parsed {
+		blob, _ := gitutil.FileBlobSHA(r.o.RepoRoot, p)
+		if err := st.UpsertCoverage(store.CoverageRow{
+			DomainKey: d.key, FilePath: p, ExtractorID: configExtractorID,
+			ExtractorVersion: configExtractorVersion, Status: "config_only", BlobSHA: blob,
+		}); err != nil {
+			return nil, fmt.Errorf("scan: record config coverage: %w", err)
+		}
+	}
+	return table, nil
+}
+
+// domainRef is what readConfig needs of a domain.
+type domainRef struct {
+	key   string
+	multi bool
+}

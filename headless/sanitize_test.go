@@ -91,3 +91,43 @@ func TestSanitizeFacts_TypesAreNotServicesOrModels(t *testing.T) {
 		t.Errorf("non-JS file dropped %d", d)
 	}
 }
+
+func TestSanitizeFacts_DropsFactsCitingCommentedOutCode(t *testing.T) {
+	src := `var app = builder.Build();
+app.MapGet("/health", () => "ok");
+/*
+app.MapGet("/legacy/ping", () => "pong");
+*/
+// app.MapPost("/old/submit", Submit);
+var v2 = app.MapGroup("/api/v2");
+v2.MapGet("/orders/{id}/status", Status);
+await producer.ProduceAsync("order-placed", msg); // not "order-cancelled"
+`
+	facts := `[
+	 {"kind":"endpoint","method":"GET","target":"/health"},
+	 {"kind":"endpoint","method":"GET","target":"/legacy/ping"},
+	 {"kind":"endpoint","method":"POST","target":"/old/submit"},
+	 {"kind":"endpoint","method":"GET","target":"/api/v2/orders/{id}/status"},
+	 {"kind":"produces","to":"order-placed"},
+	 {"kind":"produces","to":"order-cancelled"},
+	 {"kind":"endpoint","method":"GET","target":"/not/in/file"}]`
+	out, dropped := sanitizeFacts("Program.cs", []byte(src), json.RawMessage(facts))
+	if dropped != 3 {
+		t.Fatalf("dropped = %d, want 3 (legacy, old/submit, order-cancelled): %s", dropped, out)
+	}
+	for _, gone := range []string{"/legacy/ping", "/old/submit", "order-cancelled"} {
+		if strings.Contains(string(out), gone) {
+			t.Errorf("fact %s survived", gone)
+		}
+	}
+	for _, kept := range []string{`"/health"`, "order-placed", "/not/in/file", "/status"} {
+		if !strings.Contains(string(out), kept) {
+			t.Errorf("fact %s was dropped", kept)
+		}
+	}
+	// a line number the model cited is trusted over the text search
+	cited := `[{"kind":"endpoint","method":"GET","target":"/health","line":6}]`
+	if _, d := sanitizeFacts("Program.cs", []byte(src), json.RawMessage(cited)); d != 1 {
+		t.Errorf("fact citing a comment line kept (dropped %d)", d)
+	}
+}

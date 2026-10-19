@@ -214,7 +214,8 @@ type fullRun struct {
 	extra        []string // limitations beyond limitationsFor's
 	cat          *prompts.Catalog
 	structuralOK bool
-	started      bool // at least one domain began, so structuralOK is meaningful
+	started      bool                          // at least one domain began, so structuralOK is meaningful
+	configs      map[string]*graph.ConfigHosts // per domain, read by readConfig
 }
 
 // guide is the per-file guide set of this run: one catalog, the manifest's
@@ -288,6 +289,9 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	st := r.g.Store()
 	guide, err := r.guide()
 	if err != nil {
+		return err
+	}
+	if _, err := r.readConfig(domainRef{key: d.Key, multi: multi}); err != nil {
 		return err
 	}
 	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, list, versionFrom(guide))
@@ -496,6 +500,7 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 		HeadSHA: r.head, Files: todo, Backend: r.o.Backend, Concurrency: r.o.Concurrency,
 		ContextWindow: r.o.ContextWindow, FileTimeout: r.o.FileTimeout,
 		OnFileDone: r.o.OnFileDone, Guide: guide, VersionFor: versionFrom(guide), IsTest: r.isTest(d),
+		Note: r.configNote(d.Key),
 		OnFiles: func(fs []headless.FileUsage) {
 			ms := MetricsFrom(model, fs, time.Now())
 			r.rep.Metrics = append(r.rep.Metrics, ms...)
@@ -523,6 +528,15 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 		return fmt.Errorf("scan: extract domain %s: %w", d.Key, runErr)
 	}
 	return nil
+}
+
+// configNote gives the prompt of each file the domain's known config values.
+func (r *fullRun) configNote(domain string) func(string) string {
+	t := r.configs[domain]
+	if t.Empty() {
+		return nil
+	}
+	return t.PromptSection
 }
 
 // isTest is the domain's test-glob predicate (nil without test globs).
