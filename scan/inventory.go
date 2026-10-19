@@ -119,12 +119,21 @@ func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
 			inv.Skipped = append(inv.Skipped, p)
 			inv.skipped[p] = true
 		} else if isSourceFile(p) {
-			if b, rerr := os.ReadFile(filepath.Join(root, filepath.FromSlash(p))); rerr == nil && routeRegistration.Match(b) {
+			if b, rerr := readHeadN(filepath.Join(root, filepath.FromSlash(p)), maxRouteScanBytes); rerr == nil && routeRegistration.Match(b) {
 				inv.routes[p] = true
 			}
 		}
 	}
 	return inv, nil
+}
+
+func readHeadN(p string, n int64) ([]byte, error) {
+	fh, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer fh.Close()
+	return io.ReadAll(io.LimitReader(fh, n))
 }
 
 func readHead(p string) ([]byte, error) {
@@ -222,7 +231,13 @@ func sortedByCount(m map[string]int) []string {
 // routeRegistration matches the calls that register an HTTP route in code:
 // ASP.NET minimal APIs (MapGet...), Express/Fastify/Koa style (app.get,
 // router.post) and the like.
-var routeRegistration = regexp.MustCompile(`\.Map(Get|Post|Put|Delete|Patch)\s*\(|\b(app|router|server|api)\.(get|post|put|delete|patch)\s*\(`)
+// Express-style calls need a string-literal path starting with "/" as the
+// first argument, so `api.get(id)` on an HTTP client is not a route.
+var routeRegistration = regexp.MustCompile(`\.Map(Get|Post|Put|Delete|Patch)\s*\(|\b(app|router)\.(get|post|put|delete|patch)\s*\(\s*['"` + "`" + `]/`)
+
+// maxRouteScanBytes bounds how much of a file BuildInventory reads when
+// looking for route registrations.
+const maxRouteScanBytes = 64 * 1024
 
 // HasRoutes reports whether the file's text registers HTTP routes.
 func (inv *Inventory) HasRoutes(p string) bool {

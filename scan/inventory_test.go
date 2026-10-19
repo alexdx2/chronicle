@@ -116,3 +116,27 @@ func TestBuildInventory_UnreadableFileIsSkippedWithReason(t *testing.T) {
 		t.Fatalf("paths = %v", p)
 	}
 }
+
+func TestBuildInventory_RouteRegistrationNeedsPathLiteral(t *testing.T) {
+	root := t.TempDir()
+	gitT(t, root, "init", "-q")
+	writeT(t, root, "client.ts", "const r = api.get('/x');\nserver.post(`/y`);\n")
+	writeT(t, root, "srv.ts", "app.get('/x', h);\n")
+	writeT(t, root, "r.ts", "router.post(\"/y\", h);\n")
+	writeT(t, root, "late.ts", strings.Repeat("// pad\n", 20000)+"app.get('/late', h);\n")
+	gitT(t, root, "add", "-A")
+	gitT(t, root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+	inv, err := BuildInventory(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.HasRoutes("client.ts") {
+		t.Error("api.get('/x') in a client file is not a route")
+	}
+	if !inv.HasRoutes("srv.ts") || !inv.HasRoutes("r.ts") {
+		t.Error("app.get('/x') and router.post(\"/y\") are routes")
+	}
+	if inv.HasRoutes("late.ts") {
+		t.Error("only the first 64 KB of a file is scanned")
+	}
+}
