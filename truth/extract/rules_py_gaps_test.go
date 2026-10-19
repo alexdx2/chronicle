@@ -29,3 +29,42 @@ func TestPyEnvDefaultHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestRootDockerfileService(t *testing.T) {
+	uv := "FROM python:3.12\nCMD [\"uvicorn\", \"indexer.main:app\", \"--port\", \"80\"]\n"
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"fastapi title slug", map[string]string{
+			"Dockerfile": uv, "indexer/main.py": "from fastapi import FastAPI\napp = FastAPI(title=\"search-indexer\")\n"}, "own:searchindexer"},
+		{"title is prose", map[string]string{
+			"Dockerfile": uv, "indexer/main.py": "app = FastAPI(title=\"Search Indexer API\")\n"}, ""},
+		{"title commented", map[string]string{
+			"Dockerfile": uv, "indexer/main.py": "# app = FastAPI(title=\"search-indexer\")\napp = FastAPI()\n"}, ""},
+		{"poetry name", map[string]string{
+			"Dockerfile": uv, "pyproject.toml": "[tool.poetry]\nname = \"ml-scoring\"\npackage-mode = false\n"}, "own:mlscoring"},
+		{"project name", map[string]string{
+			"Dockerfile": "FROM python\nENTRYPOINT [\"python\", \"-m\", \"worker\"]\n", "pyproject.toml": "[project]\nname = \"lead_worker\"\n"}, "own:leadworker"},
+		{"setup.py name", map[string]string{
+			"Dockerfile": "FROM python\nCMD python run.py\n", "setup.py": "setup(\n    name='billing-sync',\n)\n"}, "own:billingsync"},
+		{"celery shell form", map[string]string{
+			"Dockerfile": "FROM python\nCMD celery -A app.tasks worker -l info\n", "pyproject.toml": "[project]\nname = \"jobs\"\n"}, "own:jobs"},
+		{"no name anywhere", map[string]string{"Dockerfile": uv}, ""},
+		{"pip is not a service", map[string]string{
+			"Dockerfile": "FROM python\nCMD [\"python\", \"-m\", \"pip\", \"list\"]\n", "pyproject.toml": "[project]\nname = \"x\"\n"}, ""},
+		{"RUN is not an entry point", map[string]string{
+			"Dockerfile": "FROM python\nRUN python -m compileall .\nRUN uvicorn --version\n", "pyproject.toml": "[project]\nname = \"x\"\n"}, ""},
+		{"commented CMD", map[string]string{
+			"Dockerfile": "FROM python\n# CMD [\"uvicorn\", \"a:app\"]\n", "pyproject.toml": "[project]\nname = \"x\"\n"}, ""},
+		{"node dockerfile", map[string]string{
+			"Dockerfile": "FROM node\nCMD [\"node\", \"server.js\"]\n", "pyproject.toml": "[project]\nname = \"x\"\n"}, ""},
+	}
+	for _, c := range cases {
+		got := keysOf(t, c.files, truth.ClassServices)
+		if got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
