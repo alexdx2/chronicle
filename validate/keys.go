@@ -94,9 +94,12 @@ func routeQualifiedName(qn string) (prefix, path string, ok bool) {
 	return qn[:i+1], qn[i+1:], true
 }
 
-// routeBraceParam matches a brace-style path parameter: OpenAPI "{id}", FastAPI
-// "{item_id}", Spring "{id:\\d+}" and the JS template "${userId}".
-var routeBraceParam = regexp.MustCompile(`\$?\{([A-Za-z_][A-Za-z0-9_.-]*)(?::[^}]*)?\}`)
+// routeBraceParam matches a whole path segment that is one brace-style
+// parameter: OpenAPI "{id}", FastAPI "{item_id}", Spring "{id:\\d+}" (the
+// constraint may hold one level of nested braces: "{id:[0-9]{3}}") and the JS
+// template "${userId}". A segment where the parameter is only part
+// ("{id}.json", "{id}{x}") does not match and stays as written.
+var routeBraceParam = regexp.MustCompile(`^\$?\{([A-Za-z_][A-Za-z0-9_.-]*)(?::(?:[^{}]|\{[^{}]*\})*)?\}$`)
 
 // CanonicalRoutePath rewrites brace-style path parameters to the colon style
 // ("/orders/{id}" and "/orders/${id}" become "/orders/:id") so one endpoint
@@ -107,7 +110,13 @@ func CanonicalRoutePath(path string) string {
 	if !strings.Contains(path, "{") {
 		return path
 	}
-	return routeBraceParam.ReplaceAllString(path, ":$1")
+	segs := strings.Split(path, "/")
+	for i, seg := range segs {
+		if m := routeBraceParam.FindStringSubmatch(seg); m != nil {
+			segs[i] = ":" + m[1]
+		}
+	}
+	return strings.Join(segs, "/")
 }
 
 // NormalizeQualifiedName applies rule 2 of the canonical key rule (see

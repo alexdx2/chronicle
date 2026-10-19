@@ -621,3 +621,11 @@ func TestPlanResolvesDynamicScreenRoute(t *testing.T) {
 		t.Fatal("no SERVED_BY edge onto the dynamic route's endpoint")
 	}
 }
+
+func TestRouteKeyFor_NormalisesBraces(t *testing.T) {
+	r := &Resolver{Domain: "demo"}
+	got := r.routeKeyFor("/orders/{id}")
+	if want := "contract:endpoint:demo:get:/orders/:id"; got != want {
+		t.Errorf("routeKeyFor = %q, want %q", got, want)
+	}
+}

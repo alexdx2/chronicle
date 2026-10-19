@@ -285,6 +285,10 @@ func TestCanonicalRoutePath(t *testing.T) {
 		"/orders/{id:\\d+}":         "/orders/:id",
 		"/orders/:id":               "/orders/:id",
 		"/invoices/[invoiceId]":     "/invoices/[invoiceId]",
+		"/orders/{id:[0-9]{3}}":     "/orders/:id",
+		"/a/{id:[0-9]{3}}/b/{x}":    "/a/:id/b/:x",
+		"/files/{id}.json":          "/files/{id}.json",
+		"/files/{id}{x}":            "/files/{id}{x}",
 	}
 	for in, want := range cases {
 		if got := CanonicalRoutePath(in); got != want {

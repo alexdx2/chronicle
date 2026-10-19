@@ -162,7 +162,7 @@ func (r *Resolver) active(key string) bool {
 }
 
 func (r *Resolver) routeKeyFor(route string) string {
-	return strings.ToLower(fmt.Sprintf("contract:endpoint:%s:get:%s", r.Domain, route))
+	return strings.ToLower(fmt.Sprintf("contract:endpoint:%s:get:%s", r.Domain, validate.CanonicalRoutePath(route)))
 }
 
 // splitRef splits "Model.field" on its LAST dot, so a namespaced model still
