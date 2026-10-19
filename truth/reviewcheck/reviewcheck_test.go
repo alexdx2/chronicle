@@ -1,6 +1,7 @@
 package reviewcheck
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/gitdiff"
@@ -319,24 +320,98 @@ func TestUnchangedHTTPFactExplainsAddedCallInChangedFile(t *testing.T) {
 	}
 }
 
-func TestMovedIntegrationIsNotUnexplained(t *testing.T) {
+// ownedSnap is a graph of services, each containing the named code nodes.
+func ownedSnap(owners map[string][]string) *snapshot.Snapshot {
+	s := &snapshot.Snapshot{Header: snapshot.Header{Kind: "header", Format: snapshot.Format, Version: snapshot.Version}}
+	var svcs []string
+	for svc := range owners {
+		svcs = append(svcs, svc)
+	}
+	sort.Strings(svcs)
+	for _, svc := range svcs {
+		sid := "service:service:d:" + svc
+		s.Nodes = append(s.Nodes, snapshot.Node{Kind: "node", ID: sid, Layer: "service", Type: "service", Domain: "d", Name: svc, Status: "active"})
+		for _, c := range owners[svc] {
+			s.Nodes = append(s.Nodes, snapshot.Node{Kind: "node", ID: c, Layer: "code", Type: "provider", Domain: "d", Name: c, Status: "active"})
+			s.Edges = append(s.Edges, snapshot.Edge{Kind: "edge", ID: sid + "->" + c + ":CONTAINS", From: sid, To: c, Type: "CONTAINS", Derivation: "hard", Active: true})
+		}
+	}
+	s.Nodes = append(s.Nodes, snapshot.Node{Kind: "node", ID: "service:external_system:d:pricing-api", Layer: "service", Type: "external_system", Domain: "d", Name: "pricing-api", Status: "active"})
+	return s
+}
+
+func movedReview(a, b string) *review.ReviewResult {
 	withFile := func(f review.Fact, file string) review.Fact {
 		f.Edge.Evidence = []snapshot.Evidence{{ID: "e-" + file, File: file, Range: "1-1"}}
 		return f
 	}
-	rv := &review.ReviewResult{
+	return &review.ReviewResult{
 		ChangedFiles: []gitdiff.ChangedFile{{Path: "a.cs"}, {Path: "b.cs"}},
 		Delta: &review.GraphDelta{
-			Added:   []review.Fact{withFile(edgeFact("code:p:d:b", "service:external_system:d:pricing-api", "CALLS_SERVICE"), "b.cs")},
-			Removed: []review.Fact{withFile(edgeFact("code:p:d:a", "service:external_system:d:pricing-api", "CALLS_SERVICE"), "a.cs")},
+			Added:   []review.Fact{withFile(edgeFact(b, "service:external_system:d:pricing-api", "CALLS_SERVICE"), "b.cs")},
+			Removed: []review.Fact{withFile(edgeFact(a, "service:external_system:d:pricing-api", "CALLS_SERVICE"), "a.cs")},
 		}}
-	res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{}, Review: rv})
-	if len(res.Unexplained) != 0 {
+}
+
+func TestMovedIntegrationIsNotUnexplained(t *testing.T) {
+	a, b := "code:p:d:a", "code:p:d:b"
+	snap := ownedSnap(map[string][]string{"sales": {a, b}})
+	rv := movedReview(a, b)
+	in := Input{Base: &truth.Report{}, Head: &truth.Report{}, BaseSnap: snap, HeadSnap: snap, Review: rv}
+	if res := Check(in); len(res.Unexplained) != 0 {
 		t.Errorf("moved pair unexplained: %+v", res.Unexplained)
 	}
 	// without the second changed file the edges are unexplained again
 	rv.ChangedFiles = rv.ChangedFiles[:1]
-	if res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{}, Review: rv}); len(res.Unexplained) != 2 {
+	if res := Check(in); len(res.Unexplained) != 2 {
 		t.Errorf("unpaired: %+v", res.Unexplained)
+	}
+}
+
+// Two services of one monorepo: a removal and an addition, not a move.
+func TestMovedIntegrationAcrossServicesStaysUnexplained(t *testing.T) {
+	a, b := "code:p:d:a", "code:p:d:b"
+	snap := ownedSnap(map[string][]string{"sales": {a}, "billing": {b}})
+	in := Input{Base: &truth.Report{}, Head: &truth.Report{}, BaseSnap: snap, HeadSnap: snap, Review: movedReview(a, b)}
+	if res := Check(in); len(res.Unexplained) != 2 {
+		t.Errorf("cross-service pair explained: %+v", res.Unexplained)
+	}
+}
+
+// An unchanged http fact explains an added call only when it is about the
+// call's target host.
+func TestChangedCallerExplainsOnlyMatchingHost(t *testing.T) {
+	file := "analytics-api/src/analytics/badge.client.ts"
+	from := "code:provider:d:analytics-api/src/analytics/badge-client"
+	fact := func(host string) truth.Fact {
+		f := httpFact(file, "")
+		f.Key, f.Attrs = host, map[string]string{"host": host}
+		return f
+	}
+	snap := httpSnap(file)
+	snap.Nodes = append(snap.Nodes,
+		snapshot.Node{ID: "contract:endpoint:d:post:/a", Layer: "contract", Type: "endpoint", Attrs: map[string]string{"host": "a.example.com"}},
+		snapshot.Node{ID: "contract:endpoint:d:post:/nohost", Layer: "contract", Type: "endpoint"})
+	run := func(target string, hosts ...string) int {
+		var facts []truth.Fact
+		for _, h := range hosts {
+			facts = append(facts, fact(h))
+		}
+		rv := &review.ReviewResult{ChangedFiles: []gitdiff.ChangedFile{{Path: file, Status: "M"}},
+			Delta: &review.GraphDelta{Added: []review.Fact{edgeFact(from, target, "CALLS_ENDPOINT")}}}
+		rep := &truth.Report{Facts: facts}
+		return len(Check(Input{Base: rep, Head: rep, BaseSnap: snap, HeadSnap: snap, Review: rv}).Unexplained)
+	}
+	if n := run("contract:endpoint:d:post:/a", "a.example.com", "b.example.com"); n != 0 {
+		t.Errorf("matching host: %d unexplained", n)
+	}
+	if n := run("contract:endpoint:d:post:/a", "b.example.com"); n != 1 {
+		t.Errorf("other host explained the call: %d unexplained", n)
+	}
+	if n := run("contract:endpoint:d:post:/nohost", "b.example.com"); n != 0 {
+		t.Errorf("hostless target, one host in file: %d unexplained", n)
+	}
+	if n := run("contract:endpoint:d:post:/nohost", "a.example.com", "b.example.com"); n != 1 {
+		t.Errorf("hostless target, two hosts in file: %d unexplained", n)
 	}
 }

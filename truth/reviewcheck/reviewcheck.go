@@ -322,9 +322,13 @@ func Check(in Input) Result {
 			changed[strings.TrimPrefix(strings.ReplaceAll(c.Path, "\\", "/"), "./")] = true
 		}
 		explainByChangedCaller(d.Added, changed, headHTTPFacts(head), in.HeadSnap, mappedAdded)
+		headSys, relHead := review.SnapshotCollapse(in.HeadSnap)
+		baseSys, relBase := review.SnapshotCollapse(in.BaseSnap)
+		defer relHead()
+		defer relBase()
 		// A caller moved inside the change (A -> T removed, B -> T added, both
 		// files in the diff) is one moved integration, not two unexplained edges.
-		for _, p := range review.MovedIntegrationPairs(d.Added, d.Removed, in.Review.ChangedFiles) {
+		for _, p := range review.MovedIntegrationPairs(d.Added, d.Removed, in.Review.ChangedFiles, headSys, baseSys) {
 			a, r := d.Added[p[0]].Edge, d.Removed[p[1]].Edge
 			mappedAdded[a.From], mappedAdded[a.To] = true, true
 			mappedRemoved[r.From], mappedRemoved[r.To] = true, true
@@ -523,14 +527,36 @@ func explainByChangedCaller(facts []review.Fact, changedSet map[string]bool, hf 
 			files[n.ID] = n.File
 		}
 	}
+	nodes := map[string]snapshot.Node{}
+	if snap != nil {
+		for _, n := range snap.Nodes {
+			nodes[n.ID] = n
+		}
+	}
+	idents := map[string]map[string]bool{} // file -> distinct hosts (var name when the host is unknown)
+	for _, h := range hf {
+		file := norm(h.Primary.File)
+		if idents[file] == nil {
+			idents[file] = map[string]bool{}
+		}
+		idents[file][factIdent(h)] = true
+	}
 	for _, f := range facts {
 		e := f.Edge
 		if e == nil || e.Type != "CALLS_ENDPOINT" {
 			continue
 		}
+		th := targetHost(nodes[e.To])
 		for _, h := range hf {
 			file := norm(h.Primary.File)
 			if file == "" || !changedSet[file] || !fromInFile(e.From, files[e.From], file) {
+				continue
+			}
+			if th != "" {
+				if factHost(h) != th {
+					continue
+				}
+			} else if len(idents[file]) != 1 {
 				continue
 			}
 			mapped[e.From] = true
@@ -538,4 +564,41 @@ func explainByChangedCaller(facts []review.Fact, changedSet map[string]bool, hf 
 			break
 		}
 	}
+}
+
+// factHost is the canonical host an http fact names ("" for a fact known only
+// by its variable).
+func factHost(f truth.Fact) string {
+	if h := truth.CanonHost(f.Attrs["host"]); h != "" {
+		return h
+	}
+	if f.Key != "" && !strings.HasPrefix(f.Key, "var:") {
+		return truth.CanonHost(f.Key)
+	}
+	return ""
+}
+
+// factIdent names what an http fact reaches: its host, else its variable.
+func factIdent(f truth.Fact) string {
+	if h := factHost(f); h != "" {
+		return h
+	}
+	if v := f.Attrs["var"]; v != "" {
+		return "var:" + v
+	}
+	return f.Key
+}
+
+// targetHost is the canonical host recorded on a call target node (the host
+// attribute, else a dotted alias), "" when the node names none.
+func targetHost(n snapshot.Node) string {
+	if h := truth.CanonHost(n.Attrs["host"]); h != "" {
+		return h
+	}
+	for _, a := range n.Aliases {
+		if strings.Contains(a.Alias, ".") && !strings.ContainsAny(a.Alias, " /") {
+			return truth.CanonHost(a.Alias)
+		}
+	}
+	return ""
 }
