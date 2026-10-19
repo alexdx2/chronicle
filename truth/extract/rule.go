@@ -30,6 +30,9 @@ type Tree interface {
 	ReadFile(path string) ([]byte, bool)
 	// Siblings returns base names in dir matching glob (path.Match).
 	Siblings(dir, glob string) []string
+	// Subdirs returns the base names of the directories directly in dir that
+	// the walker would enter (excluded and hidden directories are left out).
+	Subdirs(dir string) []string
 }
 
 // Rule extracts facts from one file.
@@ -123,6 +126,20 @@ func (t fsTree) Siblings(dir, glob string) []string {
 			continue
 		}
 		if ok, _ := path.Match(glob, e.Name()); ok {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+func (t fsTree) Subdirs(dir string) []string {
+	ents, err := fs.ReadDir(t.fsys, dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() && !isExcluded(e.Name()) && !strings.HasPrefix(e.Name(), ".") {
 			out = append(out, e.Name())
 		}
 	}

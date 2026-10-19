@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/alexdx2/chronicle-core/truth"
 	"github.com/alexdx2/chronicle-core/truth/extract/lex"
 	"gopkg.in/yaml.v3"
@@ -379,8 +380,97 @@ func isDockerfilePath(p string) bool {
 
 var (
 	dockerCmd    = regexp.MustCompile(`(?i)^\s*(?:CMD|ENTRYPOINT)\b(.*)$`)
-	pythonServer = regexp.MustCompile(`\b(?:uvicorn|gunicorn)\b|\bmanage\.py\b`)
+	pythonServer = regexp.MustCompile(`\b(?:uvicorn|gunicorn|hypercorn|daphne|granian|waitress-serve)\b|\bmanage\.py\b|\bcelery\b.*\s(?:-A|--app)[\s=]`)
+	// python -m <module> and python <script>.py run a program of their own.
+	pythonRun    = regexp.MustCompile(`\bpython[0-9.]*\s+(?:-m\s+([\w.]+)|([\w./-]+\.py)\b)`)
+	dockerTokSep = strings.NewReplacer("[", " ", "]", " ", ",", " ", `"`, " ", "'", " ")
+	asgiTarget   = regexp.MustCompile(`^([A-Za-z_][\w.]*):[A-Za-z_][\w.]*(?:\(\))?$`)
+	fastAPITitle = regexp.MustCompile(`\bFastAPI\(.*?\btitle\s*=\s*["']([^"']+)["']`)
+	slugName     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+	setupCfgName = regexp.MustCompile(`(?m)^name\s*=\s*([\w.-]+)\s*$`)
+	setupPyName  = regexp.MustCompile(`\bname\s*=\s*["']([\w.-]+)["']`)
 )
+
+// pythonNotService lists `python -m <tool>` modules that are build or test
+// helpers, not a long-running service.
+var pythonNotService = map[string]bool{
+	"pip": true, "venv": true, "ensurepip": true, "compileall": true, "py_compile": true,
+	"http.server": true, "unittest": true, "pytest": true, "build": true, "setuptools": true,
+}
+
+// pythonCmdStarts reports whether the CMD/ENTRYPOINT argument text starts a
+// Python service and returns that text normalised (exec form to words).
+func pythonCmdStarts(args string) (string, bool) {
+	words := strings.Join(strings.Fields(dockerTokSep.Replace(args)), " ")
+	if pythonServer.MatchString(words) {
+		return words, true
+	}
+	if m := pythonRun.FindStringSubmatch(words); m != nil {
+		if m[1] != "" {
+			return words, !pythonNotService[m[1]]
+		}
+		return words, m[2] != "setup.py"
+	}
+	return "", false
+}
+
+// rootServiceName names the service of a repo-root Dockerfile from what the
+// repo says about itself: the pyproject project/poetry name, the setup.cfg or
+// setup.py name, or the slug-shaped title of the FastAPI app the command
+// serves. A root Dockerfile alone says nothing, and then "" is returned.
+func rootServiceName(f *FileCtx, words string) string {
+	if b, ok := f.Tree.ReadFile("pyproject.toml"); ok {
+		var doc struct {
+			Project struct {
+				Name string `toml:"name"`
+			} `toml:"project"`
+			Tool struct {
+				Poetry struct {
+					Name string `toml:"name"`
+				} `toml:"poetry"`
+			} `toml:"tool"`
+		}
+		if _, err := toml.Decode(string(b), &doc); err == nil {
+			for _, n := range []string{doc.Project.Name, doc.Tool.Poetry.Name} {
+				if strings.TrimSpace(n) != "" {
+					return strings.TrimSpace(n)
+				}
+			}
+		}
+	}
+	if b, ok := f.Tree.ReadFile("setup.cfg"); ok {
+		if m := setupCfgName.FindSubmatch(b); m != nil {
+			return string(m[1])
+		}
+	}
+	if b, ok := f.Tree.ReadFile("setup.py"); ok {
+		for _, l := range lex.Scan(b, lex.Python).Lines {
+			if m := setupPyName.FindStringSubmatch(l.Code); m != nil {
+				return m[1]
+			}
+		}
+	}
+	for _, w := range strings.Fields(words) {
+		m := asgiTarget.FindStringSubmatch(w)
+		if m == nil {
+			continue
+		}
+		base := strings.ReplaceAll(m[1], ".", "/")
+		for _, cand := range []string{base + ".py", base + "/__init__.py"} {
+			b, ok := f.Tree.ReadFile(cand)
+			if !ok {
+				continue
+			}
+			lines := lex.Scan(b, lex.Python).Lines
+			for i := range lines {
+				if t := fastAPITitle.FindStringSubmatch(callText(lines, i, 6)); t != nil && slugName.MatchString(t[1]) {
+					return t[1]
+				}
+			}
+		}
+	}
+	return ""
+}
 
 // envDockerSuffix lists Dockerfile.<suffix> values that name an environment or
 // build flavour rather than a service.
@@ -392,12 +482,20 @@ var envDockerSuffix = map[string]bool{
 }
 
 func applyPythonEntry(f *FileCtx) []truth.Fact {
-	if f.Dir == "." {
-		return nil // a root Dockerfile cannot name the service
-	}
 	for _, l := range f.Lines {
-		if m := dockerCmd.FindStringSubmatch(l.Code); m != nil && pythonServer.MatchString(m[1]) {
-			name := path.Base(f.Dir)
+		m := dockerCmd.FindStringSubmatch(l.Code)
+		if m == nil {
+			continue
+		}
+		words, ok := pythonCmdStarts(m[1])
+		if !ok {
+			continue
+		}
+		var name string
+		if f.Dir == "." {
+			name = rootServiceName(f, words)
+		} else {
+			name = path.Base(f.Dir)
 			if genericServiceDir[strings.ToLower(name)] {
 				// docker/Dockerfile.api: the suffix names the service.
 				b := baseName(f.Path)
@@ -410,11 +508,11 @@ func applyPythonEntry(f *FileCtx) []truth.Fact {
 					return nil // docker/Dockerfile.prod names an environment, not a service
 				}
 			}
-			if fc, ok := serviceFact("python.entry", f, "own", name, "", "", l); ok {
-				return []truth.Fact{fc}
-			}
-			return nil
 		}
+		if fc, ok := serviceFact("python.entry", f, "own", name, "", "", l); ok {
+			return []truth.Fact{fc}
+		}
+		return nil
 	}
 	return nil
 }
