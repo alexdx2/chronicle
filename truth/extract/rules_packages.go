@@ -32,6 +32,22 @@ func inNodeModules(p string) bool {
 	return false
 }
 
+// nonPublishDirs hold sample or test manifests, not published packages.
+var nonPublishDirs = map[string]bool{
+	"test": true, "tests": true, "fixtures": true, "__fixtures__": true,
+	"examples": true, "example": true, "templates": true,
+}
+
+func inNonPublishDir(p string) bool {
+	parts := strings.Split(strings.ReplaceAll(p, "\\", "/"), "/")
+	for _, s := range parts[:len(parts)-1] {
+		if nonPublishDirs[strings.ToLower(s)] {
+			return true
+		}
+	}
+	return false
+}
+
 func packageFact(rule string, f *FileCtx, eco, name string, line int) *truth.Fact {
 	name = strings.TrimSpace(name)
 	if name == "" || !literalDepName(name) || len(f.Lines) == 0 {
@@ -62,7 +78,7 @@ func firstLine(f *FileCtx, re *regexp.Regexp, from int) int {
 // ---- npm ----
 
 func applyPackageNpm(f *FileCtx) []truth.Fact {
-	if inNodeModules(f.Path) {
+	if inNodeModules(f.Path) || inNonPublishDir(f.Path) {
 		return nil
 	}
 	var doc map[string]json.RawMessage
@@ -72,7 +88,7 @@ func applyPackageNpm(f *FileCtx) []truth.Fact {
 	if _, root := doc["workspaces"]; root {
 		return nil
 	}
-	if len(f.Tree.Siblings(f.Dir, "pnpm-workspace.yaml")) > 0 {
+	if len(f.Tree.Siblings(f.Dir, "pnpm-workspace.yaml")) > 0 || len(f.Tree.Siblings(f.Dir, "lerna.json")) > 0 {
 		return nil
 	}
 	var name string
@@ -89,35 +105,51 @@ func applyPackageNpm(f *FileCtx) []truth.Fact {
 
 // ---- .NET ----
 
+// Elements may carry attributes (Condition="...").
 var (
-	csPackageID   = regexp.MustCompile(`(?s)<PackageId>\s*([^<]*?)\s*</PackageId>`)
-	csAssemblyNm  = regexp.MustCompile(`(?s)<AssemblyName>\s*([^<]*?)\s*</AssemblyName>`)
-	csIsPackable  = regexp.MustCompile(`(?is)<IsPackable>\s*([^<]*?)\s*</IsPackable>`)
-	csPackOnBuild = regexp.MustCompile(`(?is)<GeneratePackageOnBuild>\s*([^<]*?)\s*</GeneratePackageOnBuild>`)
+	csPackageID   = regexp.MustCompile(`(?s)<PackageId(\s[^>]*)?>\s*([^<]*?)\s*</PackageId>`)
+	csAssemblyNm  = regexp.MustCompile(`(?s)<AssemblyName(\s[^>]*)?>\s*([^<]*?)\s*</AssemblyName>`)
+	csIsPackable  = regexp.MustCompile(`(?is)<IsPackable(\s[^>]*)?>\s*([^<]*?)\s*</IsPackable>`)
+	csPackOnBuild = regexp.MustCompile(`(?is)<GeneratePackageOnBuild(\s[^>]*)?>\s*([^<]*?)\s*</GeneratePackageOnBuild>`)
+	csCondition   = regexp.MustCompile(`(?i)\bCondition\s*=`)
 )
 
 func applyPackageCsproj(f *FileCtx) []truth.Fact {
 	text := blankComments(string(f.Raw))
+	// truthy: any occurrence (conditional or not) set to true.
 	truthy := func(re *regexp.Regexp) bool {
-		m := re.FindStringSubmatch(text)
-		return m != nil && strings.EqualFold(m[1], "true")
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			if strings.EqualFold(m[2], "true") {
+				return true
+			}
+		}
+		return false
 	}
-	// An explicit IsPackable=false means "pack nothing", whatever else is set.
-	if m := csIsPackable.FindStringSubmatch(text); m != nil && strings.EqualFold(m[1], "false") {
-		return nil
+	// An unconditional IsPackable=false means "pack nothing", whatever else
+	// is set. A conditional false only applies to some configurations.
+	for _, m := range csIsPackable.FindAllStringSubmatch(text, -1) {
+		if strings.EqualFold(m[2], "false") && !csCondition.MatchString(m[1]) {
+			return nil
+		}
+	}
+	assembly := func() (string, int) {
+		for _, a := range csAssemblyNm.FindAllStringSubmatchIndex(text, -1) {
+			if v := strings.TrimSpace(text[a[4]:a[5]]); v != "" && !strings.Contains(v, "$(") {
+				return v, a[0]
+			}
+		}
+		base := baseName(f.Path)
+		return strings.TrimSuffix(base, base[strings.LastIndex(base, "."):]), -1
 	}
 	var name string
 	var at int
 	if m := csPackageID.FindStringSubmatchIndex(text); m != nil {
-		name, at = text[m[2]:m[3]], m[0]
-	} else if truthy(csIsPackable) || truthy(csPackOnBuild) {
-		if a := csAssemblyNm.FindStringSubmatchIndex(text); a != nil && strings.TrimSpace(text[a[2]:a[3]]) != "" {
-			name, at = text[a[2]:a[3]], a[0]
-		} else {
-			base := baseName(f.Path)
-			name = strings.TrimSuffix(base, base[strings.LastIndex(base, "."):])
-			at = -1
+		name, at = strings.TrimSpace(text[m[4]:m[5]]), m[0]
+		if name == "$(AssemblyName)" {
+			name, at = assembly()
 		}
+	} else if truthy(csIsPackable) || truthy(csPackOnBuild) {
+		name, at = assembly()
 	} else {
 		return nil
 	}
@@ -142,11 +174,15 @@ func applyPackagePyproject(f *FileCtx) []truth.Fact {
 		} `toml:"project"`
 		Tool struct {
 			Poetry struct {
-				Name string `toml:"name"`
+				Name        string `toml:"name"`
+				PackageMode *bool  `toml:"package-mode"`
 			} `toml:"poetry"`
 		} `toml:"tool"`
 	}
 	if _, err := toml.Decode(string(f.Raw), &doc); err != nil {
+		return nil
+	}
+	if pm := doc.Tool.Poetry.PackageMode; pm != nil && !*pm {
 		return nil
 	}
 	name, header := doc.Project.Name, "[project]"
