@@ -57,8 +57,10 @@ func (c *ConfigHosts) AddUse(u ConfigUse) {
 	c.Uses = append(c.Uses, u)
 }
 
-// SanitizeConfigURL reduces an absolute http(s) URL to scheme://host[:port]/path:
-// userinfo, query and fragment never enter the table. ok is false for anything
+// SanitizeConfigURL reduces an absolute http(s) URL to scheme://host[:port]:
+// userinfo, path, query and fragment never enter the table (a path can hold a
+// token: Slack hooks, Telegram /bot<token>/). The call's own path comes from
+// the call site. ok is false for anything
 // that is not an absolute http(s) URL with a host.
 func SanitizeConfigURL(raw string) (clean, host string, ok bool) {
 	raw = strings.TrimSpace(raw)
@@ -72,9 +74,6 @@ func SanitizeConfigURL(raw string) (clean, host string, ok bool) {
 	}
 	host = strings.ToLower(u.Hostname())
 	clean = u.Scheme + "://" + strings.ToLower(u.Host)
-	if p := strings.TrimRight(u.EscapedPath(), "/"); p != "" {
-		clean += p
-	}
 	return clean, host, true
 }
 
