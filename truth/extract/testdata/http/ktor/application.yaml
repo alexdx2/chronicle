@@ -1,0 +1,12 @@
+ktor:
+  deployment:
+    port: 8080
+billing:
+  url: "http://billing-api:8080"
+  other: http://127.0.0.1:9000
+  # url: http://commented.example.com
+upstreams:
+  - http://ledger:7000/v1
+  - not a url
+docs:
+  homepage: https://docs.example.com

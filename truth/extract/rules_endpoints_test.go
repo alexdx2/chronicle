@@ -150,6 +150,21 @@ func TestEndpointRules(t *testing.T) {
 			{"openapi.paths", "GET /v2/pets", false},
 			{"openapi.paths", "PUT /v2/pets", false},
 		}},
+		{"ktor routing", "src/main/kotlin/Routes.kt", "kotlin/Routes.kt", []wantFact{
+			{"ktor.routing", "GET /health", false},
+			{"ktor.routing", "GET /api/items/{}", true},
+			{"ktor.routing", "POST /api/v2/items", true},
+			{"ktor.routing", "PUT /api/v2/items/{}", true},
+			{"ktor.routing", "DELETE /api/items/{}", true},
+			{"ktor.routing", "GET /api", true},
+			{"ktor.routing", "POST /api/export", true},
+			{"ktor.routing", "PUT /api/sync", true},
+			{"ktor.routing", "GET /api/multi/line", true},
+			{"ktor.routing", "PATCH /top", false},
+		}},
+		{"ktor without routing import", "src/main/kotlin/Client.kt", "kotlin/Client.kt", nil},
+		{"ktor test dir ignored", "src/test/kotlin/Routes.kt", "kotlin/Routes.kt", nil},
+		{"ktor test file name ignored", "src/main/kotlin/PaymentRoutesTest.kt", "kotlin/PaymentRoutesTest.kt", nil},
 		{"openapi in tests dir ignored", "tests/openapi.yaml", "openapi/openapi.yaml", nil},
 	}
 	for _, c := range cases {
