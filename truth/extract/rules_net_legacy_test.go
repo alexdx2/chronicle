@@ -37,3 +37,28 @@ func TestCsprojWorkerAndLegacyWeb(t *testing.T) {
 		}
 	}
 }
+
+func TestPackagesConfig(t *testing.T) {
+	cfg := `<?xml version="1.0" encoding="utf-8"?>
+<packages>
+  <package id="Newtonsoft.Json" version="13.0.3" targetFramework="net48" />
+  <!-- <package id="Commented.Out" version="1.0" /> -->
+  <package id="log4net" version="2.0.15" targetFramework="net48"></package>
+  <package version="1.0" />
+</packages>`
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"basic", map[string]string{"app/packages.config": cfg}, "nuget:log4net,nuget:newtonsoft.json"},
+		{"lock beside wins", map[string]string{"app/packages.config": cfg, "app/packages.lock.json": `{"version":1,"dependencies":{}}`}, ""},
+		{"not a packages file", map[string]string{"app/packages.config": `<configuration><package id="X" version="1"/></configuration>`}, ""},
+		{"other name ignored", map[string]string{"app/packages.config.bak": cfg}, ""},
+	}
+	for _, c := range cases {
+		if got := keysOf(t, c.files, truth.ClassDeps); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
