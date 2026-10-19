@@ -110,6 +110,7 @@ func init() {
 		funcRule{"csharp.httpclient_base", isCS, applyCSharpBase},
 		funcRule{"csharp.http_literal", isCS, lineRule("csharp.http_literal", csHTTPLiteral)},
 		funcRule{"csharp.refit", isCS, lineRule("csharp.refit", csRefit)},
+		funcRule{"csharp.webclient_literal", isCS, lineRule("csharp.webclient_literal", csWebClientLiteral)},
 		funcRule{"axios.create", isJS, applyAxiosCreate},
 		funcRule{"fetch.literal", isJS, lineRule("fetch.literal", jsFetch)},
 		funcRule{"fetch.template", isJS, applyFetchTemplate},
@@ -168,11 +169,15 @@ const quote = "[\"'`]"
 var (
 	csBaseAddr    = regexp.MustCompile(`\bBaseAddress\s*=\s*new\s*(?:Uri)?\s*\(\s*\$?@?"((?i:https?|grpcs?)://[^"]*)`)
 	csHTTPLiteral = regexp.MustCompile(`\.(?:Get|Post|Put|Delete|Patch|Send)(?:Async)?\(\s*\$?@?"((?i:https?|grpcs?)://[^"]*)`)
-	csRefit       = regexp.MustCompile(`RestService\.For<\w+>\(\s*\$?@?"((?i:https?|grpcs?)://[^"]*)`)
-	axBase        = regexp.MustCompile(`\bbaseURL\s*:\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
-	jsFetch       = regexp.MustCompile(`\bfetch\(\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
-	nestHTTP      = regexp.MustCompile(`\bthis\.http(?:Service)?\.(?:get|post|put|delete|patch)\(\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
-	pyRequests    = regexp.MustCompile(`\b(?:requests|httpx|session|client)\.(?:get|post|put|delete|patch)\(\s*[fF]?["']((?i:https?|grpcs?)://[^"']*)`)
+	// WebClient / HttpClient calls that the Get/Post/... rule above does not
+	// cover (DownloadString, UploadString, GetStringAsync, WebRequest.Create,
+	// new HttpRequestMessage(method, url)) with a literal absolute URL.
+	csWebClientLiteral = regexp.MustCompile(`(?:\.(?:Download(?:String|Data|File)|Upload(?:String|Data|Values|File)|OpenRead)(?:Async|TaskAsync)?|\.Get(?:String|ByteArray|Stream)Async|\bWebRequest\.Create(?:Http)?|\bnew\s+HttpRequestMessage\(\s*[\w.]+\s*,)\(?\s*(?:new\s+Uri\(\s*)?\$?@?"((?i:https?|grpcs?)://[^"]*)`)
+	csRefit            = regexp.MustCompile(`RestService\.For<\w+>\(\s*\$?@?"((?i:https?|grpcs?)://[^"]*)`)
+	axBase             = regexp.MustCompile(`\bbaseURL\s*:\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
+	jsFetch            = regexp.MustCompile(`\bfetch\(\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
+	nestHTTP           = regexp.MustCompile(`\bthis\.http(?:Service)?\.(?:get|post|put|delete|patch)\(\s*` + quote + `((?i:https?|grpcs?)://[^"'` + "`" + `]*)`)
+	pyRequests         = regexp.MustCompile(`\b(?:requests|httpx|session|client)\.(?:get|post|put|delete|patch)\(\s*[fF]?["']((?i:https?|grpcs?)://[^"']*)`)
 )
 
 // lineRule applies a one-capture regex to every code line.

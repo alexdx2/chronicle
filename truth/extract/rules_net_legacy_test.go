@@ -146,3 +146,53 @@ public class AController : ApiController
 		t.Errorf("test file: %q", got)
 	}
 }
+
+func TestCSharpWebClientLiteral(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"DownloadString", `var s = new WebClient().DownloadString("http://billing-api:8080/x/" + id);`, "billing-api"},
+		{"UploadString async", `await wc.UploadStringTaskAsync("https://pay.example.com/charge", body);`, "pay.example.com"},
+		{"GetStringAsync", `var s = await client.GetStringAsync("http://catalog:80/items");`, "catalog"},
+		{"GetAsync", `var r = await client.GetAsync("http://host-a/x");`, "host-a"},
+		{"WebRequest", `var r = WebRequest.Create("http://legacy-svc/api");`, "legacy-svc"},
+		{"HttpRequestMessage", `var m = new HttpRequestMessage(HttpMethod.Get, "http://svc-b/ping");`, "svc-b"},
+		{"new Uri", `wc.DownloadData(new Uri("http://svc-c/f"));`, "svc-c"},
+		{"commented", "// wc.DownloadString(\"http://gone/x\");\n/* wc.DownloadString(\"http://gone2/x\"); */", ""},
+		{"variable url", `wc.DownloadString(url);`, ""},
+		{"config url", `wc.DownloadString(ConfigurationManager.AppSettings["BillingApiUrl"]);`, ""},
+		{"localhost", `wc.DownloadString("http://localhost:5000/x");`, ""},
+		{"log message", `Log.Info("fetching http://billing-api:8080/ via DownloadString");`, ""},
+	}
+	for _, c := range cases {
+		if got := keysOf(t, map[string]string{"Svc/X.cs": c.src}, truth.ClassHTTP); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+	if got := keysOf(t, map[string]string{"Svc.Tests/XTests.cs": cases[0].src}, truth.ClassHTTP); got != "" {
+		t.Errorf("test file: %q", got)
+	}
+}
+
+func TestWebConfigAppSettingsURL(t *testing.T) {
+	cfg := func(body string) string {
+		return "<?xml version=\"1.0\"?>\n<configuration>\n  <appSettings>\n" + body + "\n  </appSettings>\n</configuration>"
+	}
+	cases := []struct{ name, path, src, want string }{
+		{"url key", "Web.config", cfg(`<add key="BillingApiUrl" value="http://billing-api:8080/" />`), "billing-api"},
+		{"any key, reversed attrs", "web.config", cfg(`<add value="https://crm.example.com/" key="Crm" />`), "crm.example.com"},
+		{"transform file", "Web.Release.config", cfg(`<add key="PricingUri" value="http://pricing/" xdt:Transform="SetAttributes" />`), "pricing"},
+		{"app.config", "src/App.config", cfg(`<add key="ApiEndpoint" value="http://api-x:81" />`), "api-x"},
+		{"sqs queue url is a channel", "Web.config", cfg(`<add key="OrdersQueueUrl" value="https://sqs.eu-central-1.amazonaws.com/123456789012/orders-inbound" />`), ""},
+		{"not a url", "Web.config", cfg(`<add key="AWSRegion" value="eu-central-1" /><add key="Name" value="x" />`), ""},
+		{"commented", "Web.config", cfg(`<!-- <add key="OldUrl" value="http://old-svc/" /> -->`), ""},
+		{"outside appSettings", "Web.config", `<configuration><connectionStrings><add name="db" key="DbUrl" value="http://db-svc/" /></connectionStrings></configuration>`, ""},
+		{"localhost", "Web.config", cfg(`<add key="SelfUrl" value="http://localhost:5000/" />`), ""},
+		{"schema key", "Web.config", cfg(`<add key="DocsUrl" value="https://docs.example.com/" />`), ""},
+		{"other config ignored", "nlog.config", cfg(`<add key="ApiUrl" value="http://x-svc/" />`), ""},
+		{"test dir", "Api.Tests/App.config", cfg(`<add key="ApiUrl" value="http://x-svc/" />`), ""},
+	}
+	for _, c := range cases {
+		if got := keysOf(t, map[string]string{c.path: c.src}, truth.ClassHTTP); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
