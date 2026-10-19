@@ -213,3 +213,28 @@ func TestAxiosMultiLineEvidence(t *testing.T) {
 		t.Errorf("primary %+v derived %+v", f.Primary, f.Derived)
 	}
 }
+
+func TestKtorConfigHTTP(t *testing.T) {
+	cases := []struct {
+		name, vpath, disk, want string
+	}{
+		{"hocon", "src/main/resources/application.conf", "ktor/application.conf", "billing-api,mirror-a,mirror-b,pricing.example.com"},
+		{"hocon profile", "src/main/resources/application-prod.conf", "ktor/application.conf", "billing-api,mirror-a,mirror-b,pricing.example.com"},
+		{"hocon in test resources", "src/test/resources/application.conf", "ktor/application.conf", ""},
+		{"other conf ignored", "conf/app.conf", "ktor/application.conf", ""},
+		{"yaml", "src/main/resources/application.yaml", "ktor/application.yaml", "billing-api,ledger"},
+	}
+	for _, c := range cases {
+		var keys []string
+		for _, f := range httpFacts(t, c.vpath, c.disk) {
+			keys = append(keys, f.Key)
+			if f.Primary.Line == 0 || strings.TrimSpace(f.Primary.Text) == "" {
+				t.Errorf("%s: bad primary %+v", c.name, f.Primary)
+			}
+		}
+		sort.Strings(keys)
+		if got := strings.Join(keys, ","); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
