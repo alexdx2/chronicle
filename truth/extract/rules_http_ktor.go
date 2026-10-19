@@ -84,7 +84,7 @@ func applyKtorYaml(f *FileCtx) []truth.Fact {
 			switch n.Kind {
 			case yaml.MappingNode:
 				for i := 0; i+1 < len(n.Content); i += 2 {
-					walk(n.Content[i+1], n.Content[i].Value)
+					walk(n.Content[i+1], joinKey(key, n.Content[i].Value))
 				}
 			case yaml.SequenceNode:
 				for _, c := range n.Content {
@@ -101,4 +101,13 @@ func applyKtorYaml(f *FileCtx) []truth.Fact {
 		walk(root, "")
 	})
 	return out
+}
+
+// joinKey extends a dotted YAML key path, the same context the Spring
+// application.yml rule judges (documentation keys are found anywhere on it).
+func joinKey(parent, k string) string {
+	if parent == "" {
+		return k
+	}
+	return parent + "." + k
 }
