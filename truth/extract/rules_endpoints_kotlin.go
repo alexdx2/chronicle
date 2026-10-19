@@ -90,7 +90,7 @@ func ktSkipTemplate(t string, i int) int {
 	return i
 }
 
-// ktSkipChar skips a char literal at t[i]=='\'' (or just the quote).
+// ktSkipChar skips a char literal at t[i]=='\” (or just the quote).
 func ktSkipChar(t string, i int) int {
 	if i+1 < len(t) && t[i+1] == '\\' {
 		if j := strings.IndexByte(t[i+2:], '\''); j >= 0 && j < 8 {
