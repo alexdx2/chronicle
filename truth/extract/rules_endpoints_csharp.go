@@ -25,8 +25,10 @@ var (
 	// Name = ... / Order = ...; any other argument form fails closed.
 	csVerbArgs = regexp.MustCompile(`^\s*\(\s*(?:(?:template\s*:\s*)?"([^"]*)"\s*)?(?:,?\s*(?:Name|Order)\s*=\s*[^,)]+)*\s*\)`)
 	csRoute    = regexp.MustCompile(`[\[,.]\s*Route\s*\(\s*"([^"]*)"`)
-	csAPICtrl  = regexp.MustCompile(`[\[,.]\s*ApiController\b`)
-	csDecl     = regexp.MustCompile(`\b(\w+)\s*\(`)
+	// Web API 2 class-level prefix: [RoutePrefix("api/orders")].
+	csRoutePrefix = regexp.MustCompile(`[\[,.]\s*RoutePrefix\s*\(\s*"([^"]*)"`)
+	csAPICtrl     = regexp.MustCompile(`[\[,.]\s*ApiController\b`)
+	csDecl        = regexp.MustCompile(`\b(\w+)\s*\(`)
 
 	csMinimal = regexp.MustCompile(`(\w*)\.Map(Get|Post|Put|Delete|Patch)\(\s*"([^"]+)"`)
 	csGroup   = regexp.MustCompile(`\b(?:var|[\w<>]+)\s+(\w+)\s*=\s*(\w+)((?:\.MapGroup\(\s*"[^"]+"\s*\))+)`)
@@ -117,9 +119,11 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 	apiCtrl := false
 	openDepth := 0
 	var className, prefix string
+	var rprefixes []csRouteAttr
+	webAPI := false     // controller derives from ApiController (ASP.NET Web API 2)
 	customBase := false // controller derives from an unknown base and has no own prefix
 	var prefixLine *lex.Line
-	reset := func() { verbs, routes, apiCtrl = nil, nil, false }
+	reset := func() { verbs, routes, rprefixes, apiCtrl = nil, nil, nil, false }
 
 	for _, l := range f.Lines {
 		trimmed := strings.TrimSpace(l.Code)
@@ -158,6 +162,9 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 			for _, m := range csRoute.FindAllStringSubmatchIndex(masked, -1) {
 				routes = append(routes, csRouteAttr{l, attrs[m[2]:m[3]]})
 			}
+			for _, m := range csRoutePrefix.FindAllStringSubmatchIndex(masked, -1) {
+				rprefixes = append(rprefixes, csRouteAttr{l, attrs[m[2]:m[3]]})
+			}
 			if csAPICtrl.MatchString(masked) {
 				apiCtrl = true
 			}
@@ -166,11 +173,16 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 			}
 		}
 		if cm := csClass.FindStringSubmatch(rest); cm != nil {
-			if strings.HasSuffix(cm[1], "Controller") || len(routes) > 0 || apiCtrl {
+			if strings.HasSuffix(cm[1], "Controller") || len(routes) > 0 || len(rprefixes) > 0 || apiCtrl {
 				className = strings.TrimSuffix(cm[1], "Controller")
 				prefix, prefixLine = "", nil
-				customBase = len(routes) == 0 && !apiCtrl && hasCustomBase(cm[2])
-				if len(routes) > 0 {
+				webAPI = derivesFromAPIController(cm[2])
+				customBase = len(routes) == 0 && len(rprefixes) == 0 && !apiCtrl && hasCustomBase(cm[2])
+				if len(rprefixes) > 0 {
+					prefix = strings.ReplaceAll(rprefixes[0].path, "[controller]", className)
+					ln := rprefixes[0].line
+					prefixLine = &ln
+				} else if len(routes) > 0 {
 					prefix = strings.ReplaceAll(routes[0].path, "[controller]", className)
 					ln := routes[0].line
 					prefixLine = &ln
@@ -181,7 +193,7 @@ func applyCSharpRouteAttr(f *FileCtx) []truth.Fact {
 		}
 		if len(verbs)+len(routes) > 0 {
 			if dm := csDecl.FindStringSubmatch(rest); dm != nil {
-				out = append(out, csEmit(f, className, prefix, prefixLine, customBase, dm[1], verbs, routes)...)
+				out = append(out, csEmit(f, className, prefix, prefixLine, customBase, webAPI, dm[1], verbs, routes)...)
 			}
 		}
 		reset()
@@ -203,7 +215,7 @@ func hasCustomBase(list string) bool {
 		}
 		switch {
 		case b == "":
-		case b == "ControllerBase" || b == "Controller":
+		case b == "ControllerBase" || b == "Controller" || b == "ApiController":
 			return false
 		case len(b) > 1 && b[0] == 'I' && b[1] >= 'A' && b[1] <= 'Z':
 		default:
@@ -213,7 +225,7 @@ func hasCustomBase(list string) bool {
 	return custom
 }
 
-func csEmit(f *FileCtx, className, prefix string, prefixLine *lex.Line, customBase bool, action string, verbs []csVerbAttr, routes []csRouteAttr) []truth.Fact {
+func csEmit(f *FileCtx, className, prefix string, prefixLine *lex.Line, customBase, webAPI bool, action string, verbs []csVerbAttr, routes []csRouteAttr) []truth.Fact {
 	expand := func(s string) string {
 		return strings.ReplaceAll(strings.ReplaceAll(s, "[controller]", className), "[action]", action)
 	}
@@ -235,7 +247,14 @@ func csEmit(f *FileCtx, className, prefix string, prefixLine *lex.Line, customBa
 		out = append(out, endpointFact("csharp.route_attr", f, l, method, joinPath(prefix, route, true), derived...))
 	}
 	if len(verbs) == 0 {
-		emit(routes[0].line, "GET", routes[0].path)
+		method := "GET"
+		if webAPI {
+			// Web API convention: the action name starts with the verb.
+			if method = webAPIVerbByName(action); method == "" {
+				return out
+			}
+		}
+		emit(routes[0].line, method, routes[0].path)
 		return out
 	}
 	for _, v := range verbs {
@@ -290,4 +309,35 @@ func applyCSharpMinimalAPI(f *FileCtx) []truth.Fact {
 		}
 	}
 	return out
+}
+
+// derivesFromAPIController reports whether a class base list names
+// ApiController (System.Web.Http), the ASP.NET Web API 2 controller base.
+func derivesFromAPIController(list string) bool {
+	for _, b := range strings.Split(list, ",") {
+		b = strings.TrimSpace(b)
+		if i := strings.LastIndex(b, "."); i >= 0 {
+			b = b[i+1:]
+		}
+		if b == "ApiController" {
+			return true
+		}
+	}
+	return false
+}
+
+// webAPIVerbByName applies the Web API 2 naming convention: an action named
+// Get..., Post..., Put..., Delete..., Patch... answers that verb. "" when the
+// name does not follow it (the prefix must end the name or precede a capital
+// letter, so "Getaway" and "Poster" do not count).
+func webAPIVerbByName(action string) string {
+	for _, v := range []string{"Get", "Post", "Put", "Delete", "Patch"} {
+		if strings.HasPrefix(action, v) {
+			rest := action[len(v):]
+			if rest == "" || (rest[0] >= 'A' && rest[0] <= 'Z') || rest[0] == '_' {
+				return strings.ToUpper(v)
+			}
+		}
+	}
+	return ""
 }

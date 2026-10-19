@@ -62,3 +62,87 @@ func TestPackagesConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestWebAPI2AttributeRouting(t *testing.T) {
+	hdr := "using System.Web.Http;\nnamespace A {\n"
+	cases := []struct{ name, src, want string }{
+		{"prefix plus route and verbs", hdr + `[RoutePrefix("api/orders")]
+public class OrdersController : ApiController
+{
+    [HttpGet]
+    [Route("{id:int}")]
+    public IHttpActionResult Get(int id) { return Ok(); }
+
+    [HttpPost]
+    [Route("")]
+    public IHttpActionResult Create() { return Ok(); }
+
+    [HttpPut, Route("{id:int}/lines/{line:guid}")]
+    public IHttpActionResult Put(int id) { return Ok(); }
+
+    [HttpDelete][Route("{id}")]
+    public IHttpActionResult Remove(int id) { return Ok(); }
+}}`, "DELETE /api/orders/{},GET /api/orders/{},POST /api/orders,PUT /api/orders/{}/lines/{}"},
+		{"route without prefix", hdr + `public class PingController : ApiController
+{
+    [HttpGet]
+    [Route("full/path/{x}")]
+    public string Ping(string x) { return x; }
+}}`, "GET /full/path/{}"},
+		{"verb from method name", hdr + `[RoutePrefix("api/items")]
+public class ItemsController : ApiController
+{
+    [Route("{id}")]
+    public Item GetItem(int id) { return null; }
+
+    [Route("")]
+    public IHttpActionResult PostItem(Item i) { return Ok(); }
+
+    [Route("all")]
+    public IHttpActionResult Getaway() { return Ok(); }
+}}`, "GET /api/items/{},POST /api/items"},
+		{"verb attribute alone under prefix", hdr + `[RoutePrefix("api/health")]
+public class HealthController : ApiController
+{
+    [HttpGet]
+    public string Check() { return "ok"; }
+}}`, "GET /api/health"},
+		{"tilde route overrides prefix", hdr + `[RoutePrefix("api/a")]
+public class AController : ApiController
+{
+    [HttpGet, Route("~/status")]
+    public string S() { return ""; }
+}}`, "GET /status"},
+		{"commented route", hdr + `[RoutePrefix("api/a")]
+public class AController : ApiController
+{
+    // [HttpDelete][Route("{id}")]
+    /* [HttpPost] [Route("x")] */
+    [HttpGet][Route("ok")]
+    public string S() { return ""; }
+}}`, "GET /api/a/ok"},
+		{"route in a string", hdr + `[RoutePrefix("api/a")]
+public class AController : ApiController
+{
+    public string Doc() { return "[HttpGet][Route(\"nope\")]"; }
+}}`, ""},
+		{"no routing attributes", hdr + `public class BController : ApiController
+{
+    public string GetAll() { return ""; }
+}}`, ""},
+		{"unknown base keeps relative route closed", hdr + `public class CController : MyBase
+{
+    [HttpGet][Route("x")]
+    public string S() { return ""; }
+}}`, ""},
+	}
+	for _, c := range cases {
+		if got := keysOf(t, map[string]string{"Controllers/X.cs": c.src}, truth.ClassEndpoints); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+	// test files stay silent
+	if got := keysOf(t, map[string]string{"Api.Tests/XTests.cs": cases[0].src}, truth.ClassEndpoints); got != "" {
+		t.Errorf("test file: %q", got)
+	}
+}
