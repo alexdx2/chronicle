@@ -185,3 +185,22 @@ func TestBuildSnapshot_ConfigHostsReachPromptResolverAndCoverage(t *testing.T) {
 	}
 	_ = graph.ConfigHosts{}
 }
+
+func TestReadConfigHosts_ConfigValuePassedToConstructor(t *testing.T) {
+	root, _ := newCodeRepoT(t, map[string]string{
+		"portal-bff/.env": "NOTIFY_SVC_URL=http://notify-svc:3000\n",
+		"portal-bff/src/routes/notify.ts": "import { NotifyClient } from '@acme/notify-client';\n\n" +
+			"const client = new NotifyClient(process.env.NOTIFY_SVC_URL ?? '');\n" +
+			"const u = new URL(process.env.NOTIFY_SVC_URL!);\n" +
+			"// const dead = new DeadClient(process.env.DEAD_URL);\n" +
+			"const other = new Thing('x', 5);\n",
+	})
+	table, _ := ReadConfigHosts(root, []string{"portal-bff/.env", "portal-bff/src/routes/notify.ts"})
+	if len(table.Uses) != 1 {
+		t.Fatalf("uses = %+v, want exactly the NotifyClient one", table.Uses)
+	}
+	u := table.Uses[0]
+	if u.Callee != "NotifyClient" || u.Line != 3 || u.Symbol != "process.env.NOTIFY_SVC_URL" {
+		t.Errorf("use = %+v", u)
+	}
+}

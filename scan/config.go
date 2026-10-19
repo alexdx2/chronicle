@@ -55,6 +55,22 @@ func isTSConfigFile(lower string) bool {
 // isRegistrationFile is a C# file that may register typed HTTP clients.
 func isRegistrationFile(p string) bool { return strings.HasSuffix(strings.ToLower(p), ".cs") }
 
+// isScriptSource is a JS/TS source file that may hand a config value to a
+// client constructor. Config files, declarations and tests are not.
+func isScriptSource(p string) bool {
+	lower := strings.ToLower(p)
+	switch path.Ext(lower) {
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
+	default:
+		return false
+	}
+	if strings.HasSuffix(lower, ".d.ts") || strings.Contains(lower, ".spec.") || strings.Contains(lower, ".test.") ||
+		strings.Contains(lower, "node_modules/") || IsConfigFile(p) {
+		return false
+	}
+	return true
+}
+
 // ReadConfigHosts reads every config file among files (repo-relative, tracked)
 // and every C# client registration, and returns the table plus the config files
 // it parsed. A file it cannot read is skipped: the table is best effort.
@@ -66,7 +82,8 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	for _, p := range sorted {
 		cfg := IsConfigFile(p)
 		reg := isRegistrationFile(p)
-		if !cfg && !reg {
+		src := isScriptSource(p)
+		if !cfg && !reg && !src {
 			continue
 		}
 		fp := filepath.Join(root, filepath.FromSlash(p))
@@ -80,6 +97,10 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		}
 		if reg {
 			parseClientRegistrations(t, p, body)
+			continue
+		}
+		if src {
+			parseConfigUses(t, p, body)
 			continue
 		}
 		lower := strings.ToLower(path.Base(p))
@@ -356,4 +377,87 @@ func (r *fullRun) readConfig(d domainRef) (*graph.ConfigHosts, error) {
 type domainRef struct {
 	key   string
 	multi bool
+}
+
+var (
+	// new NotifyClient(  /  createClient(  /  makeApiClient(  /  buildSdk(
+	ctorCallRe    = regexp.MustCompile(`\bnew\s+([A-Z][A-Za-z0-9_]*)\s*\(`)
+	factoryCallRe = regexp.MustCompile(`\b((?:create|make|build|init|get|new)[A-Za-z0-9_]*(?:Client|Api|Sdk|SDK|Service|Gateway|Connector)[A-Za-z0-9_]*)\s*\(`)
+	// trailing fallbacks and casts that do not change which value is passed
+	argTailRe = regexp.MustCompile(`(?s)\s*(?:\?\?|\|\|)\s*.*$|\s+as\s+\w+$|!$`)
+)
+
+// builtinCtors never take a service address worth a call edge.
+var builtinCtors = map[string]bool{
+	"URL": true, "Error": true, "Map": true, "Set": true, "Date": true, "Promise": true,
+	"RegExp": true, "Headers": true, "Request": true, "Response": true, "URLSearchParams": true,
+	"Proxy": true, "Array": true, "Object": true, "WebSocket": true, "Worker": true,
+}
+
+// parseConfigUses finds `new X(<config value>)` and client-factory calls whose
+// argument is process.env.X / config.x / environment.x, one ConfigUse per
+// argument. Resolving the symbol to a host is the resolver's job.
+func parseConfigUses(t *graph.ConfigHosts, file string, body []byte) {
+	src := string(srccomment.Strip(file, body))
+	if !strings.Contains(src, "env") && !strings.Contains(src, "onfig") && !strings.Contains(src, "ettings") {
+		return
+	}
+	line := 1
+	pos := 0
+	lineAt := func(off int) int {
+		line += strings.Count(src[pos:off], "\n")
+		pos = off
+		return line
+	}
+	type hit struct {
+		off    int
+		callee string
+		args   string
+	}
+	var hits []hit
+	for _, re := range []*regexp.Regexp{ctorCallRe, factoryCallRe} {
+		for _, m := range re.FindAllStringSubmatchIndex(src, -1) {
+			callee := src[m[2]:m[3]]
+			if builtinCtors[callee] {
+				continue
+			}
+			hits = append(hits, hit{off: m[0], callee: callee, args: balancedArg(src[m[1]:])})
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].off < hits[j].off })
+	for _, h := range hits {
+		for _, arg := range splitTopLevel(h.args) {
+			expr := strings.TrimSpace(argTailRe.ReplaceAllString(strings.TrimSpace(arg), ""))
+			kind, _ := graph.ClassifyCallBase(expr)
+			if kind != graph.SymEnv && kind != graph.SymConfig {
+				continue
+			}
+			t.AddUse(graph.ConfigUse{File: file, Line: lineAt(h.off), Text: expr, Callee: h.callee, Symbol: expr})
+		}
+	}
+}
+
+// splitTopLevel splits call arguments at commas outside brackets and quotes.
+func splitTopLevel(s string) []string {
+	var out []string
+	depth, start := 0, 0
+	var quote rune
+	for i, r := range s {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"' || r == '`':
+			quote = r
+		case r == '(' || r == '[' || r == '{':
+			depth++
+		case r == ')' || r == ']' || r == '}':
+			depth--
+		case r == ',' && depth == 0:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
 }

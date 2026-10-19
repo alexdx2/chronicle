@@ -178,3 +178,46 @@ func TestHTTPCall_RemotePathIsNotMatchedOnLocalEndpoint(t *testing.T) {
 	}
 	wantOnly(t, "external systems", externalNames(t, s), "service:external_system:demo:sales-api")
 }
+
+func TestHTTPCall_BareConfigKeyIsTheConfiguredHostNeverAKeySegment(t *testing.T) {
+	_, s, res := resolveFiles(t, fleetConfig(), srcFacts{"sales-api/Services/PricingClient.cs", []Fact{
+		{Kind: "http_call", From: "PricingClient", FromType: "provider", Target: "Services:PricingApi/prices/{sku}", Method: "GET"},
+	}})
+	wantOnly(t, "external systems", externalNames(t, s), "service:external_system:demo:pricing-api")
+	if len(res.Unresolved) != 0 {
+		t.Errorf("unresolved: %+v", res.Unresolved)
+	}
+	// a key the table does not hold mints nothing, and is reported
+	_, s2, res2 := resolveFiles(t, &ConfigHosts{}, srcFacts{"sales-api/Services/PricingClient.cs", []Fact{
+		{Kind: "http_call", From: "PricingClient", FromType: "provider", Target: "Services:PricingApi", Method: "GET"},
+	}})
+	if names := externalNames(t, s2); len(names) != 0 {
+		t.Errorf("key segment minted a node: %v", names)
+	}
+	if len(res2.Unresolved) != 1 {
+		t.Errorf("unresolved = %+v", res2.Unresolved)
+	}
+	// host:port is still a host
+	_, s3, _ := resolveFiles(t, fleetConfig(), srcFacts{"sales-api/Services/X.cs", []Fact{
+		{Kind: "http_call", From: "X", FromType: "provider", Target: "pricing-api:8080/prices", Method: "GET"},
+	}})
+	wantOnly(t, "host:port", externalNames(t, s3), "service:external_system:demo:pricing-api")
+}
+
+func TestConfigUse_ConstructorArgumentCallsTheConfiguredService(t *testing.T) {
+	cfg := fleetConfig()
+	cfg.AddUse(ConfigUse{File: "portal-bff/src/routes/notify.ts", Line: 4, Text: "process.env.NOTIFY_SVC_URL", Callee: "NotifyClient", Symbol: "process.env.NOTIFY_SVC_URL"})
+	cfg.AddUse(ConfigUse{File: "portal-bff/src/routes/notify.ts", Line: 9, Text: "process.env.NOTIFY_SVC_URL", Callee: "NotifyClient", Symbol: "process.env.NOTIFY_SVC_URL"})
+	cfg.AddUse(ConfigUse{File: "portal-bff/src/routes/ghost.ts", Line: 1, Text: "process.env.NOPE_URL", Callee: "GhostClient", Symbol: "process.env.NOPE_URL"})
+	_, s, _ := resolveFiles(t, cfg, srcFacts{"portal-bff/src/routes/notify.ts", []Fact{}}, srcFacts{"portal-bff/src/routes/ghost.ts", []Fact{}})
+	got := activeEdgesOf(t, s, "CALLS_SERVICE")
+	if len(got) != 1 || !strings.HasSuffix(got[0], "-> service:external_system:demo:notify-svc") || !strings.Contains(got[0], "notify") {
+		t.Fatalf("CALLS_SERVICE = %v", got)
+	}
+	wantOnly(t, "external systems", externalNames(t, s), "service:external_system:demo:notify-svc")
+	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CALLS_SERVICE"})
+	evs, err := s.ListEvidenceByEdge(edges[0].EdgeID)
+	if err != nil || len(evs) == 0 || evs[0].LineStart != 4 {
+		t.Errorf("evidence = %+v err=%v, want it anchored at line 4", evs, err)
+	}
+}

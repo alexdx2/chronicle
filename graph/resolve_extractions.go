@@ -576,6 +576,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	defer func() { g.domainOwnHosts = nil }()
 	g.domainConfig = g.configHosts[domainKey]
 	defer func() { g.domainConfig = nil }()
+	g.injectConfigUses(allFiles)
 
 	// Snapshot the packages this domain publishes itself (existing service
 	// nodes + every declares_service fact in this batch) before any
@@ -1183,6 +1184,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if p := extractPathFromURL(fact.Target); p != "" {
 			assertSubstring = p
 		}
+		if fact.Origin == configUseOrigin && fact.Text != "" {
+			assertSubstring = fact.Text // the line that passes the value, not the URL
+		}
 		assertion, _ := json.Marshal(map[string]any{
 			"substring": assertSubstring,
 			"url":       fact.Target,
@@ -1260,6 +1264,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 
 			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 				TargetKind: "edge", SourceKind: "file", FilePath: filePath,
+				LineStart: callLine(fact), LineEnd: callLine(fact),
 				ExtractorID: extractorID, ExtractorVersion: "1.0",
 				Confidence: callConfidence, RevisionID: revisionID,
 				AssertionKind: "text_contains", Assertion: string(assertion),
@@ -5384,6 +5389,17 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 		return httpTarget{target: rest, pathOnly: true}
 	}
 	kind, _, e, ok := g.domainConfig.ResolveSymbol(filePath, base)
+	if kind == SymNone {
+		// A bare config key ("Services:PricingApi", "api.url") written without
+		// an accessor: the table's value is the host; a key segment never is.
+		if be, bok := g.domainConfig.lookup(filePath, base); bok && isConfigKeyShaped(base) {
+			return httpTarget{target: be.URL + rest}
+		}
+		if isConfigKeyShaped(base) {
+			return httpTarget{unresolved: g.unresolvedCall(filePath, strings.TrimSpace(raw),
+				"the call address is a configuration key with no value in the repository's config files")}
+		}
+	}
 	switch kind {
 	case SymEnv, SymConfig:
 		if ok {
@@ -5426,4 +5442,77 @@ func (g *Graph) endpointHasOwner(epID int64, host string) bool {
 		}
 	}
 	return false
+}
+
+// isConfigKeyShaped says a scheme-less call base is a configuration key
+// ("Services:PricingApi", "Services__Pricing") rather than host[:port]: it has
+// a ":" followed by something that is not a port number, or a "__" separator.
+func isConfigKeyShaped(base string) bool {
+	b := strings.TrimSpace(base)
+	if strings.Contains(b, "__") {
+		return true
+	}
+	i := strings.Index(b, ":")
+	if i <= 0 || i == len(b)-1 {
+		return false
+	}
+	for _, r := range b[i+1:] {
+		if r < '0' || r > '9' {
+			return true
+		}
+	}
+	return false
+}
+
+// configUseOrigin marks the http_call facts the resolver derives from the
+// config table's constructor / factory uses (never from the model).
+const configUseOrigin = "config-use"
+
+func callLine(f Fact) int {
+	if f.Origin == configUseOrigin {
+		return f.Line
+	}
+	return 0
+}
+
+// injectConfigUses adds, to each extracted file the scan saw passing a config
+// value to a constructor or client factory, an http_call to that value's host:
+// `new NotifyClient(process.env.NOTIFY_SVC_URL)` is a call to the configured
+// service even though the file never issues a request itself. Only a value the
+// config table holds a host for becomes a fact.
+func (g *Graph) injectConfigUses(files []fileFacts) {
+	if g.domainConfig == nil || len(g.domainConfig.Uses) == 0 {
+		return
+	}
+	idx := map[string]int{}
+	for i, f := range files {
+		idx[f.filePath] = i
+	}
+	seen := map[string]bool{}
+	for _, u := range g.domainConfig.Uses {
+		i, ok := idx[u.File]
+		if !ok {
+			continue
+		}
+		_, _, e, ok := g.domainConfig.ResolveSymbol(u.File, u.Symbol)
+		if !ok {
+			continue
+		}
+		base := e.URL
+		if j := strings.Index(base, "://"); j >= 0 {
+			if k := strings.Index(base[j+3:], "/"); k >= 0 {
+				base = base[:j+3+k]
+			}
+		}
+		k := u.File + "\x00" + base
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		files[i].facts = append(files[i].facts, Fact{
+			Kind: "http_call", From: inferNameFromPath(u.File), Target: base,
+			Origin: configUseOrigin, Line: u.Line, Text: u.Text, Confidence: 1.0,
+			Note: "configured address passed to " + u.Callee,
+		})
+	}
 }

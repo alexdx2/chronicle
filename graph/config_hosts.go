@@ -34,6 +34,27 @@ type ClientBinding struct {
 type ConfigHosts struct {
 	Entries []ConfigEntry
 	Clients []ClientBinding
+	Uses    []ConfigUse
+}
+
+// ConfigUse is a source line that hands a configuration value (process.env.X,
+// config.x, environment.x) to a constructor or client factory call:
+// `new NotifyClient(process.env.NOTIFY_SVC_URL)`. The scan reads it from the
+// text; the resolver turns it into a call to the value's host.
+type ConfigUse struct {
+	File   string
+	Line   int    // 1-based
+	Text   string // the argument expression as written, the evidence anchor
+	Callee string // constructor or factory name
+	Symbol string // the base the argument was classified from
+}
+
+// AddUse records a config value passed to a constructor / factory call.
+func (c *ConfigHosts) AddUse(u ConfigUse) {
+	if u.File == "" || u.Text == "" || u.Symbol == "" {
+		return
+	}
+	c.Uses = append(c.Uses, u)
 }
 
 // SanitizeConfigURL reduces an absolute http(s) URL to scheme://host[:port]/path:
