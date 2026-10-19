@@ -486,13 +486,19 @@ func (s *Store) getEdgeByID(edgeID int64) (*EdgeRow, error) {
 
 // UpdateEdgeTrust updates computed trust fields on an edge.
 func (s *Store) UpdateEdgeTrust(edgeID int64, confidence, freshness, trustScore float64, status string) error {
-	activeInt := 1
-	if status == "removed" || status == "contradicted" {
-		activeInt = 0
+	// A stale edge (no live positive evidence, only stale rows) keeps whatever
+	// active flag it has: RetireUnbackedByFiles turns a vanished fact off, and
+	// a trust pass must not turn it back on. Only live evidence re-activates.
+	activeExpr := "1"
+	switch status {
+	case "removed", "contradicted":
+		activeExpr = "0"
+	case "stale":
+		activeExpr = "active"
 	}
 	_, err := s.db.Exec(`
-		UPDATE graph_edges SET confidence=?, freshness=?, trust_score=?, active=? WHERE edge_id=?
-	`, confidence, freshness, trustScore, activeInt, edgeID)
+		UPDATE graph_edges SET confidence=?, freshness=?, trust_score=?, active=`+activeExpr+` WHERE edge_id=?
+	`, confidence, freshness, trustScore, edgeID)
 	if err != nil {
 		return fmt.Errorf("UpdateEdgeTrust: %w", err)
 	}
