@@ -139,3 +139,28 @@ func TestGoHTTP(t *testing.T) {
 	sort.Strings(gotKeys)
 	checkLines(t, gotKeys, want)
 }
+
+func TestGoModDeps(t *testing.T) {
+	facts, got := goFacts(t, truth.ClassDeps, map[string]string{"go.mod": "gomod_basic.mod"})
+	checkLines(t, got, wantLines("manifest.gomod",
+		"go:github.com/go-chi/chi/v5", "go:github.com/twmb/franz-go", "go:github.com/quoted/pkg", "go:github.com/google/uuid"))
+	lines := map[string]int{}
+	for _, f := range facts {
+		lines[f.Key] = f.Primary.Line
+		if f.Attrs["ecosystem"] != "go" || f.Attrs["version"] == "" {
+			t.Errorf("%s: attrs %v", f.Key, f.Attrs)
+		}
+	}
+	if lines["go:github.com/twmb/franz-go"] != 8 || lines["go:github.com/google/uuid"] != 18 {
+		t.Errorf("evidence lines %v", lines)
+	}
+}
+
+func TestGoModService(t *testing.T) {
+	_, got := goFacts(t, truth.ClassServices, map[string]string{"go.mod": "gomod_basic.mod", "orders/go.mod": "gomod_major.mod"})
+	checkLines(t, got, wantLines("manifest.gomod_module", "own:shippinggo", "own:ordersapi"))
+	facts, _ := goFacts(t, truth.ClassServices, map[string]string{"go.mod": "gomod_basic.mod"})
+	if len(facts) != 1 || facts[0].Primary.Line != 2 {
+		t.Errorf("module evidence %+v", facts)
+	}
+}
