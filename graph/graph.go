@@ -48,6 +48,11 @@ type Graph struct {
 	// nodes in the post-pass if the target is still external after merging.
 	pendingExtEndpoints []pendingExtEndpoint
 
+	// touchedEndpoints holds the keys of endpoint nodes the current resolve
+	// batch created, referenced or linked; reconcileEndpointLocality settles
+	// exactly these and clears the set.
+	touchedEndpoints map[string]bool
+
 	// domainOwnHosts is computed once at the start of ResolveExtractions
 	// (before any fact is processed) from the domain's manifest-derived
 	// "infra" and "service" nodes — the hosts the domain considers its own

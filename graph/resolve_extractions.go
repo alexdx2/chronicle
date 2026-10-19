@@ -705,6 +705,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	if err := g.materializeExternalEndpoints(domainKey, revisionID); err != nil {
 		return nil, err
 	}
+	g.foldBraceEndpoints(domainKey, revisionID)
 	g.reconcileEndpointLocality(domainKey)
 	if opts.derivedPassesOn() {
 		// Everything below re-derives the whole domain from the whole graph.
@@ -1653,6 +1654,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			if err != nil {
 				return counts, g.detNoteUnresolved(filePath, "calls_endpoint", epName, nil), nil
 			}
+			g.touchEndpoint(epKey)
 			edgeKey := fromNodeKey + "->" + epKey + ":CALLS_ENDPOINT"
 			if g.detUpsertInferredEdge(store.EdgeRow{
 				EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: existingID,
@@ -2637,6 +2639,8 @@ func (g *Graph) ensureNodeID(domainKey string, revisionID int64, nodeKey, name, 
 		return 0
 	}
 
+	g.touchEndpoint(nodeKey)
+
 	id, err := g.store.GetNodeIDByKey(nodeKey)
 	if err == nil {
 		// Patch FilePath if the existing node has none and we have one
@@ -3045,6 +3049,7 @@ func (g *Graph) materializeExternalEndpoints(domainKey string, revisionID int64)
 			method = "GET"
 		}
 		epKey, epName := normalizeEndpointKey(domainKey, method, p.Path)
+		g.touchEndpoint(epKey)
 		epID, err := g.store.GetNodeIDByKey(epKey)
 		if err != nil {
 			epID, err = g.store.UpsertNode(store.NodeRow{
@@ -3090,36 +3095,81 @@ func (g *Graph) materializeExternalEndpoints(domainKey string, revisionID int64)
 	return nil
 }
 
-// reconcileEndpointLocality settles whether an endpoint node is this domain's
-// own contract. An endpoint something in the domain EXPOSES is local (active);
-// one that is only ever reached as a call target (CALLS_ENDPOINT in, no
-// EXPOSES_ENDPOINT) is somebody else's route, so it is "external" -- a
-// calls_endpoint fact must not turn a client's outbound call into a claim that
-// the caller serves that route. Order-independent: it runs after every fact of
-// the batch, so a controller resolved after its caller still wins.
-func (g *Graph) reconcileEndpointLocality(domainKey string) {
-	active := true
-	eps, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "endpoint"})
-	if err != nil || len(eps) == 0 {
+// touchEndpoint remembers that this batch created or referenced an endpoint
+// node, so reconcileEndpointLocality looks at those and not at the whole graph.
+func (g *Graph) touchEndpoint(nodeKey string) {
+	if !strings.HasPrefix(nodeKey, "contract:endpoint:") {
 		return
 	}
-	exposed := map[string]bool{}
-	called := map[string]bool{}
-	if es, err := g.store.ListEdges(store.EdgeFilter{EdgeType: "EXPOSES_ENDPOINT", Active: &active}); err == nil {
-		for _, e := range es {
-			exposed[e.ToNodeKey] = true
+	if g.touchedEndpoints == nil {
+		g.touchedEndpoints = map[string]bool{}
+	}
+	g.touchedEndpoints[nodeKey] = true
+}
+
+// endpointHasOwnEvidence reports whether a valid evidence row on the endpoint
+// node comes from anything but a call-site: the creation rows ensureNodeID and
+// the external-endpoint post-pass write ("referenced_entity",
+// "system_generated") only say "somebody pointed at this address". Any other
+// assertion (an endpoint, route or openapi extraction, an import) means the
+// domain declares the endpoint itself.
+func (g *Graph) endpointHasOwnEvidence(nodeID int64) bool {
+	rows, err := g.store.ListEvidenceByNode(nodeID)
+	if err != nil {
+		return true // cannot tell: do not demote on a read failure
+	}
+	for _, r := range rows {
+		if r.EvidenceStatus != "valid" || r.EvidencePolarity == "negative" {
+			continue
+		}
+		switch r.AssertionKind {
+		case "referenced_entity", "system_generated":
+		default:
+			return true
 		}
 	}
-	if es, err := g.store.ListEdges(store.EdgeFilter{EdgeType: "CALLS_ENDPOINT", Active: &active}); err == nil {
-		for _, e := range es {
-			called[e.ToNodeKey] = true
+	return false
+}
+
+// reconcileEndpointLocality settles whether an endpoint node is this domain's
+// own contract. An endpoint something in the domain EXPOSES is local (active).
+// One that is only ever reached as a call target is somebody else's route, so
+// it is "external" -- a calls_endpoint fact must not turn a client's outbound
+// call into a claim that the caller serves that route. "Only reached as a call
+// target" means: an incoming CALLS_ENDPOINT, no EXPOSES_ENDPOINT, and no
+// evidence beyond the call-site's own creation rows; an endpoint with endpoint,
+// route or openapi evidence stays active. Order-independent: it runs after
+// every fact of the batch, so a controller resolved after its caller still
+// wins. Only endpoints this batch touched are examined.
+func (g *Graph) reconcileEndpointLocality(domainKey string) {
+	touched := g.touchedEndpoints
+	g.touchedEndpoints = nil
+	active := true
+	for key := range touched {
+		n, err := g.store.GetNodeByKey(key)
+		if err != nil || n == nil || n.NodeType != "endpoint" || n.DomainKey != domainKey {
+			continue
 		}
-	}
-	for _, n := range eps {
+		if n.Status != "active" && n.Status != "external" {
+			continue
+		}
+		in, err := g.store.ListEdges(store.EdgeFilter{ToNodeID: n.NodeID, Active: &active})
+		if err != nil {
+			continue
+		}
+		exposed, called := false, false
+		for _, e := range in {
+			switch e.EdgeType {
+			case "EXPOSES_ENDPOINT":
+				exposed = true
+			case "CALLS_ENDPOINT":
+				called = true
+			}
+		}
 		switch {
-		case n.Status == "active" && called[n.NodeKey] && !exposed[n.NodeKey]:
+		case n.Status == "active" && called && !exposed && !g.endpointHasOwnEvidence(n.NodeID):
 			g.noteEvidenceErr(g.store.SetNodeStatus(n.NodeID, "external"))
-		case n.Status == "external" && exposed[n.NodeKey]:
+		case n.Status == "external" && (exposed || g.endpointHasOwnEvidence(n.NodeID)):
 			g.noteEvidenceErr(g.store.SetNodeStatus(n.NodeID, "active"))
 		}
 	}
@@ -3153,9 +3203,9 @@ func (g *Graph) retireProviderTwin(domainKey, fromNodeKey, name string) {
 
 // mergeBraceEndpointTwin folds the endpoint node an older build keyed with the
 // brace spelling ("GET /orders/{id}", from an OpenAPI file) into the canonical
-// colon node ("GET /orders/:id") the same route now keys to: edges move over,
-// the twin is deleted. A no-op unless the path has brace parameters and the
-// old node exists, so graphs minted by this build never pay for it.
+// colon node ("GET /orders/:id") the same route now keys to. A no-op unless the
+// path has brace parameters and the old node exists, so graphs minted by this
+// build never pay for it.
 func (g *Graph) mergeBraceEndpointTwin(domainKey, method, path, canonKey string, canonID int64) {
 	if canonID == 0 || !strings.Contains(path, "{") {
 		return
@@ -3175,19 +3225,89 @@ func (g *Graph) mergeBraceEndpointTwin(domainKey, method, path, canonKey string,
 	if err != nil || old == nil || old.Status == "deleted" {
 		return
 	}
-	active := true
-	for _, f := range []store.EdgeFilter{{ToNodeID: old.NodeID, Active: &active}} {
+	g.foldEndpointTwin(old, canonKey, canonID)
+}
+
+// foldEndpointTwin moves every edge of the twin (incoming and outgoing, active
+// or not) onto the canonical node and deletes the twin. An edge whose
+// re-keyed form already exists is a duplicate: an active one is deactivated,
+// an inactive one stays on the twin.
+//
+// Node evidence and aliases are NOT moved: the store has no journaled method
+// for re-owning them (only AddEvidence/AddAlias for new rows), and a raw
+// rewrite would diverge journal replay. They stay on the deleted twin (its
+// evidence is superseded by SetNodeStatus); the canonical node carries its own
+// creation evidence from the resolve that produced it.
+func (g *Graph) foldEndpointTwin(old *store.NodeRow, canonKey string, canonID int64) {
+	move := func(f store.EdgeFilter, r func() store.EdgeRepoint) {
 		edges, _ := g.store.ListEdges(f)
 		for _, e := range edges {
-			err := g.store.RepointEdge(e.EdgeID, store.EdgeRepoint{NewToNodeID: canonID, NewToNodeKey: canonKey})
+			err := g.store.RepointEdge(e.EdgeID, r())
 			if errors.Is(err, store.ErrEdgeKeyConflict) {
-				g.noteEvidenceErr(g.store.DeactivateEdge(e.EdgeID, "merged_endpoint_twin"))
+				if e.Active {
+					g.noteEvidenceErr(g.store.DeactivateEdge(e.EdgeID, "merged_endpoint_twin"))
+				}
 				continue
 			}
 			g.noteEvidenceErr(err)
 		}
 	}
+	move(store.EdgeFilter{ToNodeID: old.NodeID}, func() store.EdgeRepoint {
+		return store.EdgeRepoint{NewToNodeID: canonID, NewToNodeKey: canonKey}
+	})
+	move(store.EdgeFilter{FromNodeID: old.NodeID}, func() store.EdgeRepoint {
+		return store.EdgeRepoint{NewFromNodeID: canonID, NewFromNodeKey: canonKey}
+	})
 	g.noteEvidenceErr(g.store.SetNodeStatus(old.NodeID, "deleted"))
+}
+
+// foldBraceEndpoints converges a graph that still holds brace-keyed endpoint
+// nodes ("...:get:/orders/{id}") without re-extracting the file that minted
+// them: each is folded into its canonical colon node, or re-keyed to it when
+// no such node exists yet. One pass per resolve over the domain's endpoints.
+func (g *Graph) foldBraceEndpoints(domainKey string, revisionID int64) {
+	eps, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "endpoint"})
+	if err != nil {
+		return
+	}
+	for i := range eps {
+		n := eps[i]
+		if n.Status == "deleted" || !strings.Contains(n.NodeKey, "{") {
+			continue
+		}
+		parts := strings.SplitN(n.NodeKey, ":", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		qn := parts[3]
+		sep := strings.Index(qn, ":")
+		if sep <= 0 {
+			continue
+		}
+		method, path := qn[:sep], qn[sep+1:]
+		canonPath := validate.CanonicalRoutePath(path)
+		if canonPath == path {
+			continue
+		}
+		canonKey := canonicalNodeKey(strings.Join(parts[:3], ":") + ":" + method + ":" + canonPath)
+		if canonKey == n.NodeKey {
+			continue
+		}
+		if canon, err := g.store.GetNodeByKey(canonKey); err == nil && canon != nil && canon.Status != "deleted" {
+			g.foldEndpointTwin(&n, canonKey, canon.NodeID)
+			continue
+		}
+		if err := g.store.RekeyNode(n.NodeID, n.NodeKey, canonKey, n.FilePath, revisionID); err != nil {
+			g.noteEvidenceErr(err)
+			continue
+		}
+		if moved, err := g.store.GetNodeByKey(canonKey); err == nil && moved != nil {
+			moved.Name = strings.ToUpper(method) + " " + canonPath
+			_, uerr := g.store.UpsertNode(*moved)
+			g.noteEvidenceErr(uerr)
+		}
+		g.detResetNameIndex()
+	}
 }
 
 // pathLooksDynamic reports whether a URL path probably embeds a concrete
