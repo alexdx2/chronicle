@@ -58,3 +58,58 @@ func TestHostFromConfigSymbol_ReadsUnderRepoRootWithCap(t *testing.T) {
 		t.Errorf("symbol beyond 256 KB was read: %d config rows", n)
 	}
 }
+
+func TestContainsWord(t *testing.T) {
+	for _, c := range []struct {
+		src, sym string
+		want     bool
+	}{
+		{"x = process.env.PRICING_API_URL;", "PRICING_API_URL", true},
+		{"x = process.env.PRICING_API_URL_V2;", "PRICING_API_URL", false},
+		{"x = MY_PRICING_API_URL", "PRICING_API_URL", false},
+		{`cfg["Services:Pricing"]`, "Services:Pricing", true},
+		{"xServices:Pricing", "Services:Pricing", false},
+		{"a PRICING_API_URLx PRICING_API_URL", "PRICING_API_URL", true},
+	} {
+		if got := containsWord(c.src, c.sym); got != c.want {
+			t.Errorf("containsWord(%q,%q)=%v want %v", c.src, c.sym, got, c.want)
+		}
+	}
+}
+
+func TestHostFromConfigSymbol_WeakSymbols(t *testing.T) {
+	root := t.TempDir()
+	write := func(p, body string) {
+		full := filepath.Join(root, p)
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Whole-word: the env name is only a prefix of another variable.
+	write("svc/src/a.client.ts", "fetch(`${process.env.PRICING_API_URL_OLD}/p`);\n")
+	// Last segment of the key under a different service's directory.
+	write("other/src/b.client.ts", "const Pricing = 1; fetch(`${Pricing}/p`);\n")
+	// Last segment too short.
+	write("svc/src/c.client.ts", "const Api = 1; fetch(`${Api}/p`);\n")
+	// Last segment, long enough, same tree: kept.
+	write("svc/src/d.client.ts", "const Pricing = cfg.Pricing; fetch(`${Pricing}/p`);\n")
+	t.Chdir(t.TempDir())
+	c := &ConfigHosts{Root: root}
+	c.Add("PRICING_API_URL", "http://pricing-api:8080", "svc/.env")
+	c.Add("Services:Pricing", "http://pricing-api:8080", "svc/appsettings.json")
+	c.Add("Services:Api", "http://pricing-api:8080", "svc/appsettings.json")
+	for file, want := range map[string]int{
+		"svc/src/a.client.ts":   0,
+		"other/src/b.client.ts": 0,
+		"svc/src/c.client.ts":   0,
+		"svc/src/d.client.ts":   1,
+	} {
+		g, _, _ := resolveFiles(t, c, srcFacts{file, []Fact{
+			{Kind: "http_call", From: "x", FromType: "provider", Target: "pricing-api/p", Method: "GET"},
+		}})
+		if n := configRowsOf(t, g, "pricing-api"); n != want {
+			t.Errorf("%s: config rows = %d, want %d", file, n, want)
+		}
+	}
+}

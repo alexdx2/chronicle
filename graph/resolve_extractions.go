@@ -5524,10 +5524,15 @@ func (g *Graph) hostFromConfigSymbol(filePath string, fact Fact, host, rest stri
 		got, _ := cfg.lookup(filePath, e.Key)
 		cands := []string{e.Key}
 		if i := strings.LastIndexAny(e.Key, ":."); i >= 0 && i < len(e.Key)-1 {
-			cands = append(cands, e.Key[i+1:])
+			// The last segment ("Pricing" of "Services:Pricing") is a weak
+			// symbol: only when it is long enough and the source sits under
+			// the config file's directory.
+			if seg := e.Key[i+1:]; len(seg) >= 5 && fileUnderDir(filePath, got.Dir) {
+				cands = append(cands, seg)
+			}
 		}
 		for _, c := range cands {
-			if strings.Contains(src, c) {
+			if containsWord(src, c) {
 				return got, c, true
 			}
 		}
@@ -5536,11 +5541,47 @@ func (g *Graph) hostFromConfigSymbol(filePath string, fact Fact, host, rest stri
 		if rest != "" && strings.Contains(src, rest) {
 			return be, rest, true
 		}
-		if be.Key != "" && strings.Contains(src, be.Key) {
+		if be.Key != "" && containsWord(src, be.Key) {
 			return be, be.Key, true
 		}
 	}
 	return ConfigEntry{}, "", false
+}
+
+// containsWord says whether sym occurs in src as a whole word: not flanked by
+// a letter, digit or underscore.
+func containsWord(src, sym string) bool {
+	if sym == "" {
+		return false
+	}
+	for from := 0; from <= len(src); {
+		i := strings.Index(src[from:], sym)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(sym)
+		if (i == 0 || !isWordByte(src[i-1])) && (end >= len(src) || !isWordByte(src[end])) {
+			return true
+		}
+		from = i + 1
+	}
+	return false
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+// fileUnderDir says whether the repo-relative file sits in dir or below it
+// ("" and "." mean the repo root).
+func fileUnderDir(file, dir string) bool {
+	d := path.Clean(filepath.ToSlash(dir))
+	if d == "." || d == "/" || dir == "" {
+		return true
+	}
+	f := path.Clean(filepath.ToSlash(file))
+	return f == d || strings.HasPrefix(f, d+"/")
 }
 
 // configCodeText is the text of a config-derived call address as it stands on
