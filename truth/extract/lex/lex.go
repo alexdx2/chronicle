@@ -46,7 +46,7 @@ func FamilyFor(path string) Family {
 		return Hash
 	}
 	switch filepath.Ext(base) {
-	case ".cs", ".java", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".kt", ".kts", ".gradle", ".rs", ".proto":
+	case ".cs", ".java", ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".kt", ".kts", ".gradle", ".rs", ".proto":
 		return CLike
 	case ".php":
 		return PHP
