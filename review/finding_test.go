@@ -17,7 +17,8 @@ type fakeImpactQuerier struct {
 	impacts  map[string][]SystemImpact
 	subs     map[string][]SystemImpact
 	collapse map[string]SystemRef
-	err      error // non-nil: every method fails with this error
+	one      *SystemRef // when set, Collapse returns it for every key
+	err      error      // non-nil: every method fails with this error
 }
 
 var _ ImpactQuerier = fakeImpactQuerier{}
@@ -42,6 +43,9 @@ func (f fakeImpactQuerier) Collapse(nodeKey string) (SystemRef, error) {
 	}
 	if ref, ok := f.collapse[nodeKey]; ok {
 		return ref, nil
+	}
+	if f.one != nil {
+		return *f.one, nil
 	}
 	return SystemRef{Kind: kindDomain, Key: nodeKey, Name: nodeKey}, nil
 }

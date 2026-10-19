@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/gitdiff"
+	"github.com/alexdx2/chronicle-core/registry"
+	"github.com/alexdx2/chronicle-core/snapshot"
 )
 
 // IntegrationMoved is one integration whose caller changed inside the merge
@@ -52,7 +54,13 @@ func factInDiff(f Fact, inDiff map[string]bool) bool {
 // same type and target, both with evidence in a changed file. Pairing is one
 // to one and deterministic (sorted by edge id); an edge no counterpart claims
 // stays out. The indices are into added and removed.
-func MovedIntegrationPairs(added, removed []Fact, changed []gitdiff.ChangedFile) (pairs [][2]int) {
+//
+// Both callers must also belong to one system (the collapse the review names
+// systems with: addedSys resolves a head node, removedSys a base node), or,
+// when neither collapses to a service, to one domain. A nil resolver or an
+// unresolved caller never pairs: two services of one monorepo calling the
+// same target are an addition and a removal, not a move.
+func MovedIntegrationPairs(added, removed []Fact, changed []gitdiff.ChangedFile, addedSys, removedSys func(nodeKey string) SystemRef) (pairs [][2]int) {
 	inDiff := changedPathSet(changed)
 	eligible := func(f Fact) bool {
 		return f.Kind == KindEdge && f.Edge != nil && f.Edge.To != "" && movableEdgeTypes[f.Edge.Type] && factInDiff(f, inDiff)
@@ -75,6 +83,9 @@ func MovedIntegrationPairs(added, removed []Fact, changed []gitdiff.ChangedFile)
 			if used[ai] || a.Type != r.Type || a.To != r.To || a.From == r.From {
 				continue
 			}
+			if !sameOwner(addedSys, removedSys, a.From, r.From) {
+				continue
+			}
 			used[ai] = true
 			pairs = append(pairs, [2]int{ai, ri})
 			break
@@ -83,14 +94,58 @@ func MovedIntegrationPairs(added, removed []Fact, changed []gitdiff.ChangedFile)
 	return pairs
 }
 
+// sameOwner reports whether the added caller (head side) and the removed
+// caller (base side) collapse to the same system, or, when neither is a
+// service, to the same domain.
+func sameOwner(addedSys, removedSys func(string) SystemRef, addedFrom, removedFrom string) bool {
+	if addedSys == nil || removedSys == nil {
+		return false
+	}
+	a, r := addedSys(addedFrom), removedSys(removedFrom)
+	if a.Key == "" || r.Key == "" {
+		return false
+	}
+	if a.Key == r.Key {
+		return true
+	}
+	return a.Kind != kindService && r.Kind != kindService && a.Domain != "" && a.Domain == r.Domain
+}
+
+func collapser(q ImpactQuerier) func(string) SystemRef {
+	if q == nil {
+		return nil
+	}
+	return func(key string) SystemRef { return safeCollapse(q, key) }
+}
+
+// SnapshotCollapse returns the system collapse of snap's graph, the same one
+// the review uses for its findings. A nil or unloadable snapshot yields a
+// resolver that resolves nothing. release must be called when done.
+func SnapshotCollapse(snap *snapshot.Snapshot) (collapse func(string) SystemRef, release func()) {
+	none := func(string) SystemRef { return SystemRef{} }
+	if snap == nil {
+		return none, func() {}
+	}
+	reg, err := registry.LoadDefaults()
+	if err != nil {
+		return none, func() {}
+	}
+	g, closer, err := snapshot.Load(snap, reg, snapshot.LoadOptions{})
+	if err != nil {
+		return none, func() {}
+	}
+	q := CoreImpactQuerier{Graph: g}
+	return collapser(q), func() { _ = closer() }
+}
+
 // splitMovedIntegrations removes the moved pairs from d (a copy is returned,
 // d is not modified) and returns them as IntegrationMoved Changes seeded on
 // head, with the new caller as the source.
-func splitMovedIntegrations(d *GraphDelta, changed []gitdiff.ChangedFile) (*GraphDelta, []Change) {
+func splitMovedIntegrations(d *GraphDelta, changed []gitdiff.ChangedFile, baseQ, headQ ImpactQuerier) (*GraphDelta, []Change) {
 	if d == nil {
 		return nil, nil
 	}
-	pairs := MovedIntegrationPairs(d.Added, d.Removed, changed)
+	pairs := MovedIntegrationPairs(d.Added, d.Removed, changed, collapser(headQ), collapser(baseQ))
 	if len(pairs) == 0 {
 		return d, nil
 	}
