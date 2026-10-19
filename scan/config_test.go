@@ -204,3 +204,26 @@ func TestReadConfigHosts_ConfigValuePassedToConstructor(t *testing.T) {
 		t.Errorf("use = %+v", u)
 	}
 }
+
+func TestBalancedArg_Limit(t *testing.T) {
+	if got := balancedArg("a(b)c) tail"); got != "a(b)c" {
+		t.Errorf("balancedArg = %q", got)
+	}
+	if got := balancedArg(strings.Repeat("x", 3000) + ")"); got != "" {
+		t.Errorf("argument past 2 KB must not be returned, got %d bytes", len(got))
+	}
+	if got := balancedArg(strings.Repeat("x", 2000) + ")"); len(got) != 2000 {
+		t.Errorf("argument within 2 KB lost, got %d bytes", len(got))
+	}
+}
+
+func TestMayUseConfig(t *testing.T) {
+	for _, in := range []string{"AddHttpClient", "process.env.X", "environment.api", "IConfiguration", "config.url"} {
+		if !mayUseConfig([]byte("x " + in)) {
+			t.Errorf("%q must be parsed", in)
+		}
+	}
+	if mayUseConfig([]byte("const x = 1; function f() {}")) {
+		t.Error("file without markers must be skipped")
+	}
+}

@@ -1,8 +1,10 @@
 package scan
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -79,6 +81,12 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	var parsed []string
 	sorted := append([]string(nil), files...)
 	sort.Strings(sorted)
+	tooBig := 0
+	defer func() {
+		if tooBig > 0 {
+			log.Printf("scan: config: skipped %d files larger than %d bytes", tooBig, maxConfigBytes)
+		}
+	}()
 	for _, p := range sorted {
 		cfg := IsConfigFile(p)
 		reg := isRegistrationFile(p)
@@ -88,11 +96,18 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		}
 		fp := filepath.Join(root, filepath.FromSlash(p))
 		fi, err := os.Lstat(fp)
-		if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxConfigBytes {
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		if fi.Size() > maxConfigBytes {
+			tooBig++
 			continue
 		}
 		body, err := os.ReadFile(fp)
 		if err != nil {
+			continue
+		}
+		if (reg || src) && !mayUseConfig(body) {
 			continue
 		}
 		if reg {
@@ -318,9 +333,28 @@ func lastIdent(s string) string {
 	return s
 }
 
+// configMarkers are the substrings a .cs/.ts/.js file must contain to be worth
+// parsing for client registrations or config uses.
+var configMarkers = [][]byte{[]byte("Client"), []byte("process.env"), []byte("environment"), []byte("Configuration"), []byte("config.")}
+
+func mayUseConfig(body []byte) bool {
+	for _, m := range configMarkers {
+		if bytes.Contains(body, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxBalancedArg bounds how far balancedArg looks for the closing parenthesis.
+const maxBalancedArg = 2048
+
 // balancedArg returns the text up to the parenthesis that closes an already
-// opened one.
+// opened one, or "" when it is not closed within maxBalancedArg bytes.
 func balancedArg(s string) string {
+	if len(s) > maxBalancedArg {
+		s = s[:maxBalancedArg]
+	}
 	depth := 1
 	for i, r := range s {
 		switch r {
