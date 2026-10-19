@@ -106,6 +106,7 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	seed := Seed(wt, inv.Paths())
 	pf := ProfileFile{Deps: st.deps, TopDirs: topDirs, ProfiledAt: in.Sha}
 	fresh := true
+	scopeAdjusted := false
 	inheritPrev := func(pf *ProfileFile, p *ProfileFile) {
 		pf.Profile, pf.ScopeSource, pf.ScopeProposed = p.Profile, p.ScopeSource, p.ScopeProposed
 		pf.Seeded, pf.SeedReason, pf.ProfiledAt = p.Seeded, p.SeedReason, p.ProfiledAt
@@ -157,6 +158,16 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 		inheritPrev(&pf, prev)
 		if pf.Seeded {
 			st.limitations = append(st.limitations, "profile taken from the seed: "+pf.SeedReason)
+		} else if !treeHasManifest && pf.ScopeSource == "model" {
+			// A reused scope still meets the dropped-directory check: a
+			// service directory added since the base would stay unscanned.
+			scope, source, proposed, warn := GuardScope(pf.Profile, seed, inv, st.deps)
+			if source == "model" && warn != "" {
+				pf.Profile.Scope, pf.ScopeProposed = scope, proposed
+				pf.SeedReason = warn
+				st.limitations = append(st.limitations, warn)
+				scopeAdjusted = true
+			}
 		}
 	default:
 		reason := "no profile model configured"
@@ -188,7 +199,7 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	// the profile is new: the model answered, or a full scan (which has no
 	// manifest to keep). An incremental build never replaces the base's
 	// manifest by the seed.
-	if fresh && !treeHasManifest && (full || !pf.Seeded) {
+	if (fresh && !treeHasManifest && (full || !pf.Seeded)) || scopeAdjusted {
 		cfg, tech := ScopeToScanConfig(pf.Profile.Scope), techIDs(pf.Profile)
 		st.writeManifest = func(manPath string) error { return WriteProfiledManifest(manPath, domainKey, cfg, tech) }
 	}

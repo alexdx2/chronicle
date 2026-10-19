@@ -458,3 +458,32 @@ func TestBuildSnapshot_IncrementalKeepsBaseScopeWhenTopDirsChange(t *testing.T) 
 		t.Fatalf("a new top directory must not re-profile: calls=%d %+v vs %+v", b.calls, f1.Profile.Scope, f2.Profile.Scope)
 	}
 }
+
+func TestBuildSnapshot_IncrementalReusedScopeReaddsNewServiceDir(t *testing.T) {
+	root, head := tsRepoT(t)
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = &cannedBackend{answers: []string{tsProfileAnswer}}
+	first, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeT(t, root, "billing/package.json", `{"name":"billing","dependencies":{"express":"4"}}`)
+	writeT(t, root, "billing/src/orders.controller.ts", "export class OrdersController {}")
+	head2 := commitAllT(t, root, "add billing service")
+	in = buildIn(root, head2, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Base = &Base{CodeSha: head, Files: first.Files}
+	second, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf, _ := ParseProfileFile(second.Files.Profile)
+	found := false
+	for _, r := range pf.Profile.Scope.Include {
+		if strings.HasPrefix(r.Glob, "billing/") {
+			found = true
+		}
+	}
+	if pf.ProfiledAt != head || !found || !bytes.Contains(second.Files.Domain, []byte("billing/")) {
+		t.Fatalf("new top-level service dir must be re-added on a reused profile: %+v\n%s", pf.Profile.Scope, second.Files.Domain)
+	}
+}
