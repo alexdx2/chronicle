@@ -59,7 +59,7 @@ func IsTestPath(p string) bool {
 	}
 	base := parts[len(parts)-1]
 	switch {
-	case strings.HasSuffix(base, "Tests.cs"):
+	case strings.HasSuffix(base, "Tests.cs"), strings.HasSuffix(base, "Test.java"), strings.HasSuffix(base, "Tests.java"):
 		return true
 	case strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py"):
 		return true
