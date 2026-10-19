@@ -249,3 +249,46 @@ func TestHTTPRemovedFactExplainsRemovedEdge(t *testing.T) {
 		t.Fatalf("%+v", res.Unexplained)
 	}
 }
+
+func pkgSnap() *snapshot.Snapshot {
+	return &snapshot.Snapshot{Nodes: []snapshot.Node{
+		{ID: "code:package:d:npm:lodash", Layer: "code", Type: "package", Name: "lodash"},
+		{ID: "code:package:d:npm:mine", Layer: "code", Type: "package", Name: "mine"},
+	}, Edges: []snapshot.Edge{
+		{ID: "e1", Type: "DEPENDS_ON", From: "service:service:d:s", To: "code:package:d:npm:lodash", Active: true},
+		{ID: "e2", Type: "PUBLISHES", From: "service:service:d:s", To: "code:package:d:npm:mine", Active: true},
+	}}
+}
+
+func TestFindingNamingDepsNodeIsReported(t *testing.T) {
+	dep := truth.Fact{Class: truth.ClassDeps, Key: "npm:lodash"}
+	pkg := truth.Fact{Class: truth.ClassPackages, Key: "npm:mine"}
+	rv := &review.ReviewResult{Findings: []review.ReviewFinding{
+		{Facts: []review.Fact{nodeFact("code:package:d:npm:lodash", "code", "package")}},
+	}}
+	res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{Facts: []truth.Fact{dep, pkg}}, HeadSnap: pkgSnap(), Review: rv})
+	got := map[string]Status{}
+	for _, f := range res.Facts {
+		got[f.Fact.Key] = f.Status
+	}
+	if got["npm:lodash"] != Reported || got["npm:mine"] != NotTracked {
+		t.Fatalf("%v", got)
+	}
+	if res.Reported != 1 || res.NotTracked != 1 {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestDependsOnExistingHeadDepNotUnexplained(t *testing.T) {
+	// lodash is a head dependency (from another manifest) with no delta fact.
+	headDep := truth.Fact{Class: truth.ClassDeps, Key: "npm:lodash"}
+	base := &truth.Report{Facts: []truth.Fact{headDep}}
+	head := &truth.Report{Facts: []truth.Fact{headDep}}
+	e := edgeFact("service:service:d:s", "code:package:d:npm:lodash", "DEPENDS_ON")
+	other := edgeFact("service:service:d:s", "code:package:d:npm:mine", "DEPENDS_ON")
+	rv := &review.ReviewResult{Delta: &review.GraphDelta{Added: []review.Fact{e, other}}}
+	res := Check(Input{Base: base, Head: head, BaseSnap: pkgSnap(), HeadSnap: pkgSnap(), Review: rv})
+	if len(res.Unexplained) != 1 || res.Unexplained[0].ID != other.ID {
+		t.Fatalf("%+v", res.Unexplained)
+	}
+}

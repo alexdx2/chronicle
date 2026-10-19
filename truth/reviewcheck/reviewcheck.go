@@ -30,7 +30,8 @@ const (
 	MissedByReview Status = "missed_by_review"
 	// NotInGraph: the graph snapshot has no node for the fact (a scan gap).
 	NotInGraph Status = "not_in_graph"
-	// NotTracked: the review does not list this kind of change. Every delta
+	// NotTracked: the review does not list this kind of change (unless a
+	// finding names the node: then it is Reported). Every delta
 	// fact of the classes deps and packages that has a graph node gets this
 	// status, never missed_by_review: review.Diff routes ClassStructural facts
 	// (code:package nodes, DEPENDS_ON edges) only into the
@@ -151,9 +152,15 @@ func nodeKeys(rep *truth.Report, snap *snapshot.Snapshot) map[factKey]string {
 }
 
 // named is the set of node keys a review named, per direction.
-type named struct{ added, removed map[string]bool }
+type named struct {
+	added, removed map[string]bool
+	// findings holds the node keys named in review findings only.
+	findings map[string]bool
+}
 
-func newNamed() *named { return &named{map[string]bool{}, map[string]bool{}} }
+func newNamed() *named {
+	return &named{map[string]bool{}, map[string]bool{}, map[string]bool{}}
+}
 
 func addFact(set map[string]bool, f review.Fact) {
 	if f.ID != "" {
@@ -177,6 +184,7 @@ func collectFindings(fs []review.ReviewFinding, n *named) {
 		for _, fact := range f.Facts {
 			addFact(n.added, fact)
 			addFact(n.removed, fact)
+			addFact(n.findings, fact)
 		}
 		collectFindings(f.Downstream, n)
 	}
@@ -223,7 +231,13 @@ func Check(in Input) Result {
 			df.NodeKey = nk
 			mapped[nk] = true
 			if f.Class == truth.ClassDeps || f.Class == truth.ClassPackages {
-				df.Status = NotTracked
+				// Deps and packages are not in the review delta, but a
+				// finding may still name the node.
+				if nm.findings[nk] {
+					df.Status = Reported
+				} else {
+					df.Status = NotTracked
+				}
 			} else if set[nk] {
 				df.Status = Reported
 			} else {
@@ -291,6 +305,16 @@ func Check(in Input) Result {
 		d := in.Review.Delta
 		res.ReviewStructuralAdded, res.ReviewStructuralRemoved = d.StructuralAdded, d.StructuralRemoved
 		types := nodeTypes(in.BaseSnap, in.HeadSnap)
+		// A package that is a dependency in the head reference (in any
+		// manifest) is not a false positive even when the delta has no fact
+		// for it: the dependency already existed elsewhere.
+		for k := range head {
+			if k.class == truth.ClassDeps {
+				if nk := headKeys[k]; nk != "" {
+					mappedAdded[nk], mappedRemoved[nk] = true, true
+				}
+			}
+		}
 		explainByHTTP(d.Added, httpFacts(head, base, true), in.HeadSnap, mappedAdded)
 		explainByHTTP(d.Removed, httpFacts(head, base, false), in.BaseSnap, mappedRemoved)
 		for _, f := range d.Added {
