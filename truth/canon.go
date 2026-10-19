@@ -233,3 +233,10 @@ func LooseTokens(s string) string {
 	sort.Strings(toks)
 	return strings.Join(toks, "|")
 }
+
+// GraphQLEndpointKey is the fact key of a GraphQL operation: kind is "query"
+// or "mutation", name is the field name, whose case is kept (GraphQL names
+// are case-sensitive), e.g. "MUTATION renameProduct".
+func GraphQLEndpointKey(kind, name string) string {
+	return strings.ToUpper(strings.TrimSpace(kind)) + " " + strings.TrimSpace(name)
+}

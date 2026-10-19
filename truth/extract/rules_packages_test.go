@@ -45,9 +45,9 @@ func TestPackageRules(t *testing.T) {
 		src   string
 		line  int
 	}{
-		{"npm private workspace package counts",
+		{"npm private package publishes nothing",
 			map[string]string{"packages/ui/package.json": "{\n \"private\": true,\n \"name\": \"@acme/ui\"\n}"},
-			"npm:@acme/ui", "npm.name", 3},
+			"", "", 0},
 		{"npm workspace root is not a package",
 			map[string]string{"package.json": `{"name":"root","workspaces":["packages/*"]}`}, "", "", 0},
 		{"npm workspace root with object workspaces",

@@ -11,6 +11,7 @@ func init() {
 	isJS := func(p string) bool { return hasExt(p, ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs") }
 	Rules = append(Rules,
 		funcRule{"nest.controller", isJS, applyNest},
+		funcRule{"nest.graphql", isJS, applyNestGraphQL},
 		funcRule{"express.router", isJS, applyExpress},
 	)
 }
@@ -164,4 +165,122 @@ func applyExpress(f *FileCtx) []truth.Fact {
 func tsServerCtor(recv string) *regexp.Regexp {
 	return regexp.MustCompile(`\b` + regexp.QuoteMeta(recv) + `\s*(?::[^=\n]+)?=\s*(?:await\s+)?(?:` +
 		`express\s*\(|express\.Router\s*\(|(?:\w+\.)?Router\s*\(|(?i:fastify)\s*\(|new\s+(?:Hono|Koa)\b)`)
+}
+
+var (
+	nestResolver   = regexp.MustCompile(`@Resolver\s*(?:\(|$|\s)`)
+	nestClassLine  = regexp.MustCompile(`\bclass\s+[A-Za-z_$]`)
+	nestGQLOp      = regexp.MustCompile(`^\s*@(Query|Mutation)\s*\(`)
+	nestDecorator  = regexp.MustCompile(`^\s*@[A-Za-z_$][\w$.]*\s*(?:\()?`)
+	nestMethodName = regexp.MustCompile(`^\s*(?:(?:public|private|protected|async|static|override)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^>(]*>)?\s*\(`)
+	nestNameOpt    = regexp.MustCompile(`\bname\s*:\s*(?:'([^']*)'|"([^"]*)"|` + "`([^`$]*)`" + `)`)
+	nestFirstStr   = regexp.MustCompile(`^\s*(?:'([^']*)'|"([^"]*)"|` + "`([^`$]*)`" + `)\s*[,)]`)
+)
+
+// matchParen returns the index just past the parenthesis group that opens at
+// s[open] (which must be "("), or -1.
+func matchParen(s string, open int) int {
+	depth := 0
+	for k := open; k < len(s); k++ {
+		switch s[k] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return k + 1
+			}
+		}
+	}
+	return -1
+}
+
+func firstGroup(m []string) string {
+	for _, g := range m[1:] {
+		if g != "" {
+			return g
+		}
+	}
+	return ""
+}
+
+// applyNestGraphQL: code-first NestJS GraphQL. A method decorated @Query() or
+// @Mutation() in a class decorated @Resolver is the operation QUERY name /
+// MUTATION name; name is the decorator's first string argument, its
+// { name: '...' } option, or the method name.
+func applyNestGraphQL(f *FileCtx) []truth.Fact {
+	if f.IsTest || !codeContains(f, "@resolver") {
+		return nil
+	}
+	var out []truth.Fact
+	pending, inResolver := false, false
+	for i, l := range f.Lines {
+		if nestResolver.MatchString(l.Code) {
+			pending = true
+		}
+		if nestClassLine.MatchString(l.Code) {
+			inResolver, pending = pending, false
+			continue
+		}
+		m := nestGQLOp.FindStringSubmatchIndex(l.Code)
+		if m == nil || !inResolver {
+			continue
+		}
+		kind := l.Code[m[2]:m[3]]
+		txt := callText(f.Lines, i, 8)
+		at := strings.Index(txt, "@"+kind)
+		open := strings.Index(txt[at:], "(") + at
+		end := matchParen(txt, open)
+		if end < 0 {
+			continue
+		}
+		args := txt[open+1 : end-1]
+		if strings.Contains(args, "${") {
+			continue // computed name
+		}
+		name := ""
+		if mm := nestFirstStr.FindStringSubmatch(args + ")"); mm != nil {
+			name = firstGroup(mm)
+		} else if mm := nestNameOpt.FindStringSubmatch(args); mm != nil {
+			name = firstGroup(mm)
+		}
+		if name == "" {
+			// the method name: skip further decorators, take the identifier
+			var sb strings.Builder
+			for j := i; j < len(f.Lines) && j < i+14; j++ {
+				sb.WriteString(f.Lines[j].Code)
+				sb.WriteByte(' ')
+			}
+			rest := sb.String()
+			rest = rest[strings.Index(rest, "@"+kind)+end-at:]
+			for {
+				d := nestDecorator.FindString(rest)
+				if d == "" {
+					break
+				}
+				if strings.HasSuffix(d, "(") {
+					e := matchParen(rest, len(d)-1)
+					if e < 0 {
+						break
+					}
+					rest = rest[e:]
+				} else {
+					rest = rest[len(d):]
+				}
+			}
+			mm := nestMethodName.FindStringSubmatch(rest)
+			if mm == nil {
+				continue
+			}
+			name = mm[1]
+		}
+		out = append(out, truth.Fact{
+			Class:   truth.ClassEndpoints,
+			Key:     truth.GraphQLEndpointKey(kind, name),
+			Attrs:   map[string]string{"method": strings.ToUpper(kind), "path": name},
+			Primary: evidence(f, l),
+			Sources: []string{"nest.graphql"},
+		})
+	}
+	return out
 }

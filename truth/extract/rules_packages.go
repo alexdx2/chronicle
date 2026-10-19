@@ -9,9 +9,9 @@ import (
 	"github.com/alexdx2/chronicle-core/truth"
 )
 
-// Packages: what this repository publishes, read from manifests only. A
-// private workspace package still counts (other code in the fleet may import
-// it); a workspace root and anything under node_modules does not. Keys use
+// Packages: what this repository publishes, read from manifests only. An npm
+// manifest with "private": true publishes nothing and gives no fact; a
+// workspace root and anything under node_modules does not count either. Keys use
 // CanonDep so a packages fact here and a deps fact in another repository
 // share one key.
 
@@ -89,6 +89,10 @@ func applyPackageNpm(f *FileCtx) []truth.Fact {
 		return nil
 	}
 	if len(f.Tree.Siblings(f.Dir, "pnpm-workspace.yaml")) > 0 || len(f.Tree.Siblings(f.Dir, "lerna.json")) > 0 {
+		return nil
+	}
+	var private bool
+	if json.Unmarshal(doc["private"], &private) == nil && private {
 		return nil
 	}
 	var name string

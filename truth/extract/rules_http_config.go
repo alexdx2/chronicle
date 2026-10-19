@@ -307,6 +307,21 @@ func isTSConfigPath(p string) bool {
 
 var tsConfigProp = regexp.MustCompile(`(?:^|[\s{,])['"]?([A-Za-z_$][A-Za-z0-9_$]*)['"]?\s*:\s*['"` + "`" + `]((?i:https?)://[^'"` + "`" + `\s]*)['"` + "`" + `]`)
 
+// isExpoConfig: app.config.js / .ts / .mjs / .cjs (Expo). Only there an
+// environment read with a literal fallback is a deployment address; in other
+// config files the same shape is a local default and is left alone.
+func isExpoConfig(p string) bool {
+	switch strings.ToLower(baseName(p)) {
+	case "app.config.js", "app.config.ts", "app.config.mjs", "app.config.cjs":
+		return true
+	}
+	return false
+}
+
+// tsEnvDefault: prop: process.env.NAME || 'http://host'. The literal is the
+// fallback of an environment read.
+var tsEnvDefault = regexp.MustCompile(`(?:process\.env|import\.meta\.env)\.([A-Za-z_][A-Za-z0-9_]*)\s*(?:\|\||\?\?)\s*['"` + "`" + `]((?i:https?)://[^'"` + "`" + `\s]*)['"` + "`" + `]`)
+
 // applyTSConfig: an object property whose value is an absolute http(s)
 // string literal. The path is the literal's own path (use sites live in other files).
 func applyTSConfig(f *FileCtx) []truth.Fact {
@@ -316,6 +331,17 @@ func applyTSConfig(f *FileCtx) []truth.Fact {
 	var out []truth.Fact
 	for _, l := range f.Lines {
 		for _, m := range tsConfigProp.FindAllStringSubmatch(l.Code, -1) {
+			if !anyServiceURL(m[1], m[2]) {
+				continue
+			}
+			if fc, ok := httpFact("ts.config_url", f, l, m[2], m[1]); ok {
+				out = append(out, fc)
+			}
+		}
+		if !isExpoConfig(f.Path) {
+			continue
+		}
+		for _, m := range tsEnvDefault.FindAllStringSubmatch(l.Code, -1) {
 			if !anyServiceURL(m[1], m[2]) {
 				continue
 			}

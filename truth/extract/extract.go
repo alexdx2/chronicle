@@ -28,6 +28,7 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 	rep := &truth.Report{RulesVersion: truth.RulesVersion}
 	tree := fsTree{fsys}
 	var all []truth.Fact
+	var aliases []envAlias
 	skipped := map[string]bool{}
 
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -92,6 +93,7 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 			Tree:   tree,
 		}
 		rep.Files++
+		aliases = append(aliases, collectEnvAliases(ctx)...)
 		generated := IsGeneratedPath(p) || hasGeneratedHeader(raw)
 		for _, r := range matched {
 			facts, perr := applySafe(r, ctx)
@@ -113,7 +115,7 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 	if err != nil {
 		return nil, err
 	}
-	merged, warns := Merge(all)
+	merged, warns := Merge(dropResolvedAliasVars(all, aliases))
 	rep.Facts = merged
 	rep.Warnings = append(rep.Warnings, warns...)
 	return rep, nil
