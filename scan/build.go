@@ -620,7 +620,11 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		r.o.OnPlan(Plan{Domain: d.Key, InScope: len(candidates), AlreadyCovered: len(done), ToSend: len(todo)})
 	}
 	if len(todo) > 0 {
+		r.extracted = nil
 		if err := r.extract(ctx, d, todo, &dr, guide); err != nil {
+			return err
+		}
+		if err := r.retireVanished(d, r.extracted); err != nil {
 			return err
 		}
 	}
@@ -634,6 +638,27 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	unmatched, _ := r.g.FindUnmatchedHTTPCalls(d.Key)
 	dr.UnmatchedHTTPCalls = len(unmatched)
 	return ctx.Err()
+}
+
+// retireVanished deactivates the edges and nodes whose only evidence came from
+// files that were just extracted again and no longer state them: a removed
+// endpoint must leave the graph, not stay active on stale evidence of the old
+// blob. Entities that still have live evidence (declared elsewhere, or again
+// in the new version of the file) are untouched.
+func (r *fullRun) retireVanished(d manifest.DomainEntry, files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	var revID int64
+	if rev, err := r.g.Store().GetRevisionBySHA(d.Key, r.head); err == nil {
+		revID = rev.RevisionID
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("scan: look up revision at %s: %w", ShortSHA(r.head), err)
+	}
+	if _, _, err := r.g.Store().RetireUnbackedByFiles(d.Key, files, revID); err != nil {
+		return fmt.Errorf("scan: retire vanished facts: %w", err)
+	}
+	return nil
 }
 
 // invalidateDropped marks the evidence of files that the base's scan covered

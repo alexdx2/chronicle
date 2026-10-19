@@ -202,13 +202,14 @@ func selectDomains(m *manifest.Manifest, boot BootstrapResult, want string) ([]m
 
 // fullRun carries what the domains of one FullScan share and accumulate.
 type fullRun struct {
-	g     *graph.Graph
-	o     FullOptions
-	m     *manifest.Manifest
-	prevM *manifest.Manifest // the base build's manifest (incremental only)
-	env   Env
-	head  string
-	rep   *FullReport
+	g         *graph.Graph
+	o         FullOptions
+	m         *manifest.Manifest
+	prevM     *manifest.Manifest // the base build's manifest (incremental only)
+	extracted []string           // paths extracted by the latest extract call
+	env       Env
+	head      string
+	rep       *FullReport
 
 	extra        []string // limitations beyond limitationsFor's
 	cat          *prompts.Catalog
@@ -514,6 +515,7 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 				// not done, not an error: the next run picks it up
 			default:
 				dr.Extracted++
+				r.extracted = append(r.extracted, f.Path)
 			}
 		}
 	}

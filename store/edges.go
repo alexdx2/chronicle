@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -671,4 +672,158 @@ func (s *Store) MarkStaleEdges(domainKey string, revisionID int64) (int64, error
 		}
 	}
 	return int64(len(subjects)), nil
+}
+
+// RetireUnbackedByFiles deactivates the current edges and then the nodes of
+// domainKey that have evidence from one of files that is no longer live
+// (stale, superseded or invalidated) and no live positive evidence at all: the
+// file was extracted again and no longer states them. A retired node takes the
+// evidence-free (derived) edges that touch it along, and a derived node left
+// without an active edge goes with them. A node that an active edge with
+// evidence still reaches stays, as do entities still asserted by an importer.
+// Each transition is journaled like MarkStaleEdges and MarkStaleNodes. Returns
+// the number of edges and nodes retired.
+func (s *Store) RetireUnbackedByFiles(domainKey string, files []string, revisionID int64) (edges, nodes int64, err error) {
+	if len(files) == 0 {
+		return 0, 0, nil
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(files)), ",")
+	fileArgs := make([]any, len(files))
+	for i, f := range files {
+		fileArgs[i] = f
+	}
+	const deadFrom = `EXISTS (SELECT 1 FROM graph_evidence de WHERE de.%[1]s = %[2]s.%[1]s
+		      AND de.file_path IN (%[3]s) AND de.evidence_status IN ('stale','superseded','invalidated'))
+		  AND NOT EXISTS (SELECT 1 FROM graph_evidence le WHERE le.%[1]s = %[2]s.%[1]s
+		      AND le.evidence_polarity = 'positive' AND le.evidence_status IN ('valid','revalidated')
+		      AND le.source_kind <> 'synthetic')`
+
+	type subject struct {
+		id       int64
+		key      string
+		from, to int64
+	}
+	collect := func(q string, args []any) ([]subject, error) {
+		rows, qerr := s.db.Query(q, args...)
+		if qerr != nil {
+			return nil, qerr
+		}
+		defer rows.Close()
+		var out []subject
+		for rows.Next() {
+			var r subject
+			if serr := rows.Scan(&r.id, &r.key, &r.from, &r.to); serr != nil {
+				return nil, serr
+			}
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+	retireEdge := func(sub subject) error {
+		if _, err := s.db.Exec(`UPDATE graph_edges SET active=0 WHERE edge_id=? AND active=1`, sub.id); err != nil {
+			return fmt.Errorf("RetireUnbackedByFiles edge update: %w", err)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domainKey, RevisionID: revisionID, Kind: EvEdgeStatus, Key: sub.key,
+			Fields: map[string]any{"active": false, "status": "stale"},
+		}); err != nil {
+			return err
+		}
+		edges++
+		return nil
+	}
+	retireNode := func(sub subject) error {
+		if _, err := s.db.Exec(`UPDATE graph_nodes SET status='stale' WHERE node_id=? AND status='active'`, sub.id); err != nil {
+			return fmt.Errorf("RetireUnbackedByFiles node update: %w", err)
+		}
+		if err := s.appendEvent(journalEvent{
+			DomainKey: domainKey, RevisionID: revisionID, Kind: EvNodeStatus, Key: sub.key,
+			Fields: map[string]any{"status": "stale"},
+		}); err != nil {
+			return err
+		}
+		nodes++
+		return nil
+	}
+
+	keepE, keepEArgs := stillAssertedByAnImporter("graph_edges", "edge_id")
+	args := append([]any{domainKey}, fileArgs...)
+	args = append(args, keepEArgs...)
+	subs, err := collect(`SELECT edge_id, edge_key, from_node_id, to_node_id FROM graph_edges
+		WHERE active=1 AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		  AND from_node_id IN (SELECT node_id FROM graph_nodes WHERE domain_key=?)
+		  AND `+fmt.Sprintf(deadFrom, "edge_id", "graph_edges", marks)+keepE+`
+		ORDER BY edge_key`, args)
+	if err != nil {
+		return 0, 0, fmt.Errorf("RetireUnbackedByFiles edges: %w", err)
+	}
+	touched := map[int64]bool{}
+	for _, sub := range subs {
+		if err := retireEdge(sub); err != nil {
+			return edges, nodes, err
+		}
+		touched[sub.from], touched[sub.to] = true, true
+	}
+
+	keepN, keepNArgs := stillAssertedByAnImporter("graph_nodes", "node_id")
+	args = append([]any{domainKey}, fileArgs...)
+	args = append(args, keepNArgs...)
+	dead, err := collect(`SELECT node_id, node_key, 0, 0 FROM graph_nodes
+		WHERE domain_key=? AND status='active' AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
+		  AND `+fmt.Sprintf(deadFrom, "node_id", "graph_nodes", marks)+keepN+`
+		ORDER BY node_key`, args)
+	if err != nil {
+		return edges, 0, fmt.Errorf("RetireUnbackedByFiles nodes: %w", err)
+	}
+	deadSet := map[int64]bool{}
+	for _, n := range dead {
+		deadSet[n.id] = true
+		touched[n.id] = true
+	}
+	// A node with no evidence of its own (derived) or with dead evidence only
+	// survives through active edges that carry evidence. When none is left, its
+	// evidence-free edges and the node go; their other ends are checked next.
+	queue := make([]int64, 0, len(touched))
+	for id := range touched {
+		queue = append(queue, id)
+	}
+	sort.Slice(queue, func(i, j int) bool { return queue[i] < queue[j] })
+	done := map[int64]bool{}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if done[id] {
+			continue
+		}
+		done[id] = true
+		var key, status, dom string
+		var evN int
+		if err := s.db.QueryRow(`SELECT node_key, status, domain_key, (SELECT COUNT(*) FROM graph_evidence WHERE node_id = graph_nodes.node_id AND source_kind <> 'synthetic')
+			FROM graph_nodes WHERE node_id=?`, id).Scan(&key, &status, &dom, &evN); err != nil {
+			continue
+		}
+		if status != "active" || dom != domainKey || (evN > 0 && !deadSet[id]) {
+			continue
+		}
+		var backed int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM graph_edges e WHERE e.active=1 AND (e.from_node_id=? OR e.to_node_id=?)
+			AND EXISTS (SELECT 1 FROM graph_evidence x WHERE x.edge_id = e.edge_id AND x.source_kind <> 'synthetic')`, id, id).Scan(&backed); err != nil || backed > 0 {
+			continue
+		}
+		derived, err := collect(`SELECT e.edge_id, e.edge_key, e.from_node_id, e.to_node_id FROM graph_edges e
+			WHERE e.active=1 AND (e.from_node_id=? OR e.to_node_id=?) ORDER BY e.edge_key`, []any{id, id})
+		if err != nil {
+			return edges, nodes, fmt.Errorf("RetireUnbackedByFiles derived edges: %w", err)
+		}
+		for _, sub := range derived {
+			if err := retireEdge(sub); err != nil {
+				return edges, nodes, err
+			}
+			queue = append(queue, sub.from, sub.to)
+		}
+		if err := retireNode(subject{id: id, key: key}); err != nil {
+			return edges, nodes, err
+		}
+	}
+	return edges, nodes, nil
 }
