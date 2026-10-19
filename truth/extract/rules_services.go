@@ -266,6 +266,12 @@ func applyCDKFunction(f *FileCtx) []truth.Fact {
 var (
 	csprojAssembly = regexp.MustCompile(`<AssemblyName>\s*([^<]*?)\s*</AssemblyName>`)
 	csprojComment  = regexp.MustCompile(`<!--.*?-->`)
+	// Old-style (non-SDK) ASP.NET Framework projects: web project type guids
+	// (web application, MVC 1-5, web site) or a reference to System.Web*.
+	csprojWebGuid = regexp.MustCompile(`(?i)<ProjectTypeGuids>[^<]*(?:349C5851-65DF-11DA-9384-00065B846F21|603C0E0B-DB56-11DC-BE95-000D561079B0|F85E285D-A4E0-4152-9332-AB1D724D3325|E53F8FEA-EAE0-44A6-8774-FFD645390401|E3E379DF-F4C6-4180-9B81-6769533ABE47)`)
+	csprojWebRef  = regexp.MustCompile(`(?i)<Reference\s+Include="(?:System\.Web(?:\.Http|\.Mvc|\.Http\.WebHost)?|Microsoft\.AspNet\.[^",]*)\s*[",]`)
+	csprojTestRef = regexp.MustCompile(`(?i)Microsoft\.VisualStudio\.QualityTools\.UnitTestFramework|Microsoft\.VisualStudio\.TestPlatform|<Reference\s+Include="nunit\.framework|<Reference\s+Include="xunit\.|3AC096D0-A1C2-E12C-1390-A8335801FDAB`)
+	csprojSdkAttr = regexp.MustCompile(`<Project\b[^>]*\bSdk\s*=|<Sdk\s+Name\s*=|<Import\b[^>]*\bSdk\s*=`)
 )
 
 func applyCsproj(f *FileCtx) []truth.Fact {
@@ -286,20 +292,32 @@ func applyCsproj(f *FileCtx) []truth.Fact {
 		codeLines = append(codeLines, s)
 	}
 	web, exe, isTest := false, false, false
+	sdkStyle, legacyWeb := false, false
 	asmLine, asmName := -1, ""
 	for i, s := range codeLines {
 		switch {
-		case strings.Contains(s, `Sdk="Microsoft.NET.Sdk.Web"`):
+		case strings.Contains(s, `Sdk="Microsoft.NET.Sdk.Web"`), strings.Contains(s, `Sdk="Microsoft.NET.Sdk.Worker"`):
 			web = true
 		case strings.Contains(s, "<OutputType>Exe</OutputType>"):
 			exe = true
 		}
-		if strings.Contains(s, "Microsoft.NET.Test.Sdk") || strings.Contains(s, "<IsTestProject>true<") {
+		if strings.Contains(s, "Microsoft.NET.Test.Sdk") || strings.Contains(s, "<IsTestProject>true<") || csprojTestRef.MatchString(s) {
 			isTest = true
+		}
+		if csprojSdkAttr.MatchString(s) {
+			sdkStyle = true
+		}
+		if csprojWebGuid.MatchString(s) || csprojWebRef.MatchString(s) {
+			legacyWeb = true
 		}
 		if m := csprojAssembly.FindStringSubmatch(s); m != nil && asmLine < 0 {
 			asmLine, asmName = i, m[1]
 		}
+	}
+	// A non-SDK project is a service when it is an ASP.NET Framework web
+	// project (web guid or System.Web reference); a plain library is not.
+	if !sdkStyle && legacyWeb {
+		web = true
 	}
 	if !(web || exe) || isTest || len(f.Lines) == 0 {
 		return nil
