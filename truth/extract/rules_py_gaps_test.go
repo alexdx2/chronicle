@@ -1,6 +1,8 @@
 package extract
 
 import (
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/truth"
@@ -85,4 +87,88 @@ func TestKafkaPySendMultiLine(t *testing.T) {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
 		}
 	}
+}
+
+func TestDRFRouter(t *testing.T) {
+	views := "from rest_framework import viewsets, mixins\n" +
+		"class FullViewSet(viewsets.ModelViewSet):\n    queryset = X\n" +
+		"class RoViewSet(viewsets.ReadOnlyModelViewSet):\n    queryset = X\n" +
+		"class PlainViewSet(viewsets.ViewSet):\n    def list(self, request):\n        pass\n    def destroy(self, request, pk=None):\n        pass\n" +
+		"class MixViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet):\n    pass\n"
+	routerURLs := "from rest_framework.routers import DefaultRouter\nfrom .views import FullViewSet, RoViewSet\n" +
+		"router = DefaultRouter()\nrouter.register(r\"full\", FullViewSet, basename=\"f\")\nrouter.register(r'ro', RoViewSet)\nurlpatterns = router.urls\n"
+	full := "GET /api/full,POST /api/full,GET /api/full/{},PUT /api/full/{},PATCH /api/full/{},DELETE /api/full/{}"
+	ro := "GET /api/ro,GET /api/ro/{}"
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"include module from project urls", map[string]string{
+			"app/views.py": views, "app/urls.py": routerURLs,
+			"proj/urls.py": "from django.urls import include, path\nurlpatterns = [path(\"api/\", include(\"app.urls\"))]\n",
+		}, ro + "," + full},
+		{"include router.urls in same file", map[string]string{
+			"app/views.py": views,
+			"app/urls.py": "from django.urls import include, path\nfrom .views import RoViewSet\nrouter = routers.SimpleRouter()\n" +
+				"router.register('ro', RoViewSet)\nurlpatterns = [\n    path(\n        'api/',\n        include(router.urls),\n    ),\n]\n",
+		}, ro},
+		{"nested mount", map[string]string{
+			"app/views.py": views, "app/urls.py": routerURLs,
+			"proj/api.py":  "",
+			"proj/urls.py": "urlpatterns = [path('v1/', include('app.urls'))]\n",
+			"urls.py":      "urlpatterns = [path('svc/', include('proj.urls'))]\n",
+		}, "GET /svc/v1/full,POST /svc/v1/full,GET /svc/v1/full/{},PUT /svc/v1/full/{},PATCH /svc/v1/full/{},DELETE /svc/v1/full/{},GET /svc/v1/ro,GET /svc/v1/ro/{}"},
+		{"plain viewset and mixins", map[string]string{
+			"app/views.py": views,
+			"app/urls.py": "router = DefaultRouter()\nrouter.register(r'plain', PlainViewSet, basename='p')\nrouter.register(r'mix', MixViewSet)\nfrom .views import PlainViewSet, MixViewSet\n" +
+				"urlpatterns = [path('', include(router.urls))]\n",
+		}, "DELETE /plain/{},GET /plain,GET /mix,POST /mix"},
+		{"module qualified viewset and viewset in the same file", map[string]string{
+			"app/views.py": views,
+			"app/urls.py": "from . import views\nrouter = DefaultRouter()\nrouter.register(r'full', views.RoViewSet)\nrouter.register(r'local', LocalVS)\n" +
+				"class LocalVS(viewsets.ReadOnlyModelViewSet):\n    pass\nurlpatterns = [path('x/', include(router.urls))]\n",
+		}, "GET /x/full,GET /x/full/{},GET /x/local,GET /x/local/{}"},
+		{"inherited viewset", map[string]string{
+			"app/views.py": views + "class Child(RoViewSet):\n    def create(self, r):\n        pass\n",
+			"app/urls.py":  "from .views import Child\nrouter = DefaultRouter()\nrouter.register('c', Child)\nurlpatterns = [path('', include(router.urls))]\n",
+		}, "GET /c,POST /c,GET /c/{}"},
+		{"action and http_method_names", map[string]string{
+			"app/views.py": "class V(viewsets.ModelViewSet):\n    http_method_names = ['get', 'post']\n" +
+				"    @action(detail=True, methods=['post'], url_path='close')\n    def close_it(self, request, pk=None):\n        pass\n" +
+				"    @action(detail=False)\n    def stats(self, request):\n        pass\n",
+			"app/urls.py": "from .views import V\nrouter = DefaultRouter()\nrouter.register('v', V)\nurlpatterns = [path('', include(router.urls))]\n",
+		}, "GET /v,POST /v,GET /v/{},POST /v/{}/close,GET /v/stats"},
+		{"unresolved viewset", map[string]string{
+			"app/urls.py": "from external_lib import ThingViewSet\nrouter = DefaultRouter()\nrouter.register('t', ThingViewSet)\nurlpatterns = [path('', include(router.urls))]\n",
+		}, ""},
+		{"commented register", map[string]string{
+			"app/views.py": views,
+			"app/urls.py":  "from .views import RoViewSet\nrouter = DefaultRouter()\n# router.register('ro', RoViewSet)\nurlpatterns = router.urls\n",
+		}, ""},
+		{"not a drf router", map[string]string{
+			"app/views.py": views,
+			"app/admin.py": "from .views import RoViewSet\nadmin.site.register(RoViewSet)\nregistry = Registry()\nregistry.register('ro', RoViewSet)\n",
+		}, ""},
+		{"test file", map[string]string{
+			"app/views.py":      views,
+			"app/tests/urls.py": "from app.views import RoViewSet\nrouter = DefaultRouter()\nrouter.register('ro', RoViewSet)\n",
+		}, ""},
+	}
+	for _, c := range cases {
+		got := keysOf(t, c.files, truth.ClassEndpoints)
+		want := splitSorted(c.want)
+		if got != want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, want)
+		}
+	}
+}
+
+func splitSorted(s string) string {
+	if s == "" {
+		return ""
+	}
+	p := strings.Split(s, ",")
+	sort.Strings(p)
+	return strings.Join(p, ",")
 }
