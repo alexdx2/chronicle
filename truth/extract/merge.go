@@ -12,7 +12,7 @@ import (
 // "." (or the whole name when it has no dot).
 var priorities = map[string]int{
 	// code-level
-	"csharp.": 3, "nest.": 3, "express.": 3, "fastapi.": 3, "flask.": 3, "django.": 3,
+	"csharp.": 3, "go.": 3, "nest.": 3, "express.": 3, "fastapi.": 3, "flask.": 3, "django.": 3,
 	"axios.": 3, "fetch.": 3, "requests.": 3, "kafka.": 3, "kafkajs": 3, "kafkajs.": 3, "sqs.": 3,
 	"eventbridge.": 3, "boto3.": 3, "python.": 3,
 	// contract

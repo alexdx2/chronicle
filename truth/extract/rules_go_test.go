@@ -117,3 +117,25 @@ func TestGoChannels(t *testing.T) {
 		}
 	}
 }
+
+func TestGoHTTP(t *testing.T) {
+	_, got := goFacts(t, truth.ClassHTTP, map[string]string{
+		"internal/config/config.go":      "http_config.go",
+		"internal/config/config_test.go": "http_config_test.go",
+	})
+	var want []string
+	for _, k := range []string{
+		"api.payments.example",
+		"shipping-svc", "tax.internal.example", "inventory-svc", "ledger-svc", "notify.example.org",
+		"weather.example.net", "billing-svc", "search.example.io", "reports-svc",
+	} {
+		want = append(want, k)
+	}
+	var gotKeys []string
+	for _, g := range got {
+		gotKeys = append(gotKeys, g[strings.Index(g, "| ")+2:])
+	}
+	sort.Strings(want)
+	sort.Strings(gotKeys)
+	checkLines(t, gotKeys, want)
+}
