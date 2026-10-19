@@ -172,3 +172,21 @@ func splitSorted(s string) string {
 	sort.Strings(p)
 	return strings.Join(p, ",")
 }
+
+func TestHelmValuesURL(t *testing.T) {
+	cases := []struct{ name, path, src, want string }{
+		{"service map", "helm/values.yaml", "services:\n  billing: http://billing-api:8080\n  catalog: http://catalog-api:3000\n", "billing-api,catalog-api"},
+		{"url keys and lists", "chart/values-prod.yaml", "api:\n  baseUrl: https://pricing.corp.example/v2\nupstreams:\n  - http://a-svc:80\n  - name: x\n    endpoint: http://b-svc:81\n", "a-svc,b-svc,pricing.corp.example"},
+		{"local hosts", "values.yaml", "a: http://localhost:3000\nb: http://127.0.0.1:1\n", ""},
+		{"not a url", "values.yaml", "image:\n  repository: registry.corp.example/gateway\nhost: gw.corp.example\nsvc: billing-api:8080\nftp: ftp://f.example.com\n", ""},
+		{"docs and chart repos", "values.yaml", "docsUrl: https://docs.example.com\nchartRepository: https://charts.example.com\nimageRegistry: https://reg.example.com\n", ""},
+		{"commented", "values.yaml", "# billing: http://billing-api:8080\nreplicas: 2\n", ""},
+		{"other yaml ignored", "helm/templates-config.yaml", "billing: http://billing-api:8080\n", ""},
+		{"test dir", "tests/values.yaml", "billing: http://billing-api:8080\n", ""},
+	}
+	for _, c := range cases {
+		if got := keysOf(t, map[string]string{c.path: c.src}, truth.ClassHTTP); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}

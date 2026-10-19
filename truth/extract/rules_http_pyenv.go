@@ -2,8 +2,10 @@ package extract
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/alexdx2/chronicle-core/truth"
+	"gopkg.in/yaml.v3"
 )
 
 func init() {
@@ -43,5 +45,51 @@ func applyPyEnvDefault(f *FileCtx) []truth.Fact {
 			}
 		}
 	}
+	return out
+}
+
+func init() {
+	Rules = append(Rules,
+		funcRule{"helm.values_url", isHelmValuesPath, applyHelmValues},
+	)
+}
+
+var helmValuesName = regexp.MustCompile(`^values(?:[.-][\w.-]*)?\.ya?ml$`)
+
+func isHelmValuesPath(p string) bool { return helmValuesName.MatchString(strings.ToLower(baseName(p))) }
+
+// helmNotService marks keys that point at chart or image repositories.
+var helmNotService = regexp.MustCompile(`(?i)repo|registry|chart|helm|mirror`)
+
+// applyHelmValues: any scalar of a Helm values file that is an absolute
+// http(s) URL with a non-local host is an upstream the release talks to.
+// Keys naming documentation, schemas or chart repositories are skipped.
+func applyHelmValues(f *FileCtx) []truth.Fact {
+	if f.IsTest {
+		return nil
+	}
+	var out []truth.Fact
+	var walk func(n *yaml.Node, key string)
+	walk = func(n *yaml.Node, key string) {
+		n = yamlResolve(n)
+		switch n.Kind {
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				walk(n.Content[i+1], n.Content[i].Value)
+			}
+		case yaml.SequenceNode:
+			for _, c := range n.Content {
+				walk(c, key)
+			}
+		case yaml.ScalarNode:
+			if helmNotService.MatchString(key) || !anyServiceURL(key, n.Value) {
+				return
+			}
+			if fc, ok := yamlFact("helm.values_url", f, n, key); ok {
+				out = append(out, fc)
+			}
+		}
+	}
+	yamlDocs(f.Raw, func(root *yaml.Node) { walk(root, "") })
 	return out
 }
