@@ -276,3 +276,19 @@ func TestNormalizeEdgeKey(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalRoutePath(t *testing.T) {
+	cases := map[string]string{
+		"/orders/{id}":              "/orders/:id",
+		"/orders/{orderId}/capture": "/orders/:orderId/capture",
+		"/orders/${userId}":         "/orders/:userId",
+		"/orders/{id:\\d+}":         "/orders/:id",
+		"/orders/:id":               "/orders/:id",
+		"/invoices/[invoiceId]":     "/invoices/[invoiceId]",
+	}
+	for in, want := range cases {
+		if got := CanonicalRoutePath(in); got != want {
+			t.Errorf("CanonicalRoutePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

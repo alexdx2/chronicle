@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -91,6 +92,22 @@ func routeQualifiedName(qn string) (prefix, path string, ok bool) {
 		return "", "", false
 	}
 	return qn[:i+1], qn[i+1:], true
+}
+
+// routeBraceParam matches a brace-style path parameter: OpenAPI "{id}", FastAPI
+// "{item_id}", Spring "{id:\\d+}" and the JS template "${userId}".
+var routeBraceParam = regexp.MustCompile(`\$?\{([A-Za-z_][A-Za-z0-9_.-]*)(?::[^}]*)?\}`)
+
+// CanonicalRoutePath rewrites brace-style path parameters to the colon style
+// ("/orders/{id}" and "/orders/${id}" become "/orders/:id") so one endpoint
+// keys to one node whichever source described it: a NestJS controller (":id")
+// or an OpenAPI document ("{id}"). Case is left alone; callers lowercase.
+// Bracket style ("[id]") is a different framework convention and stays as is.
+func CanonicalRoutePath(path string) string {
+	if !strings.Contains(path, "{") {
+		return path
+	}
+	return routeBraceParam.ReplaceAllString(path, ":$1")
 }
 
 // NormalizeQualifiedName applies rule 2 of the canonical key rule (see

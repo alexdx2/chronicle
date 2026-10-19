@@ -705,6 +705,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	if err := g.materializeExternalEndpoints(domainKey, revisionID); err != nil {
 		return nil, err
 	}
+	g.reconcileEndpointLocality(domainKey)
 	if opts.derivedPassesOn() {
 		// Everything below re-derives the whole domain from the whole graph.
 		// Correct after a scan, and the dominant cost of a per-commit refresh.
@@ -1507,6 +1508,10 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// node, this is a local DI call — drop the edge. Using lookupCodeNode instead
 		// of the old PascalCase heuristic catches path-keyed nodes like "arenaservice"
 		// whose Name starts with a lowercase letter.
+		// A file-less code:provider named like the callee is the twin an older
+		// build minted for this very call, not a local class: retire it so it
+		// cannot make the call look local, and the call lands on the service.
+		g.retireProviderTwin(domainKey, fromNodeKey, toName)
 		isLocal := lookupCodeNode(g, domainKey, toName)
 		if !isLocal && len(toName) >= 3 && toName[0] == 'I' &&
 			toName[1] >= 'A' && toName[1] <= 'Z' && toName[2] >= 'a' && toName[2] <= 'z' {
@@ -1549,9 +1554,19 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		svcKey := canonicalNodeKey("service:service:" + domainKey + ":" + normalizePackageName(toName))
 		toNodeKey := svcKey
 		existingNode, _ := g.store.GetNodeByKey(svcKey)
+		callDeriv := "hard"
 		if existingNode == nil {
-			// Fall back to code:provider
-			toNodeKey = canonicalNodeKey("code:provider:" + domainKey + ":" + toName)
+			// Not one of the domain's own services: the call names a service
+			// boundary, never a code provider. Land on the node an http_call
+			// to the same host uses (a DNS-aliased service, else the domain's
+			// external_system) so one callee is one node.
+			callDeriv = "linked"
+			toNodeKey = canonicalNodeKey("service:external_system:" + domainKey + ":" + toName)
+			if aliases, err := g.store.ListAliasesByNormalized(strings.ToLower(toName), "dns"); err == nil && len(aliases) == 1 {
+				if node, err := g.store.GetNodeByID(aliases[0].NodeID); err == nil && node.Layer == "service" {
+					toNodeKey = node.NodeKey
+				}
+			}
 		}
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, toName, "")
 
@@ -1563,7 +1578,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		_, err := g.store.UpsertEdge(store.EdgeRow{
 			EdgeKey: edgeKey, FromNodeID: fromID, ToNodeID: toID,
 			FromNodeKey: fromNodeKey, ToNodeKey: toNodeKey,
-			EdgeType: "CALLS_SERVICE", DerivationKind: "hard", Active: true,
+			EdgeType: "CALLS_SERVICE", DerivationKind: callDeriv, Active: true,
 			LastSeenRevisionID: revisionID, Confidence: confidence, Freshness: 1.0, TrustScore: confidence,
 			Metadata: "{}", ValidFromRevisionID: 0, // legacy mode: update in place, don't close+reopen on duplicate
 		})
@@ -1662,6 +1677,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			return counts, nil, nil
 		}
 		epID := g.ensureNodeID(domainKey, revisionID, epKey, epName, "")
+		g.mergeBraceEndpointTwin(domainKey, fact.Method, fact.Target, epKey, epID)
 
 		edgeKey := fromNodeKey + "->" + epKey + ":CALLS_ENDPOINT"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -1996,6 +2012,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 		toNodeKey, endpointName := normalizeEndpointKey(domainKey, fact.Method, path)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, endpointName, "")
+		g.mergeBraceEndpointTwin(domainKey, fact.Method, path, toNodeKey, toID)
 
 		edgeKey := fromNodeKey + "->" + toNodeKey + ":EXPOSES_ENDPOINT"
 		_, err := g.store.UpsertEdge(store.EdgeRow{
@@ -3071,6 +3088,106 @@ func (g *Graph) materializeExternalEndpoints(domainKey string, revisionID int64)
 	}
 	g.pendingExtEndpoints = nil
 	return nil
+}
+
+// reconcileEndpointLocality settles whether an endpoint node is this domain's
+// own contract. An endpoint something in the domain EXPOSES is local (active);
+// one that is only ever reached as a call target (CALLS_ENDPOINT in, no
+// EXPOSES_ENDPOINT) is somebody else's route, so it is "external" -- a
+// calls_endpoint fact must not turn a client's outbound call into a claim that
+// the caller serves that route. Order-independent: it runs after every fact of
+// the batch, so a controller resolved after its caller still wins.
+func (g *Graph) reconcileEndpointLocality(domainKey string) {
+	active := true
+	eps, err := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "endpoint"})
+	if err != nil || len(eps) == 0 {
+		return
+	}
+	exposed := map[string]bool{}
+	called := map[string]bool{}
+	if es, err := g.store.ListEdges(store.EdgeFilter{EdgeType: "EXPOSES_ENDPOINT", Active: &active}); err == nil {
+		for _, e := range es {
+			exposed[e.ToNodeKey] = true
+		}
+	}
+	if es, err := g.store.ListEdges(store.EdgeFilter{EdgeType: "CALLS_ENDPOINT", Active: &active}); err == nil {
+		for _, e := range es {
+			called[e.ToNodeKey] = true
+		}
+	}
+	for _, n := range eps {
+		switch {
+		case n.Status == "active" && called[n.NodeKey] && !exposed[n.NodeKey]:
+			g.noteEvidenceErr(g.store.SetNodeStatus(n.NodeID, "external"))
+		case n.Status == "external" && exposed[n.NodeKey]:
+			g.noteEvidenceErr(g.store.SetNodeStatus(n.NodeID, "active"))
+		}
+	}
+}
+
+// retireProviderTwin cleans up what older builds left behind for a call to a
+// named service: a synthetic code:provider:<domain>:<name> node and a hard
+// CALLS_SERVICE edge from the caller to it, minted when the service was not a
+// node yet. The call now lands on the service/external_system node, so the
+// caller's edge to the twin is a claim its file no longer makes; the twin node
+// goes with it once nothing else (and no file) holds it.
+func (g *Graph) retireProviderTwin(domainKey, fromNodeKey, name string) {
+	twinKey := canonicalNodeKey("code:provider:" + domainKey + ":" + name)
+	twin, err := g.store.GetNodeByKey(twinKey)
+	if err != nil || twin == nil || twin.FilePath != "" || twin.Status == "deleted" {
+		return
+	}
+	edge, err := g.store.GetEdgeByKey(fromNodeKey + "->" + twinKey + ":CALLS_SERVICE")
+	if err != nil || edge == nil || !edge.Active {
+		return // not this caller's twin: a real, if file-less, local provider
+	}
+	g.noteEvidenceErr(g.store.DeactivateEdge(edge.EdgeID, "superseded_by_service_target"))
+	active := true
+	for _, f := range []store.EdgeFilter{{ToNodeID: twin.NodeID, Active: &active}, {FromNodeID: twin.NodeID, Active: &active}} {
+		if rest, err := g.store.ListEdges(f); err != nil || len(rest) > 0 {
+			return
+		}
+	}
+	g.noteEvidenceErr(g.store.SetNodeStatus(twin.NodeID, "deleted"))
+}
+
+// mergeBraceEndpointTwin folds the endpoint node an older build keyed with the
+// brace spelling ("GET /orders/{id}", from an OpenAPI file) into the canonical
+// colon node ("GET /orders/:id") the same route now keys to: edges move over,
+// the twin is deleted. A no-op unless the path has brace parameters and the
+// old node exists, so graphs minted by this build never pay for it.
+func (g *Graph) mergeBraceEndpointTwin(domainKey, method, path, canonKey string, canonID int64) {
+	if canonID == 0 || !strings.Contains(path, "{") {
+		return
+	}
+	if method == "" {
+		method = "GET"
+	}
+	path = strings.TrimRight(path, "/")
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	oldKey := "contract:endpoint:" + strings.ToLower(domainKey) + ":" + strings.ToLower(strings.ToUpper(method)+":"+path)
+	if oldKey == canonKey {
+		return
+	}
+	old, err := g.store.GetNodeByKey(oldKey)
+	if err != nil || old == nil || old.Status == "deleted" {
+		return
+	}
+	active := true
+	for _, f := range []store.EdgeFilter{{ToNodeID: old.NodeID, Active: &active}} {
+		edges, _ := g.store.ListEdges(f)
+		for _, e := range edges {
+			err := g.store.RepointEdge(e.EdgeID, store.EdgeRepoint{NewToNodeID: canonID, NewToNodeKey: canonKey})
+			if errors.Is(err, store.ErrEdgeKeyConflict) {
+				g.noteEvidenceErr(g.store.DeactivateEdge(e.EdgeID, "merged_endpoint_twin"))
+				continue
+			}
+			g.noteEvidenceErr(err)
+		}
+	}
+	g.noteEvidenceErr(g.store.SetNodeStatus(old.NodeID, "deleted"))
 }
 
 // pathLooksDynamic reports whether a URL path probably embeds a concrete
@@ -4470,6 +4587,8 @@ func normalizeEndpointKey(domainKey, method, path string) (nodeKey string, displ
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
+	// ":id" (code) and "{id}" (OpenAPI) are one endpoint.
+	path = validate.CanonicalRoutePath(path)
 	displayName = method + " " + path
 	nodeKey = canonicalNodeKey("contract:endpoint:" + domainKey + ":" + strings.ToLower(method+":"+path))
 	return
