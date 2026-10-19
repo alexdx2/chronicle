@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/alexdx2/chronicle-core/store"
@@ -414,30 +415,59 @@ func (g *Graph) RecalculateAllTrust() error {
 	}
 	// nodeHasLiveEdge reads the counterpart's stored status, which may still
 	// be last run's value when the counterpart is recomputed later in the
-	// pass. Repeat the pass (ListNodes orders by node_key, so it is deterministic) until
-	// no status changes; bounded because mutually-dependent pairs can
-	// oscillate.
+	// pass. After the first full pass only the neighbours of nodes whose
+	// status changed can be affected, so repeat for those alone (in node_key
+	// order, which keeps it deterministic) until nothing changes; bounded
+	// because mutually-dependent pairs can oscillate.
+	neighbours := make(map[int64][]int64)
+	for _, e := range edges {
+		if e.FromNodeID == e.ToNodeID {
+			continue
+		}
+		neighbours[e.FromNodeID] = append(neighbours[e.FromNodeID], e.ToNodeID)
+		neighbours[e.ToNodeID] = append(neighbours[e.ToNodeID], e.FromNodeID)
+	}
 	prev := make(map[int64]string, len(nodes))
 	for _, n := range nodes {
 		prev[n.NodeID] = n.Status
 	}
-	for iter := 0; iter < maxTrustPasses; iter++ {
-		changed := false
+	// pass recomputes the given nodes and returns those whose status changed.
+	pass := func(todo func(id int64) bool) (map[int64]bool, error) {
+		changed := map[int64]bool{}
 		for _, n := range nodes {
+			if !todo(n.NodeID) {
+				continue
+			}
 			if err := g.RecalculateNodeTrust(n.NodeID); err != nil {
-				return err
+				return nil, err
 			}
 			cur, err := g.store.GetNodeByID(n.NodeID)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("recalculate trust: reload node %d: %w", n.NodeID, err)
 			}
 			if cur.Status != prev[n.NodeID] {
 				prev[n.NodeID] = cur.Status
-				changed = true
+				changed[n.NodeID] = true
 			}
 		}
-		if !changed {
+		return changed, nil
+	}
+	changed, err := pass(func(int64) bool { return true })
+	if err != nil {
+		return err
+	}
+	for iter := 1; iter < maxTrustPasses && len(changed) > 0; iter++ {
+		affected := map[int64]bool{}
+		for id := range changed {
+			for _, nb := range neighbours[id] {
+				affected[nb] = true
+			}
+		}
+		if len(affected) == 0 {
 			break
+		}
+		if changed, err = pass(func(id int64) bool { return affected[id] }); err != nil {
+			return err
 		}
 	}
 	return nil
