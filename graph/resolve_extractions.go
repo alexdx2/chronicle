@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -1184,15 +1185,22 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if p := extractPathFromURL(fact.Target); p != "" {
 			assertSubstring = p
 		}
-		if fact.Origin == configUseOrigin && fact.Text != "" {
-			assertSubstring = fact.Text // the line that passes the value, not the URL
+		assertCtx := "fetch"
+		if tgt.cfg != nil && tgt.codeText != "" {
+			// The host came from a config file: the calling line holds the
+			// variable / key / path, never the host. Check that text, on any
+			// kind of line; the config file row below checks the host.
+			assertSubstring, assertCtx = tgt.codeText, ""
 		}
-		assertion, _ := json.Marshal(map[string]any{
+		assertionMap := map[string]any{
 			"substring": assertSubstring,
 			"url":       fact.Target,
-			"context":   "fetch",
 			"method":    fact.Method,
-		})
+		}
+		if assertCtx != "" {
+			assertionMap["context"] = assertCtx
+		}
+		assertion, _ := json.Marshal(assertionMap)
 		var aliasLocal bool // the host is a service node of THIS domain
 		if !pathOnly {
 			// Check if hostname matches a known service via DNS alias
@@ -1270,6 +1278,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 				AssertionKind: "text_contains", Assertion: string(assertion),
 			})
 			counts.evidence++
+			g.configEvidence(edgeKey, tgt.cfg, fact, fact.Method, callConfidence, revisionID, extractorID)
 		}
 
 		// Also create CALLS_ENDPOINT edge if we can extract a path from the URL —
@@ -1333,6 +1342,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 					return counts, nil, err
 				}
 				counts.evidence++
+				g.configEvidence(callEpEdgeKey, tgt.cfg, fact, fact.Method, epConfidence, revisionID, extractorID)
 			}
 		}
 
@@ -5356,6 +5366,13 @@ type httpTarget struct {
 	target     string
 	pathOnly   bool           // no host: neither an external_system nor a CALLS_SERVICE
 	unresolved *UnresolvedRef // the host is a symbol nothing could resolve
+
+	// cfg is the config entry the host came from; codeText is what the calling
+	// line says instead of the host (env var name, config key, environment.apiUrl,
+	// or the path a typed client is called with). Both are empty for a call whose
+	// host is written in the code.
+	cfg      *ConfigEntry
+	codeText string
 }
 
 // unresolvedCall records a call the resolver refuses to link, deterministic
@@ -5376,6 +5393,11 @@ func (g *Graph) unresolvedCall(filePath, name, why string) *UnresolvedRef {
 func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 	raw := fact.Target
 	if low := strings.ToLower(cleanCallTarget(raw)); strings.Contains(low[:min(len(low), 8)], "://") {
+		if fact.Origin == configUseOrigin && fact.Text != "" {
+			if _, _, e, ok := g.domainConfig.ResolveSymbol(filePath, fact.Text); ok {
+				return httpTarget{target: raw, cfg: &e, codeText: fact.Text}
+			}
+		}
 		return httpTarget{target: raw}
 	}
 	base, rest := SplitCallTarget(raw)
@@ -5384,16 +5406,16 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 			return httpTarget{target: raw}
 		}
 		if e, ok := g.domainConfig.ClientBase(filePath, fact.From, inferNameFromPath(filePath)); ok {
-			return httpTarget{target: e.URL + rest}
+			return httpTarget{target: e.URL + rest, cfg: &e, codeText: rest}
 		}
 		return httpTarget{target: rest, pathOnly: true}
 	}
-	kind, _, e, ok := g.domainConfig.ResolveSymbol(filePath, base)
+	kind, key, e, ok := g.domainConfig.ResolveSymbol(filePath, base)
 	if kind == SymNone {
 		// A bare config key ("Services:PricingApi", "api.url") written without
 		// an accessor: the table's value is the host; a key segment never is.
 		if be, bok := g.domainConfig.lookup(filePath, base); bok && isConfigKeyShaped(base) {
-			return httpTarget{target: be.URL + rest}
+			return httpTarget{target: be.URL + rest, cfg: &be, codeText: strings.TrimSpace(base)}
 		}
 		if isConfigKeyShaped(base) {
 			return httpTarget{unresolved: g.unresolvedCall(filePath, strings.TrimSpace(raw),
@@ -5403,7 +5425,7 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 	switch kind {
 	case SymEnv, SymConfig:
 		if ok {
-			return httpTarget{target: e.URL + rest}
+			return httpTarget{target: e.URL + rest, cfg: &e, codeText: configCodeText(base, key)}
 		}
 		if kind == SymEnv {
 			return httpTarget{target: raw} // the variable's name still names the service
@@ -5414,6 +5436,66 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 	}
 	return httpTarget{unresolved: g.unresolvedCall(filePath, strings.TrimSpace(raw),
 		"the call address is a configuration symbol with no value in the repository's config files")}
+}
+
+// configCodeText is the text of a config-derived call address as it stands on
+// the calling line: the variable name for an env access, the key as written for
+// an indexer / getter, "environment.apiUrl" for a config object property.
+func configCodeText(base, key string) string {
+	inner := strings.TrimSpace(base)
+	for {
+		switch {
+		case strings.HasPrefix(inner, "${") && strings.HasSuffix(inner, "}"):
+			inner = strings.TrimSpace(inner[2 : len(inner)-1])
+			continue
+		case strings.HasPrefix(inner, "{") && strings.HasSuffix(inner, "}"):
+			inner = strings.TrimSpace(inner[1 : len(inner)-1])
+			continue
+		case strings.HasPrefix(inner, "$") && len(inner) > 1:
+			inner = inner[1:]
+			continue
+		}
+		break
+	}
+	if strings.Contains(inner, key) {
+		if objPathRe.MatchString(inner) && !strings.HasPrefix(inner, "this.") {
+			return inner // environment.apiUrl
+		}
+		return key
+	}
+	// A nested indexer (_config["Services"]["Pricing"]) joins its parts with ":";
+	// the line carries them separately, the last one names the setting.
+	if ms := cfgIndexRe.FindAllStringSubmatch(inner, -1); len(ms) > 0 {
+		return ms[len(ms)-1][1]
+	}
+	if i := strings.LastIndexAny(key, ":."); i >= 0 && i < len(key)-1 {
+		return key[i+1:]
+	}
+	return key
+}
+
+// configEvidence records the second claim of a config-derived call: the config
+// file line that holds the address names the host.
+func (g *Graph) configEvidence(edgeKey string, e *ConfigEntry, fact Fact, method string, conf float64, revisionID int64, extractorID string) {
+	if e == nil || e.File == "" || e.Host == "" {
+		return
+	}
+	sub := e.Host
+	if u, err := url.Parse(e.URL); err == nil && u.Host != "" {
+		sub = u.Host // host[:port], as the file writes it
+	}
+	assertion, _ := json.Marshal(map[string]any{
+		"substring": sub,
+		"url":       fact.Target,
+		"method":    method,
+		"config":    e.Key,
+	})
+	_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+		TargetKind: "edge", SourceKind: "file", FilePath: e.File,
+		ExtractorID: extractorID, ExtractorVersion: "1.0",
+		Confidence: conf, RevisionID: revisionID,
+		AssertionKind: "text_contains", Assertion: string(assertion),
+	})
 }
 
 // hostIsOwn says whether the host name is one the domain declared as its own.
