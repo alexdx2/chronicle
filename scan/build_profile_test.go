@@ -433,3 +433,28 @@ func TestBuildSnapshot_ProfileFileIsDeterministic(t *testing.T) {
 		t.Fatalf("profile.json differs between identical builds:\n%s\n---\n%s", files[0], files[1])
 	}
 }
+
+func TestBuildSnapshot_IncrementalKeepsBaseScopeWhenTopDirsChange(t *testing.T) {
+	root, head := newCodeRepoT(t, map[string]string{"package.json": `{"name":"a"}`, "src/a.ts": "export const a = 1"})
+	ans := `{"technologies":[{"id":"typescript","language":"typescript","role":"other","evidence":["src/a.ts"],"pack":"typescript"}],"scope":{"include":[{"glob":"src/**","reason":"app"},{"glob":"package.json","reason":"manifest"}],"exclude":[]}}`
+	b := &cannedBackend{answers: []string{ans, ans}}
+	in := buildIn(root, head, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = b
+	first, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head2 := commitFileT(t, root, "lib/b.ts", "export const b = 2")
+	in = buildIn(root, head2, t.TempDir(), llm.NewFake("testdata/fake"))
+	in.Profile.Backend = b
+	in.Base = &Base{CodeSha: head, Files: first.Files}
+	second, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f1, _ := ParseProfileFile(first.Files.Profile)
+	f2, _ := ParseProfileFile(second.Files.Profile)
+	if b.calls != 1 || !reflect.DeepEqual(f1.Profile.Scope, f2.Profile.Scope) {
+		t.Fatalf("a new top directory must not re-profile: calls=%d %+v vs %+v", b.calls, f1.Profile.Scope, f2.Profile.Scope)
+	}
+}

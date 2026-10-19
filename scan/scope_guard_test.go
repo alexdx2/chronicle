@@ -341,3 +341,61 @@ func TestGuardScope_ReAddedDirGetsExtensionsOfItsOwnFiles(t *testing.T) {
 		t.Errorf("controller not in scope: %+v", scope)
 	}
 }
+
+func TestGuardScope_ReAddsRootEntryFileTheProfileLeftOut(t *testing.T) {
+	inv := &Inventory{routes: map[string]bool{"Program.cs": true}}
+	for _, f := range []string{"Program.cs", "api.csproj", "Controllers/A.cs", "Services/S.cs", "Services/T.cs", "Services/U.cs"} {
+		inv.Files = append(inv.Files, InvFile{Path: f})
+	}
+	seed := SeedResult{Include: []string{"**/*.cs", "**/*.csproj"}, Exclude: bootstrapExclude}
+	p := Profile{Scope: Scope{Include: []ScopeRule{{Glob: "Controllers/**", Reason: "a"}, {Glob: "Services/**", Reason: "a"}, {Glob: "*.csproj", Reason: "m"}}}}
+	scope, source, proposed, warn := GuardScope(p, seed, inv, deps.Report{})
+	if source != "model" || proposed == nil || !strings.Contains(warn, "Program.cs") {
+		t.Fatalf("%s %v %q", source, proposed, warn)
+	}
+	cfg := ScopeToScanConfig(scope)
+	if !graph.InScope("Program.cs", &cfg) || graph.InScope("Other.cs", &cfg) {
+		t.Fatalf("only the exact root file is added: %+v", scope.Include)
+	}
+	// A root file with route registrations is covered even under another name.
+	inv.Files = append(inv.Files, InvFile{Path: "routes.js"})
+	inv.routes["routes.js"] = true
+	seed.Include = append(seed.Include, "**/*.js")
+	scope, _, _, _ = GuardScope(p, seed, inv, deps.Report{})
+	if cfg = ScopeToScanConfig(scope); !graph.InScope("routes.js", &cfg) {
+		t.Fatalf("route file missing: %+v", scope.Include)
+	}
+}
+
+func TestGuardScope_DoesNotReAddExamplesDirWithAppPackage(t *testing.T) {
+	inv := fourServicesInv()
+	for _, f := range []string{"examples/demo/package.json", "examples/demo/src/main.ts"} {
+		inv.Files = append(inv.Files, InvFile{Path: f})
+	}
+	inv.Manifests = append(inv.Manifests, "examples/demo/package.json")
+	seed := SeedResult{Include: []string{"**/*.ts", "**/package.json"}, Exclude: bootstrapExclude}
+	p, _ := ParseProfile(partialScopeProfile)
+	rep := appsReport("jerry-api", "tom-api", "spectators-api", "arena-api", "examples")
+	rep.Publishes = append(rep.Publishes, deps.Package{Name: "demo", Ecosystem: "npm", File: "examples/demo/package.json", App: true})
+	scope, _, _, _ := GuardScope(p, seed, inv, rep)
+	cfg := ScopeToScanConfig(scope)
+	if graph.InScope("examples/demo/src/main.ts", &cfg) {
+		t.Fatalf("examples must stay out: %+v", scope.Include)
+	}
+	if !graph.InScope("tom-api/src/main.ts", &cfg) {
+		t.Fatalf("real apps still re-added: %+v", scope.Include)
+	}
+}
+
+func TestLayerChecks_CoverageFailsWhenRouteFileIsOutsideScope(t *testing.T) {
+	g, _ := checksGraph(t)
+	inv := &Inventory{routes: map[string]bool{"Program.cs": true}}
+	for _, f := range []string{"Program.cs", "A.cs", "B.cs", "C.cs"} {
+		inv.Files = append(inv.Files, InvFile{Path: f})
+	}
+	cfg := &manifest.ScanConfig{Include: []string{"A.cs", "B.cs", "C.cs"}}
+	c := byLayer(LayerChecksScoped(g, "d", Profile{}, &FullReport{}, inv, cfg, nil))["coverage"]
+	if c.Status != CheckFailed || !strings.Contains(c.Detail, "Program.cs") {
+		t.Fatalf("%+v", c)
+	}
+}

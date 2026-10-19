@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -36,6 +37,7 @@ type Inventory struct {
 
 	maxBytes int64
 	skipped  map[string]bool
+	routes   map[string]bool // source files whose text registers HTTP routes
 }
 
 // isBinaryHead reports whether the leading bytes of a file mark it binary
@@ -66,6 +68,7 @@ func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
 		TopDirs:  map[string]int{},
 		maxBytes: maxBytes,
 		skipped:  map[string]bool{},
+		routes:   map[string]bool{},
 
 		SkipReasons: map[string]string{},
 	}
@@ -115,6 +118,10 @@ func BuildInventory(root string, maxBytes int64) (*Inventory, error) {
 		if skip {
 			inv.Skipped = append(inv.Skipped, p)
 			inv.skipped[p] = true
+		} else if isSourceFile(p) {
+			if b, rerr := os.ReadFile(filepath.Join(root, filepath.FromSlash(p))); rerr == nil && routeRegistration.Match(b) {
+				inv.routes[p] = true
+			}
 		}
 	}
 	return inv, nil
@@ -210,4 +217,14 @@ func sortedByCount(m map[string]int) []string {
 		return keys[i] < keys[j]
 	})
 	return keys
+}
+
+// routeRegistration matches the calls that register an HTTP route in code:
+// ASP.NET minimal APIs (MapGet...), Express/Fastify/Koa style (app.get,
+// router.post) and the like.
+var routeRegistration = regexp.MustCompile(`\.Map(Get|Post|Put|Delete|Patch)\s*\(|\b(app|router|server|api)\.(get|post|put|delete|patch)\s*\(`)
+
+// HasRoutes reports whether the file's text registers HTTP routes.
+func (inv *Inventory) HasRoutes(p string) bool {
+	return inv != nil && inv.routes[p]
 }

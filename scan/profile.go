@@ -469,7 +469,8 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory, rep deps.Report) (Sc
 		}
 	}
 	dropped := droppedDirs(base, &cfg, rep)
-	if !suspicious && len(dropped) == 0 {
+	rootFiles := droppedRootFiles(base, &cfg, inv)
+	if !suspicious && len(dropped) == 0 && len(rootFiles) == 0 {
 		return p.Scope, "model", nil, ""
 	}
 	if suspicious {
@@ -485,6 +486,9 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory, rep deps.Report) (Sc
 		Include: append([]ScopeRule(nil), p.Scope.Include...),
 		Exclude: append([]ScopeRule(nil), p.Scope.Exclude...),
 		Tests:   append([]ScopeRule(nil), p.Scope.Tests...),
+	}
+	for _, f := range rootFiles {
+		scope.Include = append(scope.Include, ScopeRule{Glob: f, Reason: "root entry file the profile scope dropped"})
 	}
 	for _, d := range dropped {
 		for _, g := range droppedDirGlobs(d, p.Scope, seed, base) {
@@ -521,7 +525,8 @@ func GuardScope(p Profile, seed SeedResult, inv *Inventory, rep deps.Report) (Sc
 		}
 	}
 	proposed := p.Scope
-	warn := "scope kept from the model; re-added application directories it dropped: " + strings.Join(dropped, ", ")
+	readded := append(append([]string(nil), dropped...), rootFiles...)
+	warn := "scope kept from the model; re-added application directories it dropped: " + strings.Join(readded, ", ")
 	return scope, "model", &proposed, warn
 }
 
@@ -538,7 +543,7 @@ func droppedDirs(base []string, cfg *manifest.ScanConfig, rep deps.Report) []str
 	byDir := map[string]*tally{}
 	for _, f := range base {
 		d := topDirOf(f)
-		if d == "." {
+		if d == "." || demoDirs[strings.ToLower(d)] {
 			continue
 		}
 		t := byDir[d]
@@ -563,6 +568,31 @@ func droppedDirs(base []string, cfg *manifest.ScanConfig, rep deps.Report) []str
 	for d, t := range byDir {
 		if t.kept == 0 && (t.structure || app[d]) {
 			out = append(out, d)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// demoDirs are top-level directories of illustrations, not of the product: an
+// app package inside them (an example with its own package.json) does not make
+// the directory worth re-adding. They are treated like generated output.
+var demoDirs = map[string]bool{
+	"examples": true, "example": true, "samples": true, "sample": true,
+	"docs": true, "demo": true, "demos": true,
+}
+
+// droppedRootFiles lists the files at the repository root that are entry
+// points (Program.cs, main.ts ...) or register HTTP routes and that the scope
+// keeps out: for minimal-API code they hold every endpoint of the service.
+func droppedRootFiles(base []string, cfg *manifest.ScanConfig, inv *Inventory) []string {
+	var out []string
+	for _, f := range base {
+		if topDirOf(f) != "." || !isSourceFile(f) {
+			continue
+		}
+		if (isStructureFile(f) || inv.HasRoutes(f)) && !graph.InScope(f, cfg) {
+			out = append(out, f)
 		}
 	}
 	sort.Strings(out)

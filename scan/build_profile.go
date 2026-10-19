@@ -101,7 +101,7 @@ func buildProfileStage(ctx context.Context, in BuildInput, wt, domainKey string,
 	}
 	full := base == nil
 	needModel := opts.Backend != nil && !opts.Off &&
-		(full || prev == nil || opts.ForceReprofile || manifestsChanged || !sameStringSet(topDirs, prev.TopDirs))
+		(full || prev == nil || opts.ForceReprofile || manifestsChanged)
 
 	seed := Seed(wt, inv.Paths())
 	pf := ProfileFile{Deps: st.deps, TopDirs: topDirs, ProfiledAt: in.Sha}

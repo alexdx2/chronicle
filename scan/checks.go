@@ -111,7 +111,7 @@ func checkScope(inv *Inventory, scope *manifest.ScanConfig, owns func(string) bo
 	total, out := 0, 0
 	dirs := map[string]bool{}
 	for _, p := range ownedPaths(inv, owns) {
-		if !isStructureFile(p) {
+		if !isStructureFile(p) && !inv.HasRoutes(p) {
 			continue
 		}
 		total++
@@ -146,6 +146,7 @@ func checkCoverageInventory(c LayerCheck, domainKey string, rep *FullReport, inv
 		return c
 	}
 	total, in := 0, 0
+	var routesOut []string
 	for _, p := range ownedPaths(inv, owns) {
 		if !isSourceFile(p) {
 			continue
@@ -153,6 +154,8 @@ func checkCoverageInventory(c LayerCheck, domainKey string, rep *FullReport, inv
 		total++
 		if graph.InScope(p, scope) {
 			in++
+		} else if inv.HasRoutes(p) {
+			routesOut = append(routesOut, p)
 		}
 	}
 	if total == 0 {
@@ -164,7 +167,11 @@ func checkCoverageInventory(c LayerCheck, domainKey string, rep *FullReport, inv
 	} else {
 		c.Detail += "; " + inv2
 	}
-	if in*2 < total && !userScope {
+	if len(routesOut) > 0 && !userScope {
+		sort.Strings(routesOut)
+		c.Detail += "; files registering routes are outside the scope: " + strings.Join(routesOut, ", ")
+		c.Status = CheckFailed
+	} else if in*2 < total && !userScope {
 		c.Status = CheckFailed
 	} else if c.Status == CheckNA {
 		c.Status = CheckOK
@@ -222,7 +229,17 @@ func isSchemaFile(p string) bool {
 		(strings.HasSuffix(base, ".sql") && (strings.Contains(low, "/migrations/") || strings.HasPrefix(low, "migrations/")))
 }
 
+// entryFileNames are the files that conventionally hold the application's
+// bootstrap and, in minimal-API style code, all of its routes.
+var entryFileNames = map[string]bool{
+	"program.cs": true, "startup.cs": true, "main.ts": true, "server.ts": true,
+	"app.ts": true, "main.py": true, "app.py": true,
+}
+
 func isStructureFile(p string) bool {
+	if !strings.Contains(filepath.ToSlash(p), "/") && entryFileNames[strings.ToLower(p)] {
+		return true
+	}
 	if graph.LayerOf(p) != graph.LayerStructure {
 		return false
 	}
