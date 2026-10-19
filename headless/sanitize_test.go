@@ -125,9 +125,25 @@ await producer.ProduceAsync("order-placed", msg); // not "order-cancelled"
 			t.Errorf("fact %s was dropped", kept)
 		}
 	}
-	// a line number the model cited is trusted over the text search
-	cited := `[{"kind":"endpoint","method":"GET","target":"/health","line":6}]`
+	// a cited comment line drops the fact only if its anchor is commented out too
+	cited := `[{"kind":"endpoint","method":"GET","target":"/legacy/ping","line":4}]`
 	if _, d := sanitizeFacts("Program.cs", []byte(src), json.RawMessage(cited)); d != 1 {
-		t.Errorf("fact citing a comment line kept (dropped %d)", d)
+		t.Errorf("commented-out route kept (dropped %d)", d)
+	}
+	wrong := `[{"kind":"endpoint","method":"GET","target":"/health","line":6}]`
+	if _, d := sanitizeFacts("Program.cs", []byte(src), json.RawMessage(wrong)); d != 0 {
+		t.Errorf("live route dropped on a comment line (dropped %d)", d)
+	}
+}
+
+func TestSanitizeFacts_CommentMentionKeepsFact(t *testing.T) {
+	src := "// GET /orders\n[HttpGet(\"/orders\")]\nvoid List() {} // see http://pricing-api\n"
+	route := `[{"kind":"endpoint","method":"GET","target":"/orders","line":1}]`
+	if _, d := sanitizeFacts("C.cs", []byte(src), json.RawMessage(route)); d != 0 {
+		t.Errorf("route under a doc comment dropped (%d)", d)
+	}
+	host := `[{"kind":"http_call","method":"GET","target":"http://pricing-api"}]`
+	if _, d := sanitizeFacts("C.cs", []byte(src), json.RawMessage(host)); d != 0 {
+		t.Errorf("host-only call dropped (%d)", d)
 	}
 }

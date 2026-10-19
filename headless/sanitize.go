@@ -208,20 +208,38 @@ func commentedOut(path string, content []byte, mask []bool, kind string, f map[s
 	case "endpoint", "calls_endpoint":
 		anchor = str("target")
 	case "http_call":
-		if i := strings.Index(str("target"), "/"); i >= 0 {
-			anchor = str("target")[i:]
-			if strings.HasPrefix(str("target"), "http") {
-				if j := strings.Index(str("target")[8:], "/"); j >= 0 {
-					anchor = str("target")[8+j:]
-				}
+		t := str("target")
+		if absoluteURL(t) {
+			t = t[strings.Index(t, "//")+2:]
+			if j := strings.Index(t, "/"); j >= 0 {
+				anchor = t[j:]
 			}
+		} else if i := strings.Index(t, "/"); i >= 0 {
+			anchor = t[i:]
 		}
 	case "produces", "consumes":
 		anchor = str("to")
 	}
+	// Host-only calls and topic facts have no path to look for: the line decides.
+	skipAnchor := kind == "produces" || kind == "consumes" ||
+		(kind == "http_call" && anchor == "")
 	if line, ok := f["line"].(float64); ok && line >= 1 {
-		return lineInComment(content, mask, int(line))
+		if !lineInComment(content, mask, int(line)) {
+			return false
+		}
+		if skipAnchor {
+			return true
+		}
+		// The line alone is not enough (a doc comment above a live route):
+		// the anchor must also occur only inside comments.
+		return anchorOnlyInComments(content, mask, anchor)
 	}
+	return anchorOnlyInComments(content, mask, anchor)
+}
+
+// anchorOnlyInComments is true when the anchor text occurs in the file and
+// every occurrence is inside a comment.
+func anchorOnlyInComments(content []byte, mask []bool, anchor string) bool {
 	// A route with parameters ("/orders/{id}") is written other ways in code;
 	// judge only the literal head of it.
 	if i := strings.IndexAny(anchor, "{:<["); i > 0 {
