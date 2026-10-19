@@ -291,6 +291,8 @@ func Check(in Input) Result {
 		d := in.Review.Delta
 		res.ReviewStructuralAdded, res.ReviewStructuralRemoved = d.StructuralAdded, d.StructuralRemoved
 		types := nodeTypes(in.BaseSnap, in.HeadSnap)
+		explainByHTTP(d.Added, httpFacts(head, base, true), in.HeadSnap, mappedAdded)
+		explainByHTTP(d.Removed, httpFacts(head, base, false), in.BaseSnap, mappedRemoved)
 		for _, f := range d.Added {
 			if u, ok := unexplained(f, Added, mappedAdded, types); ok {
 				res.Unexplained = append(res.Unexplained, u)
@@ -372,4 +374,83 @@ func unexplained(f review.Fact, change string, mapped map[string]bool, types map
 		return Unexplained{ID: id, Kind: "node", Type: f.Node.Type, Change: change}, true
 	}
 	return Unexplained{}, false
+}
+
+// httpFacts returns the http facts present only in head (added) or only in
+// base (removed).
+func httpFacts(head, base map[factKey]truth.Fact, added bool) []truth.Fact {
+	from, other := head, base
+	if !added {
+		from, other = base, head
+	}
+	var out []truth.Fact
+	for k, f := range from {
+		if f.Class != truth.ClassHTTP {
+			continue
+		}
+		if _, ok := other[k]; !ok {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// explainByHTTP marks CALLS_SERVICE / CALLS_ENDPOINT edges of the review
+// delta that an http fact explains, and their target nodes, as mapped. An edge
+// is explained when its from-node lives in the fact's file; a CALLS_ENDPOINT
+// edge also when its target endpoint's path matches the fact path.
+func explainByHTTP(facts []review.Fact, hf []truth.Fact, snap *snapshot.Snapshot, mapped map[string]bool) {
+	if len(hf) == 0 {
+		return
+	}
+	files := map[string]string{}
+	if snap != nil {
+		for _, n := range snap.Nodes {
+			files[n.ID] = n.File
+		}
+	}
+	for _, f := range facts {
+		e := f.Edge
+		if e == nil || (e.Type != "CALLS_SERVICE" && e.Type != "CALLS_ENDPOINT") {
+			continue
+		}
+		for _, h := range hf {
+			file := h.Primary.File
+			ok := file != "" && fromInFile(e.From, files[e.From], file)
+			if !ok && e.Type == "CALLS_ENDPOINT" && h.Attrs["path"] != "" {
+				if p := endpointPath(e.To); p != "" && truth.CanonPath(p) == truth.CanonPath(h.Attrs["path"]) {
+					ok = true
+				}
+			}
+			if ok {
+				mapped[e.From] = true
+				mapped[e.To] = true
+				break
+			}
+		}
+	}
+}
+
+func fromInFile(key, nodeFile, file string) bool {
+	norm := func(p string) string { return strings.TrimPrefix(strings.ReplaceAll(p, "\\", "/"), "./") }
+	if nodeFile != "" {
+		return norm(nodeFile) == norm(file)
+	}
+	noExt := norm(file)
+	if i := strings.LastIndex(noExt, "."); i > strings.LastIndex(noExt, "/") && i > 0 {
+		noExt = noExt[:i]
+	}
+	return strings.Contains(key, noExt)
+}
+
+// endpointPath extracts the path of a contract:endpoint node key
+// (contract:endpoint:<domain>:<method>:<path>).
+func endpointPath(key string) string {
+	if !strings.HasPrefix(key, "contract:endpoint:") {
+		return ""
+	}
+	if i := strings.Index(key, "/"); i >= 0 {
+		return key[i:]
+	}
+	return ""
 }

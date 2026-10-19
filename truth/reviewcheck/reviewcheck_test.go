@@ -184,3 +184,68 @@ func TestDepsPackagesNotTracked(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+func httpFact(file, path string) truth.Fact {
+	return truth.Fact{Class: truth.ClassHTTP, Key: "var:BADGES_API_URL", Attrs: map[string]string{"path": path},
+		Primary: truth.Evidence{File: file, Line: 3}, Sources: []string{"t"}}
+}
+
+func httpSnap(file string) *snapshot.Snapshot {
+	return &snapshot.Snapshot{Nodes: []snapshot.Node{
+		{ID: "service:external_system:d:badges-api", Layer: "service", Type: "external_system"},
+		{ID: "code:provider:d:analytics-api/src/analytics/badge-client", Layer: "code", Type: "provider", File: file},
+		{ID: "code:provider:d:other/thing", Layer: "code", Type: "provider", File: "other/thing.ts"},
+	}}
+}
+
+func TestHTTPFactExplainsCallEdges(t *testing.T) {
+	file := "analytics-api/src/analytics/badge.client.ts"
+	from := "code:provider:d:analytics-api/src/analytics/badge-client"
+	ep := "contract:endpoint:d:get:/badges/:userid"
+	hf := httpFact(file, "/badges/${userId}")
+	snap := httpSnap(file)
+	svc := "service:external_system:d:badges-api"
+	rv := &review.ReviewResult{Delta: &review.GraphDelta{Added: []review.Fact{
+		edgeFact(from, ep, "CALLS_ENDPOINT"),
+		nodeFact(ep, "contract", "endpoint"),
+		nodeFact(svc, "service", "external_system"),
+		edgeFact("code:provider:d:other/thing", "contract:endpoint:d:post:/zzz", "CALLS_ENDPOINT"),
+	}}}
+	// The same-path endpoint edge from another file is explained by path; use
+	// a different path to prove a foreign file stays unexplained.
+	res := Check(Input{Base: &truth.Report{}, Head: &truth.Report{Facts: []truth.Fact{hf}}, HeadSnap: snap, Review: rv})
+	if len(res.Unexplained) != 1 || res.Unexplained[0].ID != "code:provider:d:other/thing->contract:endpoint:d:post:/zzz:CALLS_ENDPOINT" {
+		t.Fatalf("%+v", res.Unexplained)
+	}
+}
+
+func TestHTTPFactRecallUnchanged(t *testing.T) {
+	file := "a/b.ts"
+	hf := httpFact(file, "/x/${id}")
+	snap := httpSnap(file)
+	with := Check(Input{Base: &truth.Report{}, Head: &truth.Report{Facts: []truth.Fact{hf}}, HeadSnap: snap,
+		Review: &review.ReviewResult{Delta: &review.GraphDelta{Added: []review.Fact{
+			nodeFact("service:external_system:d:badges-api", "service", "external_system")}}}})
+	if with.Reported+with.Missed+with.NotInGraph != 1 {
+		t.Fatalf("%+v", with)
+	}
+}
+
+func TestHTTPRemovedFactExplainsRemovedEdge(t *testing.T) {
+	file := "analytics-api/src/analytics/badge.client.ts"
+	from := "code:provider:d:analytics-api/src/analytics/badge-client"
+	rv := &review.ReviewResult{Delta: &review.GraphDelta{Removed: []review.Fact{
+		edgeFact(from, "service:external_system:d:badges-api", "CALLS_SERVICE")}}}
+	res := Check(Input{Base: &truth.Report{Facts: []truth.Fact{httpFact(file, "/badges/:id")}}, Head: &truth.Report{},
+		BaseSnap: httpSnap(file), Review: rv})
+	if len(res.Unexplained) != 0 {
+		t.Fatalf("%+v", res.Unexplained)
+	}
+	// Same edge reported as added is not explained by a removed fact.
+	rv2 := &review.ReviewResult{Delta: &review.GraphDelta{Added: rv.Delta.Removed}}
+	res = Check(Input{Base: &truth.Report{Facts: []truth.Fact{httpFact(file, "/badges/:id")}}, Head: &truth.Report{},
+		BaseSnap: httpSnap(file), HeadSnap: httpSnap(file), Review: rv2})
+	if len(res.Unexplained) != 1 {
+		t.Fatalf("%+v", res.Unexplained)
+	}
+}
