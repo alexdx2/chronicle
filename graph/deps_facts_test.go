@@ -632,3 +632,21 @@ func TestWriteDepsExtractions_LibrarySiblingDependsOnPackageNode(t *testing.T) {
 		t.Errorf("no PUBLISHES edge to %s", want)
 	}
 }
+
+func TestServiceNameOfPackage(t *testing.T) {
+	cases := map[[2]string]string{
+		{"maven", "com.corp:inventory-spring"}:   "inventory-spring",
+		{"gradle", "io.ktor:payments-kotlin"}:    "payments-kotlin",
+		{"go", "github.com/corp/shipping-go"}:    "shipping-go",
+		{"go", "github.com/corp/shipping-go/v2"}: "shipping-go",
+		{"composer", "corp/cms"}:                 "cms",
+		{"npm", "@corp/logger"}:                  "@corp/logger",
+		{"nuget", "Acme.Contracts"}:              "Acme.Contracts",
+		{"cargo", "geo-rust"}:                    "geo-rust",
+	}
+	for in, want := range cases {
+		if got := serviceNameOfPackage(in[0], in[1]); got != want {
+			t.Errorf("%v: got %q want %q", in, got, want)
+		}
+	}
+}

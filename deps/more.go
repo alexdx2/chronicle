@@ -103,9 +103,10 @@ func (php) parse(_, rel string, body []byte) (Report, error) {
 	}
 	add(doc.Require, "dependencies")
 	add(doc.RequireDev, "dev")
-	if doc.Name != "" && doc.Type != "project" {
+	if doc.Name != "" {
+		// type "project" is an application skeleton (Laravel, Symfony): it runs
 		ln, text := find(doc.Name)
-		r.Publishes = append(r.Publishes, Package{Name: Normalize("composer", doc.Name), Ecosystem: "composer", File: rel, Line: ln, Text: text})
+		r.Publishes = append(r.Publishes, Package{Name: Normalize("composer", doc.Name), Ecosystem: "composer", File: rel, Line: ln, Text: text, App: doc.Type == "project"})
 	}
 	return r, nil
 }

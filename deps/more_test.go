@@ -43,8 +43,11 @@ func TestComposerJSON(t *testing.T) {
 		t.Fatalf("publishes %v", r.Publishes)
 	}
 	app := parseOne(t, php{}, "composer.json", `{"name":"corp/app","type":"project","require":{"laravel/framework":"^11"}}`)
-	if len(app.Publishes) != 0 {
-		t.Fatalf("a project publishes nothing: %v", app.Publishes)
+	if len(app.Publishes) != 1 || !app.Publishes[0].App {
+		t.Fatalf("a project is an application: %v", app.Publishes)
+	}
+	if r.Publishes[0].App {
+		t.Fatalf("a library is not an application")
 	}
 }
 
@@ -88,7 +91,6 @@ func TestAppsByFramework(t *testing.T) {
 		mk("maven", "com.corp:inv", "org.springframework.boot:spring-boot-starter-web"),
 		mk("go", "github.com/corp/ship", "github.com/go-chi/chi/v5"),
 		mk("cargo", "geo", "axum"),
-		mk("composer", "corp/cms", "laravel/framework"),
 		mk("gem", "crm", "rails"),
 	}
 	for i, r := range yes {

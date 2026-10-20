@@ -46,7 +46,7 @@ func (g *Graph) WriteDepsExtractionsOpts(domainKey string, revisionID int64, rep
 		// no Web/Exe project) is a package only.
 		if p.App {
 			byFile[p.File] = append(byFile[p.File], Fact{
-				Kind: "declares_service", To: p.Name, Ecosystem: p.Ecosystem, FromType: "file",
+				Kind: "declares_service", To: serviceNameOfPackage(p.Ecosystem, p.Name), Ecosystem: p.Ecosystem, FromType: "file",
 				Line: p.Line, Text: p.Text, Origin: depsOrigin,
 			})
 		}
@@ -256,4 +256,41 @@ func (g *Graph) resolvePublishesPackage(domainKey string, revisionID int64, file
 	})
 	counts.evidence++
 	return counts
+}
+
+// serviceNameOfPackage is the name a deployed application goes by: the short
+// name of its package, not its registry coordinates. A Maven project
+// "com.corp:inventory-spring" runs as "inventory-spring", a Go module
+// "github.com/corp/shipping-go/v2" as "shipping-go", a Composer package
+// "corp/cms" as "cms". npm, NuGet, PyPI, Cargo and gem names are already short.
+func serviceNameOfPackage(ecosystem, name string) string {
+	switch ecosystem {
+	case "maven", "gradle":
+		if i := strings.LastIndex(name, ":"); i >= 0 {
+			return name[i+1:]
+		}
+	case "go":
+		parts := strings.Split(strings.TrimSuffix(name, "/"), "/")
+		for len(parts) > 1 && len(parts[len(parts)-1]) > 1 && parts[len(parts)-1][0] == 'v' && isAllDigits(parts[len(parts)-1][1:]) {
+			parts = parts[:len(parts)-1]
+		}
+		return parts[len(parts)-1]
+	case "composer":
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			return name[i+1:]
+		}
+	}
+	return name
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

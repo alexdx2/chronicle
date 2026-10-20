@@ -206,12 +206,11 @@ func joinRoot(root, rel string) string { return filepath.Join(root, filepath.Fro
 // manifest that declares one publishes a service. (npm and .NET read their own
 // signals in their parsers.)
 var appFrameworks = map[string][]string{
-	"python":   {"fastapi", "flask", "django", "starlette", "uvicorn", "gunicorn", "aiohttp", "tornado", "sanic", "quart", "falcon", "celery", "hypercorn", "daphne", "litestar"},
-	"maven":    {"org.springframework.boot:spring-boot-starter-web", "org.springframework.boot:spring-boot-starter-webflux", "org.springframework.boot:spring-boot-starter", "io.quarkus:quarkus-resteasy", "io.quarkus:quarkus-rest", "io.micronaut:micronaut-http-server-netty", "io.vertx:vertx-web", "io.ktor:ktor-server-core", "io.ktor:ktor-server-netty", "io.javalin:javalin", "org.http4k:http4k-core"},
-	"go":       {"github.com/go-chi/chi", "github.com/gin-gonic/gin", "github.com/labstack/echo", "github.com/gofiber/fiber", "github.com/gorilla/mux", "google.golang.org/grpc", "github.com/julienschmidt/httprouter"},
-	"cargo":    {"axum", "actix-web", "rocket", "warp", "tide", "poem", "tonic"},
-	"composer": {"laravel/framework", "symfony/framework-bundle", "slim/slim", "laminas/laminas-mvc"},
-	"gem":      {"rails", "sinatra", "hanami", "grape", "sidekiq", "puma", "padrino"},
+	"python": {"fastapi", "flask", "django", "starlette", "uvicorn", "gunicorn", "aiohttp", "tornado", "sanic", "quart", "falcon", "celery", "hypercorn", "daphne", "litestar"},
+	"maven":  {"org.springframework.boot:spring-boot-starter-web", "org.springframework.boot:spring-boot-starter-webflux", "org.springframework.boot:spring-boot-starter", "io.quarkus:quarkus-resteasy", "io.quarkus:quarkus-rest", "io.micronaut:micronaut-http-server-netty", "io.vertx:vertx-web", "io.ktor:ktor-server-core", "io.ktor:ktor-server-netty", "io.javalin:javalin", "org.http4k:http4k-core"},
+	"go":     {"github.com/go-chi/chi", "github.com/gin-gonic/gin", "github.com/labstack/echo", "github.com/gofiber/fiber", "github.com/gorilla/mux", "google.golang.org/grpc", "github.com/julienschmidt/httprouter"},
+	"cargo":  {"axum", "actix-web", "rocket", "warp", "tide", "poem", "tonic"},
+	"gem":    {"rails", "sinatra", "hanami", "grape", "sidekiq", "puma", "padrino"},
 }
 
 func markAppsByFramework(r *Report) {
