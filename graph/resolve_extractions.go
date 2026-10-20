@@ -580,7 +580,7 @@ func (g *Graph) resolveExtractionsInTx(domainKey string, revisionID int64, opts 
 	g.domainConfig = g.configHosts[domainKey]
 	g.srcCache = map[string]string{}
 	defer func() { g.domainConfig = nil; g.srcCache = nil }()
-	g.injectConfigUses(allFiles)
+	allFiles = g.injectConfigUses(allFiles, domainKey)
 
 	// Snapshot the packages this domain publishes itself (existing service
 	// nodes + every declares_service fact in this batch) before any
@@ -5709,15 +5709,19 @@ func callLine(f Fact) int {
 // `new NotifyClient(process.env.NOTIFY_SVC_URL)` is a call to the configured
 // service even though the file never issues a request itself. Only a value the
 // config table holds a host for becomes a fact.
-func (g *Graph) injectConfigUses(files []fileFacts) {
-	if g.domainConfig == nil || len(g.domainConfig.Uses) == 0 {
-		return
+func (g *Graph) injectConfigUses(files []fileFacts, domainKey string) []fileFacts {
+	if g.domainConfig == nil {
+		return files
 	}
 	idx := map[string]int{}
 	for i, f := range files {
 		idx[f.filePath] = i
 	}
 	seen := map[string]bool{}
+	files = g.injectRoutingConfig(files, idx, seen, domainKey)
+	if len(g.domainConfig.Uses) == 0 {
+		return files
+	}
 	for _, u := range g.domainConfig.Uses {
 		i, ok := idx[u.File]
 		if !ok {
@@ -5744,4 +5748,62 @@ func (g *Graph) injectConfigUses(files []fileFacts) {
 			Note: "configured address passed to " + u.Callee,
 		})
 	}
+	return files
+}
+
+// injectRoutingConfig turns addresses under a routing key (a reverse proxy's
+// destinations, a gateway's routes) into http_call facts of the file that
+// holds them: the service forwards traffic there although no code calls it.
+// The caller is the domain's one service when there is exactly one, else the
+// config file's name. Returns files with the config file appended when it was
+// not among them.
+func (g *Graph) injectRoutingConfig(files []fileFacts, idx map[string]int, seen map[string]bool, domainKey string) []fileFacts {
+	var owner string
+	if services, _ := g.store.ListNodes(store.NodeFilter{Domain: domainKey, NodeType: "service"}); len(services) == 1 {
+		owner = services[0].Name
+	}
+	for _, e := range g.domainConfig.Entries {
+		if !e.Routing || e.File == "" {
+			continue
+		}
+		k := e.File + "\x00" + e.Host
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		src, ok := g.readSourceForConfig(e.File)
+		if !ok {
+			continue
+		}
+		sub := e.Host
+		if u, err := url.Parse(e.URL); err == nil && u.Host != "" {
+			sub = u.Host
+		}
+		line := 0
+		for n, l := range strings.Split(src, "\n") {
+			if strings.Contains(strings.ToLower(l), strings.ToLower(sub)) {
+				line = n + 1
+				break
+			}
+		}
+		if line == 0 {
+			continue
+		}
+		i, ok := idx[e.File]
+		if !ok {
+			files = append(files, fileFacts{filePath: e.File})
+			i = len(files) - 1
+			idx[e.File] = i
+		}
+		from := owner
+		if from == "" {
+			from = inferNameFromPath(e.File)
+		}
+		files[i].facts = append(files[i].facts, Fact{
+			Kind: "http_call", From: from, Target: e.URL,
+			Origin: configUseOrigin, Line: line, Text: sub, Confidence: 1.0,
+			Note: "configured routing destination " + e.Key,
+		})
+	}
+	return files
 }

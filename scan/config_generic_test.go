@@ -106,3 +106,22 @@ func TestEnvDefaultsAcrossLanguages(t *testing.T) {
 		t.Errorf("a bare URL literal became an entry: %v", entriesOf(tab))
 	}
 }
+
+func TestTSConfigEnvFallbackAndJSFiles(t *testing.T) {
+	for _, f := range []string{"app.config.js", "environment.ts", "config/config.mjs", "env.config.cjs"} {
+		if !IsConfigFile(f) {
+			t.Errorf("%s should be a config file", f)
+		}
+	}
+	for _, f := range []string{"src/app.js", "jest.config.spec.js", "types.d.ts"} {
+		if IsConfigFile(f) {
+			t.Errorf("%s should not be a config file", f)
+		}
+	}
+	tab := &graph.ConfigHosts{}
+	parseTSConfig(tab, "app.config.js", []byte("export default {\n  extra: {\n    apiUrl: process.env.API_URL || 'http://gateway:8080',\n    other: process.env.X ?? \"http://beta:1\",\n    name: 'x',\n  },\n};\n"))
+	got := entriesOf(tab)
+	if got["extra.apiUrl"] != "gateway" || got["extra.other"] != "beta" || len(got) != 2 {
+		t.Fatalf("%v", got)
+	}
+}

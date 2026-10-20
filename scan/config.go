@@ -50,10 +50,17 @@ func IsConfigFile(p string) bool {
 }
 
 func isTSConfigFile(lower string) bool {
-	if !strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".d.ts") || strings.HasSuffix(lower, ".spec.ts") {
+	ext := path.Ext(lower)
+	switch ext {
+	case ".ts", ".js", ".mjs", ".cjs":
+	default:
 		return false
 	}
-	return strings.HasPrefix(lower, "environment") || strings.HasPrefix(lower, "config") || strings.HasSuffix(lower, ".config.ts")
+	if strings.HasSuffix(lower, ".d.ts") || strings.Contains(lower, ".spec.") || strings.Contains(lower, ".test.") {
+		return false
+	}
+	stem := strings.TrimSuffix(lower, ext)
+	return strings.HasPrefix(lower, "environment") || strings.HasPrefix(lower, "config") || strings.HasSuffix(stem, ".config")
 }
 
 // isRegistrationFile is a C# file that may register typed HTTP clients.
@@ -260,7 +267,7 @@ func composeDefault(v string) string {
 
 // tsToken is one meaningful token of a TS config object: a property holding an
 // absolute URL literal, a property opening an object, a bare brace, a closing brace.
-var tsToken = regexp.MustCompile("([A-Za-z_$][\\w$]*)[\"']?\\s*:\\s*[\"'`](https?://[^\"'`\\s]+)[\"'`]|([A-Za-z_$][\\w$]*)[\"']?\\s*:\\s*\\{|(\\{)|(\\})")
+var tsToken = regexp.MustCompile("([A-Za-z_$][\\w$]*)[\"']?\\s*:\\s*(?:[^,{}\"'`\\n]*?(?:\\|\\||\\?\\?)\\s*)?[\"'`](https?://[^\"'`\\s]+)[\"'`]|([A-Za-z_$][\\w$]*)[\"']?\\s*:\\s*\\{|(\\{)|(\\})")
 
 // parseTSConfig reads object properties with absolute URL literals in
 // environment*.ts / config*.ts. The key is the property path inside the

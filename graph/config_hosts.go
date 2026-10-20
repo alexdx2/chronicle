@@ -16,6 +16,10 @@ type ConfigEntry struct {
 	Host string // "pricing-api" (no port)
 	File string // repo-relative path of the config file
 	Dir  string // directory of File ("." for the root)
+	// Routing marks an address that sits under a routing key (reverse proxy
+	// destinations, gateway routes, upstreams): the configuration is itself the
+	// integration, no call site names it.
+	Routing bool
 }
 
 // ClientBinding says a typed HTTP client class (AddHttpClient<T>,
@@ -87,7 +91,7 @@ func (c *ConfigHosts) Add(key, rawURL, file string) {
 	if !ok || key == "" {
 		return
 	}
-	c.Entries = append(c.Entries, ConfigEntry{Key: key, URL: clean, Host: host, File: file, Dir: dirOf(file)})
+	c.Entries = append(c.Entries, ConfigEntry{Key: key, URL: clean, Host: host, File: file, Dir: dirOf(file), Routing: isRoutingKey(key)})
 }
 
 // AddClient records a typed client registration.
@@ -393,4 +397,18 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 		b.WriteString(strings.Join(names, ", ") + ". A call made through one of them with only a path (\"/prices/{sku}\") is an http_call with that path as the target.\n")
 	}
 	return b.String()
+}
+
+// routingKeyWords are config key parts that say the value is where traffic is
+// sent on behalf of callers: reverse proxies, API gateways, load balancers.
+var routingKeyWords = []string{"reverseproxy", "destinations", "upstream", "proxy_pass", "proxypass", "downstream", "gateway.routes", "gateway:routes", "backends"}
+
+func isRoutingKey(key string) bool {
+	k := strings.ToLower(key)
+	for _, w := range routingKeyWords {
+		if strings.Contains(k, w) {
+			return true
+		}
+	}
+	return false
 }

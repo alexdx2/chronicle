@@ -221,3 +221,34 @@ func TestConfigUse_ConstructorArgumentCallsTheConfiguredService(t *testing.T) {
 		t.Errorf("evidence = %+v err=%v, want it anchored at line 4", evs, err)
 	}
 }
+
+func TestRoutingConfig_ProxyDestinationIsACallWithoutCallSite(t *testing.T) {
+	writeTree(t, map[string]string{
+		"gateway/appsettings.json": "{\n  \"ReverseProxy\": {\n    \"Clusters\": {\n      \"billing\": { \"Destinations\": { \"d1\": { \"Address\": \"http://billing-api:8080\" } } }\n    }\n  },\n  \"Services\": { \"Docs\": \"http://wiki:80\" }\n}\n",
+	})
+	c := &ConfigHosts{}
+	c.Add("ReverseProxy:Clusters:billing:Destinations:d1:Address", "http://billing-api:8080", "gateway/appsettings.json")
+	c.Add("Services:Docs", "http://wiki:80", "gateway/appsettings.json") // not a routing key: no call
+	g, s, _ := resolveFiles(t, c, srcFacts{"gateway/Program.cs", []Fact{}})
+	got := activeEdgesOf(t, s, "CALLS_SERVICE")
+	if len(got) != 1 || !strings.HasSuffix(got[0], "-> service:external_system:demo:billing-api") {
+		t.Fatalf("CALLS_SERVICE = %v", got)
+	}
+	ev := callServiceEvidence(t, g, s, "billing-api", "gateway/appsettings.json")
+	if len(ev) == 0 || ev[0].FilePath != "gateway/appsettings.json" || ev[0].LineStart != 4 {
+		t.Errorf("evidence = %+v, want the Address line (4)", ev)
+	}
+}
+
+func TestIsRoutingKey(t *testing.T) {
+	for _, k := range []string{"ReverseProxy:Clusters:a:Destinations:d:Address", "upstream.backend.url", "spring.cloud.gateway.routes.0.uri", "nginx.proxy_pass"} {
+		if !isRoutingKey(k) {
+			t.Errorf("%s should be a routing key", k)
+		}
+	}
+	for _, k := range []string{"Services:PricingApi", "api.url", "NOTIFY_SVC_URL"} {
+		if isRoutingKey(k) {
+			t.Errorf("%s should not be a routing key", k)
+		}
+	}
+}
