@@ -1,7 +1,9 @@
 package scan
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"log"
 	"os"
 	"path"
@@ -46,19 +48,27 @@ func LoadScanConfigErr(root string) (*scancfg.Config, error) {
 		fleet = os.Getenv("CHRONICLE_SCAN_CONFIG_DIR")
 	}
 	proj := filepath.Join(root, filepath.FromSlash(ScanConfigFile))
-	stamp := fleet + "|"
-	if fi, err := os.Stat(proj); err == nil {
-		stamp += fi.ModTime().String() + "|" + string(rune(fi.Size()))
+	// The stamp is the content of the layers, not file times and sizes: a file
+	// rewritten with the same size inside one mtime tick must not be served stale.
+	h := sha256.New()
+	h.Write([]byte(fleet + "|"))
+	if b, err := os.ReadFile(proj); err == nil {
+		h.Write(b)
 	}
 	if fleet != "" {
 		if es, _ := os.ReadDir(fleet); len(es) > 0 {
 			for _, e := range es {
-				if fi, err := e.Info(); err == nil {
-					stamp += e.Name() + fi.ModTime().String()
+				if e.IsDir() {
+					continue
+				}
+				h.Write([]byte("\x00" + e.Name() + "\x00"))
+				if b, err := os.ReadFile(filepath.Join(fleet, e.Name())); err == nil {
+					h.Write(b)
 				}
 			}
 		}
 	}
+	stamp := hex.EncodeToString(h.Sum(nil))
 	if v, ok := scanCfgCache.Load(root); ok && v.(cachedScanCfg).stamp == stamp {
 		return v.(cachedScanCfg).cfg, nil
 	}

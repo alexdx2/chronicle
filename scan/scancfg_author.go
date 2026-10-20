@@ -118,6 +118,11 @@ func isLikelyNonSource(p string) bool {
 	return false
 }
 
+var (
+	provenanceLine = regexp.MustCompile(`(?m)^provenance:[^\n]*\n?`)
+	versionLine    = regexp.MustCompile(`(?m)^version:[^\n]*\n`)
+)
+
 func stripFences(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
@@ -201,10 +206,13 @@ func ScanConfigAuthor(ctx context.Context, b llm.Backend, root string, opts Auth
 		res.Refused = "no candidate that finds anything in " + fmt.Sprint(len(res.Rounds)) + " rounds"
 		return res, nil
 	}
-	// stamp provenance; the candidate must still parse as written
-	stamped := strings.Replace(best, "version: 1", "version: 1\nprovenance: llm:"+b.Model(), 1)
-	if !strings.Contains(stamped, "provenance:") {
-		stamped = "version: 1\nprovenance: llm:" + b.Model() + "\n" + strings.TrimPrefix(best, "version: 1\n")
+	// Stamp provenance. Whatever provenance the answer claims is replaced: a
+	// model cannot present its rules as a human's.
+	body := provenanceLine.ReplaceAllString(best, "")
+	stamp := "provenance: llm:" + b.Model() + "\n"
+	stamped := stamp + body
+	if loc := versionLine.FindStringIndex(body); loc != nil {
+		stamped = body[:loc[1]] + stamp + body[loc[1]:]
 	}
 	if _, err := scancfg.Parse([]byte(stamped), scancfg.SourceProject); err != nil {
 		res.Refused = "stamped candidate invalid: " + err.Error()

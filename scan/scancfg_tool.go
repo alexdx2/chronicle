@@ -319,6 +319,10 @@ type ExplainEntry struct {
 
 // ScanConfigExplain lists what the configuration in force yields in one file.
 func ScanConfigExplain(root, file string) []ExplainEntry {
+	file, ok := insideRepo(root, file)
+	if !ok {
+		return nil
+	}
 	cfg := LoadScanConfig(root)
 	t, _ := ReadConfigHostsWith(root, []string{file}, cfg)
 	var out []ExplainEntry
@@ -359,4 +363,24 @@ func ScanConfigSave(root, yamlText string, acceptRemoved bool) (ScanConfigSaveRe
 	}
 	res.Saved, res.Path = true, ScanConfigFile
 	return res, nil
+}
+
+// insideRepo cleans a repository-relative path that comes from a model and
+// refuses anything that leaves the repository: absolute paths, "..", and
+// symlinks that resolve outside of it.
+func insideRepo(root, file string) (string, bool) {
+	file = filepath.ToSlash(filepath.Clean(filepath.FromSlash(file)))
+	if file == "." || file == ".." || strings.HasPrefix(file, "../") || filepath.IsAbs(filepath.FromSlash(file)) {
+		return "", false
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", false
+	}
+	if real, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(file))); err == nil {
+		if rel, err := filepath.Rel(realRoot, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+	}
+	return file, true
 }
