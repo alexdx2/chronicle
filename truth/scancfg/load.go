@@ -98,8 +98,18 @@ func (c *Config) Validate() error {
 		}
 		for j, p := range r.Patterns {
 			pw := fmt.Sprintf("%s (%s).patterns[%d]", where, r.ID, j)
-			if !sides[p.Side] {
-				add("%s: side %q must be produce, consume or declare", pw, p.Side)
+			if !sides[p.Side] && p.Side != "define" {
+				add("%s: side %q must be produce, consume, declare or define", pw, p.Side)
+			}
+			if c, err := compileTemplate(p.Call); err == nil {
+				switch {
+				case p.Side == "define" && !(c.hasID && c.named):
+					add("%s: a define pattern needs {id} and {name}", pw)
+				case p.Side != "define" && c.hasID:
+					add("%s: {id} belongs in a define pattern; use {ref} to look an identifier up", pw)
+				case p.Side == "define" && c.hasRef:
+					add("%s: a define pattern cannot use {ref}", pw)
+				}
 			}
 			if !kinds[p.Kind] {
 				add("%s: kind %q is not a channel kind", pw, p.Kind)

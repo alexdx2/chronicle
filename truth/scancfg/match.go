@@ -20,15 +20,18 @@ type Resolver func(file, expr string) (name, via string, ok bool)
 
 // Compiled is a template turned into a regexp.
 type Compiled struct {
-	re    *regexp.Regexp
-	named bool
+	re     *regexp.Regexp
+	named  bool // {name}
+	hasID  bool // {id}: the identifier a definition binds
+	hasRef bool // {ref}: an identifier looked up in the definitions
 }
 
 var placeholder = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 const (
-	strLit  = `(?:"([^"\\\n]*)"|'([^'\\\n]*)'|` + "`([^`\\n]*)`" + `)`
-	exprLit = `([A-Za-z_@$][\w.$]*(?:\(\))?)`
+	strLit  = `(?:"(?P<s1>[^"\\\n]*)"|'(?P<s2>[^'\\\n]*)'|` + "`(?P<s3>[^`\\n]*)`" + `)`
+	exprLit = `(?P<e>[A-Za-z_@$][\w.$]*(?:\(\))?)`
+	identRe = `(?P<%s>[A-Za-z_]\w*)`
 	anyExpr = `(?:[^,()]|\((?:[^()]|\([^()]*\))*\))*?`
 )
 
@@ -42,7 +45,7 @@ func compileTemplate(tpl string) (*Compiled, error) {
 		return nil, fmt.Errorf("call template is empty")
 	}
 	var b strings.Builder
-	named := false
+	named, hasID, hasRef := false, false, false
 	last := 0
 	locs := placeholder.FindAllStringSubmatchIndex(tpl, -1)
 	lit := func(s string) {
@@ -76,6 +79,18 @@ func compileTemplate(tpl string) (*Compiled, error) {
 			}
 			named = true
 			b.WriteString(`(?:` + strLit + `|` + exprLit + `)`)
+		case w == "id":
+			if hasID {
+				return nil, fmt.Errorf("template %q uses {id} twice", tpl)
+			}
+			hasID = true
+			b.WriteString(fmt.Sprintf(identRe, "id"))
+		case w == "ref":
+			if hasRef {
+				return nil, fmt.Errorf("template %q uses {ref} twice", tpl)
+			}
+			hasRef = true
+			b.WriteString(fmt.Sprintf(identRe, "ref"))
 		case w == "any":
 			b.WriteString(anyExpr)
 		case w[0] >= 'A' && w[0] <= 'Z':
@@ -87,28 +102,37 @@ func compileTemplate(tpl string) (*Compiled, error) {
 		last = m[1]
 	}
 	lit(tpl[last:])
-	if !named {
-		return nil, fmt.Errorf("template %q has no {name}", tpl)
+	if !named && !hasRef {
+		return nil, fmt.Errorf("template %q has no {name} or {ref}", tpl)
+	}
+	if named && hasRef {
+		return nil, fmt.Errorf("template %q has both {name} and {ref}", tpl)
 	}
 	re, err := regexp.Compile(strings.TrimSuffix(b.String(), `\s*`))
 	if err != nil {
 		return nil, fmt.Errorf("template %q: %v", tpl, err)
 	}
-	return &Compiled{re: re, named: named}, nil
+	return &Compiled{re: re, named: named, hasID: hasID, hasRef: hasRef}, nil
 }
 
 // captured returns (literal, expr): exactly one is non-empty.
 func (c *Compiled) captured(m []int, code string) (lit, expr string, ok bool) {
-	// groups: 1..3 string literal forms, 4 expression
-	for g := 1; g <= 3; g++ {
-		if m[2*g] >= 0 {
+	for _, n := range []string{"s1", "s2", "s3"} {
+		if g := c.re.SubexpIndex(n); g >= 0 && m[2*g] >= 0 {
 			return code[m[2*g]:m[2*g+1]], "", true
 		}
 	}
-	if m[8] >= 0 {
-		return "", code[m[8]:m[9]], true
+	if g := c.re.SubexpIndex("e"); g >= 0 && m[2*g] >= 0 {
+		return "", code[m[2*g]:m[2*g+1]], true
 	}
 	return "", "", false
+}
+
+func (c *Compiled) group(m []int, code, name string) string {
+	if g := c.re.SubexpIndex(name); g >= 0 && m[2*g] >= 0 {
+		return code[m[2*g]:m[2*g+1]]
+	}
+	return ""
 }
 
 // globToRegexp: * within a segment, ** across segments, ? one char.
@@ -286,6 +310,40 @@ func ignored(names []string, name string) bool {
 // Run applies every rule to one file. file is the repo-relative slash path.
 // A rule that exceeds the per-file budget is cut off, never the scan.
 func (e *Engine) Run(file string, src []byte, resolve Resolver) []Fact {
+	return e.RunWith(file, src, resolve, nil)
+}
+
+// HasDefs reports whether any rule binds identifiers (define patterns).
+func (e *Engine) HasDefs() bool {
+	for _, r := range e.rules {
+		for _, p := range r.rule.Patterns {
+			if p.Side == "define" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Defs collects the definitions of one file: patterns with side "define" bind
+// the identifier {id} to the channel name {name} (`orders = app.topic("orders-v1")`).
+// Merge the results of all files and hand them to RunWith: {ref} patterns
+// (`@app.agent({ref})`, `{ref}.send(`) resolve their identifier through them,
+// across files.
+func (e *Engine) Defs(file string, src []byte, resolve Resolver) map[string]string {
+	out := map[string]string{}
+	for _, f := range e.scanFile(file, src, resolve, nil, true) {
+		out[f.Via] = f.Name // Via carries the bound identifier for define facts
+	}
+	return out
+}
+
+// RunWith is Run with the repository's definitions for {ref} patterns.
+func (e *Engine) RunWith(file string, src []byte, resolve Resolver, defs map[string]string) []Fact {
+	return e.scanFile(file, src, resolve, defs, false)
+}
+
+func (e *Engine) scanFile(file string, src []byte, resolve Resolver, defs map[string]string, defining bool) []Fact {
 	res := lex.Scan(src, lex.FamilyFor(file))
 	var sb strings.Builder
 	starts := make([]int, 0, len(res.Lines))
@@ -320,8 +378,19 @@ func (e *Engine) Run(file string, src []byte, resolve Resolver) []Fact {
 				return out
 			}
 			p := cr.rule.Patterns[i]
+			if (p.Side == "define") != defining {
+				continue
+			}
 			for _, m := range c.re.FindAllStringSubmatchIndex(code, -1) {
 				lit, expr, ok := c.captured(m, code)
+				if c.hasRef {
+					ref := c.group(m, code, "ref")
+					n, found := defs[ref]
+					if !found {
+						continue
+					}
+					lit, expr, ok = n, "", true
+				}
 				if !ok {
 					continue
 				}
@@ -350,9 +419,18 @@ func (e *Engine) Run(file string, src []byte, resolve Resolver) []Fact {
 					kind = "topic"
 				}
 				line := lineAt(m[0])
+				if c.hasRef {
+					via = "definition " + c.group(m, code, "ref")
+				}
 				f := Fact{Rule: cr.rule.ID, Source: cr.rule.Source, Reviewed: cr.rule.Reviewed, Kind: kind,
 					Side: p.Side, Transport: p.Transport, Name: name, File: file, Line: line,
 					Text: strings.TrimSpace(strings.Join(strings.Fields(code[m[0]:m[1]]), " ")), Via: via}
+				if defining {
+					f.Via = c.group(m, code, "id")
+					if f.Via == "" {
+						continue
+					}
+				}
 				k := f.Rule + "|" + f.Key() + "|" + fmt.Sprint(line)
 				if seen[k] {
 					continue

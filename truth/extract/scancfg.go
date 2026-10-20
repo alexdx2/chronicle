@@ -37,6 +37,32 @@ func scanConfigFacts(fsys fs.FS, rep *truth.Report) []truth.Fact {
 		return nil
 	}
 	var out []truth.Fact
+	defs := map[string]string{}
+	if eng.HasDefs() {
+		_ = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if p != "." && isExcluded(d.Name()) {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if silentSkip(d.Name()) || IsSamplePath(p) || !cfg.Scope.Allowed(p) {
+				return nil
+			}
+			if info, err := d.Info(); err != nil || info.Size() > MaxFile {
+				return nil
+			}
+			if src, err := fs.ReadFile(fsys, p); err == nil {
+				for id, n := range eng.Defs(p, src, nil) {
+					defs[id] = n
+				}
+			}
+			return nil
+		})
+	}
 	_ = fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -58,7 +84,7 @@ func scanConfigFacts(fsys fs.FS, rep *truth.Report) []truth.Fact {
 			return nil
 		}
 		var consts map[string]string
-		facts := eng.Run(p, src, func(_, expr string) (string, string, bool) {
+		facts := eng.RunWith(p, src, func(_, expr string) (string, string, bool) {
 			if consts == nil {
 				consts = scancfg.SameFileConstants(src)
 			}
@@ -68,7 +94,7 @@ func scanConfigFacts(fsys fs.FS, rep *truth.Report) []truth.Fact {
 			}
 			v, ok := consts[id]
 			return v, "constant " + id, ok
-		})
+		}, defs)
 		facts = append(facts, scancfg.RunDocuments(cfg, p, src)...)
 		for _, f := range facts {
 			n := channelName(f.Name)

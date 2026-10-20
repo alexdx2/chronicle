@@ -159,3 +159,38 @@ func TestGatesAndStrings(t *testing.T) {
 		t.Errorf("grouped go import: %v", r)
 	}
 }
+
+func TestDefinitionsAcrossFiles(t *testing.T) {
+	cfg := mustParse(t, `channels:
+  - id: faust
+    when: {contains: ["app.agent", "app.topic"]}
+    patterns:
+      - {call: "{id} = app.topic({name}", side: define}
+      - {call: "@app.agent({ref})", side: consume, transport: kafka}
+      - {call: "{ref}.send(", side: produce, transport: kafka}
+`, "")
+	e, err := NewEngine(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appSrc := []byte("orders = app.topic('orders-valid')\nflagged = app.topic('payments-flagged')\n")
+	agSrc := []byte("@app.agent(orders)\nasync def f(s):\n    await flagged.send(key=k)\n    await unknown.send(x)\n")
+	defs := e.Defs("app.py", appSrc, nil)
+	if defs["orders"] != "orders-valid" || len(defs) != 2 {
+		t.Fatalf("defs %v", defs)
+	}
+	if got := e.RunWith("app.py", appSrc, nil, defs); len(got) != 0 {
+		t.Errorf("a definition is not a fact: %v", got)
+	}
+	got := e.RunWith("agents.py", agSrc, nil, defs)
+	k := map[string]bool{}
+	for _, f := range got {
+		k[f.Key()] = true
+	}
+	if !k["topic:orders-valid#consume"] || !k["topic:payments-flagged#produce"] || len(got) != 2 {
+		t.Errorf("refs: %v", got)
+	}
+	if _, err := Parse([]byte("channels:\n  - id: x\n    patterns: [{call: '{id} = f({name}', side: produce}]\n"), SourceProject); err == nil {
+		t.Error("{id} outside define must be rejected")
+	}
+}

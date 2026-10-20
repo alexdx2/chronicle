@@ -240,6 +240,16 @@ func applyScanConfig(t *graph.ConfigHosts, root string, files []string, cfg *sca
 	sorted := append([]string(nil), files...)
 	sort.Strings(sorted)
 	var facts []scancfg.Fact
+	defs := map[string]string{}
+	if eng.HasDefs() {
+		for _, p := range sorted {
+			if body, ok := readSmall(root, p); ok && cfg.Scope.Allowed(p) && !looksBinary(body) {
+				for id, n := range eng.Defs(p, body, nil) {
+					defs[id] = n
+				}
+			}
+		}
+	}
 	for _, p := range sorted {
 		if !cfg.Scope.Allowed(p) {
 			continue
@@ -265,7 +275,7 @@ func applyScanConfig(t *graph.ConfigHosts, root string, files []string, cfg *sca
 			}
 			return "", "", false
 		}
-		facts = append(facts, eng.Run(p, body, resolve)...)
+		facts = append(facts, eng.RunWith(p, body, resolve, defs)...)
 		facts = append(facts, scancfg.RunDocuments(cfg, p, body)...)
 		if clientEng != nil {
 			for _, c := range clientEng.RunClients(p, body) {
