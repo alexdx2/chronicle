@@ -8,11 +8,11 @@ import (
 // Argument parsing shared by the cloud messaging rules (Service Bus, Pub/Sub,
 // CDK). The lexer already blanked comments; strings are still in Code.
 
-// splitCallArgs returns the top-level arguments of the call whose opening
+// splitCloudCallArgs returns the top-level arguments of the call whose opening
 // parenthesis is text[open]. ok is false when the call does not close inside
 // text. Brackets and quotes are respected; an empty trailing argument (a
 // trailing comma) is dropped.
-func splitCallArgs(text string, open int) (args []string, ok bool) {
+func splitCloudCallArgs(text string, open int) (args []string, ok bool) {
 	depth, start, quote := 0, open+1, byte(0)
 	for i := open; i < len(text); i++ {
 		c := text[i]
@@ -120,7 +120,7 @@ func findCalls(f *FileCtx, re *regexp.Regexp, window int) []foundCall {
 		for _, loc := range re.FindAllStringSubmatchIndex(l.Code, -1) {
 			text := codeWindow(f.Lines, i, window)
 			open := loc[1] - 1
-			args, ok := splitCallArgs(text, open)
+			args, ok := splitCloudCallArgs(text, open)
 			c := foundCall{idx: i, text: text, open: open, args: parseArgs(args), closed: ok}
 			c.name = l.Code[loc[2]:loc[3]]
 			if len(loc) >= 6 && loc[4] >= 0 {

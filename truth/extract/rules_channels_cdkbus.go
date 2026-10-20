@@ -61,7 +61,7 @@ func objectPropLiteral(obj, key string) string {
 	if len(obj) < 2 || obj[0] != '{' {
 		return ""
 	}
-	args, ok := splitCallArgs("("+obj[1:len(obj)-1]+")", 0)
+	args, ok := splitCloudCallArgs("("+obj[1:len(obj)-1]+")", 0)
 	if !ok {
 		return ""
 	}

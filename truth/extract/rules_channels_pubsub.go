@@ -69,7 +69,7 @@ func psResolve(expr, window string, vars map[string]psPath, line int) (psPath, b
 		if i := strings.Index(window, m[0]); i >= 0 {
 			open = i + len(m[0]) - 1
 		}
-		args, ok := splitCallArgs(window, open)
+		args, ok := splitCloudCallArgs(window, open)
 		if !ok {
 			return psPath{}, false
 		}
