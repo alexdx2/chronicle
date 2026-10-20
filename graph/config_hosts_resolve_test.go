@@ -349,3 +349,26 @@ func TestCanonChannelName(t *testing.T) {
 		}
 	}
 }
+
+func TestProduces_ConfigKeyHoldingAnSQSQueueURLIsTheQueue(t *testing.T) {
+	writeTree(t, map[string]string{
+		"legacy/Web.config":        "<appSettings><add key=\"OrdersQueueUrl\" value=\"https://sqs.eu-central-1.amazonaws.com/123456789012/orders-inbound\" /></appSettings>\n",
+		"legacy/Services/Queue.cs": "class Q { void F() { var url = ConfigurationManager.AppSettings[\"OrdersQueueUrl\"]; sqs.SendMessageAsync(new SendMessageRequest { QueueUrl = url }); } }\n",
+	})
+	c := &ConfigHosts{}
+	c.Add("OrdersQueueUrl", "https://sqs.eu-central-1.amazonaws.com/123456789012/orders-inbound", "legacy/Web.config")
+	g, s, _ := resolveFiles(t, c, srcFacts{"legacy/Services/Queue.cs", []Fact{{Kind: "produces", From: "Q", FromType: "service", To: "OrdersQueueUrl"}}})
+	if _, err := g.VerifyFileEvidence("legacy/Services/Queue.cs", 1, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES_TOPIC"})
+	if len(edges) != 1 || !strings.HasSuffix(edges[0].ToNodeKey, ":orders-inbound") || !edges[0].Active {
+		t.Fatalf("edges = %+v", edges)
+	}
+	// a plain topic name is untouched
+	_, s2, _ := resolveFiles(t, c, srcFacts{"legacy/Services/Queue.cs", []Fact{{Kind: "produces", From: "Q", FromType: "service", To: "order-placed"}}})
+	e2, _ := s2.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES_TOPIC"})
+	if len(e2) != 1 || !strings.HasSuffix(e2[0].ToNodeKey, ":order-placed") {
+		t.Fatalf("plain topic: %+v", e2)
+	}
+}

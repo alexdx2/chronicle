@@ -1966,7 +1966,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
-		fact.To = canonChannelName(fact.To)
+		rawTo := fact.To
+		fact.To = g.channelNameFor(filePath, fact.To)
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
@@ -1983,7 +1984,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 
 		assertion, _ := json.Marshal(map[string]any{
-			"substring": fact.To,
+			"substring": evidenceSubstring(rawTo, fact.To),
 		})
 		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
@@ -2015,7 +2016,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
-		fact.To = canonChannelName(fact.To)
+		rawTo := fact.To
+		fact.To = g.channelNameFor(filePath, fact.To)
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
@@ -2033,7 +2035,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 
 		assertion, _ := json.Marshal(map[string]any{
-			"substring": fact.To,
+			"substring": evidenceSubstring(rawTo, fact.To),
 		})
 		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
@@ -5837,4 +5839,30 @@ func canonChannelName(to string) string {
 		}
 	}
 	return to
+}
+
+// channelNameFor is the name a topic or queue goes by: a config key that holds
+// an SQS queue URL stands for the queue, an SQS URL or ARN for its last
+// segment.
+func (g *Graph) channelNameFor(filePath, to string) string {
+	if g.domainConfig != nil {
+		if _, key, e, ok := g.domainConfig.ResolveSymbol(filePath, strings.TrimSpace(to)); ok && e.Queue != "" {
+			return e.Queue
+		} else if key == "" {
+			if be, bok := g.domainConfig.lookup(filePath, strings.TrimSpace(to)); bok && be.Queue != "" {
+				return be.Queue
+			}
+		}
+	}
+	return canonChannelName(to)
+}
+
+// evidenceSubstring is what the file must contain to vouch for a channel edge:
+// the target as the model read it, which is in the source, unless the
+// canonical name is itself written there (a queue URL contains its name).
+func evidenceSubstring(raw, canon string) string {
+	if strings.Contains(raw, canon) {
+		return canon
+	}
+	return strings.TrimSpace(raw)
 }
