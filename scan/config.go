@@ -93,6 +93,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	tooBig := 0
 	var namedRegs []namedReg
 	var namedUses []namedUse
+	var useFiles []string // sources a client may be built in; read again once the table is complete
 	defer func() {
 		if tooBig > 0 {
 			log.Printf("scan: config: skipped %d files larger than %d bytes", tooBig, maxConfigBytes)
@@ -121,6 +122,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		}
 		if envSrc || reg || src {
 			parseEnvDefaults(t, p, body) // the default beside an env read, any language
+			useFiles = append(useFiles, p)
 		}
 		if envSrc {
 			continue // an env-default source is not a config file: no coverage row
@@ -155,6 +157,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		parsed = append(parsed, p)
 	}
 	joinNamedClients(t, namedRegs, namedUses)
+	parseKeyLiteralUses(t, root, useFiles)
 	return t, parsed
 }
 

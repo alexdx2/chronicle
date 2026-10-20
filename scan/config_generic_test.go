@@ -1,6 +1,8 @@
 package scan
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/graph"
@@ -123,5 +125,39 @@ func TestTSConfigEnvFallbackAndJSFiles(t *testing.T) {
 	got := entriesOf(tab)
 	if got["extra.apiUrl"] != "gateway" || got["extra.other"] != "beta" || len(got) != 2 {
 		t.Fatalf("%v", got)
+	}
+}
+
+func TestKeyLiteralUsesAcrossLanguages(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/main/resources/application.conf", "billing {\n  url = \"http://billing-api:8080\"\n}\n")
+	write("src/Application.kt", "fun main() {\n    val billing = BillingClient(config.property(\"billing.url\").getString())\n    val plain = Logger(config.property(\"billing.url\").getString())\n}\n")
+	write("app/catalog.py", "import os\nclient = CatalogClient(os.getenv(\"CATALOG_API_URL\"))\n# other = CatalogClient(os.getenv(\"CATALOG_API_URL\"))\n")
+	write("app/settings.py", "CATALOG = os.getenv(\"CATALOG_API_URL\", \"http://catalog-api:3000\")\nx = CatalogClient(os.getenv(\"CATALOG_API_URL\"))\n")
+	write("src/lib.rs", "let c = CatalogClient::new(std::env::var(\"CATALOG_API_URL\").unwrap());\n")
+	files := []string{"src/main/resources/application.conf", "src/Application.kt", "app/catalog.py", "app/settings.py", "src/lib.rs"}
+	tab, _ := ReadConfigHosts(root, files)
+	got := map[string]int{}
+	for _, u := range tab.Uses {
+		got[u.File+":"+u.Callee]++
+	}
+	want := map[string]int{"src/Application.kt:BillingClient": 1, "app/catalog.py:CatalogClient": 1, "src/lib.rs:CatalogClient": 1}
+	for k, n := range want {
+		if got[k] != n {
+			t.Errorf("uses = %v, want %s", got, k)
+		}
+	}
+	if got["src/Application.kt:Logger"] != 0 {
+		t.Errorf("a non-client callee became a use: %v", got)
+	}
+	if got["app/settings.py:CatalogClient"] != 0 {
+		t.Errorf("the file that defines the default is never the use: %v", got)
 	}
 }
