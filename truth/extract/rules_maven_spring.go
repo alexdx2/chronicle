@@ -118,7 +118,7 @@ func applyManifestMaven(f *FileCtx) []truth.Fact {
 // packaging is not pom/jar-library.
 func applyMavenService(f *FileCtx) []truth.Fact {
 	ms := scanPom(f)
-	if !ms.haveSvcArt || !strings.Contains(string(f.Raw), "spring-boot") {
+	if !ms.haveSvcArt || !pomIsApplication(string(f.Raw)) {
 		return nil
 	}
 	if strings.Contains(string(f.Raw), "<packaging>pom</packaging>") {
@@ -215,4 +215,16 @@ func pomPath(stack []string) string {
 		stack = stack[1:]
 	}
 	return strings.Join(stack, "/")
+}
+
+// pomIsApplication: a pom builds something that runs when it uses an
+// application framework (Spring Boot, Kafka Streams, Quarkus, Micronaut, Vert.x,
+// Ktor, Javalin) or names a main class.
+func pomIsApplication(raw string) bool {
+	for _, marker := range []string{"spring-boot", "kafka-streams", "io.quarkus", "micronaut", "io.vertx", "ktor-server", "io.javalin", "<mainClass>", "<main.class>"} {
+		if strings.Contains(raw, marker) {
+			return true
+		}
+	}
+	return false
 }

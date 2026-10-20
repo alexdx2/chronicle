@@ -65,6 +65,9 @@ func TestAmqpChannelRules(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var got []string
 			for _, f := range channelFacts(t, c.vpath, c.disk) {
+				if len(f.Sources) == 1 && strings.HasPrefix(f.Sources[0], "redis") {
+					continue // the fixture holds a redis.publish on purpose: the amqp rule must ignore it, the redis rule may read it
+				}
 				if len(f.Sources) != 1 || f.Primary.Line == 0 || f.Primary.Text == "" || f.Primary.File != c.vpath {
 					t.Errorf("%s: bad evidence/sources %+v %v", f.Key, f.Primary, f.Sources)
 				}

@@ -84,3 +84,18 @@ func TestSpringConfigURLs(t *testing.T) {
 		t.Fatalf("properties http = %v", got)
 	}
 }
+
+func TestAmqpExchangeNamedByAConfigObjectProperty(t *testing.T) {
+	files := map[string]string{
+		"src/config.ts": "export const config = {\n  eventsExchange: 'orders.events',\n};\n",
+		"src/amqp.ts":   "import amqp from 'amqplib';\nimport { config } from './config';\nexport async function setup(ch: amqp.Channel) {\n  await ch.assertExchange(config.eventsExchange, 'topic');\n}\n",
+	}
+	got := strings.Join(extractKeys(t, files, "channels"), ",")
+	if got != "exchange:orders.events#declare" {
+		t.Fatalf("channels = %s", got)
+	}
+	files["src/config.ts"] = "export const config = {\n  eventsExchange: compute(),\n};\n"
+	if got := extractKeys(t, files, "channels"); len(got) != 0 {
+		t.Fatalf("an unresolvable name gave a fact: %v", got)
+	}
+}

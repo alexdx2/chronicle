@@ -105,6 +105,10 @@ func jsEval(f *FileCtx, ct *codeText, expr string, depth int, seen map[string]bo
 		}
 		return cfgVal{}, false
 	}
+	if lit, ok := quotedLit(expr); ok && depth > 0 {
+		// a name defined elsewhere as a plain string (eventsExchange: 'orders.events')
+		return cfgVal{val: lit}, true
+	}
 	if !jsChain.MatchString(expr) {
 		return cfgVal{}, false
 	}
