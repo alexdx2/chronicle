@@ -1,0 +1,15 @@
+import pika
+
+conn = pika.BlockingConnection(pika.ConnectionParameters("localhost"))
+channel = conn.channel()
+channel.exchange_declare(exchange="shop.events", exchange_type="topic")
+channel.queue_declare(queue="shop.mail", durable=True)
+channel.queue_bind("shop.mail", "shop.events", routing_key="order.#")
+channel.basic_consume(queue="shop.mail", on_message_callback=cb)
+channel.basic_consume("bare.queue", cb)
+channel.basic_publish(exchange="shop.out", routing_key="k", body=b"x")
+channel.basic_publish(exchange="", routing_key="py.direct", body=b"x")
+# channel.queue_declare(queue="commented")
+print("channel.queue_declare(queue='in-a-string')")
+channel.queue_declare(queue=QUEUE_NAME)
+result = channel.queue_declare(queue="", exclusive=True)
