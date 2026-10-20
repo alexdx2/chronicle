@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/alexdx2/chronicle-core/graph"
+	"github.com/alexdx2/chronicle-core/llm"
 	"github.com/alexdx2/chronicle-core/mcpserver"
 	"github.com/alexdx2/chronicle-core/scan"
 )
@@ -96,6 +98,29 @@ func newScanConfigCmd() *cobra.Command {
 	for _, c := range []*cobra.Command{validate, dry, save} {
 		c.Flags().StringVar(&file, "file", "", "candidate scan.yaml (default: stdin)")
 	}
-	cmd.AddCommand(get, validate, dry, explain, save)
+	var model string
+	var rounds int
+	author := &cobra.Command{Use: "author", Short: "Ask a model to write the project layer; each answer is dry-run and corrected up to --rounds times", RunE: func(c *cobra.Command, _ []string) error {
+		if model == "" {
+			model = os.Getenv("CHRONICLE_MODEL")
+		}
+		if model == "" {
+			model = defaultExtractModel
+		}
+		b, err := llm.Open(model, os.Getenv)
+		if errors.Is(err, llm.ErrNoKey) {
+			_ = out(map[string]any{"error": err.Error(), "skipped": true})
+			os.Exit(3)
+		}
+		if err != nil {
+			return err
+		}
+		res, err := scan.ScanConfigAuthor(c.Context(), b, graph.ProjectRoot(), scan.AuthorOptions{MaxRounds: rounds})
+		_ = out(res)
+		return err
+	}}
+	author.Flags().StringVar(&model, "model", "", "provider:model (default $CHRONICLE_MODEL)")
+	author.Flags().IntVar(&rounds, "rounds", 3, "dry-run/correction rounds")
+	cmd.AddCommand(get, validate, dry, explain, save, author)
 	return cmd
 }

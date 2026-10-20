@@ -1,9 +1,13 @@
 package scan
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/alexdx2/chronicle-core/llm"
 )
 
 func writeTree(t *testing.T, files map[string]string) string {
@@ -116,5 +120,57 @@ func TestScanConfigTools(t *testing.T) {
 	}
 	if ex := ScanConfigExplain(writeTree(t, map[string]string{"a.py": "app.topic('x')\n", ".depbot/scan.yaml": cand}), "a.py"); len(ex) != 1 {
 		t.Fatalf("explain: %+v", ex)
+	}
+}
+
+type seqBackend struct {
+	answers []string
+	n       int
+	users   []string
+}
+
+func (s *seqBackend) Name() string  { return "seq" }
+func (s *seqBackend) Model() string { return "seq-model" }
+func (s *seqBackend) Complete(_ context.Context, req llm.Request) (llm.Response, error) {
+	s.users = append(s.users, req.User)
+	a := s.answers[min(s.n, len(s.answers)-1)]
+	s.n++
+	return llm.Response{Text: a}, nil
+}
+
+func TestScanConfigAuthor(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"svc/app.py":          "import mybus\nbus.announce('orders.v1')\nbus.announce('refunds.v1')\n",
+		"truth-expected.json": `{"channels":[{"Key":"topic:orders.v1#produce"},{"Key":"topic:refunds.v1#produce"}]}`,
+	})
+	b := &seqBackend{answers: []string{
+		"channels: [{id: Bad}]",
+		"```yaml\nversion: 1\nchannels:\n  - id: mybus\n    when: {imports: [mybus]}\n    patterns: [{call: 'bus.announce({name}', side: produce}]\n```",
+	}}
+	res, err := ScanConfigAuthor(context.Background(), b, root, AuthorOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Saved || len(res.Rounds) != 2 || res.Rounds[0].Valid || !res.Rounds[1].Valid || res.Rounds[1].Missing != 0 {
+		t.Fatalf("%+v", res)
+	}
+	if !strings.Contains(b.users[1], "invalid") {
+		t.Error("the error must be fed back")
+	}
+	if !strings.Contains(b.users[0], "bus.announce") {
+		t.Error("evidence snippets must reach the model")
+	}
+	cfg := LoadScanConfig(root)
+	var src string
+	for _, c := range cfg.Channels {
+		if c.ID == "mybus" {
+			src = c.Source
+			if c.Reviewed {
+				t.Error("a model-written rule must be unreviewed")
+			}
+		}
+	}
+	if src != "llm:seq-model" {
+		t.Errorf("provenance %q", src)
 	}
 }
