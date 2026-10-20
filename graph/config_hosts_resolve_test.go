@@ -312,3 +312,22 @@ func TestClassifyCallBase_ViteEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyCallBase_SpringPlaceholderKeys(t *testing.T) {
+	for in, want := range map[string]string{
+		"${services.catalog.url}":            "services.catalog.url",
+		"${services.catalog.url:http://x:1}": "services.catalog.url",
+		"${catalog-api.base-url}/stock":      "",
+	} {
+		kind, key := ClassifyCallBase(in)
+		if want == "" {
+			continue
+		}
+		if kind != SymConfig || key != want {
+			t.Errorf("%s -> %v %q, want config %q", in, kind, key, want)
+		}
+	}
+	if kind, _ := ClassifyCallBase("${baseUrl}"); kind == SymConfig {
+		t.Errorf("a local variable is not a property key")
+	}
+}

@@ -199,6 +199,7 @@ var (
 	envAccessRe = regexp.MustCompile(`(?:process\.env\.|import\.meta\.env\.|(?:^|[^A-Za-z.])env\.|ENV\.)([A-Za-z_][A-Za-z0-9_]*)|(?:process\.env|import\.meta\.env|os\.environ|ENV)\s*\[\s*["']([^"']+)["']\s*\]|(?:os\.getenv|Environment\.GetEnvironmentVariable|System\.getenv)\s*\(\s*["']([^"']+)["']`)
 	// environment.apiUrl, config.api.url, settings.x (a TS/JS config object)
 	objPathRe    = regexp.MustCompile(`^(?:this\.)?(?:[A-Za-z_$][\w$]*\.)*?(?:environment|environments|config|settings|appsettings|appConfig|AppConfig|extra)\.([A-Za-z_][A-Za-z0-9_.]*)$`)
+	dottedKeyRe  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_\-]*(?:\.[A-Za-z0-9_\-]+)+$`)
 	lowerIdentRe = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
 	// Spring / compose style: ${VAR}, ${VAR:-default}
 	placeholderRe = regexp.MustCompile(`^\$\{\s*([^}:]+?)\s*(?::-[^}]*)?\}$`)
@@ -292,6 +293,17 @@ func ClassifyCallBase(base string) (kind SymbolKind, key string) {
 	}
 	if m := placeholderRe.FindStringSubmatch(b); m != nil && envVarRe.MatchString(m[1]) {
 		return SymEnv, m[1]
+	}
+	if wrapped {
+		// Spring/Quarkus style ${catalog.url} and ${catalog.url:http://x}: a dotted
+		// property key, with or without a default
+		k := inner
+		if i := strings.Index(k, ":"); i > 0 {
+			k = k[:i]
+		}
+		if dottedKeyRe.MatchString(k) {
+			return SymConfig, k
+		}
 	}
 	if wrapped && envVarRe.MatchString(inner) {
 		return SymEnv, inner
