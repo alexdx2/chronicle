@@ -279,3 +279,23 @@ func TestConfigUse_SymbolDiffersFromTheAnchorText(t *testing.T) {
 	ev := callServiceEvidence(t, g, s, "billing-api", code, "w/appsettings.json")
 	wantTwoValid(t, ev, code, `CreateClient(\"billing\")`, "w/appsettings.json")
 }
+
+func TestClassifyCallBase_ConfigObjectPaths(t *testing.T) {
+	for in, want := range map[string]string{
+		"Constants.expoConfig.extra.apiUrl":   "apiUrl",
+		"Constants.expoConfig?.extra?.apiUrl": "apiUrl",
+		"environment.apiUrl":                  "apiUrl",
+		"this.config.api.url":                 "api.url",
+		"Config.default.settings.catalog.url": "catalog.url",
+	} {
+		kind, key := ClassifyCallBase(in)
+		if kind != SymConfig || key != want {
+			t.Errorf("%s -> %v %q, want config %q", in, kind, key, want)
+		}
+	}
+	for _, in := range []string{"user.name", "response.data.url", "items.length"} {
+		if kind, _ := ClassifyCallBase(in); kind == SymConfig {
+			t.Errorf("%s must not be a config symbol", in)
+		}
+	}
+}

@@ -198,7 +198,7 @@ var (
 	// process.env.X, process.env['X'], env.X, os.environ['X'], os.getenv('X'), Environment.GetEnvironmentVariable("X")
 	envAccessRe = regexp.MustCompile(`(?:process\.env\.|(?:^|[^A-Za-z.])env\.|ENV\.)([A-Za-z_][A-Za-z0-9_]*)|(?:process\.env|os\.environ|ENV)\s*\[\s*["']([^"']+)["']\s*\]|(?:os\.getenv|Environment\.GetEnvironmentVariable|System\.getenv)\s*\(\s*["']([^"']+)["']`)
 	// environment.apiUrl, config.api.url, settings.x (a TS/JS config object)
-	objPathRe    = regexp.MustCompile(`^(?:this\.)?(?:environment|environments|config|settings|appsettings|appConfig|AppConfig)\.([A-Za-z_][A-Za-z0-9_.]*)$`)
+	objPathRe    = regexp.MustCompile(`^(?:this\.)?(?:[A-Za-z_$][\w$]*\.)*?(?:environment|environments|config|settings|appsettings|appConfig|AppConfig|extra)\.([A-Za-z_][A-Za-z0-9_.]*)$`)
 	lowerIdentRe = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
 	// Spring / compose style: ${VAR}, ${VAR:-default}
 	placeholderRe = regexp.MustCompile(`^\$\{\s*([^}:]+?)\s*(?::-[^}]*)?\}$`)
@@ -287,7 +287,7 @@ func ClassifyCallBase(base string) (kind SymbolKind, key string) {
 		}
 		return SymUnknown, ""
 	}
-	if m := objPathRe.FindStringSubmatch(inner); m != nil {
+	if m := objPathRe.FindStringSubmatch(strings.ReplaceAll(inner, "?.", ".")); m != nil {
 		return SymConfig, m[1]
 	}
 	if m := placeholderRe.FindStringSubmatch(b); m != nil && envVarRe.MatchString(m[1]) {
