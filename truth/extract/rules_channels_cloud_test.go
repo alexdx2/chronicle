@@ -36,24 +36,24 @@ func TestChannelCloudRules(t *testing.T) {
 		want              []string
 	}{
 		{"servicebus dotnet", "src/Bus.cs", "ServiceBus.cs", []string{
-			"servicebus | topic:topic-a#consume", "servicebus | subscription:sub-a#consume",
+			"servicebus | topic:topic-a#consume",
 			"servicebus | queue:queue-b#consume", "servicebus | queue:queue-c#consume",
-			"servicebus | topic:topic-d#consume", "servicebus | subscription:sub-d#consume",
+			"servicebus | topic:topic-d#consume",
 			"servicebus | queue:queue-e#consume",
-			"servicebus | topic:topic-f#consume", "servicebus | subscription:sub-f#consume",
+			"servicebus | topic:topic-f#consume",
 			"servicebus | queue:queue-g#produce", "servicebus | topic:topic-h#produce",
 		}},
 		{"servicebus dotnet test file", "tests/BusTests.cs", "ServiceBus.cs", nil},
 		{"servicebus lookalike without the sdk", "src/Other.cs", "servicebus_other.cs", nil},
 		{"servicebus js", "src/bus.ts", "servicebus.ts", []string{
 			"servicebus | queue:js-queue#consume",
-			"servicebus | topic:js-topic#consume", "servicebus | subscription:js-sub#consume",
+			"servicebus | topic:js-topic#consume",
 			"servicebus | queue:js-out#produce",
 		}},
 		{"servicebus python", "app/bus.py", "servicebus.py", []string{
 			"servicebus | queue:py-q-in#consume", "servicebus | queue:py-q-pos#consume",
-			"servicebus | topic:py-topic#consume", "servicebus | subscription:py-sub#consume",
-			"servicebus | topic:py-topic2#consume", "servicebus | subscription:py-sub2#consume",
+			"servicebus | topic:py-topic#consume",
+			"servicebus | topic:py-topic2#consume",
 			"servicebus | topic:py-topic-out#produce", "servicebus | queue:py-q-out#produce",
 		}},
 		{"pubsub python", "app/ps.py", "pubsub.py", []string{

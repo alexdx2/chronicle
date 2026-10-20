@@ -9,7 +9,7 @@ import (
 
 // Azure Service Bus clients: .NET Azure.Messaging.ServiceBus, JS
 // @azure/service-bus and Python azure-servicebus. A receiver or processor on
-// (topic, subscription) consumes the topic and the subscription; on a single
+// (topic, subscription) consumes the topic (the subscription is how it listens, not a channel of its own); on a single
 // name it consumes a queue. A sender produces; the SDK does not say whether
 // the target is a queue or a topic, so a sender created with a plain name is a
 // queue unless the call names it (topicName: / get_topic_sender).
@@ -57,7 +57,6 @@ func applyServiceBus(f *FileCtx) []truth.Fact {
 			case "get_subscription_receiver":
 				if t, s := lit(c, 0, "topic_name"), lit(c, 1, "subscription_name"); t != "" && s != "" {
 					emit(c, "topic", t, "consume")
-					emit(c, "subscription", s, "consume")
 				}
 			}
 		}
@@ -82,7 +81,6 @@ func applyServiceBus(f *FileCtx) []truth.Fact {
 				if t := lit(c, -1, "topicName"); t != "" {
 					if s := lit(c, 1, "subscriptionName"); s != "" {
 						emit(c, "topic", t, "consume")
-						emit(c, "subscription", s, "consume")
 					}
 					continue
 				}
@@ -97,7 +95,6 @@ func applyServiceBus(f *FileCtx) []truth.Fact {
 				second, has := c.args.arg(1)
 				if s := plainLiteral(second); has && s != "" {
 					emit(c, "topic", first, "consume")
-					emit(c, "subscription", s, "consume")
 				} else if !has || sbOptionsArg(second) {
 					emit(c, "queue", first, "consume")
 				}

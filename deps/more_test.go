@@ -1,6 +1,10 @@
 package deps
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func parseOne(t *testing.T, p parser, rel, body string) Report {
 	t.Helper()
@@ -119,5 +123,32 @@ func TestLegacyWebCsprojIsApp(t *testing.T) {
 	lib := parseOne(t, nuget{}, "Lib.csproj", `<Project><PropertyGroup><AssemblyName>Lib</AssemblyName></PropertyGroup></Project>`)
 	if lib.Publishes[0].App {
 		t.Fatal("a plain library is an app")
+	}
+}
+
+func TestAppsByDockerfile(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("app/pyproject.toml", "[project]\nname = \"fraud\"\nversion = \"1\"\ndependencies = [\"requests\"]\n")
+	write("app/Dockerfile", "FROM python:3.12\nCMD [\"python\", \"-m\", \"fraud\"]\n")
+	write("lib/pyproject.toml", "[project]\nname = \"toolkit\"\nversion = \"1\"\n")
+	write("lib/Dockerfile", "FROM python:3.12\nRUN pip install .\n")
+	files := []string{"app/pyproject.toml", "app/Dockerfile", "lib/pyproject.toml", "lib/Dockerfile"}
+	rep, err := Scan(root, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apps := map[string]bool{}
+	for _, p := range rep.Publishes {
+		apps[p.Name] = p.App
+	}
+	if !apps["fraud"] || apps["toolkit"] {
+		t.Fatalf("apps = %v", apps)
 	}
 }

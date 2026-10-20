@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -154,6 +155,7 @@ func Scan(root string, files []string) (Report, error) {
 			break
 		}
 	}
+	markAppsByDockerfile(root, files, &out)
 	fillCentralNuGetVersions(out.Depends, out.central)
 	sort.Strings(out.Warnings)
 	sort.SliceStable(out.Publishes, func(i, j int) bool {
@@ -206,8 +208,8 @@ func joinRoot(root, rel string) string { return filepath.Join(root, filepath.Fro
 // manifest that declares one publishes a service. (npm and .NET read their own
 // signals in their parsers.)
 var appFrameworks = map[string][]string{
-	"python": {"fastapi", "flask", "django", "starlette", "uvicorn", "gunicorn", "aiohttp", "tornado", "sanic", "quart", "falcon", "celery", "hypercorn", "daphne", "litestar"},
-	"maven":  {"org.springframework.boot:spring-boot-starter-web", "org.springframework.boot:spring-boot-starter-webflux", "org.springframework.boot:spring-boot-starter", "io.quarkus:quarkus-resteasy", "io.quarkus:quarkus-rest", "io.micronaut:micronaut-http-server-netty", "io.vertx:vertx-web", "io.ktor:ktor-server-core", "io.ktor:ktor-server-netty", "io.javalin:javalin", "org.http4k:http4k-core"},
+	"python": {"faust", "faust-streaming", "fastapi", "flask", "django", "starlette", "uvicorn", "gunicorn", "aiohttp", "tornado", "sanic", "quart", "falcon", "celery", "hypercorn", "daphne", "litestar"},
+	"maven":  {"org.springframework.boot:spring-boot-starter-web", "org.springframework.boot:spring-boot-starter-webflux", "org.springframework.boot:spring-boot-starter", "io.quarkus:quarkus-resteasy", "io.quarkus:quarkus-rest", "io.micronaut:micronaut-http-server-netty", "io.vertx:vertx-web", "org.apache.kafka:kafka-streams", "io.ktor:ktor-server-core", "io.ktor:ktor-server-netty", "io.javalin:javalin", "org.http4k:http4k-core"},
 	"go":     {"github.com/go-chi/chi", "github.com/gin-gonic/gin", "github.com/labstack/echo", "github.com/gofiber/fiber", "github.com/gorilla/mux", "google.golang.org/grpc", "github.com/julienschmidt/httprouter"},
 	"cargo":  {"axum", "actix-web", "rocket", "warp", "tide", "poem", "tonic"},
 	"gem":    {"rails", "sinatra", "hanami", "grape", "sidekiq", "puma", "padrino"},
@@ -238,6 +240,35 @@ func markAppsByFramework(r *Report) {
 			if pub.App {
 				break
 			}
+		}
+	}
+}
+
+var dockerRunRe = regexp.MustCompile(`(?im)^\s*(?:CMD|ENTRYPOINT)\b`)
+
+// markAppsByDockerfile: a package published from a directory that has a
+// Dockerfile with a CMD or ENTRYPOINT is what that image runs, whatever its
+// language or framework: an application.
+func markAppsByDockerfile(root string, files []string, r *Report) {
+	dirs := map[string]bool{}
+	for _, rel := range files {
+		b := strings.ToLower(base(rel))
+		if b != "dockerfile" && !strings.HasPrefix(b, "dockerfile.") {
+			continue
+		}
+		body, err := osReadFile(joinRoot(root, rel))
+		if err != nil || !dockerRunRe.Match(body) {
+			continue
+		}
+		dirs[path.Dir(filepath.ToSlash(rel))] = true
+	}
+	if len(dirs) == 0 {
+		return
+	}
+	for i := range r.Publishes {
+		p := &r.Publishes[i]
+		if !p.App && dirs[path.Dir(filepath.ToSlash(p.File))] {
+			p.App = true
 		}
 	}
 }
