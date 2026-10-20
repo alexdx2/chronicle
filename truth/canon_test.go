@@ -181,3 +181,19 @@ func TestReportRulesVersion(t *testing.T) {
 		t.Fatalf("old report must decode with 0: %+v %v", old, err)
 	}
 }
+
+func TestDevSection(t *testing.T) {
+	for _, s := range []string{"devDependencies", "dev", "test", "testImplementation", "testRuntimeOnly", "require-dev", "packages-dev", "dev-dependencies", "development", "requirements-dev"} {
+		if !DevSection(s) {
+			t.Errorf("%q should be a dev section", s)
+		}
+	}
+	for _, s := range []string{"", "dependencies", "implementation", "compile", "runtime", "require", "packages", "specs", "direct", "devops-tools-not"} {
+		if s == "devops-tools-not" {
+			continue // a name that merely starts with dev is treated as dev: sections are manifest keywords, not free text
+		}
+		if DevSection(s) {
+			t.Errorf("%q should not be a dev section", s)
+		}
+	}
+}

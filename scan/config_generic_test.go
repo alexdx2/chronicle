@@ -161,3 +161,21 @@ func TestKeyLiteralUsesAcrossLanguages(t *testing.T) {
 		t.Errorf("the file that defines the default is never the use: %v", got)
 	}
 }
+
+func TestEnvDefaultNamesTheAssignedConstant(t *testing.T) {
+	tab := &graph.ConfigHosts{}
+	parseEnvDefaults(tab, "dags/etl_config.py", []byte("from airflow.models import Variable\nCATALOG_API_URL = Variable.get(\"catalog_api_url\", default_var=\"http://catalog-api:3000\")\nPAGE_SIZE = int(Variable.get(\"catalog_page_size\", default_var=\"500\"))\n"))
+	got := entriesOf(tab)
+	if got["CATALOG_API_URL"] != "catalog-api" || got["catalog_api_url"] != "catalog-api" || len(got) != 2 {
+		t.Fatalf("%v", got)
+	}
+	tab = &graph.ConfigHosts{}
+	parseEnvDefaults(tab, "config.ts", []byte("export const catalogUrl = process.env.CATALOG_URL || 'http://catalog-api:3000';\nconst timeout = process.env.TIMEOUT_MS || 'http://not-an-address-name:1';\n"))
+	got = entriesOf(tab)
+	if got["catalogUrl"] != "catalog-api" || got["CATALOG_URL"] != "catalog-api" {
+		t.Fatalf("%v", got)
+	}
+	if _, bad := got["timeout"]; bad {
+		t.Fatalf("a name that does not say address became an alias: %v", got)
+	}
+}

@@ -79,9 +79,13 @@ var (
 	// ${KEY:default} / ${KEY:-default} with a URL default, in config and in code
 	placeholderURLRe = regexp.MustCompile(`\$\{\s*([A-Za-z0-9_.\-]+)\s*:-?\s*(https?://[^}\s"']+)\s*\}`)
 	// an environment read: the name is a quoted UPPER_SNAKE literal or process.env.NAME
-	envReadRe = regexp.MustCompile(`(?i:getenv|environ|\bENV\b|\benv\s*\(|\bconfig\s*\(|Variable\.get|GetEnvironmentVariable|env::var)[^"'` + "`" + `]{0,40}["'` + "`" + `]([A-Z][A-Z0-9_]{2,})["'` + "`" + `]|process\.env\.([A-Z][A-Z0-9_]{2,})|process\.env\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]`)
-	urlLitRe  = regexp.MustCompile("[\"'`](https?://[^\"'`\\s)]+)[\"'`]")
-	envHintRe = regexp.MustCompile(`(?i)getenv|environ|\bENV\b|\benv\s*\(|\bconfig\s*\(|Variable\.get|process\.env|env::var`)
+	envReadRe = regexp.MustCompile(`(?i:getenv|environ|\bENV\b|\benv\s*\(|\bconfig\s*\(|Variable\.get|GetEnvironmentVariable|env::var)[^"'` + "`" + `]{0,40}["'` + "`" + `]([A-Z][A-Z0-9_]{2,})["'` + "`" + `]|process\.env\.([A-Z][A-Z0-9_]{2,})|process\.env\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]|Variable\.get\(\s*["']([a-z][a-z0-9_]{4,})["']`)
+	// an identifier assigned at the start of a line: NAME = , const NAME = , val name = , NAME :=
+	assignedNameRe = regexp.MustCompile(`^\s*(?:export\s+)?(?:(?:const|let|var|val|final|static|public|private|readonly|String)\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)`)
+	// names that say "this is an address"
+	addressNameRe = regexp.MustCompile(`(?i)(?:url|uri|host|endpoint|address|base|api)$`)
+	urlLitRe      = regexp.MustCompile("[\"'`](https?://[^\"'`\\s)]+)[\"'`]")
+	envHintRe     = regexp.MustCompile(`(?i)getenv|environ|\bENV\b|\benv\s*\(|\bconfig\s*\(|Variable\.get|process\.env|env::var`)
 )
 
 // parseGenericConfig reads one config file by extension.
@@ -232,7 +236,7 @@ func parseEnvDefaults(t *graph.ConfigHosts, file string, body []byte) {
 			continue
 		}
 		name := ""
-		for g := 1; g <= 3; g++ {
+		for g := 1; g <= 4; g++ {
 			if m[2*g] >= 0 {
 				name = win[m[2*g]:m[2*g+1]]
 				break
@@ -241,6 +245,11 @@ func parseEnvDefaults(t *graph.ConfigHosts, file string, body []byte) {
 		rest := win[m[1]:]
 		if u := urlLitRe.FindStringSubmatch(rest); u != nil && name != "" {
 			t.Add(name, u[1], file)
+			// CATALOG_API_URL = os.getenv("x", "http://..."): the constant the
+			// rest of the code uses is a name for the same address
+			if a := assignedNameRe.FindStringSubmatch(l); a != nil && a[1] != name && addressNameRe.MatchString(a[1]) {
+				t.Add(a[1], u[1], file)
+			}
 		}
 	}
 }

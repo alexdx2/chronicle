@@ -49,7 +49,7 @@ func Compare(rep *truth.Report, snap *snapshot.Snapshot) *truth.Verdict {
 		ix.warns = nil
 		if status == "" {
 			switch {
-			case f.Class == truth.ClassDeps && (f.Attrs["section"] == "devDependencies" || truth.Noise(f.Attrs["ecosystem"], depName(f))):
+			case f.Class == truth.ClassDeps && (truth.DevSection(f.Attrs["section"]) || truth.Noise(f.Attrs["ecosystem"], depName(f))):
 				status = truth.Ignored
 			case haveCoverage && scoped(f.Class) && !ix.coverage[strings.TrimPrefix(f.Primary.File, "./")]:
 				status = truth.OutOfScope

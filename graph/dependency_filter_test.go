@@ -71,3 +71,16 @@ func TestShouldTrackDependency(t *testing.T) {
 		t.Error("@prisma/client should not create edges")
 	}
 }
+
+func TestIsDevDepSection(t *testing.T) {
+	for _, s := range []string{"devDependencies", "dev", "test", "testImplementation", "require-dev", "packages-dev", "dev-dependencies"} {
+		if !IsDevDepSection(s) {
+			t.Errorf("%q should be a dev section", s)
+		}
+	}
+	for _, s := range []string{"", "dependencies", "implementation", "compile", "runtime", "project"} {
+		if IsDevDepSection(s) {
+			t.Errorf("%q should not be a dev section", s)
+		}
+	}
+}

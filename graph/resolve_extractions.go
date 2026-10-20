@@ -1027,7 +1027,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			fact.Section = "dependencies"
 		}
 		// "indirect" is a Go transitive requirement: dev-like, opt-in.
-		if (fact.Section == "devDependencies" || fact.Section == "indirect") && !includeDevDeps {
+		if (IsDevDepSection(fact.Section) || fact.Section == "indirect") && !includeDevDeps {
 			return counts, nil, nil
 		}
 

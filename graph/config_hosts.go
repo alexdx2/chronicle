@@ -196,7 +196,7 @@ var (
 	// GetValue<string>("A:B"), GetSection("A:B"), GetConnectionString("x"), GetString("A")
 	cfgGetRe = regexp.MustCompile(`Get(?:Value|Section|String|ConnectionString)\s*(?:<[^>]*>)?\s*\(\s*["']([^"')]+)["']`)
 	// process.env.X, process.env['X'], env.X, os.environ['X'], os.getenv('X'), Environment.GetEnvironmentVariable("X")
-	envAccessRe = regexp.MustCompile(`(?:process\.env\.|(?:^|[^A-Za-z.])env\.|ENV\.)([A-Za-z_][A-Za-z0-9_]*)|(?:process\.env|os\.environ|ENV)\s*\[\s*["']([^"']+)["']\s*\]|(?:os\.getenv|Environment\.GetEnvironmentVariable|System\.getenv)\s*\(\s*["']([^"']+)["']`)
+	envAccessRe = regexp.MustCompile(`(?:process\.env\.|import\.meta\.env\.|(?:^|[^A-Za-z.])env\.|ENV\.)([A-Za-z_][A-Za-z0-9_]*)|(?:process\.env|import\.meta\.env|os\.environ|ENV)\s*\[\s*["']([^"']+)["']\s*\]|(?:os\.getenv|Environment\.GetEnvironmentVariable|System\.getenv)\s*\(\s*["']([^"']+)["']`)
 	// environment.apiUrl, config.api.url, settings.x (a TS/JS config object)
 	objPathRe    = regexp.MustCompile(`^(?:this\.)?(?:[A-Za-z_$][\w$]*\.)*?(?:environment|environments|config|settings|appsettings|appConfig|AppConfig|extra)\.([A-Za-z_][A-Za-z0-9_.]*)$`)
 	lowerIdentRe = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)

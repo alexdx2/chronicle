@@ -217,3 +217,18 @@ func ShouldTrackDependencyIn(ecosystem, name string) bool {
 	}
 	return ShouldTrackDependency(name)
 }
+
+// IsDevDepSection mirrors truth.DevSection for the graph side (the two stay
+// separate copies on purpose: the reference does not import the scan).
+func IsDevDepSection(section string) bool {
+	s := strings.ToLower(strings.TrimSpace(section))
+	switch {
+	case s == "":
+		return false
+	case strings.HasPrefix(s, "dev"), strings.HasPrefix(s, "test"):
+		return true
+	case strings.HasSuffix(s, "-dev"), strings.HasSuffix(s, "_dev"), strings.Contains(s, "requirements-dev"), strings.Contains(s, "dev-requirements"):
+		return true
+	}
+	return false
+}

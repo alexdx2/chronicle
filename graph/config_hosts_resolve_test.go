@@ -299,3 +299,16 @@ func TestClassifyCallBase_ConfigObjectPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyCallBase_ViteEnv(t *testing.T) {
+	for in, want := range map[string]string{
+		"import.meta.env.VITE_API_URL":      "VITE_API_URL",
+		"`${import.meta.env.VITE_API_URL}`": "VITE_API_URL",
+		"import.meta.env['VITE_API_URL']":   "VITE_API_URL",
+	} {
+		kind, key := ClassifyCallBase(in)
+		if kind != SymEnv || key != want {
+			t.Errorf("%s -> %v %q, want env %q", in, kind, key, want)
+		}
+	}
+}

@@ -174,11 +174,13 @@ func ServiceKey(kind, name string) string {
 }
 
 var (
-	noisePrefixes = []string{"system.", "microsoft.", "runtime.", "@types/", "eslint", "xunit", "nunit", "coverlet", "pytest"}
+	noisePrefixes = []string{"system.", "microsoft.", "runtime.", "@types/", "eslint", "xunit", "nunit", "coverlet", "pytest", "@vitejs/", "@testing-library", "@babel/", "babel-", "@swc/", "postcss", "autoprefixer", "tailwindcss", "org.junit", "junit:", "org.mockito", "org.jetbrains.kotlin:kotlin-test", "io.ktor:ktor-server-test-host", "org.springframework.boot:spring-boot-starter-test"}
 	noiseExact    = map[string]bool{
 		"netstandard.library": true, "typescript": true, "prettier": true, "jest": true,
 		"vitest": true, "mocha": true, "moq": true, "fluentassertions": true,
 		"black": true, "ruff": true, "mypy": true, "flake8": true,
+		"react": true, "react-dom": true, "next": true, "vue": true, "angular": true, "vite": true, "webpack": true,
+		"rollup": true, "esbuild": true, "tsx": true, "ts-node": true, "tsup": true, "supertest": true, "nock": true,
 	}
 )
 
@@ -239,4 +241,23 @@ func LooseTokens(s string) string {
 // are case-sensitive), e.g. "MUTATION renameProduct".
 func GraphQLEndpointKey(kind, name string) string {
 	return strings.ToUpper(strings.TrimSpace(kind)) + " " + strings.TrimSpace(name)
+}
+
+// DevSection reports whether a dependency section only matters while
+// developing or testing: npm devDependencies, Maven test scope, Gradle
+// testImplementation, Composer require-dev, Cargo dev-dependencies, a Gemfile
+// development/test group, requirements-dev.txt. Such a dependency is not a
+// fact the running system has, so the comparison ignores it when the graph
+// leaves it out.
+func DevSection(section string) bool {
+	s := strings.ToLower(strings.TrimSpace(section))
+	switch {
+	case s == "":
+		return false
+	case strings.HasPrefix(s, "dev"), strings.HasPrefix(s, "test"):
+		return true
+	case strings.HasSuffix(s, "-dev"), strings.HasSuffix(s, "_dev"), strings.Contains(s, "requirements-dev"), strings.Contains(s, "dev-requirements"):
+		return true
+	}
+	return false
 }
