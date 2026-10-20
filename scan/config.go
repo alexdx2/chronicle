@@ -105,7 +105,9 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		reg := isRegistrationFile(p)
 		src := isScriptSource(p)
 		envSrc := !cfg && !reg && !src && isEnvDefaultSource(p)
-		if !cfg && !reg && !src && !envSrc {
+		tf := strings.EqualFold(path.Ext(p), ".tf")
+		maybeConnector := strings.EqualFold(path.Ext(p), ".json")
+		if !cfg && !reg && !src && !envSrc && !tf && !maybeConnector {
 			continue
 		}
 		fp := filepath.Join(root, filepath.FromSlash(p))
@@ -120,6 +122,21 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		body, err := os.ReadFile(fp)
 		if err != nil {
 			continue
+		}
+		if tf {
+			parseTerraformChannels(t, p, body)
+			continue
+		}
+		if maybeConnector && isConnectorJSON(p, body) {
+			parseConnectorChannels(t, p, body)
+			parsed = append(parsed, p)
+			continue
+		}
+		if maybeConnector && !cfg {
+			continue
+		}
+		if envSrc || src || reg || (cfg && isEnvDefaultSource(p)) {
+			parseCDKChannels(t, p, body)
 		}
 		if envSrc || reg || src || (cfg && isEnvDefaultSource(p)) {
 			parseEnvDefaults(t, p, body) // the default beside an env read, any language (a config module too)

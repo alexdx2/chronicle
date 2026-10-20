@@ -42,6 +42,9 @@ type Fact struct {
 	// resolves when the anchor text is not that symbol itself
 	// (`CreateClient("billing")` is the anchor, Configuration["Services:BillingApi"] the symbol).
 	ConfigSymbol string `json:"-"`
+	// EvidenceText, when set, is what the file must contain to vouch for a
+	// channel fact whose name is composed (a Debezium topic is prefix + table).
+	EvidenceText string `json:"-"`
 	Reason       string `json:"reason,omitempty"`    // reason for relationship (e.g. parent container justification)
 	Section      string `json:"section,omitempty"`   // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
 	Version      string `json:"version,omitempty"`   // dependency version as written in the manifest
@@ -1987,7 +1990,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 
 		assertion, _ := json.Marshal(map[string]any{
-			"substring": evidenceSubstring(rawTo, fact.To),
+			"substring": channelEvidence(fact, rawTo),
 		})
 		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
@@ -2041,7 +2044,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		}
 
 		assertion, _ := json.Marshal(map[string]any{
-			"substring": evidenceSubstring(rawTo, fact.To),
+			"substring": channelEvidence(fact, rawTo),
 		})
 		_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
 			TargetKind: "edge", SourceKind: "file", FilePath: filePath,
@@ -2103,6 +2106,25 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			Confidence: 0.90, RevisionID: revisionID,
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
+		counts.evidence++
+
+	case "declares_channel":
+		// A channel declared by infrastructure code (terraform, CDK, compose):
+		// the contract node exists although nothing in this repository produces
+		// to it or consumes from it.
+		if strings.TrimSpace(fact.To) == "" {
+			return counts, nil, nil
+		}
+		nodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
+		g.ensureNodeID(domainKey, revisionID, nodeKey, fact.To, "")
+		assertion, _ := json.Marshal(map[string]any{"substring": fact.To})
+		_, _ = g.resolverNodeEvidence(nodeKey, validate.EvidenceInput{
+			TargetKind: "node", SourceKind: "file", FilePath: filePath,
+			ExtractorID: extractorID, ExtractorVersion: "1.0",
+			Confidence: 0.95, RevisionID: revisionID,
+			AssertionKind: "text_contains", Assertion: string(assertion),
+		})
+		counts.nodes++
 		counts.evidence++
 
 	case "model":
@@ -5846,6 +5868,7 @@ func (g *Graph) injectRoutingConfig(files []fileFacts, idx map[string]int, seen 
 }
 
 var (
+	pubsubPathRe  = regexp.MustCompile(`^projects/[^/]+/(?:topics|subscriptions)/([^/]+)$`)
 	awsQueueURLRe = regexp.MustCompile(`(?i)^(?:https?:)?(?://)?(?:sqs\.[a-z0-9\-]+\.amazonaws\.com|[a-z0-9\-]+\.queue\.amazonaws\.com|localhost(?::\d+)?|[a-z0-9.\-]+(?::\d+)?)/(?:[0-9]{8,14}|queue)/([A-Za-z0-9_\-.]+?)/?$`)
 	awsARNRe      = regexp.MustCompile(`^arn:aws[a-z\-]*:(?:sqs|sns):[a-z0-9\-]*:[0-9]*:([A-Za-z0-9_\-.]+)$`)
 )
@@ -5855,6 +5878,9 @@ var (
 // which is the name every other repo uses. Any other target is unchanged.
 func canonChannelName(to string) string {
 	t := strings.TrimSpace(to)
+	if m := pubsubPathRe.FindStringSubmatch(t); m != nil {
+		return m[1] // projects/corp/topics/fraud-signals
+	}
 	if m := awsARNRe.FindStringSubmatch(t); m != nil {
 		return m[1]
 	}
@@ -5904,14 +5930,17 @@ func (g *Graph) injectChannelBindings(files []fileFacts, idx map[string]int, see
 			continue
 		}
 		key := strings.ToLower(e.Key)
-		if !strings.Contains(key, ".bindings.") || !strings.HasSuffix(key, ".destination") {
-			continue
-		}
 		kind := ""
 		switch {
-		case strings.Contains(key, "-in-"):
+		case strings.HasPrefix(key, "declare:"):
+			kind = "declares_channel" // terraform / CDK declarations (scan/config_declared.go)
+		case strings.HasPrefix(key, "connect.source:"):
+			kind = "produces" // Kafka Connect source connector topics
+		case strings.HasPrefix(key, "connect.sink:"):
+			kind = "consumes" // Kafka Connect sink connector topics
+		case strings.Contains(key, ".bindings.") && strings.HasSuffix(key, ".destination") && strings.Contains(key, "-in-"):
 			kind = "consumes"
-		case strings.Contains(key, "-out-"):
+		case strings.Contains(key, ".bindings.") && strings.HasSuffix(key, ".destination") && strings.Contains(key, "-out-"):
 			kind = "produces"
 		default:
 			continue
@@ -5925,9 +5954,14 @@ func (g *Graph) injectChannelBindings(files []fileFacts, idx map[string]int, see
 		if !ok {
 			continue
 		}
+		needle, evText := e.Channel, ""
+		if strings.HasPrefix(key, "connect.source:") {
+			needle = e.Key[len("connect.source:"):] // the table entry: the topic is prefix + table
+			evText = needle
+		}
 		line := 0
 		for n, l := range strings.Split(src, "\n") {
-			if strings.Contains(l, e.Channel) && strings.Contains(strings.ToLower(l), "destination") {
+			if strings.Contains(l, needle) && (kind == "declares_channel" || strings.HasPrefix(key, "connect.") || strings.Contains(strings.ToLower(l), "destination")) {
 				line = n + 1
 				break
 			}
@@ -5942,7 +5976,7 @@ func (g *Graph) injectChannelBindings(files []fileFacts, idx map[string]int, see
 			idx[e.File] = i
 		}
 		files[i].facts = append(files[i].facts, Fact{
-			Kind: kind, To: e.Channel, FromType: "service", Transport: "kafka",
+			Kind: kind, To: e.Channel, FromType: "service", Transport: "kafka", EvidenceText: evText,
 			Origin: configUseOrigin, Line: line, Text: e.Channel, Confidence: 1.0,
 			Note: "configured binding " + e.Key,
 		})
@@ -5981,4 +6015,11 @@ func isLowerCamelIdent(s string) bool {
 		}
 	}
 	return upper
+}
+
+func channelEvidence(fact Fact, rawTo string) string {
+	if fact.EvidenceText != "" {
+		return fact.EvidenceText
+	}
+	return evidenceSubstring(rawTo, fact.To)
 }

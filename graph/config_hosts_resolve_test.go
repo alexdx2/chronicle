@@ -490,3 +490,32 @@ func TestFunctionNameIsNotAChannel(t *testing.T) {
 		}
 	}
 }
+
+func TestDeclaredChannelIsANodeAndConnectorTopicsAreEdges(t *testing.T) {
+	writeTree(t, map[string]string{
+		"i/main.tf":           "resource \"kafka_topic\" \"orders\" {\n  name = \"orders\"\n}\n",
+		"i/connectors/s.json": "{\"connector.class\":\"io.debezium.connector.postgresql.PostgresConnector\",\"topic.prefix\":\"pg\",\"table.include.list\":\"public.customers\"}\n",
+	})
+	c := &ConfigHosts{}
+	c.AddChannel("declare:kafka_topic.orders", "orders", "i/main.tf")
+	c.AddChannel("connect.source:public.customers", "pg.public.customers", "i/connectors/s.json")
+	g, s, _ := resolveFiles(t, c, srcFacts{"i/x.java", []Fact{}})
+	for _, f := range []string{"i/main.tf", "i/connectors/s.json"} {
+		if _, err := g.VerifyFileEvidence(f, 1, "demo"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes, _ := s.ListNodes(store.NodeFilter{NodeType: "topic"})
+	var names []string
+	for _, n := range nodes {
+		names = append(names, n.Name)
+	}
+	sort.Strings(names)
+	if strings.Join(names, ",") != "orders,pg.public.customers" {
+		t.Fatalf("topic nodes = %v", names)
+	}
+	pub, _ := s.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES_TOPIC"})
+	if len(pub) != 1 || !strings.HasSuffix(pub[0].ToNodeKey, "pg-public-customers") && !strings.HasSuffix(pub[0].ToNodeKey, "pg.public.customers") && !strings.Contains(pub[0].ToNodeKey, "customers") {
+		t.Fatalf("connector edge: %+v", pub)
+	}
+}

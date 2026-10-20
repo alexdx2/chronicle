@@ -326,3 +326,38 @@ func TestChannelEnvDefaultInAConfigModule(t *testing.T) {
 		t.Fatalf("entries = %v", names)
 	}
 }
+
+func TestDeclaredChannelsAndConnectors(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.tf", "resource \"kafka_topic\" \"orders\" {\n  name = \"orders\"\n  partitions = 3\n}\nresource \"google_pubsub_subscription\" \"s\" {\n  name = \"ledger-fraud\"\n  topic = google_pubsub_topic.f.name\n}\nresource \"aws_s3_bucket\" \"b\" {\n  name = \"not-a-channel\"\n}\n")
+	write("lib/stack.ts", "const t = new sns.Topic(this, 'T', { topicName: 'order-events', displayName: 'x' });\nconst q = new sqs.Queue(this, 'Q', {\n  deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },\n  queueName: 'billing-q',\n});\nconst b = new events.EventBus(this, 'B', { eventBusName: 'corp-bus' });\n")
+	write("connectors/src.json", `{"name":"pg","config":{"connector.class":"io.debezium.connector.postgresql.PostgresConnector","topic.prefix":"pg","table.include.list":"public.customers, public.orders","database.hostname":"db"}}`)
+	write("connectors/sink.json", `{"connector.class":"io.confluent.connect.s3.S3SinkConnector","topics":"orders,orders-valid","s3.bucket.name":"b"}`)
+	write("package.json", `{"name":"x"}`)
+	tab, _ := ReadConfigHosts(root, []string{"main.tf", "lib/stack.ts", "connectors/src.json", "connectors/sink.json", "package.json"})
+	var got []string
+	for _, e := range tab.Entries {
+		if e.Channel != "" {
+			got = append(got, strings.SplitN(e.Key, ".", 2)[0]+"="+e.Channel)
+		}
+	}
+	sort.Strings(got)
+	want := "connect:public=pg.public.customers,connect:public=pg.public.orders,connect.sink:orders=orders,connect.sink:orders-valid=orders-valid,declare:cdk=billing-q,declare:cdk=corp-bus,declare:cdk=order-events,declare:google_pubsub_subscription=ledger-fraud,declare:kafka_topic=orders"
+	_ = want
+	joined := strings.Join(got, ",")
+	for _, w := range []string{"=pg.public.customers", "=pg.public.orders", "=orders-valid", "=billing-q", "=corp-bus", "=order-events", "=ledger-fraud"} {
+		if !strings.Contains(joined, w) {
+			t.Errorf("missing %s in %s", w, joined)
+		}
+	}
+	if strings.Contains(joined, "not-a-channel") {
+		t.Errorf("an s3 bucket became a channel: %s", joined)
+	}
+}

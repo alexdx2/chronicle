@@ -520,3 +520,14 @@ func channelConfigValue(key, value string) (string, bool) {
 	}
 	return v, true
 }
+
+// AddChannel records a channel name declared by infrastructure or connector
+// configuration under a reserved key (see scan/config_declared.go); the key
+// policy of Add does not apply.
+func (c *ConfigHosts) AddChannel(key, name, file string) {
+	name = strings.TrimSpace(name)
+	if key == "" || !channelNameRe.MatchString(name) {
+		return
+	}
+	c.Entries = append(c.Entries, ConfigEntry{Key: key, File: file, Dir: dirOf(file), Channel: name})
+}
