@@ -121,8 +121,8 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		if err != nil {
 			continue
 		}
-		if envSrc || reg || src {
-			parseEnvDefaults(t, p, body) // the default beside an env read, any language
+		if envSrc || reg || src || (cfg && isEnvDefaultSource(p)) {
+			parseEnvDefaults(t, p, body) // the default beside an env read, any language (a config module too)
 			useFiles = append(useFiles, p)
 		}
 		if envSrc {

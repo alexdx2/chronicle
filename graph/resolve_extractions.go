@@ -1957,6 +1957,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		if strings.TrimSpace(fact.To) == "" {
 			return counts, g.detNoteUnresolved(filePath, "produces", "", nil), nil
 		}
+		if g.isFunctionNameTarget(filePath, fact.To) {
+			return counts, g.detNoteUnresolved(filePath, "produces", fact.To, nil), nil
+		}
 		// WebSocket pushes (SignalR Clients.*.SendAsync, socket.io emit) are
 		// client fan-out, not broker topics — no topic node.
 		if strings.ToLower(fact.Transport) == "websocket" || strings.EqualFold(fact.Method, "SendAsync") {
@@ -2011,6 +2014,9 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		// is the honest answer and the one a reader can act on.
 		if strings.TrimSpace(fact.To) == "" {
 			return counts, g.detNoteUnresolved(filePath, "consumes", "", nil), nil
+		}
+		if g.isFunctionNameTarget(filePath, fact.To) {
+			return counts, g.detNoteUnresolved(filePath, "consumes", fact.To, nil), nil
 		}
 		fromNodeKey := typedNodeKeyFromFile(domainKey, filePath, fact.FromType)
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
@@ -5731,6 +5737,7 @@ func (g *Graph) injectConfigUses(files []fileFacts, domainKey string) []fileFact
 	}
 	seen := map[string]bool{}
 	files = g.injectRoutingConfig(files, idx, seen, domainKey)
+	files = g.injectChannelBindings(files, idx, seen)
 	if len(g.domainConfig.Uses) == 0 {
 		return files
 	}
@@ -5884,4 +5891,94 @@ func evidenceSubstring(raw, canon string) string {
 		return canon
 	}
 	return strings.TrimSpace(raw)
+}
+
+// injectChannelBindings turns channel bindings declared in configuration into
+// produces/consumes facts of the config file that holds them: Spring Cloud
+// Stream's spring.cloud.stream.bindings.<fn>-in-0.destination consumes,
+// <fn>-out-0.destination produces. The binding is the integration; no call in
+// the code names the channel.
+func (g *Graph) injectChannelBindings(files []fileFacts, idx map[string]int, seen map[string]bool) []fileFacts {
+	for _, e := range g.domainConfig.Entries {
+		if e.Channel == "" || e.File == "" {
+			continue
+		}
+		key := strings.ToLower(e.Key)
+		if !strings.Contains(key, ".bindings.") || !strings.HasSuffix(key, ".destination") {
+			continue
+		}
+		kind := ""
+		switch {
+		case strings.Contains(key, "-in-"):
+			kind = "consumes"
+		case strings.Contains(key, "-out-"):
+			kind = "produces"
+		default:
+			continue
+		}
+		k := e.File + "\x00" + kind + "\x00" + e.Channel
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		src, ok := g.readSourceForConfig(e.File)
+		if !ok {
+			continue
+		}
+		line := 0
+		for n, l := range strings.Split(src, "\n") {
+			if strings.Contains(l, e.Channel) && strings.Contains(strings.ToLower(l), "destination") {
+				line = n + 1
+				break
+			}
+		}
+		if line == 0 {
+			continue
+		}
+		i, ok := idx[e.File]
+		if !ok {
+			files = append(files, fileFacts{filePath: e.File})
+			i = len(files) - 1
+			idx[e.File] = i
+		}
+		files[i].facts = append(files[i].facts, Fact{
+			Kind: kind, To: e.Channel, FromType: "service", Transport: "kafka",
+			Origin: configUseOrigin, Line: line, Text: e.Channel, Confidence: 1.0,
+			Note: "configured binding " + e.Key,
+		})
+	}
+	return files
+}
+
+// isFunctionNameTarget says a produces/consumes target is the name of a
+// function the file calls (sendOrder, publishOrderCreated), not a channel: a
+// lower-camel identifier that the source also writes as a call. Channels are
+// names in strings; PascalCase message types (MediatR commands) are kept.
+func (g *Graph) isFunctionNameTarget(filePath, to string) bool {
+	t := strings.TrimSpace(to)
+	if t == "" || !isLowerCamelIdent(t) {
+		return false
+	}
+	src, ok := g.readSourceForConfig(filePath)
+	if !ok {
+		return false
+	}
+	return strings.Contains(src, t+"(") || strings.Contains(src, t+" (")
+}
+
+func isLowerCamelIdent(s string) bool {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	upper := false
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			upper = true
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return upper
 }

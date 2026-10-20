@@ -442,3 +442,51 @@ func TestProduces_ConfigSymbolWithAChannelName(t *testing.T) {
 		}
 	}
 }
+
+func TestChannelBindingsInConfigAreProducesAndConsumes(t *testing.T) {
+	writeTree(t, map[string]string{
+		"bs/src/main/resources/application.yml": "spring:\n  cloud:\n    stream:\n      bindings:\n        invoicing-in-0:\n          destination: orders-valid\n        invoicing-out-0:\n          destination: invoices\n        other-0:\n          destination: ignored-no-direction\n",
+	})
+	c := &ConfigHosts{}
+	f := "bs/src/main/resources/application.yml"
+	c.Add("spring.cloud.stream.bindings.invoicing-in-0.destination", "orders-valid", f)
+	c.Add("spring.cloud.stream.bindings.invoicing-out-0.destination", "invoices", f)
+	c.Add("spring.cloud.stream.bindings.other-0.destination", "ignored-no-direction", f)
+	g, s, _ := resolveFiles(t, c, srcFacts{"bs/src/main/java/A.java", []Fact{}})
+	if _, err := g.VerifyFileEvidence(f, 1, "demo"); err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := s.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES_TOPIC"})
+	con, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONSUMES_TOPIC"})
+	if len(pub) != 1 || !strings.HasSuffix(pub[0].ToNodeKey, ":invoices") || !pub[0].Active {
+		t.Errorf("produces = %+v", pub)
+	}
+	if len(con) != 1 || !strings.HasSuffix(con[0].ToNodeKey, ":orders-valid") || !con[0].Active {
+		t.Errorf("consumes = %+v", con)
+	}
+}
+
+func TestFunctionNameIsNotAChannel(t *testing.T) {
+	writeTree(t, map[string]string{
+		"o/routes.ts": "import { sendOrder } from './kafka';\nexport async function h() { await sendOrder('1', {}); const t = 'orderCreated'; bus.emit(t); }\n",
+	})
+	_, s, res := resolveFiles(t, &ConfigHosts{}, srcFacts{"o/routes.ts", []Fact{
+		{Kind: "produces", From: "h", FromType: "service", To: "sendOrder"},
+		{Kind: "produces", From: "h", FromType: "service", To: "orderCreated"},
+		{Kind: "produces", From: "h", FromType: "service", To: "OrderPlaced"},
+	}})
+	edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "PUBLISHES_TOPIC"})
+	var got []string
+	for _, e := range edges {
+		got = append(got, e.ToNodeKey[strings.LastIndex(e.ToNodeKey, ":")+1:])
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "orderCreated,OrderPlaced" && strings.Join(got, ",") != "orderplaced,ordercreated" && len(got) != 2 {
+		t.Fatalf("edges = %v unresolved=%d", got, len(res.Unresolved))
+	}
+	for _, g := range got {
+		if strings.EqualFold(g, "sendOrder") {
+			t.Fatalf("a function name became a channel: %v", got)
+		}
+	}
+}

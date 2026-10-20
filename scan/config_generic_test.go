@@ -3,6 +3,7 @@ package scan
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -302,5 +303,26 @@ func TestEnvDefaultChannelNames(t *testing.T) {
 	parseEnvDefaults(tab, "x.py", []byte("TOPIC_PREFIX = os.getenv(\"LOG_LEVEL\", \"info\")\n"))
 	if len(tab.Entries) != 0 {
 		t.Errorf("a non-channel variable became an entry: %v", tab.Entries)
+	}
+}
+
+func TestChannelEnvDefaultInAConfigModule(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src/config.ts"), []byte("export const config = {\n  ordersTopic: process.env.ORDERS_TOPIC || 'orders',\n  port: 3000,\n};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tab, _ := ReadConfigHosts(root, []string{"src/config.ts"})
+	var names []string
+	for _, e := range tab.Entries {
+		if e.Channel != "" {
+			names = append(names, e.Key+"="+e.Channel)
+		}
+	}
+	sort.Strings(names)
+	if strings.Join(names, ",") != "ORDERS_TOPIC=orders,ordersTopic=orders" {
+		t.Fatalf("entries = %v", names)
 	}
 }
