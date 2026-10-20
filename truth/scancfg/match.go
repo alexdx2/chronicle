@@ -321,3 +321,33 @@ func (s Scope) Allowed(file string) bool {
 	}
 	return true
 }
+
+// ClientEngine runs client rules: calls that build an HTTP client from an
+// address. The address is returned raw (expression text or literal) so the
+// caller can resolve it through its own tables.
+type ClientEngine struct{ e *Engine }
+
+// NewClientEngine compiles cfg.Clients; nil when there are none.
+func NewClientEngine(cfg *Config) (*ClientEngine, error) {
+	if len(cfg.Clients) == 0 {
+		return nil, nil
+	}
+	synth := &Config{}
+	for i, c := range cfg.Clients {
+		synth.Channels = append(synth.Channels, ChannelRule{
+			ID: fmt.Sprintf("client-%d", i), When: c.When, Source: c.Source,
+			Patterns: []Pattern{{Call: strings.ReplaceAll(c.Call, "{addr}", "{name}"), Side: "produce"}},
+		})
+	}
+	e, err := NewEngine(synth)
+	if err != nil {
+		return nil, err
+	}
+	return &ClientEngine{e: e}, nil
+}
+
+// RunClients returns one Fact per client construction whose address is an
+// expression; Name is the expression text.
+func (c *ClientEngine) RunClients(file string, src []byte) []Fact {
+	return c.e.Run(file, src, func(_, expr string) (string, string, bool) { return expr, "expr", true })
+}

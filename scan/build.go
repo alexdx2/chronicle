@@ -620,7 +620,7 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 			forced[p] = true
 		}
 	}
-	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates, versionFrom(guide))
+	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates, versionFrom(guide, r.o.RepoRoot))
 	if err != nil {
 		return err
 	}

@@ -94,6 +94,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	var namedRegs []namedReg
 	var namedUses []namedUse
 	classDecls := map[string][]classDecl{}
+	sc := LoadScanConfig(root)
 	var useFiles []string // sources a client may be built in; read again once the table is complete
 	defer func() {
 		if tooBig > 0 {
@@ -139,7 +140,9 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 			parseCDKChannels(t, p, body)
 		}
 		if envSrc || reg || src || (cfg && isEnvDefaultSource(p)) {
-			parseEnvDefaults(t, p, body) // the default beside an env read, any language (a config module too)
+			if sc.Config.EnvDefaultsOn() {
+				parseEnvDefaults(t, p, body)
+			} // the default beside an env read, any language (a config module too)
 			useFiles = append(useFiles, p)
 		}
 		if envSrc {
@@ -178,6 +181,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	joinNamedClients(t, namedRegs, namedUses)
 	joinTypedClients(t, classDecls)
 	parseKeyLiteralUses(t, root, useFiles)
+	applyScanConfig(t, root, sorted, sc, &parsed)
 	return t, parsed
 }
 

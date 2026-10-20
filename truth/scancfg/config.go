@@ -15,15 +15,18 @@ const Version = 1
 
 // Config is one parsed layer or the merged effective configuration.
 type Config struct {
-	Version   int            `yaml:"version" json:"version"`
-	Scope     Scope          `yaml:"scope,omitempty" json:"scope,omitempty"`
-	Config    ConfigSection  `yaml:"config,omitempty" json:"config,omitempty"`
-	Channels  []ChannelRule  `yaml:"channels,omitempty" json:"channels,omitempty"`
-	Documents []DocumentRule `yaml:"documents,omitempty" json:"documents,omitempty"`
-	Clients   []ClientRule   `yaml:"clients,omitempty" json:"clients,omitempty"`
-	Routes    []RouteRule    `yaml:"routes,omitempty" json:"routes,omitempty"`
-	Aliases   []Alias        `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Noise     []Noise        `yaml:"noise,omitempty" json:"noise,omitempty"`
+	Version int `yaml:"version" json:"version"`
+	// Provenance of a project layer: "project" (default, a human wrote it) or
+	// "llm:<model>" (a model proposed it; rules stay unreviewed until a human sets reviewed).
+	Provenance string         `yaml:"provenance,omitempty" json:"provenance,omitempty"`
+	Scope      Scope          `yaml:"scope,omitempty" json:"scope,omitempty"`
+	Config     ConfigSection  `yaml:"config,omitempty" json:"config,omitempty"`
+	Channels   []ChannelRule  `yaml:"channels,omitempty" json:"channels,omitempty"`
+	Documents  []DocumentRule `yaml:"documents,omitempty" json:"documents,omitempty"`
+	Clients    []ClientRule   `yaml:"clients,omitempty" json:"clients,omitempty"`
+	Routes     []RouteRule    `yaml:"routes,omitempty" json:"routes,omitempty"`
+	Aliases    []Alias        `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Noise      []Noise        `yaml:"noise,omitempty" json:"noise,omitempty"`
 }
 
 // Scope says which files the scan reads (glob patterns, ** crosses directories).

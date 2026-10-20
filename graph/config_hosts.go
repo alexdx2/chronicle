@@ -50,6 +50,30 @@ type ConfigHosts struct {
 	Entries []ConfigEntry
 	Clients []ClientBinding
 	Uses    []ConfigUse
+	// RuleChannels are the channel facts the project's scan configuration
+	// (.depbot/scan.yaml) found deterministically: the resolver turns each
+	// into a produces/consumes/declares fact of its file.
+	RuleChannels []RuleChannel
+	// Aliases say a host name stands for a service (scan.yaml aliases).
+	Aliases []HostAlias
+	// Hints are convention sentences for the model prompt (scan.yaml routes).
+	Hints []string
+}
+
+// HostAlias maps a host name to a service name.
+type HostAlias struct{ Host, Service string }
+
+// RuleChannel is one channel fact found by a scan-config rule or document.
+type RuleChannel struct {
+	Rule      string // rule id, for the note
+	Source    string // builtin, fleet, project, llm
+	File      string
+	Line      int
+	Text      string // evidence anchor: what the file contains on that line
+	Name      string
+	Side      string // produce | consume | declare
+	Kind      string // topic, queue, stream, ...
+	Transport string
 }
 
 // ConfigUse is a source line that hands a configuration value (process.env.X,
@@ -118,7 +142,9 @@ func (c *ConfigHosts) AddClient(b ClientBinding) {
 }
 
 // Empty reports whether the table holds nothing.
-func (c *ConfigHosts) Empty() bool { return c == nil || (len(c.Entries) == 0 && len(c.Clients) == 0) }
+func (c *ConfigHosts) Empty() bool {
+	return c == nil || (len(c.Entries) == 0 && len(c.Clients) == 0 && len(c.RuleChannels) == 0)
+}
 
 func dirOf(file string) string {
 	if i := strings.LastIndex(file, "/"); i >= 0 {
@@ -406,7 +432,7 @@ func (c *ConfigHosts) ClientBase(filePath string, classes ...string) (ConfigEntr
 // PromptSection renders the table as a short block for the extraction prompt:
 // keys and hosts only. The URL's path, userinfo and query never appear.
 func (c *ConfigHosts) PromptSection(filePath string) string {
-	if c.Empty() {
+	if c.Empty() && (c == nil || len(c.Hints) == 0) {
 		return ""
 	}
 	type row struct{ key, host, class, channel string }
@@ -432,7 +458,7 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].key < rows[j].key || (rows[i].key == rows[j].key && rows[i].host < rows[j].host)
 	})
-	if len(rows) == 0 && len(c.Clients) == 0 {
+	if len(rows) == 0 && len(c.Clients) == 0 && len(c.Hints) == 0 {
 		return ""
 	}
 	if len(rows) > 40 {
@@ -459,6 +485,12 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 		}
 		sort.Strings(names)
 		b.WriteString(strings.Join(names, ", ") + ". A call made through one of them with only a path (\"/prices/{sku}\") is an http_call with that path as the target.\n")
+	}
+	if len(c.Hints) > 0 {
+		b.WriteString("\n## Conventions of this repository\nThe project's scan configuration states:\n")
+		for _, h := range c.Hints {
+			b.WriteString("- " + strings.TrimSpace(h) + "\n")
+		}
 	}
 	return b.String()
 }
@@ -530,4 +562,59 @@ func (c *ConfigHosts) AddChannel(key, name, file string) {
 		return
 	}
 	c.Entries = append(c.Entries, ConfigEntry{Key: key, File: file, Dir: dirOf(file), Channel: name})
+}
+
+// ChannelValue resolves an expression a rule captured in place of a literal
+// ("settings.ORDERS_TOPIC", "cfg.topics.orders", "ORDERS_TOPIC") to the channel
+// name a configuration key holds. The expression, its last segment, and the
+// dotted-to-colon spelling are tried against the channel entries nearest to file.
+func (c *ConfigHosts) ChannelValue(file, expr string) (name, key string, ok bool) {
+	if c == nil {
+		return "", "", false
+	}
+	expr = strings.TrimSuffix(strings.TrimSpace(expr), "()")
+	tries := []string{expr}
+	if i := strings.LastIndexAny(expr, "."); i >= 0 {
+		tries = append(tries, expr[i+1:])
+	}
+	for _, t := range tries {
+		if e, found := c.lookupChannel(file, t); found {
+			return e.Channel, e.Key, true
+		}
+		if e, found := c.lookupChannel(file, strings.ToUpper(t)); found {
+			return e.Channel, e.Key, true
+		}
+	}
+	return "", "", false
+}
+
+// AddChannelValue records a configuration value a project's scan config marks
+// as a channel name (config.keys: as: channel). Names are taken as written.
+func (c *ConfigHosts) AddChannelValue(key, name, file string) {
+	name = strings.TrimSpace(name)
+	if key == "" || name == "" || strings.ContainsAny(name, " \t\n") {
+		return
+	}
+	c.Entries = append(c.Entries, ConfigEntry{Key: key, File: file, Dir: dirOf(file), Channel: name})
+}
+
+// AddAddressValue records a configuration value a project's scan config marks
+// as an address (config.keys: as: address), without the key-name policy.
+func (c *ConfigHosts) AddAddressValue(key, rawURL, file string) {
+	clean, host, ok := SanitizeConfigURL(rawURL)
+	if !ok || key == "" {
+		return
+	}
+	c.Entries = append(c.Entries, ConfigEntry{Key: key, URL: clean, Host: host, File: file, Dir: dirOf(file), Routing: isRoutingKey(key)})
+}
+
+// DropKeys removes every entry whose key matches (config.keys: as: ignore).
+func (c *ConfigHosts) DropKeys(match func(key string) bool) {
+	out := c.Entries[:0]
+	for _, e := range c.Entries {
+		if !match(e.Key) {
+			out = append(out, e)
+		}
+	}
+	c.Entries = out
 }

@@ -56,6 +56,11 @@ func toS(v any) string {
 }
 
 // decodeDocument reads json, yaml or properties/dotenv into a flat map.
+// DecodeDocument reads json, yaml or properties/dotenv into dotted-path -> value.
+func DecodeDocument(file string, src []byte) (map[string]string, bool) {
+	return decodeDocument(file, src)
+}
+
 func decodeDocument(file string, src []byte) (map[string]string, bool) {
 	out := map[string]string{}
 	switch strings.ToLower(filepath.Ext(file)) {

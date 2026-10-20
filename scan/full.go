@@ -239,10 +239,11 @@ func (r *fullRun) guide() (*headless.GuideSet, error) {
 	return headless.NewGuide(r.cat, tech), nil
 }
 
-func versionFrom(guide *headless.GuideSet) func(string) string {
+func versionFrom(guide *headless.GuideSet, root string) func(string) string {
+	suffix := ScanConfigVersion(root)
 	return func(path string) string {
 		_, refs := guide.For(path)
-		return headless.ExtractorVersion(refs)
+		return headless.ExtractorVersion(refs) + suffix
 	}
 }
 
@@ -294,7 +295,7 @@ func (r *fullRun) scanDomain(ctx context.Context, d manifest.DomainEntry, multi 
 	if _, err := r.readConfig(domainRef{key: d.Key, multi: multi}); err != nil {
 		return err
 	}
-	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, list, versionFrom(guide))
+	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, list, versionFrom(guide, r.o.RepoRoot))
 	if err != nil {
 		return err
 	}
@@ -499,7 +500,7 @@ func (r *fullRun) extract(ctx context.Context, d manifest.DomainEntry, todo []st
 		G: r.g, RepoRoot: r.o.RepoRoot, ChronicleDir: paths.DirAt(r.o.RepoRoot), Domain: d.Key, Manifest: r.m,
 		HeadSHA: r.head, Files: todo, Backend: r.o.Backend, Concurrency: r.o.Concurrency,
 		ContextWindow: r.o.ContextWindow, FileTimeout: r.o.FileTimeout,
-		OnFileDone: r.o.OnFileDone, Guide: guide, VersionFor: versionFrom(guide), IsTest: r.isTest(d),
+		OnFileDone: r.o.OnFileDone, Guide: guide, VersionFor: versionFrom(guide, r.o.RepoRoot), IsTest: r.isTest(d),
 		Note: r.configNote(d.Key),
 		OnFiles: func(fs []headless.FileUsage) {
 			ms := MetricsFrom(model, fs, time.Now())

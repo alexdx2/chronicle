@@ -5458,6 +5458,29 @@ func (g *Graph) unresolvedCall(filePath, name, why string) *UnresolvedRef {
 // registered with; a symbol nothing resolves is reported unresolved and never
 // becomes a node named after the symbol.
 func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
+	t := g.classifyHTTPTargetRaw(filePath, fact)
+	if g.domainConfig == nil || len(g.domainConfig.Aliases) == 0 || t.target == "" {
+		return t
+	}
+	// scan.yaml aliases: a host name that stands for a service is rewritten to
+	// the service name, so the call resolves to it like any host that is one.
+	if u, err := url.Parse(strings.TrimSpace(t.target)); err == nil && u.Host != "" {
+		for _, a := range g.domainConfig.Aliases {
+			if strings.EqualFold(u.Hostname(), a.Host) {
+				if p := u.Port(); p != "" {
+					u.Host = a.Service + ":" + p
+				} else {
+					u.Host = a.Service
+				}
+				t.target = u.String()
+				break
+			}
+		}
+	}
+	return t
+}
+
+func (g *Graph) classifyHTTPTargetRaw(filePath string, fact Fact) httpTarget {
 	raw := fact.Target
 	if low := strings.ToLower(cleanCallTarget(raw)); strings.Contains(low[:min(len(low), 8)], "://") {
 		if fact.Origin == configUseOrigin && fact.Text != "" {
@@ -6014,6 +6037,38 @@ func (g *Graph) injectChannelBindings(files []fileFacts, idx map[string]int, see
 			Kind: kind, To: e.Channel, FromType: "service", Transport: "kafka", EvidenceText: evText,
 			Origin: configUseOrigin, Line: line, Text: e.Channel, Confidence: 1.0,
 			Note: "configured binding " + e.Key,
+		})
+	}
+	return g.injectRuleChannels(files, idx, seen)
+}
+
+// injectRuleChannels turns the channel facts of the project's scan
+// configuration into facts of the files that hold them. The rule is the
+// recognition; nothing else names the channel to the model.
+func (g *Graph) injectRuleChannels(files []fileFacts, idx map[string]int, seen map[string]bool) []fileFacts {
+	if g.domainConfig == nil {
+		return files
+	}
+	for _, rc := range g.domainConfig.RuleChannels {
+		kind := map[string]string{"produce": "produces", "consume": "consumes", "declare": "declares_channel"}[rc.Side]
+		if kind == "" || rc.File == "" || rc.Name == "" {
+			continue
+		}
+		k := rc.File + "\x00" + kind + "\x00" + rc.Name + "\x00" + fmt.Sprint(rc.Line)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		i, ok := idx[rc.File]
+		if !ok {
+			files = append(files, fileFacts{filePath: rc.File})
+			i = len(files) - 1
+			idx[rc.File] = i
+		}
+		files[i].facts = append(files[i].facts, Fact{
+			Kind: kind, To: rc.Name, FromType: "service", Transport: rc.Transport, Text: rc.Text, EvidenceText: rc.Text,
+			Origin: configUseOrigin, Line: rc.Line, Confidence: 1.0,
+			Note: "scan-config rule " + rc.Rule + " (" + rc.Source + ")",
 		})
 	}
 	return files

@@ -52,6 +52,12 @@ func Parse(data []byte, source string) (*Config, error) {
 	if c.Version != Version {
 		return nil, fmt.Errorf("scan config: unsupported version %d (this build reads %d)", c.Version, Version)
 	}
+	if source == SourceProject && c.Provenance != "" {
+		if c.Provenance != "project" && !strings.HasPrefix(c.Provenance, "llm:") {
+			return nil, fmt.Errorf("scan config: provenance %q must be project or llm:<model>", c.Provenance)
+		}
+		source = c.Provenance
+	}
 	trusted := source == SourceBuiltin || source == SourceFleet
 	for i := range c.Channels {
 		c.Channels[i].Source = source
