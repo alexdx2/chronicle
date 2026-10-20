@@ -616,6 +616,9 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 				forced[p] = true
 			}
 		}
+		for _, p := range keyConsumers(r.o.RepoRoot, table, changedCfg, candidates) {
+			forced[p] = true
+		}
 	}
 	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates, versionFrom(guide))
 	if err != nil {
@@ -897,6 +900,48 @@ func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// keyConsumers lists the candidate source files that write, as text, a key or
+// variable name defined by one of the changed config files: whichever
+// language reads it, such a file may build its call from the new value.
+func keyConsumers(root string, t *graph.ConfigHosts, changed map[string]bool, candidates []string) []string {
+	if t == nil {
+		return nil
+	}
+	var needles []string
+	seen := map[string]bool{}
+	for _, e := range t.Entries {
+		if !changed[e.File] || seen[e.Key] || len(e.Key) < 5 {
+			continue
+		}
+		seen[e.Key] = true
+		needles = append(needles, e.Key)
+		if i := strings.LastIndexAny(e.Key, ".:"); i > 4 { // the prefix of a bound options class
+			needles = append(needles, e.Key[:i])
+		}
+	}
+	if len(needles) == 0 {
+		return nil
+	}
+	var out []string
+	for _, p := range candidates {
+		if IsConfigFile(p) {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil || len(body) > maxConfigBytes {
+			continue
+		}
+		for _, n := range needles {
+			if bytes.Contains(body, []byte(n)) {
+				out = append(out, p)
+				break
+			}
+		}
 	}
 	sort.Strings(out)
 	return out

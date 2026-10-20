@@ -210,3 +210,49 @@ func TestBuildSnapshot_ClientBuiltFromConfigIsACallEvenWhenTheModelFindsNothing(
 		t.Fatal("no active call to gateway")
 	}
 }
+
+// The files that read a changed key are found by the key's text, whatever
+// language they are written in.
+func TestBuildSnapshot_ConfigOnlyChangeReachesFilesThatNameTheKey(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, map[string]string{
+		"src/main/resources/application.yml": "services:\n  catalog:\n    url: http://catalog-a:3000\n",
+		"src/main/java/Config.java":          "class Config { @Value(\"${services.catalog.url}\") String u; }\n",
+		"src/main/java/Other.java":           "class Other { }\n",
+	})
+	reread := map[string]int{}
+	b := &fileCountBackend{inner: &perFileBackend{facts: map[string]string{}}, seen: reread}
+	first, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k := range reread {
+		delete(reread, k)
+	}
+	writeT(t, repo, "src/main/resources/application.yml", "services:\n  catalog:\n    url: http://catalog-b:3000\n")
+	c2 := commitAllT(t, repo, "repoint")
+	in := buildIn(repo, c2, t.TempDir(), b)
+	in.Base = &Base{CodeSha: c1, Files: first.Files}
+	if _, err := BuildSnapshot(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if reread["src/main/java/Config.java"] == 0 {
+		t.Errorf("the file that names services.catalog.url must be extracted again: %v", reread)
+	}
+	if reread["src/main/java/Other.java"] != 0 {
+		t.Errorf("a file that does not name the key must not be extracted again: %v", reread)
+	}
+}
+
+// fileCountBackend counts the files a build sends to the model.
+type fileCountBackend struct {
+	inner llm.Backend
+	seen  map[string]int
+}
+
+func (b *fileCountBackend) Name() string  { return b.inner.Name() }
+func (b *fileCountBackend) Model() string { return b.inner.Model() }
+func (b *fileCountBackend) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	first, _, _ := strings.Cut(req.User, "\n")
+	b.seen[strings.TrimPrefix(first, "File: ")]++
+	return b.inner.Complete(ctx, req)
+}
