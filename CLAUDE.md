@@ -216,6 +216,17 @@ Rules when touching this chain:
 - Evidence re-observation refreshes assertion + verification fields AND journals them — `journal verify` diverges otherwise.
 - Insights consume the signals: hot_score = normComplexity × degree × staleness × churn(≤2×) × untested(1.5×); dashboard reads `/api/insights`.
 
+## Scan configuration (`.depbot/scan.yaml`)
+
+A declarative, per-project layer over the built-in scan: which files, where addresses and channel names live, how channels look in code and documents. Package `truth/scancfg` (types, loader, validation, layers, template engine, document rules); `scan/scancfg.go` applies it in the config pass (results land in `graph.ConfigHosts`: `RuleChannels`, `Aliases`, `Hints`, key entries); the resolver turns `RuleChannels` into produces/consumes/declares facts (`injectRuleChannels`) and rewrites aliased hosts. Layers, weakest first: `scan/builtin/*.yaml` (embedded), the fleet dir (`CHRONICLE_SCAN_CONFIG_DIR`, Pro uses `<data>/scan-config`), the project file. A rule with the same id replaces the weaker one.
+
+- Call templates: `client.send({name}` (string literal or identifier resolved through same-file constants and config keys), `{any}` skips an argument, `side: define` with `{id} = app.topic({name}` binds an identifier repo-wide and `{ref}` looks it up (`@app.agent({ref})`). `when` gates: ext, glob, contains, imports (import-like lines only). A match inside a string literal is not a match.
+- Provenance: `provenance: llm:<model>` marks a model-written layer; its rules are unreviewed. The independent reference (`truth/extract/scancfg.go`) executes only `reviewed: true` project rules, so the oracle never grades a rule with its own output. Builtin and fleet rules count as reviewed.
+- Coverage version gets `+scan-config@<hash>`: changing the configuration re-extracts the files it touches.
+- Tools: `chronicle scan-config get|validate|dry-run|explain|save|author` and the MCP tool `chronicle_scan_config` (action enum; engine injected by `internal/cli/scan_config.go` because `scan` imports `headless` imports `mcpserver`). `save` refuses a candidate that removes facts the current configuration finds unless `--accept-removed`; `dry-run` compares with `truth-expected.json` when the repo has one.
+- Not in v1: `routes` only reach the model as hints; SQL documents are not decoded (code rules with `ext: [.sql, .ksql]` work).
+- Spec: `docs/superpowers/specs/2026-10-20-project-scan-config-design.md` (outer repo). Builtin rules have Go twins in `truth/extract`; `scan/builtin_test.go` keeps them in agreement.
+
 ## Build and test
 
 ```bash
