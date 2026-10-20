@@ -115,6 +115,7 @@ func Extract(fsys fs.FS) (*truth.Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	all = append(all, scanConfigFacts(fsys, rep)...)
 	merged, warns := Merge(dropResolvedAliasVars(all, aliases))
 	rep.Facts = merged
 	rep.Warnings = append(rep.Warnings, warns...)
