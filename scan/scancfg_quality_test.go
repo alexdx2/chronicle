@@ -403,3 +403,26 @@ func TestBuiltinRules_NoFalsePositives(t *testing.T) {
 		})
 	}
 }
+
+// With an answer sheet, rules whose facts are mostly wrong are not saved, and
+// the model is told when it found the channel but gave it the wrong role.
+func TestAuthor_WrongSidesAreNotSaved(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"svc/app.py":          "import mybus\nbus.announce('orders.v1')\nbus.announce('refunds.v1')\n",
+		"truth-expected.json": `{"channels":[{"key":"topic:orders.v1#produce"},{"key":"topic:refunds.v1#produce"}]}`,
+	})
+	wrong := "version: 1\nchannels:\n  - id: mybus\n    patterns: [{call: 'bus.announce({name}', side: consume}]\n"
+	b := &seqBackend{answers: []string{wrong}}
+	res, err := ScanConfigAuthor(context.Background(), b, root, AuthorOptions{MaxRounds: 2})
+	if err != nil || res.Saved || fileExists(root) {
+		t.Fatalf("wrong-side candidate saved: %+v %v", res, err)
+	}
+	if !strings.Contains(b.users[1], "side is wrong for") {
+		t.Errorf("no side hint in the feedback:\n%s", b.users[1])
+	}
+	right := strings.Replace(wrong, "side: consume", "side: produce", 1)
+	res, err = ScanConfigAuthor(context.Background(), &seqBackend{answers: []string{wrong, right}}, root, AuthorOptions{MaxRounds: 3})
+	if err != nil || !res.Saved || res.Rounds[len(res.Rounds)-1].Hits != 2 {
+		t.Fatalf("corrected candidate: %+v %v", res, err)
+	}
+}

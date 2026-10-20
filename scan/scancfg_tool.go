@@ -88,6 +88,12 @@ type GoldenDiff struct {
 	File    string   `json:"file"`
 	Missing []string `json:"missing"`
 	Extra   []string `json:"extra"`
+	// The same comparison for the configuration's own facts (what the rules
+	// find, without the Go reference): the reference may already know a channel
+	// the rules do not, and an author needs to see exactly that.
+	ConfigHits    int      `json:"config_hits"`
+	ConfigMissing []string `json:"config_missing"`
+	ConfigExtra   []string `json:"config_extra"`
 }
 
 // isAnswerSheet: golden files of the audit fixtures are never project input.
@@ -238,11 +244,11 @@ func ScanConfigDryRun(root, yamlText string) DryRunReport {
 	}
 	sort.Strings(rep.Added)
 	sort.Strings(rep.Removed)
-	rep.Golden = goldenDiff(root, yamlText)
+	rep.Golden = goldenDiff(root, yamlText, rep.Facts)
 	return rep
 }
 
-func goldenDiff(root, yamlText string) *GoldenDiff {
+func goldenDiff(root, yamlText string, facts []DryRunFact) *GoldenDiff {
 	var gp string
 	for _, c := range []string{"truth-expected.json", ".depbot/truth-expected.json"} {
 		if _, err := os.Stat(filepath.Join(root, c)); err == nil {
@@ -305,6 +311,25 @@ func goldenDiff(root, yamlText string) *GoldenDiff {
 	}
 	sort.Strings(d.Missing)
 	sort.Strings(d.Extra)
+	cfgGot := map[string]bool{}
+	for _, f := range facts {
+		cfgGot[f.Key] = true
+	}
+	d.ConfigMissing, d.ConfigExtra = []string{}, []string{}
+	for k := range want {
+		if cfgGot[k] {
+			d.ConfigHits++
+		} else {
+			d.ConfigMissing = append(d.ConfigMissing, k)
+		}
+	}
+	for k := range cfgGot {
+		if !want[k] {
+			d.ConfigExtra = append(d.ConfigExtra, k)
+		}
+	}
+	sort.Strings(d.ConfigMissing)
+	sort.Strings(d.ConfigExtra)
 	return d
 }
 

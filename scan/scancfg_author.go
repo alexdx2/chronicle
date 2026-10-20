@@ -24,6 +24,7 @@ type AuthorRound struct {
 	Valid     bool   `json:"valid"`
 	Errors    string `json:"errors,omitempty"`
 	Facts     int    `json:"facts"`
+	Hits      int    `json:"golden_hits"`
 	Missing   int    `json:"golden_missing"`
 	Extra     int    `json:"golden_extra"`
 }
@@ -123,6 +124,23 @@ var (
 	versionLine    = regexp.MustCompile(`(?m)^version:[^\n]*\n`)
 )
 
+// sideMismatches lists channel names that appear in both lists with a
+// different side: the rule found the channel but gave it the wrong role.
+func sideMismatches(missing, extra []string) string {
+	name := func(k string) string { return strings.SplitN(k, "#", 2)[0] }
+	have := map[string]bool{}
+	for _, k := range extra {
+		have[name(k)] = true
+	}
+	var out []string
+	for _, k := range missing {
+		if have[name(k)] {
+			out = append(out, name(k))
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 func stripFences(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
@@ -163,8 +181,8 @@ func ScanConfigAuthor(ctx context.Context, b llm.Backend, root string, opts Auth
 	ev := authorEvidence(root, files, known, opts.Snippets)
 	var gold string
 	if base.Golden != nil {
-		gold = fmt.Sprintf("\nThe reference still misses these channels (key = kind:name#side):\n%s\nIt has these that should not exist:\n%s\n",
-			strings.Join(base.Golden.Missing, "\n"), strings.Join(base.Golden.Extra, "\n"))
+		gold = fmt.Sprintf("\nThe rules do not find these channels yet (key = kind:name#side):\n%s\nThe rules find these that should not exist:\n%s\n",
+			strings.Join(base.Golden.ConfigMissing, "\n"), strings.Join(base.Golden.ConfigExtra, "\n"))
 	}
 	user := "Current project layer:\n" + current + "\nLines of this repository that look like channel use the configuration does not find yet:\n\n" +
 		strings.Join(ev, "\n---\n") + gold + "\nWrite the improved scan.yaml."
@@ -179,12 +197,18 @@ func ScanConfigAuthor(ctx context.Context, b llm.Backend, root string, opts Auth
 		dr := ScanConfigDryRun(root, cand)
 		ar := AuthorRound{Candidate: cand, Valid: dr.Valid, Errors: dr.Errors, Facts: len(dr.Facts)}
 		if dr.Golden != nil {
-			ar.Missing, ar.Extra = len(dr.Golden.Missing), len(dr.Golden.Extra)
+			ar.Hits, ar.Missing, ar.Extra = dr.Golden.ConfigHits, len(dr.Golden.ConfigMissing), len(dr.Golden.ConfigExtra)
 		}
 		res.Rounds = append(res.Rounds, ar)
 		if dr.Valid {
 			score := len(dr.Facts)*2 - (ar.Missing+ar.Extra)*3
-			if len(dr.Facts) > 0 && score > bestScore {
+			// With an answer sheet a candidate must find more right than wrong
+			// facts: rules whose facts are wrong would pollute the graph.
+			acceptable := len(dr.Facts) > 0 && (dr.Golden == nil || ar.Hits > ar.Extra)
+			if dr.Golden != nil {
+				score = ar.Hits*3 - ar.Extra*3 - ar.Missing
+			}
+			if acceptable && score > bestScore {
 				bestScore, best = score, cand
 			}
 			if len(dr.Facts) > 0 && (dr.Golden == nil || ar.Missing == 0 && ar.Extra == 0) {
@@ -195,7 +219,10 @@ func ScanConfigAuthor(ctx context.Context, b llm.Backend, root string, opts Auth
 				fb += " That is nothing: a when gate or a template does not match the lines shown above (a gate must hold in every file where the pattern should match, including files that do not import the library)."
 			}
 			if dr.Golden != nil {
-				fb += fmt.Sprintf("\nStill missing: %s\nShould not exist: %s", strings.Join(dr.Golden.Missing, ", "), strings.Join(dr.Golden.Extra, ", "))
+				fb += fmt.Sprintf("\nStill missing: %s\nShould not exist: %s", strings.Join(dr.Golden.ConfigMissing, ", "), strings.Join(dr.Golden.ConfigExtra, ", "))
+				if hint := sideMismatches(dr.Golden.ConfigMissing, dr.Golden.ConfigExtra); hint != "" {
+					fb += "\nThe name is right but the side is wrong for: " + hint + " (produce = the code sends/writes it, consume = it reads it, declare = it creates or configures it)."
+				}
 			}
 			user = "Your previous answer:\n" + cand + "\n" + fb + "\nFix it. Answer with the YAML only."
 		} else {
