@@ -331,3 +331,21 @@ func TestClassifyCallBase_SpringPlaceholderKeys(t *testing.T) {
 		t.Errorf("a local variable is not a property key")
 	}
 }
+
+func TestCanonChannelName(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://sqs.eu-west-1.amazonaws.com/123456789012/orders-inbound":  "orders-inbound",
+		"//sqs.eu-west-1.amazonaws.com/123456789012/orders-inbound":        "orders-inbound",
+		"https://sqs.eu-west-1.amazonaws.com/123456789012/orders-inbound/": "orders-inbound",
+		"http://localhost:4566/000000000000/orders-inbound":                "orders-inbound",
+		"arn:aws:sqs:eu-west-1:123456789012:orders-inbound":                "orders-inbound",
+		"arn:aws:sns:eu-west-1:123456789012:order-events":                  "order-events",
+		"order-placed":                      "order-placed",
+		"orders/created":                    "orders/created",
+		"https://example.com/api/v1/things": "https://example.com/api/v1/things",
+	} {
+		if got := canonChannelName(in); got != want {
+			t.Errorf("canonChannelName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

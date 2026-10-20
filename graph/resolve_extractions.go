@@ -1966,6 +1966,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
+		fact.To = canonChannelName(fact.To)
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
@@ -2014,6 +2015,7 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		fromID := g.ensureNodeID(domainKey, revisionID, fromNodeKey, inferNameFromPath(filePath), filePath)
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
+		fact.To = canonChannelName(fact.To)
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
@@ -5814,4 +5816,25 @@ func (g *Graph) injectRoutingConfig(files []fileFacts, idx map[string]int, seen 
 		})
 	}
 	return files
+}
+
+var (
+	awsQueueURLRe = regexp.MustCompile(`(?i)^(?:https?:)?(?://)?(?:sqs\.[a-z0-9\-]+\.amazonaws\.com|[a-z0-9\-]+\.queue\.amazonaws\.com|localhost(?::\d+)?|[a-z0-9.\-]+(?::\d+)?)/(?:[0-9]{8,14}|queue)/([A-Za-z0-9_\-.]+?)/?$`)
+	awsARNRe      = regexp.MustCompile(`^arn:aws[a-z\-]*:(?:sqs|sns):[a-z0-9\-]*:[0-9]*:([A-Za-z0-9_\-.]+)$`)
+)
+
+// canonChannelName is the name a queue or topic goes by when the model wrote
+// its address: an SQS queue URL or an SQS/SNS ARN stands for the last segment,
+// which is the name every other repo uses. Any other target is unchanged.
+func canonChannelName(to string) string {
+	t := strings.TrimSpace(to)
+	if m := awsARNRe.FindStringSubmatch(t); m != nil {
+		return m[1]
+	}
+	if strings.Contains(t, "/") {
+		if m := awsQueueURLRe.FindStringSubmatch(t); m != nil {
+			return m[1]
+		}
+	}
+	return to
 }
