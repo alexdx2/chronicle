@@ -248,22 +248,30 @@ var dockerRunRe = regexp.MustCompile(`(?im)^\s*(?:CMD|ENTRYPOINT)\b`)
 
 // markAppsByDockerfile: a package published from a directory that has a
 // Dockerfile with a CMD or ENTRYPOINT is what that image runs, whatever its
-// language or framework: an application.
-func markAppsByDockerfile(root string, files []string, r *Report) {
+// language or framework: an application. The directories are listed from the
+// disk, because callers pass only the manifests.
+func markAppsByDockerfile(root string, _ []string, r *Report) {
 	dirs := map[string]bool{}
-	for _, rel := range files {
-		b := strings.ToLower(base(rel))
-		if b != "dockerfile" && !strings.HasPrefix(b, "dockerfile.") {
-			continue
+	for i := range r.Publishes {
+		if p := &r.Publishes[i]; !p.App {
+			dirs[path.Dir(filepath.ToSlash(p.File))] = false
 		}
-		body, err := osReadFile(joinRoot(root, rel))
-		if err != nil || !dockerRunRe.Match(body) {
-			continue
-		}
-		dirs[path.Dir(filepath.ToSlash(rel))] = true
 	}
-	if len(dirs) == 0 {
-		return
+	for dir := range dirs {
+		entries, err := os.ReadDir(joinRoot(root, dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			b := strings.ToLower(e.Name())
+			if e.IsDir() || (b != "dockerfile" && !strings.HasPrefix(b, "dockerfile.")) {
+				continue
+			}
+			if body, err := osReadFile(joinRoot(root, path.Join(dir, e.Name()))); err == nil && dockerRunRe.Match(body) {
+				dirs[dir] = true
+				break
+			}
+		}
 	}
 	for i := range r.Publishes {
 		p := &r.Publishes[i]

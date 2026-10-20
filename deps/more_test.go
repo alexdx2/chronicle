@@ -139,8 +139,7 @@ func TestAppsByDockerfile(t *testing.T) {
 	write("app/Dockerfile", "FROM python:3.12\nCMD [\"python\", \"-m\", \"fraud\"]\n")
 	write("lib/pyproject.toml", "[project]\nname = \"toolkit\"\nversion = \"1\"\n")
 	write("lib/Dockerfile", "FROM python:3.12\nRUN pip install .\n")
-	files := []string{"app/pyproject.toml", "app/Dockerfile", "lib/pyproject.toml", "lib/Dockerfile"}
-	rep, err := Scan(root, files)
+	rep, err := Scan(root, []string{"app/pyproject.toml", "lib/pyproject.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}
