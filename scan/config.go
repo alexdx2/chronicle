@@ -365,7 +365,7 @@ func lastIdent(s string) string {
 
 // configMarkers are the substrings a .cs/.ts/.js file must contain to be worth
 // parsing for client registrations or config uses.
-var configMarkers = [][]byte{[]byte("Client"), []byte("process.env"), []byte("environment"), []byte("Configuration"), []byte("config.")}
+var configMarkers = [][]byte{[]byte("Client"), []byte("process.env"), []byte("environment"), []byte("Configuration"), []byte("config."), []byte("onfig"), []byte("baseURL"), []byte("baseUrl")}
 
 func mayUseConfig(body []byte) bool {
 	for _, m := range configMarkers {

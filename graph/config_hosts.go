@@ -175,6 +175,22 @@ func (c *ConfigHosts) lookup(filePath, key string) (ConfigEntry, bool) {
 	if len(hosts) == 1 {
 		return any[0], true
 	}
+	if len(any) == 0 {
+		// The code names a leaf of an options object (extra.apiUrl read as
+		// "apiUrl"): accept a key that ends with it when one address stands
+		// behind every such key.
+		var tail []ConfigEntry
+		tails := map[string]bool{}
+		for _, e := range c.Entries {
+			if strings.HasSuffix(normConfigKey(e.Key), ":"+want) {
+				tail = append(tail, e)
+				tails[e.URL] = true
+			}
+		}
+		if len(tails) == 1 {
+			return pick(tail), true
+		}
+	}
 	return ConfigEntry{}, false
 }
 

@@ -184,3 +184,29 @@ func TestBuildSnapshot_ConfigOnlyChangeMovesTheCallsThatUseIt(t *testing.T) {
 		t.Errorf("the call to the old address must be gone")
 	}
 }
+
+// A source file the model has nothing to say about still builds a client from
+// a configured address; that call must not depend on the model reporting it.
+func TestBuildSnapshot_ClientBuiltFromConfigIsACallEvenWhenTheModelFindsNothing(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, map[string]string{
+		"app.config.js":     "module.exports = { extra: { apiUrl: process.env.API_URL || 'http://gateway:8080' } };\n",
+		"src/api/client.ts": "import Constants from 'expo-constants';\nconst apiUrl = Constants.expoConfig?.extra?.apiUrl as string;\nexport const api = axios.create({ baseURL: apiUrl });\n",
+	})
+	b := &perFileBackend{facts: map[string]string{}} // every file: no facts
+	res, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := false
+	for _, e := range decodeT(t, res.Files).Edges {
+		if e.Active && strings.Contains(e.ID, ":gateway:CALLS_SERVICE") {
+			ok = true
+		}
+	}
+	if !ok {
+		for _, e := range decodeT(t, res.Files).Edges {
+			t.Logf("edge %s %v", e.ID, e.Active)
+		}
+		t.Fatal("no active call to gateway")
+	}
+}

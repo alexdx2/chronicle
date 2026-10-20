@@ -5734,10 +5734,28 @@ func (g *Graph) injectConfigUses(files []fileFacts, domainKey string) []fileFact
 	if len(g.domainConfig.Uses) == 0 {
 		return files
 	}
+	var scanned map[string]bool // files the extraction looked at and found nothing to say about
 	for _, u := range g.domainConfig.Uses {
 		i, ok := idx[u.File]
 		if !ok {
-			continue
+			// A file the model answered "no runtime architecture" for has no
+			// extraction facts, yet it builds a client from a configured
+			// address: the use is the fact.
+			if scanned == nil {
+				scanned = map[string]bool{}
+				rows, _ := g.store.ListCoverage(domainKey)
+				for _, r := range rows {
+					if r.Status == "no_runtime_architecture" || r.Status == "extracted" {
+						scanned[r.FilePath] = true
+					}
+				}
+			}
+			if !scanned[u.File] {
+				continue
+			}
+			files = append(files, fileFacts{filePath: u.File})
+			i = len(files) - 1
+			idx[u.File] = i
 		}
 		_, _, e, ok := g.domainConfig.ResolveSymbol(u.File, u.Symbol)
 		if !ok {
