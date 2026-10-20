@@ -1,1 +1,29 @@
+# Starter rules, in the same format a project writes. Each one has a Go twin in
+# truth/extract; scan/builtin_test.go holds the two to the same answers on the
+# reference fixtures. Cross-file semantics (Faust topic objects used from other
+# modules) stay in Go: a template sees one file.
 version: 1
+channels:
+  - id: kafka-streams
+    when: {ext: [.java], imports: [org.apache.kafka.streams, StreamsBuilder]}
+    patterns:
+      - {call: ".stream({name}", side: consume, kind: topic, transport: kafka}
+      - {call: ".table({name}", side: consume, kind: topic, transport: kafka}
+      - {call: ".globalTable({name}", side: consume, kind: topic, transport: kafka}
+      - {call: ".to({name}", side: produce, kind: topic, transport: kafka}
+      - {call: ".through({name}", side: produce, kind: topic, transport: kafka}
+  - id: mqtt-py
+    when: {ext: [.py], imports: [paho, aiomqtt, asyncio_mqtt, gmqtt]}
+    patterns:
+      - {call: ".subscribe({name}", side: consume, kind: topic, transport: mqtt}
+      - {call: ".subscribe(topic={name}", side: consume, kind: topic, transport: mqtt}
+      - {call: ".publish({name}", side: produce, kind: topic, transport: mqtt}
+      - {call: ".publish(topic={name}", side: produce, kind: topic, transport: mqtt}
+      - {call: ".single({name}", side: produce, kind: topic, transport: mqtt}
+  - id: mqtt-js
+    when: {ext: [.ts, .tsx, .js, .jsx, .mjs, .cjs], imports: ["mqtt"]}
+    patterns:
+      - {call: ".subscribe({name}", side: consume, kind: topic, transport: mqtt}
+      - {call: ".subscribeAsync({name}", side: consume, kind: topic, transport: mqtt}
+      - {call: ".publish({name}", side: produce, kind: topic, transport: mqtt}
+      - {call: ".publishAsync({name}", side: produce, kind: topic, transport: mqtt}

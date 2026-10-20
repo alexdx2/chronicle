@@ -142,3 +142,20 @@ func TestScope(t *testing.T) {
 		}
 	}
 }
+
+func TestGatesAndStrings(t *testing.T) {
+	cfg := mustParse(t, "channels:\n  - id: m\n    when: {imports: [paho]}\n    patterns: [{call: '.publish({name}', side: produce}]\n", "")
+	e, _ := NewEngine(cfg)
+	if r := e.Run("a.py", []byte("x = 'no/paho/import'\nc.publish('t')\n"), nil); len(r) != 0 {
+		t.Errorf("a word in a string opened the imports gate: %v", r)
+	}
+	r := e.Run("a.py", []byte("import paho.mqtt.client as mqtt\nlog.warn(\"c.publish('in-log')\")\nc.publish('real')\n"), nil)
+	if len(r) != 1 || r[0].Name != "real" {
+		t.Errorf("call inside a string matched: %v", r)
+	}
+	g := mustParse(t, "channels:\n  - id: g\n    when: {imports: [nats.go]}\n    patterns: [{call: '.Publish({name}', side: produce}]\n", "")
+	e2, _ := NewEngine(g)
+	if r := e2.Run("m.go", []byte("package m\nimport (\n\t\"github.com/nats-io/nats.go\"\n)\nfunc f(){ nc.Publish(\"s.x\", d) }\n"), nil); len(r) != 1 {
+		t.Errorf("grouped go import: %v", r)
+	}
+}

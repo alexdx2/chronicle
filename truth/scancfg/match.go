@@ -169,12 +169,9 @@ func (w When) ok(file, code string) bool {
 			return false
 		}
 	}
-	for _, list := range [][]string{w.Contains, w.Imports} {
-		if len(list) == 0 {
-			continue
-		}
+	if len(w.Contains) > 0 {
 		hit := false
-		for _, s := range list {
+		for _, s := range w.Contains {
 			if strings.Contains(code, s) {
 				hit = true
 				break
@@ -184,7 +181,70 @@ func (w When) ok(file, code string) bool {
 			return false
 		}
 	}
+	if len(w.Imports) > 0 && !importsAny(code, w.Imports) {
+		return false
+	}
 	return true
+}
+
+var importLineRe = regexp.MustCompile(`(?m)^\s*(?:import\b|from\b|using\b|#include\b|use\b|require\b|(?:const|let|var)\s+[^=\n]*=\s*require\s*\(|\w+\s*=\s*require\b|@import\b|load\b)[^\n]*$|\bimport\s*\(|\brequire\s*\(\s*['"][^\n]*`)
+
+// importsAny: a token appears in an import-like line (import, from, using,
+// require, #include, use). A token that only occurs in a string or an
+// identifier somewhere else does not open the gate.
+func importsAny(code string, tokens []string) bool {
+	for _, ln := range importLineRe.FindAllString(code, -1) {
+		for _, t := range tokens {
+			if strings.Contains(ln, t) {
+				return true
+			}
+		}
+	}
+	// Go-style grouped imports: import ( ... ) spans lines
+	for _, blk := range goImportBlock.FindAllString(code, -1) {
+		for _, t := range tokens {
+			if strings.Contains(blk, t) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var goImportBlock = regexp.MustCompile(`(?s)\bimport\s*\(.*?\)`)
+
+// stringMask marks bytes of code that sit inside a string literal (quotes
+// included). Comments are already blanked; Python triple quotes are blanked as
+// docstrings by the lexer.
+func stringMask(code string) []bool {
+	mask := make([]bool, len(code))
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		if c != '"' && c != '\'' && c != '`' {
+			continue
+		}
+		j := i + 1
+		for ; j < len(code); j++ {
+			if code[j] == '\\' && c != '`' {
+				j++
+				continue
+			}
+			if code[j] == c {
+				break
+			}
+			if code[j] == '\n' && c != '`' {
+				break
+			}
+		}
+		if j >= len(code) || code[j] != c {
+			continue // unterminated on its line: an apostrophe, not a string
+		}
+		for k := i; k <= j; k++ {
+			mask[k] = true
+		}
+		i = j
+	}
+	return mask
 }
 
 type compiledRule struct {
@@ -247,6 +307,7 @@ func (e *Engine) Run(file string, src []byte, resolve Resolver) []Fact {
 		}
 		return res.Lines[lo].Num
 	}
+	var inStr []bool
 	var out []Fact
 	deadline := time.Now().Add(PerFileBudget)
 	seen := map[string]bool{}
@@ -263,6 +324,12 @@ func (e *Engine) Run(file string, src []byte, resolve Resolver) []Fact {
 				lit, expr, ok := c.captured(m, code)
 				if !ok {
 					continue
+				}
+				if inStr == nil {
+					inStr = stringMask(code)
+				}
+				if inStr[m[0]] {
+					continue // the call is text inside a string (a log line, a docstring)
 				}
 				name, via := lit, ""
 				if expr != "" {
