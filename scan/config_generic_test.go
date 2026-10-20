@@ -179,3 +179,31 @@ func TestEnvDefaultNamesTheAssignedConstant(t *testing.T) {
 		t.Fatalf("a name that does not say address became an alias: %v", got)
 	}
 }
+
+func TestConfigStructFieldFlowsIntoAClientConstructor(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/config.rs", "pub fn load() -> Config {\n    Config {\n        catalog_url: std::env::var(\"CATALOG_API_URL\").unwrap_or_else(|_| \"http://catalog-api:3000\".into()),\n    }\n}\n")
+	write("src/main.rs", "fn main() {\n    let cfg = config::load();\n    let catalog = CatalogClient::new(cfg.catalog_url.clone());\n    let log = Logger::new(cfg.catalog_url.clone());\n}\n")
+	tab, _ := ReadConfigHosts(root, []string{"src/config.rs", "src/main.rs"})
+	got := entriesOf(tab)
+	if got["catalog_url"] != "catalog-api" || got["CATALOG_API_URL"] != "catalog-api" {
+		t.Fatalf("entries %v", got)
+	}
+	var uses []graph.ConfigUse
+	for _, u := range tab.Uses {
+		uses = append(uses, u)
+	}
+	if len(uses) != 1 || uses[0].File != "src/main.rs" || uses[0].Callee != "CatalogClient" || uses[0].Line != 3 {
+		t.Fatalf("uses %+v", uses)
+	}
+	if _, _, e, ok := tab.ResolveSymbol("src/main.rs", uses[0].Symbol); !ok || e.Host != "catalog-api" {
+		t.Fatalf("symbol does not resolve: %+v", e)
+	}
+}

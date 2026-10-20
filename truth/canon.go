@@ -174,13 +174,13 @@ func ServiceKey(kind, name string) string {
 }
 
 var (
-	noisePrefixes = []string{"system.", "microsoft.", "runtime.", "@types/", "eslint", "xunit", "nunit", "coverlet", "pytest", "@vitejs/", "@testing-library", "@babel/", "babel-", "@swc/", "postcss", "autoprefixer", "tailwindcss", "org.junit", "junit:", "org.mockito", "org.jetbrains.kotlin:kotlin-test", "io.ktor:ktor-server-test-host", "org.springframework.boot:spring-boot-starter-test"}
+	noisePrefixes = []string{"system.", "microsoft.", "runtime.", "@types/", "eslint", "xunit", "nunit", "coverlet", "pytest", "@vitejs/", "@testing-library", "@babel/", "babel-", "@swc/", "postcss", "autoprefixer", "tailwindcss", "org.junit", "junit:", "org.mockito", "org.jetbrains.kotlin:kotlin-test", "io.ktor:ktor-server-test-host", "org.springframework.boot:spring-boot-starter-test", "ch.qos.logback", "org.slf4j", "org.projectlombok", "golang.org/x/", "github.com/stretchr/testify", "github.com/google/go-cmp", "go.uber.org/mock", "swashbuckle."}
 	noiseExact    = map[string]bool{
 		"netstandard.library": true, "typescript": true, "prettier": true, "jest": true,
 		"vitest": true, "mocha": true, "moq": true, "fluentassertions": true,
 		"black": true, "ruff": true, "mypy": true, "flake8": true,
 		"react": true, "react-dom": true, "next": true, "vue": true, "angular": true, "vite": true, "webpack": true,
-		"rollup": true, "esbuild": true, "tsx": true, "ts-node": true, "tsup": true, "supertest": true, "nock": true,
+		"rollup": true, "esbuild": true, "setuptools": true, "wheel": true, "pip": true, "tsx": true, "ts-node": true, "tsup": true, "supertest": true, "nock": true,
 	}
 )
 

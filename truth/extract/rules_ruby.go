@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"path"
 	"regexp"
 	"strings"
 
@@ -480,6 +481,7 @@ func applyRubyHTTP(f *FileCtx) []truth.Fact {
 
 func applyLockGem(f *FileCtx) []truth.Fact {
 	s := newDepSet("lock.gem", f)
+	dev := gemfileDevGems(f)
 	// DEPENDENCIES lists what the Gemfile asks for; specs is the whole closure.
 	inDeps := false
 	for _, l := range f.Lines {
@@ -496,7 +498,11 @@ func applyLockGem(f *FileCtx) []truth.Fact {
 			continue
 		}
 		if m := gemDirect.FindStringSubmatch(raw); m != nil {
-			if fp := s.add("gem", m[1], m[2], "dependencies"); fp != nil {
+			section := "dependencies"
+			if dev[m[1]] {
+				section = "dev"
+			}
+			if fp := s.add("gem", m[1], m[2], section); fp != nil {
 				fp.Primary = evidence(f, l)
 			}
 		}
@@ -505,3 +511,41 @@ func applyLockGem(f *FileCtx) []truth.Fact {
 }
 
 var gemDirect = regexp.MustCompile(`^  ([A-Za-z0-9_.\-]+)!?(?: \(([^)]*)\))?\s*$`)
+
+var (
+	gemfileGem   = regexp.MustCompile(`^\s*gem\s+['"]([^'"]+)['"]`)
+	gemfileGroup = regexp.MustCompile(`^\s*group\s+(.*?)\s+do\b`)
+)
+
+// gemfileDevGems names the gems the Gemfile beside the lock puts in a test or
+// development group: the lock lists them without saying so.
+func gemfileDevGems(f *FileCtx) map[string]bool {
+	out := map[string]bool{}
+	raw, ok := f.Tree.ReadFile(path.Join(f.Dir, "Gemfile"))
+	if !ok {
+		return out
+	}
+	var groups []bool
+	for _, line := range strings.Split(string(raw), "\n") {
+		code := line
+		if i := strings.Index(code, " #"); i >= 0 {
+			code = code[:i]
+		}
+		t := strings.TrimSpace(code)
+		switch {
+		case strings.HasPrefix(t, "#"):
+		case gemfileGroup.MatchString(code):
+			m := gemfileGroup.FindStringSubmatch(code)
+			groups = append(groups, strings.Contains(m[1], ":test") || strings.Contains(m[1], ":development"))
+		case t == "end" && len(groups) > 0:
+			groups = groups[:len(groups)-1]
+		case gemfileGem.MatchString(code):
+			for _, dev := range groups {
+				if dev {
+					out[gemfileGem.FindStringSubmatch(code)[1]] = true
+				}
+			}
+		}
+	}
+	return out
+}

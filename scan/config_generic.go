@@ -81,7 +81,7 @@ var (
 	// an environment read: the name is a quoted UPPER_SNAKE literal or process.env.NAME
 	envReadRe = regexp.MustCompile(`(?i:getenv|environ|\bENV\b|\benv\s*\(|\bconfig\s*\(|Variable\.get|GetEnvironmentVariable|env::var)[^"'` + "`" + `]{0,40}["'` + "`" + `]([A-Z][A-Z0-9_]{2,})["'` + "`" + `]|process\.env\.([A-Z][A-Z0-9_]{2,})|process\.env\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]|Variable\.get\(\s*["']([a-z][a-z0-9_]{4,})["']`)
 	// an identifier assigned at the start of a line: NAME = , const NAME = , val name = , NAME :=
-	assignedNameRe = regexp.MustCompile(`^\s*(?:export\s+)?(?:(?:const|let|var|val|final|static|public|private|readonly|String)\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)`)
+	assignedNameRe = regexp.MustCompile(`^\s*(?:export\s+)?(?:(?:const|let|var|val|final|static|public|private|readonly|String)\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=|:\s)`)
 	// names that say "this is an address"
 	addressNameRe = regexp.MustCompile(`(?i)(?:url|uri|host|endpoint|address|base|api)$`)
 	urlLitRe      = regexp.MustCompile("[\"'`](https?://[^\"'`\\s)]+)[\"'`]")

@@ -25,6 +25,9 @@ var clientCalleeRe = regexp.MustCompile(`\b((?:[A-Za-z_][\w]*\.)*[A-Z][A-Za-z0-9
 // useKeyLiteral says a table key is specific enough to be recognised as a
 // string literal: a dotted or colon path, or an UPPER_SNAKE variable name.
 func useKeyLiteral(key string) bool {
+	if identKey(key) {
+		return false
+	}
 	if len(key) < 5 {
 		return false
 	}
@@ -34,16 +37,28 @@ func useKeyLiteral(key string) bool {
 	return strings.ToUpper(key) == key && strings.Contains(key, "_")
 }
 
+// identKey: an address-named identifier (catalog_url, catalogUrl, CatalogURL),
+// the name a config struct or object gives the value.
+func identKey(key string) bool {
+	return len(key) >= 5 && !strings.ContainsAny(key, ".:") && addressIdentRe.MatchString(key) && strings.ToUpper(key) != key
+}
+
+var addressIdentRe = regexp.MustCompile(`(?i)(?:url|uri|host|endpoint|address)$`)
+
 // parseKeyLiteralUses adds a ConfigUse per client-shaped call whose arguments
 // hold a table key as a string literal. The key's own file is never a use.
 func parseKeyLiteralUses(t *graph.ConfigHosts, root string, files []string) {
-	keys := map[string]string{} // key -> file that defines it
+	keys := map[string]string{}   // key -> file that defines it
+	idents := map[string]string{} // address-named identifier -> file that defines it
 	for _, e := range t.Entries {
-		if useKeyLiteral(e.Key) {
+		switch {
+		case useKeyLiteral(e.Key):
 			keys[e.Key] = e.File
+		case identKey(e.Key):
+			idents[e.Key] = e.File
 		}
 	}
-	if len(keys) == 0 {
+	if len(keys) == 0 && len(idents) == 0 {
 		return
 	}
 	seen := map[string]bool{}
@@ -55,10 +70,12 @@ func parseKeyLiteralUses(t *graph.ConfigHosts, root string, files []string) {
 		src := string(srccomment.Strip(p, body))
 		// cheap exit: the file must mention at least one key
 		mentions := false
-		for k := range keys {
-			if strings.Contains(src, k) {
-				mentions = true
-				break
+		for _, set := range []map[string]string{keys, idents} {
+			for k := range set {
+				if strings.Contains(src, k) {
+					mentions = true
+					break
+				}
 			}
 		}
 		if !mentions {
@@ -74,11 +91,26 @@ func parseKeyLiteralUses(t *graph.ConfigHosts, root string, files []string) {
 			if i+1 < len(lines) && !strings.Contains(window, ")") {
 				window += " " + lines[i+1]
 			}
+			for k, def := range idents {
+				if def == p {
+					continue
+				}
+				if m := regexp.MustCompile(`(?:^|[^\w])((?:[\w]+\.)*` + regexp.QuoteMeta(k) + `)\b`).FindStringSubmatch(window); m != nil {
+					id := p + "\x00" + k
+					if !seen[id] {
+						seen[id] = true
+						t.AddUse(graph.ConfigUse{File: p, Line: i + 1, Text: m[1], Callee: l[cm[2]:cm[3]], Symbol: `Configuration["` + k + `"]`})
+					}
+				}
+			}
 			for k, def := range keys {
 				if def == p {
 					continue
 				}
 				for _, q := range []string{`"`, `'`} {
+					if identKey(k) {
+						break
+					}
 					lit := q + k + q
 					if !strings.Contains(window, lit) {
 						continue
