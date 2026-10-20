@@ -375,7 +375,7 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 		rows = rows[:40]
 	}
 	var b strings.Builder
-	b.WriteString("\n\n## Known config values\nThese configuration keys of this repository hold the hosts below. When a call's address is one of these keys (Configuration[\"..\"], process.env.X, environment.x), report the call with the key as the target; the host is filled in for you.\n")
+	b.WriteString("\n\n## Known config values\nThese configuration keys of this repository hold the hosts below. When a call's address is one of these keys (a configuration key, an environment variable, a settings property: Configuration[\"..\"], process.env.X, os.getenv(\"X\"), @Value, environment.x), report the call with the key as the target; the host is filled in for you.\n")
 	for _, r := range rows {
 		b.WriteString("- " + r.key + " -> " + r.host + "\n")
 	}

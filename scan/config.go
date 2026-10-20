@@ -43,6 +43,8 @@ func IsConfigFile(p string) bool {
 		return true
 	case isTSConfigFile(lower):
 		return true
+	case isGenericConfigFile(p):
+		return true
 	}
 	return false
 }
@@ -91,7 +93,8 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		cfg := IsConfigFile(p)
 		reg := isRegistrationFile(p)
 		src := isScriptSource(p)
-		if !cfg && !reg && !src {
+		envSrc := !cfg && !reg && !src && isEnvDefaultSource(p)
+		if !cfg && !reg && !src && !envSrc {
 			continue
 		}
 		fp := filepath.Join(root, filepath.FromSlash(p))
@@ -107,6 +110,12 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		if err != nil {
 			continue
 		}
+		if envSrc || reg || src {
+			parseEnvDefaults(t, p, body) // the default beside an env read, any language
+		}
+		if envSrc {
+			continue // an env-default source is not a config file: no coverage row
+		}
 		if (reg || src) && !mayUseConfig(body) {
 			continue
 		}
@@ -120,6 +129,9 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		}
 		lower := strings.ToLower(path.Base(p))
 		switch {
+		case isGenericConfigFile(p) && !strings.HasPrefix(lower, "appsettings") && !strings.HasPrefix(lower, ".env") &&
+			!strings.HasPrefix(lower, "docker-compose") && !strings.HasPrefix(lower, "compose."):
+			parseGenericConfig(t, p, body)
 		case strings.HasSuffix(lower, ".json"):
 			parseAppsettings(t, p, body)
 		case strings.HasPrefix(lower, ".env"):
