@@ -33,6 +33,8 @@ func isGenericConfigFile(p string) bool {
 		return true
 	case ".conf":
 		return strings.HasPrefix(stem, "application") || strings.HasPrefix(stem, "reference")
+	case ".config":
+		return stem == "web" || stem == "app" || strings.HasPrefix(stem, "web.") || strings.HasPrefix(stem, "app.")
 	case ".yml", ".yaml":
 		return strings.HasPrefix(stem, "application") || strings.HasPrefix(stem, "bootstrap") ||
 			strings.HasPrefix(stem, "values") || genericConfigStem(stem) || inConfigDir(p)
@@ -109,6 +111,8 @@ func parseGenericConfig(t *graph.ConfigHosts, file string, body []byte) {
 		}
 	case ".properties":
 		parseProperties(t, file, body)
+	case ".config":
+		parseXMLAppSettings(t, file, body)
 	case ".conf":
 		parseHocon(t, file, body)
 	}
@@ -251,5 +255,15 @@ func parseEnvDefaults(t *graph.ConfigHosts, file string, body []byte) {
 				t.Add(a[1], u[1], file)
 			}
 		}
+	}
+}
+
+var xmlAddRe = regexp.MustCompile(`<add\s+[^>]*?key\s*=\s*"([^"]+)"[^>]*?value\s*=\s*"([^"]*)"`)
+
+// parseXMLAppSettings reads <add key="" value=""/> of web.config / app.config.
+func parseXMLAppSettings(t *graph.ConfigHosts, file string, body []byte) {
+	src := regexp.MustCompile(`(?s)<!--.*?-->`).ReplaceAll(body, nil)
+	for _, m := range xmlAddRe.FindAllSubmatch(src, -1) {
+		t.Add(string(m[1]), string(m[2]), file)
 	}
 }

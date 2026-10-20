@@ -3,6 +3,7 @@ package scan
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/graph"
@@ -205,5 +206,29 @@ func TestConfigStructFieldFlowsIntoAClientConstructor(t *testing.T) {
 	}
 	if _, _, e, ok := tab.ResolveSymbol("src/main.rs", uses[0].Symbol); !ok || e.Host != "catalog-api" {
 		t.Fatalf("symbol does not resolve: %+v", e)
+	}
+}
+
+func TestWebConfigAppSettingsAndSQSQueue(t *testing.T) {
+	if !IsConfigFile("Web.config") || !IsConfigFile("src/app.config") || IsConfigFile("nuget.config") {
+		t.Fatal("web.config / app.config are config files, nuget.config is not")
+	}
+	tab := &graph.ConfigHosts{}
+	parseGenericConfig(tab, "Web.config", []byte("<configuration><appSettings>\n  <add key=\"BillingApiUrl\" value=\"http://billing-api:8080/\" />\n  <add key=\"OrdersQueueUrl\" value=\"https://sqs.eu-central-1.amazonaws.com/123456789012/orders-inbound\" />\n  <!-- <add key=\"Old\" value=\"http://dead:1\" /> -->\n</appSettings></configuration>"))
+	got := entriesOf(tab)
+	if got["BillingApiUrl"] != "billing-api" || got["OrdersQueueUrl"] != "sqs.eu-central-1.amazonaws.com" || len(got) != 2 {
+		t.Fatalf("%v", got)
+	}
+	var q string
+	for _, e := range tab.Entries {
+		if e.Key == "OrdersQueueUrl" {
+			q = e.Queue
+		}
+	}
+	if q != "orders-inbound" {
+		t.Fatalf("queue = %q", q)
+	}
+	if p := tab.PromptSection("Orders/OrderQueue.cs"); !strings.Contains(p, `OrdersQueueUrl -> SQS queue "orders-inbound"`) || !strings.Contains(p, "BillingApiUrl -> billing-api") {
+		t.Fatalf("prompt:\n%s", p)
 	}
 }

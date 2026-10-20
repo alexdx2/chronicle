@@ -20,6 +20,10 @@ type ConfigEntry struct {
 	// destinations, gateway routes, upstreams): the configuration is itself the
 	// integration, no call site names it.
 	Routing bool
+	// Queue is the queue name when the value is an AWS SQS queue URL
+	// (https://sqs.eu-west-1.amazonaws.com/123456789012/orders-inbound): the
+	// host says nothing about the system, the last path segment does.
+	Queue string
 }
 
 // ClientBinding says a typed HTTP client class (AddHttpClient<T>,
@@ -91,7 +95,7 @@ func (c *ConfigHosts) Add(key, rawURL, file string) {
 	if !ok || key == "" {
 		return
 	}
-	c.Entries = append(c.Entries, ConfigEntry{Key: key, URL: clean, Host: host, File: file, Dir: dirOf(file), Routing: isRoutingKey(key)})
+	c.Entries = append(c.Entries, ConfigEntry{Key: key, URL: clean, Host: host, File: file, Dir: dirOf(file), Routing: isRoutingKey(key), Queue: sqsQueueName(rawURL)})
 }
 
 // AddClient records a typed client registration.
@@ -370,7 +374,7 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 	if c.Empty() {
 		return ""
 	}
-	type row struct{ key, host, class string }
+	type row struct{ key, host, class, queue string }
 	seen := map[string]bool{}
 	var rows []row
 	for _, e := range c.Entries {
@@ -388,7 +392,7 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 			continue
 		}
 		seen[k] = true
-		rows = append(rows, row{key: e.Key, host: e.Host})
+		rows = append(rows, row{key: e.Key, host: e.Host, queue: e.Queue})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].key < rows[j].key || (rows[i].key == rows[j].key && rows[i].host < rows[j].host)
@@ -402,6 +406,10 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 	var b strings.Builder
 	b.WriteString("\n\n## Known config values\nThese configuration keys of this repository hold the hosts below. When a call's address is one of these keys (a configuration key, an environment variable, a settings property: Configuration[\"..\"], process.env.X, os.getenv(\"X\"), @Value, environment.x), report the call with the key as the target; the host is filled in for you.\n")
 	for _, r := range rows {
+		if r.queue != "" {
+			b.WriteString("- " + r.key + " -> SQS queue \"" + r.queue + "\" (a produce/consume of that queue, not an HTTP host)\n")
+			continue
+		}
 		b.WriteString("- " + r.key + " -> " + r.host + "\n")
 	}
 	if len(c.Clients) > 0 {
@@ -432,4 +440,19 @@ func isRoutingKey(key string) bool {
 		}
 	}
 	return false
+}
+
+var sqsHostRe = regexp.MustCompile(`(?i)^(?:sqs\.[a-z0-9\-]+|[a-z0-9\-]+)\.amazonaws\.com$`)
+
+// sqsQueueName returns the queue of an SQS queue URL, "" for anything else.
+func sqsQueueName(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !sqsHostRe.MatchString(u.Hostname()) || !strings.HasPrefix(strings.ToLower(u.Hostname()), "sqs.") && !strings.Contains(strings.ToLower(u.Hostname()), "queue") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) == 2 && len(parts[0]) >= 8 && parts[1] != "" { // /<account id>/<queue name>
+		return parts[1]
+	}
+	return ""
 }
