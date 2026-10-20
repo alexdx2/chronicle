@@ -1,0 +1,1 @@
+{ "name": "pkg", "topics": "not-a-connector", "table.include.list": "a.b", "topic.prefix": "x" }

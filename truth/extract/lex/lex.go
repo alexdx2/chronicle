@@ -21,6 +21,7 @@ const (
 	Hash                 // yaml, toml, hcl, dotenv, Dockerfile: # comments, single-line quotes
 	None                 // json, xml: no comments
 	PHP                  // //, #, /* */ (but not the #[Attribute] opener), '…', "…"
+	SQL                  // --, /* */, '…' ('' escapes), "…"
 )
 
 // Line is one source line (split on '\n'; a trailing '\r' stays).
@@ -54,6 +55,8 @@ func FamilyFor(path string) Family {
 		return Hash
 	case ".py":
 		return Python
+	case ".sql", ".ksql":
+		return SQL
 	case ".yml", ".yaml", ".toml", ".tf", ".conf":
 		return Hash
 	}
@@ -104,6 +107,13 @@ func Scan(src []byte, f Family) Result {
 	for i := 0; f != None && i < n; {
 		c := src[i]
 		switch {
+		case (f == SQL && has(i, "--")):
+			j := bytes.IndexByte(src[i:], '\n')
+			if j < 0 {
+				j = n - i
+			}
+			blank(i, i+j)
+			i += j
 		case ((f == CLike || f == PHP) && has(i, "//")) || ((f == Python || f == Hash || f == PHP) && c == '#' && !(f == PHP && has(i, "#["))):
 			j := bytes.IndexByte(src[i:], '\n')
 			if j < 0 {
@@ -111,7 +121,7 @@ func Scan(src []byte, f Family) Result {
 			}
 			blank(i, i+j)
 			i += j
-		case (f == CLike || f == PHP) && has(i, "/*"):
+		case (f == CLike || f == PHP || f == SQL) && has(i, "/*"):
 			i = multi(i, i+2, "*/", false, true)
 		case f == CLike && has(i, `@"`):
 			// C# verbatim: "" is an escaped quote, no backslash escapes.
@@ -137,7 +147,7 @@ func Scan(src []byte, f Family) Result {
 			i = multi(i, i+1, "`", true, false)
 		case c == '"' || c == '\'':
 			// Single-line string; an unclosed quote is not a string at all.
-			esc := !(f == Hash && c == '\'')
+			esc := !((f == Hash || f == SQL) && c == '\'')
 			j := i + 1
 			for j < n && src[j] != c && src[j] != '\n' {
 				if esc && src[j] == '\\' && j+1 < n && src[j+1] != '\n' {

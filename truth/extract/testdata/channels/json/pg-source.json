@@ -1,0 +1,8 @@
+{
+  "name": "pg-src",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "topic.prefix": "cdc",
+    "table.include.list": "public.users, sales.orders,public.tmp_.*"
+  }
+}

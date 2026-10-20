@@ -1,0 +1,1 @@
+{"name":"m","connector.class":"io.debezium.connector.mysql.MySqlConnector","database.server.name":"legacy","table.include.list":"shop.items","database.include.list":"shop"}

@@ -1,0 +1,5 @@
+{
+  "connector.class": "io.confluent.connect.s3.S3SinkConnector",
+  "topics": "c-a, c-b,${env:X}",
+  "topics.regex": "ignored-.*"
+}

@@ -1,0 +1,20 @@
+spring:
+  cloud:
+    stream:
+      bindings:
+        pay-in-0:
+          destination: s-payments, s-refunds
+          group: g
+        pay-out-0:
+          destination: s-receipts
+        plain-binding:
+          destination: s-unknown-direction
+        env-in-0:
+          destination: ${ENV_TOPIC}
+        # old-in-0:
+        #   destination: s-commented
+      kafka:
+        bindings:
+          pay-out-0:
+            producer:
+              destination: not-a-binding

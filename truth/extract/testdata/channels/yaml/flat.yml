@@ -1,0 +1,1 @@
+spring.cloud.stream.bindings.f-in-0.destination: flat-in

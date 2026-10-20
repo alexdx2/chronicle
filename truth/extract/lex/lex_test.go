@@ -131,7 +131,7 @@ func TestFamilyFor(t *testing.T) {
 	cases := map[string]Family{
 		"a/b.cs": CLike, "a/B.java": CLike, "x.TSX": CLike, "x.mjs": CLike, "App.jsx": CLike, "x.py": Python,
 		"Dockerfile": Hash, "Dockerfile.dev": Hash, ".env": Hash, ".env.local": Hash,
-		"A.kt": CLike, "build.gradle.kts": CLike, "build.gradle": CLike, "application.conf": Hash, "a.yml": Hash, "a.tf": Hash, "a.toml": Hash, "a.json": None, "a.csproj": None, "a.xml": None, "a.zzz": None,
+		"A.kt": CLike, "build.gradle.kts": CLike, "build.gradle": CLike, "application.conf": Hash, "a.yml": Hash, "a.tf": Hash, "a.toml": Hash, "a.json": None, "m/01.sql": SQL, "a.csproj": None, "a.xml": None, "a.zzz": None,
 	}
 	for p, want := range cases {
 		if got := FamilyFor(p); got != want {
@@ -191,5 +191,15 @@ func TestJSXCommentsBlanked(t *testing.T) {
 	r := code(t, "const a = 1 // api.get('/x')\n", FamilyFor("App.jsx"))
 	if strings.Contains(r.Lines[0].Code, "api.get") {
 		t.Fatalf("comment leaked: %q", r.Lines[0].Code)
+	}
+}
+
+func TestSQL(t *testing.T) {
+	r := code(t, "a 'x -- y' -- c\n/* b\nc */ d 'it''s' e", SQL)
+	if got := r.Lines[0].Code; got != "a 'x -- y'     " {
+		t.Fatalf("%q", got)
+	}
+	if strings.TrimSpace(r.Lines[1].Code) != "" || strings.TrimSpace(r.Lines[2].Code) != "d 'it''s' e" {
+		t.Fatalf("%+v", r.Lines)
 	}
 }
