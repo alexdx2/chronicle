@@ -264,3 +264,16 @@ func TestTypedClientClassUsesItsRegisteredAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestOptionsObjectAndLocalAliasReachTheClient(t *testing.T) {
+	tab := &graph.ConfigHosts{}
+	parseConfigUses(tab, "src/api/client.ts", []byte("import Constants from 'expo-constants';\n\nconst apiUrl = Constants.expoConfig?.extra?.apiUrl as string;\n\nexport const api = axios.create({\n  baseURL: apiUrl,\n  timeout: 15000,\n});\nconst other = got.extend({ prefixUrl: process.env.OTHER_URL });\nconst nope = axios.create({ timeout: 1, headers: { url: apiUrl } });\n"))
+	var got []string
+	for _, u := range tab.Uses {
+		got = append(got, u.Callee+"|"+u.Text+"|"+u.Symbol)
+	}
+	want := []string{"axios.create|apiUrl|Constants.expoConfig?.extra?.apiUrl", "got.extend|process.env.OTHER_URL|process.env.OTHER_URL"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("uses = %q", got)
+	}
+}

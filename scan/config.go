@@ -479,7 +479,8 @@ func parseConfigUses(t *graph.ConfigHosts, file string, body []byte) {
 		args   string
 	}
 	var hits []hit
-	for _, re := range []*regexp.Regexp{ctorCallRe, factoryCallRe} {
+	aliases := localConfigAliases(src)
+	for _, re := range []*regexp.Regexp{ctorCallRe, factoryCallRe, httpLibFactoryRe} {
 		for _, m := range re.FindAllStringSubmatchIndex(src, -1) {
 			callee := src[m[2]:m[3]]
 			if builtinCtors[callee] {
@@ -491,14 +492,59 @@ func parseConfigUses(t *graph.ConfigHosts, file string, body []byte) {
 	sort.Slice(hits, func(i, j int) bool { return hits[i].off < hits[j].off })
 	for _, h := range hits {
 		for _, arg := range splitTopLevel(h.args) {
-			expr := strings.TrimSpace(argTailRe.ReplaceAllString(strings.TrimSpace(arg), ""))
-			kind, _ := graph.ClassifyCallBase(expr)
-			if kind != graph.SymEnv && kind != graph.SymConfig {
-				continue
+			for _, expr := range addressArgs(arg) {
+				symbol := expr
+				if a, ok := aliases[expr]; ok { // const apiUrl = Constants.expoConfig.extra.apiUrl
+					symbol = a
+				}
+				kind, _ := graph.ClassifyCallBase(symbol)
+				if kind != graph.SymEnv && kind != graph.SymConfig {
+					continue
+				}
+				t.AddUse(graph.ConfigUse{File: file, Line: lineAt(h.off), Text: expr, Callee: h.callee, Symbol: symbol})
 			}
-			t.AddUse(graph.ConfigUse{File: file, Line: lineAt(h.off), Text: expr, Callee: h.callee, Symbol: expr})
 		}
 	}
+}
+
+// httpLibFactoryRe: axios.create({ baseURL }), got.extend({ prefixUrl }), ky.create ...
+var httpLibFactoryRe = regexp.MustCompile(`\b((?:axios|got|ky|ofetch|superagent)\.(?:create|extend))\s*\(`)
+
+var (
+	localAliasRe = regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::\s*[\w<>\[\]|. ]+)?=\s*([^;\n]+)`)
+	addressKeyRe = regexp.MustCompile(`(?i)^(?:base_?url|prefix_?url|url|uri|endpoint|host|address|api_?url|[a-z]*url)$`)
+)
+
+// localConfigAliases finds `const name = <config value>` so a client built from
+// `name` is known to be built from the value.
+func localConfigAliases(src string) map[string]string {
+	out := map[string]string{}
+	for _, m := range localAliasRe.FindAllStringSubmatch(src, -1) {
+		expr := strings.TrimSpace(argTailRe.ReplaceAllString(strings.TrimSpace(m[2]), ""))
+		if kind, _ := graph.ClassifyCallBase(expr); kind == graph.SymEnv || kind == graph.SymConfig {
+			out[m[1]] = expr
+		}
+	}
+	return out
+}
+
+// addressArgs gives the expressions of one call argument that may hold an
+// address: the argument itself, or the address-named properties of an options
+// object ({ baseURL: apiUrl, timeout: 5 } gives apiUrl).
+func addressArgs(arg string) []string {
+	a := strings.TrimSpace(arg)
+	if strings.HasPrefix(a, "{") && strings.HasSuffix(a, "}") {
+		var out []string
+		for _, prop := range splitTopLevel(a[1 : len(a)-1]) {
+			k, v, ok := strings.Cut(prop, ":")
+			if !ok || !addressKeyRe.MatchString(strings.Trim(strings.TrimSpace(k), `"'`)) {
+				continue
+			}
+			out = append(out, strings.TrimSpace(argTailRe.ReplaceAllString(strings.TrimSpace(v), "")))
+		}
+		return out
+	}
+	return []string{strings.TrimSpace(argTailRe.ReplaceAllString(a, ""))}
 }
 
 // splitTopLevel splits call arguments at commas outside brackets and quotes.
