@@ -132,6 +132,12 @@ METHOD values: GET | POST | PUT | DELETE | PATCH | WS | Query | Mutation | Subsc
 Use for externally callable entry points: HTTP routes, GraphQL operations, WebSocket handlers, RPC handlers.
 For message consumers, prefer `consumes`.
 
+`target` is the full path the service answers on. Join every prefix this file shows: a class or
+controller prefix (`@RequestMapping("/x")`, `[Route("x")]`, `@Controller('x')`), a route group or
+sub-router (`MapGroup`, `Group`, `Route("/x", ...)`, `scope`, `namespace`, `APIRouter(prefix=...)`,
+`Router.prefix`), a mount made in this same file (`app.use('/api', router)`). A prefix that is set in a
+file you cannot see is not guessed: write the path as this file shows it. Keep path parameters as written.
+
 gRPC / RPC handlers: `method` is the literal `GRPC` (never GET/POST, never the rpc name),
 `target` is `package.Service/Method` as the wire path, e.g.
 `{"kind":"endpoint","method":"GRPC","target":"bookmaker.OddsService/GetOdds"}`.
