@@ -85,3 +85,36 @@ func TestScanConfigBrokenIsIgnored(t *testing.T) {
 		t.Fatal("scan must continue with the other layers")
 	}
 }
+
+func TestScanConfigTools(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"svc/app.py":          "import faust\napp.topic('orders.v1')\napp.topic('refunds.v1')\n",
+		"truth-expected.json": `{"channels":[{"Key":"topic:orders.v1#declare"},{"Key":"topic:refunds.v1#declare"},{"Key":"topic:gone.v1#declare"}]}`,
+	})
+	cand := "channels:\n  - id: faust\n    patterns: [{call: 'app.topic({name}', side: declare}]\n"
+	dr := ScanConfigDryRun(root, cand)
+	if !dr.Valid || len(dr.Added) != 2 {
+		t.Fatalf("dry run: %+v", dr)
+	}
+	if dr.Golden == nil || len(dr.Golden.Missing) != 1 {
+		t.Fatalf("golden: %+v", dr.Golden)
+	}
+	if bad := ScanConfigDryRun(root, "channels: [{id: X}]"); bad.Valid || bad.Errors == "" {
+		t.Fatal("invalid must be reported")
+	}
+	res, err := ScanConfigSave(root, cand, false)
+	if err != nil || !res.Saved {
+		t.Fatalf("save: %+v %v", res, err)
+	}
+	// dropping the rule now loses facts: refused until accepted
+	res, _ = ScanConfigSave(root, "version: 1\n", false)
+	if res.Saved || len(res.Removed) != 2 {
+		t.Fatalf("loss guard: %+v", res)
+	}
+	if res, _ = ScanConfigSave(root, "version: 1\n", true); !res.Saved {
+		t.Fatalf("accepted: %+v", res)
+	}
+	if ex := ScanConfigExplain(writeTree(t, map[string]string{"a.py": "app.topic('x')\n", ".depbot/scan.yaml": cand}), "a.py"); len(ex) != 1 {
+		t.Fatalf("explain: %+v", ex)
+	}
+}

@@ -59,6 +59,7 @@ func Tools(g *graph.Graph) []server.ServerTool {
 		{Tool: reportDiscoveryTool(), Handler: reportDiscoveryHandler(g)},
 		{Tool: getDiscoveriesTool(), Handler: getDiscoveriesHandler(g)},
 		{Tool: adminURLTool(), Handler: adminURLHandler()},
+		{Tool: scanConfigTool(), Handler: scanConfigHandler(g)},
 		{Tool: defineTermTool(), Handler: defineTermHandler(g)},
 		{Tool: getGlossaryTool(), Handler: getGlossaryHandler(g)},
 		{Tool: checkLanguageTool(), Handler: checkLanguageHandler(g)},

@@ -18,6 +18,7 @@ import (
 	"github.com/alexdx2/chronicle-core/graph"
 	"github.com/alexdx2/chronicle-core/internal/srccomment"
 	"github.com/alexdx2/chronicle-core/store"
+	"github.com/alexdx2/chronicle-core/truth/scancfg"
 )
 
 // configExtractorID labels the coverage rows the config pass writes.
@@ -86,6 +87,12 @@ func isScriptSource(p string) bool {
 // and every C# client registration, and returns the table plus the config files
 // it parsed. A file it cannot read is skipped: the table is best effort.
 func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string) {
+	return ReadConfigHostsWith(root, files, LoadScanConfig(root))
+}
+
+// ReadConfigHostsWith is ReadConfigHosts under an explicit scan configuration
+// (a candidate being dry-run, not the one on disk).
+func ReadConfigHostsWith(root string, files []string, sc *scancfg.Config) (*graph.ConfigHosts, []string) {
 	t := &graph.ConfigHosts{Root: root}
 	var parsed []string
 	sorted := append([]string(nil), files...)
@@ -94,7 +101,6 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	var namedRegs []namedReg
 	var namedUses []namedUse
 	classDecls := map[string][]classDecl{}
-	sc := LoadScanConfig(root)
 	var useFiles []string // sources a client may be built in; read again once the table is complete
 	defer func() {
 		if tooBig > 0 {
