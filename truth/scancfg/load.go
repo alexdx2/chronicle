@@ -59,16 +59,25 @@ func Parse(data []byte, source string) (*Config, error) {
 		source = c.Provenance
 	}
 	trusted := source == SourceBuiltin || source == SourceFleet
+	// A model cannot vouch for its own rules: the independent reference runs
+	// only what a human reviewed, so the mark is dropped from model-written files.
+	modelWritten := strings.HasPrefix(source, "llm:")
 	for i := range c.Channels {
 		c.Channels[i].Source = source
 		if trusted {
 			c.Channels[i].Reviewed = true
+		}
+		if modelWritten {
+			c.Channels[i].Reviewed = false
 		}
 	}
 	for i := range c.Documents {
 		c.Documents[i].Source = source
 		if trusted {
 			c.Documents[i].Reviewed = true
+		}
+		if modelWritten {
+			c.Documents[i].Reviewed = false
 		}
 	}
 	for i := range c.Clients {

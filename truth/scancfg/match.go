@@ -26,6 +26,13 @@ type Compiled struct {
 	hasRef bool // {ref}: an identifier looked up in the definitions
 }
 
+var litToken = regexp.MustCompile(`[\w$@]+(?:\.[\w$@]+)*|\S`)
+
+func wordTok(t string) bool {
+	c := t[0]
+	return c == '_' || c == '$' || c == '@' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
+}
+
 var placeholder = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 const (
@@ -49,20 +56,19 @@ func compileTemplate(tpl string) (*Compiled, error) {
 	last := 0
 	locs := placeholder.FindAllStringSubmatchIndex(tpl, -1)
 	lit := func(s string) {
-		if s == "" {
-			return
-		}
-		for _, f := range strings.Fields(strings.NewReplacer("(", " ( ", ")", " ) ", ",", " , ").Replace(s)) {
-			switch f {
-			case "(":
-				b.WriteString(`\(\s*`)
-			case ")":
-				b.WriteString(`\s*\)`)
-			case ",":
-				b.WriteString(`\s*,\s*`)
-			default:
-				b.WriteString(regexp.QuoteMeta(f))
+		// Whitespace is optional between every pair of tokens except two words,
+		// which stay apart ("new Client"): `{ baseURL:` and `{baseURL:` are one thing.
+		idx := litToken.FindAllStringIndex(s, -1)
+		for i, loc := range idx {
+			tk := s[loc[0]:loc[1]]
+			b.WriteString(regexp.QuoteMeta(tk))
+			if i+1 < len(idx) && wordTok(tk) && wordTok(s[idx[i+1][0]:idx[i+1][1]]) && idx[i+1][0] > loc[1] {
+				b.WriteString(`\s+`)
+			} else {
+				b.WriteString(`\s*`)
 			}
+		}
+		if len(idx) == 0 {
 			b.WriteString(`\s*`)
 		}
 	}

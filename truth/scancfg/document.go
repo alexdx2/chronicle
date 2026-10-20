@@ -203,6 +203,7 @@ func RunDocuments(cfg *Config, file string, src []byte) []Fact {
 		if d.Select == "" {
 			keys = []string{""}
 		}
+		emitted := map[string]bool{}
 		for _, k := range keys {
 			for _, e := range d.Emit {
 				side := e.Side
@@ -221,6 +222,12 @@ func RunDocuments(cfg *Config, file string, src []byte) []Fact {
 				for _, n := range expand(e.Name, k, doc[k], doc) {
 					if n == "" {
 						continue
+					}
+					// A name that does not depend on the selected key repeats for every key.
+					if dup := d.ID + "|" + kind + ":" + n + "#" + side; emitted[dup] {
+						continue
+					} else {
+						emitted[dup] = true
 					}
 					out = append(out, Fact{Rule: d.ID, Source: d.Source, Reviewed: d.Reviewed, Kind: kind, Side: side,
 						Transport: e.Transport, Name: n, File: file, Line: lineOf(src, doc[k]), Text: k + ": " + doc[k]})
