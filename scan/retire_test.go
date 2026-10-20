@@ -2,10 +2,13 @@ package scan
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/alexdx2/chronicle-core/llm"
+	"github.com/alexdx2/chronicle-core/snapshot"
 )
 
 // perFileBackend answers each file with the facts the test set for it.
@@ -83,5 +86,52 @@ func TestBuildSnapshot_IncrementalRetiresEndpointRemovedFromReextractedFile(t *t
 	}
 	if !gotGet || !gotOther {
 		t.Errorf("endpoints still declared must stay active (get=%v other=%v)", gotGet, gotOther)
+	}
+}
+
+func TestBuildSnapshot_IncrementalRetiresFactsOfADeletedFile(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, map[string]string{
+		"src/orders.controller.ts": "route(\"GET /orders\");\n",
+		"src/products.resolver.ts": "route(\"GET /products-gone\");\n",
+		"src/readme-neighbour.ts":  "export const x = 1;\n",
+	})
+	b := &perFileBackend{facts: map[string]string{
+		"src/orders.controller.ts": `{"kind":"endpoint","method":"GET","target":"/orders","from_type":"controller"}`,
+		"src/products.resolver.ts": `{"kind":"endpoint","method":"GET","target":"/products-gone","from_type":"controller"}`,
+	}}
+	first, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := func(files snapshot.Files, needle string) bool {
+		g := decodeT(t, files)
+		for _, e := range g.Edges {
+			if e.Active && strings.Contains(strings.ToLower(e.ID), needle) {
+				return true
+			}
+		}
+		return false
+	}
+	if !active(first.Files, "products-gone") {
+		for _, e := range decodeT(t, first.Files).Edges {
+			t.Logf("edge %s active=%v", e.ID, e.Active)
+		}
+		t.Fatalf("base must expose the endpoint of the resolver")
+	}
+	if err := os.Remove(filepath.Join(repo, "src", "products.resolver.ts")); err != nil {
+		t.Fatal(err)
+	}
+	c2 := commitAllT(t, repo, "delete the resolver")
+	in := buildIn(repo, c2, t.TempDir(), b)
+	in.Base = &Base{CodeSha: c1, Files: first.Files}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active(res.Files, "products-gone") {
+		t.Errorf("the endpoint of a deleted file is still active")
+	}
+	if !active(res.Files, "get:/orders") {
+		t.Errorf("the endpoint of an untouched file must stay active")
 	}
 }

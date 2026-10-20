@@ -631,6 +631,14 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 			return err
 		}
 	}
+	// A file the change deleted (or renamed away from) states nothing any
+	// more: what only it vouched for must leave the graph, whether or not
+	// anything else was extracted in this build.
+	if gone := goneFiles(changed, multi, r.m, d.Key); len(gone) > 0 {
+		if err := r.retireVanished(d, gone); err != nil {
+			return err
+		}
+	}
 	// Dependencies are written after extraction so a manifest's service node
 	// (minted by the model's declares_service) exists: its edges then start
 	// there and the model's and the deps pass's DEPENDS_ON are one edge.
@@ -803,4 +811,28 @@ func BuildWithStore(ctx context.Context, st snapshot.Store, in BuildInput, so St
 	}
 	pr, err := st.Put(ctx, in.Repo, in.Sha, res.Files, po)
 	return pr, res, err
+}
+
+// goneFiles lists the paths a change removed from the tree: deleted files and
+// the old side of renames, restricted to the domain's own files in a
+// multi-domain repository.
+func goneFiles(changed []gitdiff.ChangedFile, multi bool, m *manifest.Manifest, domainKey string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p == "" || seen[p] || (multi && m != nil && m.DomainForFile(p) != domainKey) {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	for _, f := range changed {
+		if f.Status == "D" {
+			add(f.Path)
+		} else if f.OldPath != "" && f.OldPath != f.Path {
+			add(f.OldPath)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
