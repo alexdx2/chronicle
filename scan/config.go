@@ -93,6 +93,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	tooBig := 0
 	var namedRegs []namedReg
 	var namedUses []namedUse
+	classDecls := map[string][]classDecl{}
 	var useFiles []string // sources a client may be built in; read again once the table is complete
 	defer func() {
 		if tooBig > 0 {
@@ -132,6 +133,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		}
 		if reg {
 			parseClientRegistrations(t, p, body)
+			scanClassDecls(p, body, classDecls)
 			rs, us := scanNamedClients(p, body)
 			namedRegs, namedUses = append(namedRegs, rs...), append(namedUses, us...)
 			continue
@@ -157,6 +159,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		parsed = append(parsed, p)
 	}
 	joinNamedClients(t, namedRegs, namedUses)
+	joinTypedClients(t, classDecls)
 	parseKeyLiteralUses(t, root, useFiles)
 	return t, parsed
 }

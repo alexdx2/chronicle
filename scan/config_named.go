@@ -95,3 +95,48 @@ func joinNamedClients(t *graph.ConfigHosts, regs []namedReg, uses []namedUse) {
 		t.AddUse(graph.ConfigUse{File: u.file, Line: u.line, Text: u.text, Callee: "IHttpClientFactory.CreateClient", Symbol: `Configuration["` + key + `"]`})
 	}
 }
+
+var classDeclRe = regexp.MustCompile(`\b(?:class|record)\s+([A-Z][A-Za-z0-9_]*)`)
+
+type classDecl struct {
+	file, text string
+	line       int
+}
+
+// scanClassDecls records where each class is declared (first per file and name).
+func scanClassDecls(file string, body []byte, into map[string][]classDecl) {
+	src := string(srccomment.Strip(file, body))
+	if !strings.Contains(src, "class") && !strings.Contains(src, "record") {
+		return
+	}
+	for _, m := range classDeclRe.FindAllStringSubmatchIndex(src, -1) {
+		name := src[m[2]:m[3]]
+		into[name] = append(into[name], classDecl{file: file, text: strings.TrimSpace(src[m[0]:m[3]]), line: 1 + strings.Count(src[:m[0]], "\n")})
+	}
+}
+
+// joinTypedClients makes the class a typed HTTP client is registered for a
+// user of the address it was registered with: the class exists to call that
+// service, whatever path its methods ask for. Only a class declared in exactly
+// one file is taken; an interface binding (IPricingClient) is skipped, its
+// implementation carries the class name that was registered too.
+func joinTypedClients(t *graph.ConfigHosts, decls map[string][]classDecl) {
+	seen := map[string]bool{}
+	for _, b := range append([]graph.ClientBinding(nil), t.Clients...) {
+		ds := decls[b.Class]
+		if len(ds) != 1 || seen[b.Class+"\x00"+ds[0].file] {
+			continue
+		}
+		key := b.Key
+		if key == "" {
+			if b.URL == "" {
+				continue
+			}
+			key = "HttpClient:" + b.Class
+			t.Add(key, b.URL, b.File)
+		}
+		seen[b.Class+"\x00"+ds[0].file] = true
+		d := ds[0]
+		t.AddUse(graph.ConfigUse{File: d.file, Line: d.line, Text: d.text, Callee: "typed client " + b.Class, Symbol: `Configuration["` + key + `"]`})
+	}
+}

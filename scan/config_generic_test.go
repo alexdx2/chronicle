@@ -232,3 +232,35 @@ func TestWebConfigAppSettingsAndSQSQueue(t *testing.T) {
 		t.Fatalf("prompt:\n%s", p)
 	}
 }
+
+func TestTypedClientClassUsesItsRegisteredAddress(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		full := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("appsettings.json", `{"Services":{"PricingApi":"http://pricing-api:8080"}}`)
+	write("Program.cs", "builder.Services.AddHttpClient<IPricingClient, PricingClient>(c => c.BaseAddress = new Uri(builder.Configuration[\"Services:PricingApi\"]!));\nbuilder.Services.AddHttpClient<DocsClient>(c => c.BaseAddress = new Uri(\"http://wiki:80\"));\n")
+	write("Services/PricingClient.cs", "namespace X;\npublic class PricingClient : IPricingClient\n{\n  public Task<P> Get(string sku) => _http.GetFromJsonAsync<P>($\"/prices/{sku}\");\n}\n")
+	write("Services/DocsClient.cs", "public class DocsClient { }\n")
+	tab, _ := ReadConfigHosts(root, []string{"appsettings.json", "Program.cs", "Services/PricingClient.cs", "Services/DocsClient.cs"})
+	got := map[string]string{}
+	for _, u := range tab.Uses {
+		_, _, e, ok := tab.ResolveSymbol(u.File, u.Symbol)
+		if !ok {
+			t.Errorf("use %+v does not resolve", u)
+		}
+		got[u.File] = e.Host
+	}
+	if got["Services/PricingClient.cs"] != "pricing-api" || got["Services/DocsClient.cs"] != "wiki" || len(got) != 2 {
+		t.Fatalf("uses = %v", got)
+	}
+	for _, u := range tab.Uses {
+		if u.File == "Services/PricingClient.cs" && (u.Line != 2 || u.Text != "class PricingClient") {
+			t.Errorf("anchor %+v", u)
+		}
+	}
+}
