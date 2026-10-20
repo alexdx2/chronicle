@@ -710,6 +710,17 @@ func (s *Store) RetireUnbackedByFiles(domainKey string, files []string, revision
 		      AND le.evidence_polarity = 'positive' AND le.evidence_status IN ('valid','revalidated')
 		      AND le.source_kind <> 'synthetic' AND COALESCE(le.ast_rule,'') <> '`+ConfigValueRule+`')`
 
+	// A call derived from a configuration value is as live as that value: when
+	// the config row went stale and no config row is live, the unchanged code
+	// line that names the symbol no longer backs the call.
+	const deadConfig = `EXISTS (SELECT 1 FROM graph_evidence ce WHERE ce.%[1]s = %[2]s.%[1]s
+		      AND ce.file_path IN (%[3]s) AND ce.ast_rule = '`+ConfigValueRule+`' AND ce.evidence_status IN ('stale','superseded','invalidated'))
+		  AND NOT EXISTS (SELECT 1 FROM graph_evidence cl WHERE cl.%[1]s = %[2]s.%[1]s
+		      AND cl.ast_rule = '`+ConfigValueRule+`' AND cl.evidence_polarity = 'positive' AND cl.evidence_status IN ('valid','revalidated'))`
+	deadClause := func(col, alias string) string {
+		return "((" + fmt.Sprintf(deadFrom, col, alias, marks) + ") OR (" + fmt.Sprintf(deadConfig, col, alias, marks) + "))"
+	}
+
 	type subject struct {
 		id       int64
 		key      string
@@ -760,11 +771,12 @@ func (s *Store) RetireUnbackedByFiles(domainKey string, files []string, revision
 
 	keepE, keepEArgs := stillAssertedByAnImporter("graph_edges", "edge_id")
 	args := append([]any{domainKey}, fileArgs...)
+	args = append(args, fileArgs...) // the second IN (...) of deadConfig
 	args = append(args, keepEArgs...)
 	subs, err := collect(`SELECT edge_id, edge_key, from_node_id, to_node_id FROM graph_edges
 		WHERE active=1 AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
 		  AND from_node_id IN (SELECT node_id FROM graph_nodes WHERE domain_key=?)
-		  AND `+fmt.Sprintf(deadFrom, "edge_id", "graph_edges", marks)+keepE+`
+		  AND `+deadClause("edge_id", "graph_edges")+keepE+`
 		ORDER BY edge_key`, args)
 	if err != nil {
 		return 0, 0, fmt.Errorf("RetireUnbackedByFiles edges: %w", err)
@@ -779,10 +791,11 @@ func (s *Store) RetireUnbackedByFiles(domainKey string, files []string, revision
 
 	keepN, keepNArgs := stillAssertedByAnImporter("graph_nodes", "node_id")
 	args = append([]any{domainKey}, fileArgs...)
+	args = append(args, fileArgs...)
 	args = append(args, keepNArgs...)
 	dead, err := collect(`SELECT node_id, node_key, 0, 0 FROM graph_nodes
 		WHERE domain_key=? AND status='active' AND (valid_to_revision_id IS NULL OR valid_to_revision_id = 0)
-		  AND `+fmt.Sprintf(deadFrom, "node_id", "graph_nodes", marks)+keepN+`
+		  AND `+deadClause("node_id", "graph_nodes")+keepN+`
 		ORDER BY node_key`, args)
 	if err != nil {
 		return edges, 0, fmt.Errorf("RetireUnbackedByFiles nodes: %w", err)

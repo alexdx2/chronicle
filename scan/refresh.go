@@ -571,6 +571,10 @@ func (e Env) DiffFiles(base, head string) (touched, deleted []string, err error)
 func FilterRefreshable(files []string) []string {
 	var out []string
 	for _, f := range files {
+		if IsConfigFile(f) { // a config file's evidence (an address in .env, application.yml) goes stale when it changes
+			out = append(out, f)
+			continue
+		}
 		for _, ext := range RefreshExtensions {
 			if strings.HasSuffix(f, ext) {
 				out = append(out, f)

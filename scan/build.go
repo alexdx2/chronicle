@@ -594,8 +594,28 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 	if err != nil {
 		return err
 	}
-	if _, err := r.readConfig(domainRef{key: d.Key, multi: multi}); err != nil {
+	table, err := r.readConfig(domainRef{key: d.Key, multi: multi})
+	if err != nil {
 		return err
+	}
+	// A change that only moves an address in a config file leaves the code
+	// that uses it byte for byte the same, yet the call it makes has moved:
+	// extract those files again.
+	changedCfg := map[string]bool{}
+	for _, f := range changed {
+		if IsConfigFile(f.Path) {
+			changedCfg[f.Path] = true
+		}
+		if f.OldPath != "" && IsConfigFile(f.OldPath) {
+			changedCfg[f.OldPath] = true
+		}
+	}
+	if len(changedCfg) > 0 {
+		for _, p := range configConsumers(table, changedCfg) {
+			if seen[p] {
+				forced[p] = true
+			}
+		}
 	}
 	todo, done, err := pendingFiles(st, d.Key, r.o.RepoRoot, candidates, versionFrom(guide))
 	if err != nil {
@@ -627,7 +647,12 @@ func (r *fullRun) incrementalDomain(ctx context.Context, d manifest.DomainEntry,
 		if err := r.extract(ctx, d, todo, &dr, guide); err != nil {
 			return err
 		}
-		if err := r.retireVanished(d, r.extracted); err != nil {
+		gone := r.extracted
+		if len(changedCfg) > 0 {
+			// the old address is stated by the config file that no longer holds it
+			gone = append(append([]string{}, r.extracted...), sortedKeys(changedCfg)...)
+		}
+		if err := r.retireVanished(d, gone); err != nil {
 			return err
 		}
 	}
@@ -832,6 +857,46 @@ func goneFiles(changed []gitdiff.ChangedFile, multi bool, m *manifest.Manifest, 
 		} else if f.OldPath != "" && f.OldPath != f.Path {
 			add(f.OldPath)
 		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// configConsumers lists the source files whose use of an address is read from
+// one of the changed config files, or from a key those files no longer hold.
+func configConsumers(t *graph.ConfigHosts, changed map[string]bool) []string {
+	if t == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, u := range t.Uses {
+		if _, _, e, ok := t.ResolveSymbol(u.File, u.Symbol); !ok || changed[e.File] {
+			add(u.File)
+		}
+	}
+	for _, b := range t.Clients {
+		if b.Key == "" {
+			continue
+		}
+		if e, ok := t.Lookup(b.File, b.Key); !ok || changed[e.File] {
+			add(b.File)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out

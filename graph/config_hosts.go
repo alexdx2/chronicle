@@ -456,3 +456,9 @@ func sqsQueueName(raw string) string {
 	}
 	return ""
 }
+
+// Lookup is the exported form of the table's key lookup, for callers that need
+// to know which config file a key's value comes from.
+func (c *ConfigHosts) Lookup(filePath, key string) (ConfigEntry, bool) {
+	return c.lookup(filePath, key)
+}

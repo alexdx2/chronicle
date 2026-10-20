@@ -134,3 +134,11 @@ func TestShortSHA(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterRefreshable_ConfigFilesAreRefreshable(t *testing.T) {
+	got := FilterRefreshable([]string{"a.ts", "b.rb", ".env", "src/main/resources/application.yml", "appsettings.json", "README.md"})
+	want := []string{"a.ts", ".env", "src/main/resources/application.yml", "appsettings.json"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FilterRefreshable = %v, want %v", got, want)
+	}
+}

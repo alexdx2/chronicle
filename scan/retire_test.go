@@ -135,3 +135,52 @@ func TestBuildSnapshot_IncrementalRetiresFactsOfADeletedFile(t *testing.T) {
 		t.Errorf("the endpoint of an untouched file must stay active")
 	}
 }
+
+// A change that only moves an address in a config file must move the call the
+// code makes with it, although no source file changed.
+func TestBuildSnapshot_ConfigOnlyChangeMovesTheCallsThatUseIt(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, map[string]string{
+		".env":                 "NOTIFY_SVC_URL=http://notify-a:3000\n",
+		"src/routes/notify.ts": "import { NotifyClient } from '@acme/notify-client';\nconst client = new NotifyClient(process.env.NOTIFY_SVC_URL ?? '');\n",
+		"src/routes/other.ts":  "export const x = 1;\n",
+	})
+	b := &perFileBackend{facts: map[string]string{}}
+	first, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callsTo := func(files snapshot.Files, host string) bool {
+		for _, e := range decodeT(t, files).Edges {
+			if e.Active && strings.Contains(e.ID, "CALLS_SERVICE") && strings.HasSuffix(strings.Split(e.ID, "->")[1], ":"+host+":CALLS_SERVICE") {
+				return true
+			}
+		}
+		return false
+	}
+	if !callsTo(first.Files, "notify-a") {
+		for _, e := range decodeT(t, first.Files).Edges {
+			t.Logf("edge %s %v", e.ID, e.Active)
+		}
+		t.Fatalf("base must call notify-a")
+	}
+	writeT(t, repo, ".env", "NOTIFY_SVC_URL=http://notify-b:3000\n")
+	c2 := commitAllT(t, repo, "repoint notify")
+	in := buildIn(repo, c2, t.TempDir(), b)
+	in.Base = &Base{CodeSha: c1, Files: first.Files}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !callsTo(res.Files, "notify-b") {
+		t.Errorf("the call must move to notify-b")
+	}
+	if callsTo(res.Files, "notify-a") {
+		for _, e := range decodeT(t, res.Files).Edges {
+			t.Logf("edge %s active=%v ev=%d", e.ID, e.Active, len(e.Evidence))
+			for _, ev := range e.Evidence {
+				t.Logf("   ev %s status=%s ver=%s", ev.File, ev.Status, ev.Verification)
+			}
+		}
+		t.Errorf("the call to the old address must be gone")
+	}
+}
