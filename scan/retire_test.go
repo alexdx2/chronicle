@@ -256,3 +256,47 @@ func (b *fileCountBackend) Complete(ctx context.Context, req llm.Request) (llm.R
 	b.seen[strings.TrimPrefix(first, "File: ")]++
 	return b.inner.Complete(ctx, req)
 }
+
+// A channel whose name comes from configuration follows the configuration:
+// renaming the key's value in appsettings moves the consumer to the new channel.
+func TestBuildSnapshot_ConfigRenamesAConsumedChannel(t *testing.T) {
+	repo, c1 := newCodeRepoT(t, map[string]string{
+		"appsettings.json":          "{ \"Kafka\": { \"Topics\": { \"Payments\": \"payments\" } } }\n",
+		"Kafka/PaymentsConsumer.cs": "class C { void F(IConfiguration cfg) { consumer.Subscribe(cfg[\"Kafka:Topics:Payments\"]); } }\n",
+	})
+	b := &perFileBackend{facts: map[string]string{
+		"Kafka/PaymentsConsumer.cs": `{"kind":"consumes","to":"Kafka:Topics:Payments","from_type":"service"}`,
+	}}
+	first, err := BuildSnapshot(context.Background(), buildIn(repo, c1, t.TempDir(), b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := func(files snapshot.Files, suffix string) bool {
+		for _, e := range decodeT(t, files).Edges {
+			if e.Active && strings.Contains(e.ID, "CONSUMES_TOPIC") && strings.Contains(e.ID, suffix+":CONSUMES_TOPIC") {
+				return true
+			}
+		}
+		return false
+	}
+	if !active(first.Files, "payments") {
+		for _, e := range decodeT(t, first.Files).Edges {
+			t.Logf("edge %s %v", e.ID, e.Active)
+		}
+		t.Fatal("base must consume payments")
+	}
+	writeT(t, repo, "appsettings.json", "{ \"Kafka\": { \"Topics\": { \"Payments\": \"payments-v2\" } } }\n")
+	c2 := commitAllT(t, repo, "rename the topic")
+	in := buildIn(repo, c2, t.TempDir(), b)
+	in.Base = &Base{CodeSha: c1, Files: first.Files}
+	res, err := BuildSnapshot(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active(res.Files, "payments-v2") {
+		t.Errorf("the consumer must move to payments-v2")
+	}
+	if active(res.Files, "payments") {
+		t.Errorf("the old channel must be gone")
+	}
+}

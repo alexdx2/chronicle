@@ -1973,7 +1973,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		rawTo := fact.To
-		fact.To = g.channelNameFor(filePath, fact.To)
+		var chanSrc *ConfigEntry
+		fact.To, chanSrc = g.channelNameAndSource(filePath, fact.To)
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
@@ -1999,6 +2000,19 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
 		counts.evidence++
+		if chanSrc != nil && chanSrc.File != "" && chanSrc.Channel != "" {
+			// the name came from configuration: the config row vouches for it too, and
+			// when the config no longer says it, the edge goes (see RetireUnbackedByFiles)
+			cfgAssertion, _ := json.Marshal(map[string]any{"substring": chanSrc.Channel, "config": chanSrc.Key})
+			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: chanSrc.File,
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
+				ASTRule:    store.ConfigValueRule,
+				Confidence: 0.9, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(cfgAssertion),
+			})
+			counts.evidence++
+		}
 
 	case "consumes":
 		// Consumes from topic/queue.
@@ -2026,7 +2040,8 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 		g.registerNodeAlias(fromID, inferNameFromPath(filePath), "file_stem")
 
 		rawTo := fact.To
-		fact.To = g.channelNameFor(filePath, fact.To)
+		var chanSrc *ConfigEntry
+		fact.To, chanSrc = g.channelNameAndSource(filePath, fact.To)
 		toNodeKey := g.resolveTopicKey(domainKey, fact.To, revisionID)
 		toID := g.ensureNodeID(domainKey, revisionID, toNodeKey, fact.To, "")
 
@@ -2053,6 +2068,19 @@ func (g *Graph) resolveOneFact(domainKey string, revisionID int64, filePath stri
 			AssertionKind: "text_contains", Assertion: string(assertion),
 		})
 		counts.evidence++
+		if chanSrc != nil && chanSrc.File != "" && chanSrc.Channel != "" {
+			// the name came from configuration: the config row vouches for it too, and
+			// when the config no longer says it, the edge goes (see RetireUnbackedByFiles)
+			cfgAssertion, _ := json.Marshal(map[string]any{"substring": chanSrc.Channel, "config": chanSrc.Key})
+			_, _ = g.resolverEdgeEvidence(edgeKey, validate.EvidenceInput{
+				TargetKind: "edge", SourceKind: "file", FilePath: chanSrc.File,
+				ExtractorID: extractorID, ExtractorVersion: "1.0",
+				ASTRule:    store.ConfigValueRule,
+				Confidence: 0.9, RevisionID: revisionID,
+				AssertionKind: "text_contains", Assertion: string(cfgAssertion),
+			})
+			counts.evidence++
+		}
 
 	case "endpoint":
 		// Endpoint — contract node + evidence
@@ -5896,6 +5924,13 @@ func canonChannelName(to string) string {
 // holds a channel name (or an SQS queue URL) stands for that name, an SQS URL or
 // ARN for its last segment.
 func (g *Graph) channelNameFor(filePath, to string) string {
+	name, _ := g.channelNameAndSource(filePath, to)
+	return name
+}
+
+// channelNameAndSource is channelNameFor that also says which config entry
+// supplied the name (nil when the target was written as the name itself).
+func (g *Graph) channelNameAndSource(filePath, to string) (string, *ConfigEntry) {
 	t := strings.TrimSpace(to)
 	if g.domainConfig != nil {
 		key := t
@@ -5903,10 +5938,10 @@ func (g *Graph) channelNameFor(filePath, to string) string {
 			key = k
 		}
 		if e, ok := g.domainConfig.lookupChannel(filePath, key); ok {
-			return e.Channel
+			return e.Channel, &e
 		}
 	}
-	return canonChannelName(to)
+	return canonChannelName(to), nil
 }
 
 // evidenceSubstring is what the file must contain to vouch for a channel edge:
