@@ -372,3 +372,19 @@ func TestProduces_ConfigKeyHoldingAnSQSQueueURLIsTheQueue(t *testing.T) {
 		t.Fatalf("plain topic: %+v", e2)
 	}
 }
+
+func TestBareDottedConfigKeyTargetIsTheConfiguredHost(t *testing.T) {
+	for _, target := range []string{"services.catalog.url", "services.catalog.url/products/{sku}"} {
+		c := &ConfigHosts{}
+		c.Add("services.catalog.url", "http://catalog-api:3000", "src/main/resources/application.yml")
+		_, s, _ := resolveFiles(t, c, srcFacts{"src/main/java/CatalogClient.java", []Fact{{Kind: "http_call", From: "CatalogClient", FromType: "service", Target: target, Method: "GET"}}})
+		wantOnly(t, target, externalNames(t, s), "service:external_system:demo:catalog-api")
+	}
+	// a host that merely looks dotted is still a host
+	c := &ConfigHosts{}
+	c.Add("services.catalog.url", "http://catalog-api:3000", "application.yml")
+	_, s, _ := resolveFiles(t, c, srcFacts{"A.java", []Fact{{Kind: "http_call", From: "A", FromType: "service", Target: "billing.corp.local/invoices", Method: "GET"}}})
+	if got := externalNames(t, s); len(got) != 1 || strings.Contains(got[0], "catalog") {
+		t.Fatalf("externals = %v", got)
+	}
+}

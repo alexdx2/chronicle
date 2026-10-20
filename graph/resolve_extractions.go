@@ -5434,7 +5434,7 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 	if kind == SymNone {
 		// A bare config key ("Services:PricingApi", "api.url") written without
 		// an accessor: the table's value is the host; a key segment never is.
-		if be, bok := g.domainConfig.lookup(filePath, base); bok && isConfigKeyShaped(base) {
+		if be, bok := g.domainConfig.lookup(filePath, base); bok && (isConfigKeyShaped(base) || strings.ContainsAny(base, "._")) {
 			return httpTarget{target: be.URL + rest, cfg: &be, codeText: strings.TrimSpace(base)}
 		}
 		if isConfigKeyShaped(base) {
