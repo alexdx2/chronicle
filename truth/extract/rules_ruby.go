@@ -478,32 +478,30 @@ func applyRubyHTTP(f *FileCtx) []truth.Fact {
 
 // ---- Gemfile.lock ----------------------------------------------------------
 
-var gemSpec = regexp.MustCompile(`^    ([A-Za-z0-9_.\-]+) \(([^)]*)\)\s*$`)
-
 func applyLockGem(f *FileCtx) []truth.Fact {
 	s := newDepSet("lock.gem", f)
-	inSpecs := false
+	// DEPENDENCIES lists what the Gemfile asks for; specs is the whole closure.
+	inDeps := false
 	for _, l := range f.Lines {
 		raw := strings.TrimRight(l.Raw, "\r")
 		switch {
-		case strings.TrimSpace(raw) == "":
-			inSpecs = false
+		case raw == "DEPENDENCIES":
+			inDeps = true
 			continue
-		case raw == "  specs:":
-			inSpecs = true
-			continue
-		case !strings.HasPrefix(raw, " "):
-			inSpecs = false
+		case strings.TrimSpace(raw) == "" || !strings.HasPrefix(raw, " "):
+			inDeps = false
 			continue
 		}
-		if !inSpecs {
+		if !inDeps {
 			continue
 		}
-		if m := gemSpec.FindStringSubmatch(raw); m != nil {
-			if fp := s.add("gem", m[1], m[2], "specs"); fp != nil {
+		if m := gemDirect.FindStringSubmatch(raw); m != nil {
+			if fp := s.add("gem", m[1], m[2], "dependencies"); fp != nil {
 				fp.Primary = evidence(f, l)
 			}
 		}
 	}
 	return s.facts
 }
+
+var gemDirect = regexp.MustCompile(`^  ([A-Za-z0-9_.\-]+)!?(?: \(([^)]*)\))?\s*$`)

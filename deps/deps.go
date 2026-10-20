@@ -62,7 +62,7 @@ type parser interface {
 	parse(root, rel string, body []byte) (Report, error)
 }
 
-var parsers = []parser{npm{}, nuget{}, gomod{}, python{}, jvm{}}
+var parsers = []parser{npm{}, nuget{}, gomod{}, python{}, jvm{}, ruby{}, php{}, rust{}, nugetConfig{}}
 
 var osReadFile = os.ReadFile
 
@@ -77,7 +77,7 @@ func IsManifest(path string) bool {
 }
 
 // EcosystemOfManifest names the ecosystem of a manifest path ("npm", "nuget",
-// "go", "python", "maven", "gradle"), or "" when path is not a manifest. It
+// "go", "python", "maven", "gradle", "gem", "composer", "cargo"), or "" when path is not a manifest. It
 // lets a resolver route a model-origin dependency fact found in a manifest to
 // the same package identity the deterministic pass mints.
 func EcosystemOfManifest(path string) string {
@@ -91,6 +91,14 @@ func EcosystemOfManifest(path string) string {
 		return "go"
 	case python{}.matches(path):
 		return "python"
+	case ruby{}.matches(path):
+		return "gem"
+	case php{}.matches(path):
+		return "composer"
+	case rust{}.matches(path):
+		return "cargo"
+	case nugetConfig{}.matches(path):
+		return "nuget"
 	case b == "pom.xml":
 		return "maven"
 	case jvm{}.matches(path):
@@ -132,6 +140,7 @@ func Scan(root string, files []string) (Report, error) {
 				out.Warnings = append(out.Warnings, fmt.Sprintf("%s: %v", rel, err))
 				break
 			}
+			markAppsByFramework(&r)
 			out.Publishes = append(out.Publishes, r.Publishes...)
 			out.Depends = append(out.Depends, r.Depends...)
 			for name, v := range r.central {
@@ -191,3 +200,45 @@ func lineOf(body []byte, off int) int {
 func base(p string) string { return path.Base(filepath.ToSlash(p)) }
 
 func joinRoot(root, rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }
+
+// appFrameworks are dependencies that make a package an application rather
+// than a library: a web or RPC framework, a server runtime, a job host. A
+// manifest that declares one publishes a service. (npm and .NET read their own
+// signals in their parsers.)
+var appFrameworks = map[string][]string{
+	"python":   {"fastapi", "flask", "django", "starlette", "uvicorn", "gunicorn", "aiohttp", "tornado", "sanic", "quart", "falcon", "celery", "hypercorn", "daphne", "litestar"},
+	"maven":    {"org.springframework.boot:spring-boot-starter-web", "org.springframework.boot:spring-boot-starter-webflux", "org.springframework.boot:spring-boot-starter", "io.quarkus:quarkus-resteasy", "io.quarkus:quarkus-rest", "io.micronaut:micronaut-http-server-netty", "io.vertx:vertx-web", "io.ktor:ktor-server-core", "io.ktor:ktor-server-netty", "io.javalin:javalin", "org.http4k:http4k-core"},
+	"go":       {"github.com/go-chi/chi", "github.com/gin-gonic/gin", "github.com/labstack/echo", "github.com/gofiber/fiber", "github.com/gorilla/mux", "google.golang.org/grpc", "github.com/julienschmidt/httprouter"},
+	"cargo":    {"axum", "actix-web", "rocket", "warp", "tide", "poem", "tonic"},
+	"composer": {"laravel/framework", "symfony/framework-bundle", "slim/slim", "laminas/laminas-mvc"},
+	"gem":      {"rails", "sinatra", "hanami", "grape", "sidekiq", "puma", "padrino"},
+}
+
+func markAppsByFramework(r *Report) {
+	if len(r.Publishes) == 0 || len(r.Depends) == 0 {
+		return
+	}
+	for i := range r.Publishes {
+		pub := &r.Publishes[i]
+		if pub.App {
+			continue
+		}
+		prefixes, ok := appFrameworks[pub.Ecosystem]
+		if !ok {
+			continue
+		}
+		for _, d := range r.Depends {
+			if d.File != pub.File || d.Ecosystem != pub.Ecosystem || d.Internal || d.Section == "dev" || d.Section == "test" {
+				continue
+			}
+			for _, pre := range prefixes {
+				if d.Name == pre || strings.HasPrefix(d.Name, pre+"/") || strings.HasPrefix(d.Name, pre+"-") && pub.Ecosystem != "maven" {
+					pub.App = true
+				}
+			}
+			if pub.App {
+				break
+			}
+		}
+	}
+}

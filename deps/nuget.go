@@ -12,7 +12,7 @@ var (
 	nugetVersionRe = regexp.MustCompile(`\bVersion="([^"]*)"`)
 	nugetIDRe      = regexp.MustCompile(`<PackageId>\s*([^<]*?)\s*</PackageId>`)
 	nugetAsmRe     = regexp.MustCompile(`<AssemblyName>\s*([^<]*?)\s*</AssemblyName>`)
-	nugetWebRe     = regexp.MustCompile(`Sdk="Microsoft\.NET\.Sdk\.Web`)
+	nugetWebRe     = regexp.MustCompile(`(?i)Sdk="Microsoft\.NET\.Sdk\.(?:Web|Worker)|349C5851-65DF-11DA-9384-00065B846F21|<Reference\s+Include="System\.Web(?:\.Http)?[,"]`)
 	nugetExeRe     = regexp.MustCompile(`<OutputType>\s*(?:Exe|WinExe)\s*</OutputType>`)
 	nugetUnpackRe  = regexp.MustCompile(`<IsPackable>\s*false\s*</IsPackable>`)
 )

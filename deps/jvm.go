@@ -107,7 +107,7 @@ var (
 )
 
 func parseGradle(root, rel string, body []byte) Report {
-	const eco = "gradle"
+	const eco = "maven" // Gradle declares Maven coordinates: one identity with pom.xml consumers
 	var r Report
 	group, groupLine := "", 0
 	for i, line := range strings.Split(string(body), "\n") {

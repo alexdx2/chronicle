@@ -233,11 +233,11 @@ func TestScan_GradleEcosystem(t *testing.T) {
 	write(t, root, "svc2/build.gradle.kts", "dependencies {\n  implementation(\"io.ktor:ktor-server-core:2.3.0\")\n}\n")
 	rep, _ := Scan(root, []string{"svc/build.gradle", "svc2/build.gradle.kts"})
 	for _, d := range rep.Depends {
-		if d.Ecosystem != "gradle" {
+		if d.Ecosystem != "maven" {
 			t.Errorf("%s: ecosystem %q, want gradle", d.File, d.Ecosystem)
 		}
 	}
-	if len(rep.Publishes) != 1 || rep.Publishes[0].Ecosystem != "gradle" {
+	if len(rep.Publishes) != 1 || rep.Publishes[0].Ecosystem != "maven" {
 		t.Errorf("publishes = %+v", rep.Publishes)
 	}
 	if len(rep.Depends) != 2 {

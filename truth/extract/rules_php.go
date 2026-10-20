@@ -2,6 +2,7 @@ package extract
 
 import (
 	"encoding/json"
+	"path"
 	"regexp"
 	"strings"
 
@@ -414,6 +415,23 @@ func applyLockComposer(f *FileCtx) []truth.Fact {
 		return nil
 	}
 	s := newDepSet("lock.composer", f)
+	// The lock lists the transitive closure; the direct dependencies are the
+	// require / require-dev keys of the composer.json beside it.
+	direct := map[string]bool{}
+	if raw, ok := f.Tree.ReadFile(path.Join(f.Dir, "composer.json")); ok {
+		var cj struct {
+			Require    map[string]json.RawMessage `json:"require"`
+			RequireDev map[string]json.RawMessage `json:"require-dev"`
+		}
+		if json.Unmarshal(raw, &cj) == nil {
+			for n := range cj.Require {
+				direct[strings.ToLower(n)] = true
+			}
+			for n := range cj.RequireDev {
+				direct[strings.ToLower(n)] = true
+			}
+		}
+	}
 	find := func(name, section string) *lex.Line {
 		from := 0
 		for k, l := range f.Lines {
@@ -431,6 +449,9 @@ func applyLockComposer(f *FileCtx) []truth.Fact {
 		return nil
 	}
 	add := func(section string, name, version string) {
+		if len(direct) > 0 && !direct[strings.ToLower(name)] {
+			return
+		}
 		if fp := s.add("composer", name, version, section); fp != nil {
 			if l := find(name, section); l != nil {
 				fp.Primary = evidence(f, *l)

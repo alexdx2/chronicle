@@ -138,8 +138,10 @@ PLATFORMS
 
 DEPENDENCIES
   rails (~> 7.1)
+  ygem!
 `
-	if got := keysOf(t, map[string]string{"Gemfile.lock": lock}, truth.ClassDeps); got != "gem:nokogiri,gem:rack,gem:rails,gem:ygem" {
+	// only what the Gemfile asks for; the specs closure (rack, nokogiri) is transitive
+	if got := keysOf(t, map[string]string{"Gemfile.lock": lock}, truth.ClassDeps); got != "gem:rails,gem:ygem" {
 		t.Errorf("got %s", got)
 	}
 }
