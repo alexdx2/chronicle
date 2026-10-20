@@ -93,7 +93,7 @@ func TestScanConfigBrokenIsIgnored(t *testing.T) {
 func TestScanConfigTools(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"svc/app.py":          "import faust\napp.topic('orders.v1')\napp.topic('refunds.v1')\n",
-		"truth-expected.json": `{"channels":[{"Key":"topic:orders.v1#declare"},{"Key":"topic:refunds.v1#declare"},{"Key":"topic:gone.v1#declare"}]}`,
+		"truth-expected.json": `{"_comment":"x","channels":[{"Key":"topic:orders.v1#declare"},{"Key":"topic:refunds.v1#declare"},{"Key":"topic:gone.v1#declare"}]}`,
 	})
 	cand := "channels:\n  - id: faust\n    patterns: [{call: 'app.topic({name}', side: declare}]\n"
 	dr := ScanConfigDryRun(root, cand)
@@ -141,7 +141,7 @@ func (s *seqBackend) Complete(_ context.Context, req llm.Request) (llm.Response,
 func TestScanConfigAuthor(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"svc/app.py":          "import mybus\nbus.announce('orders.v1')\nbus.announce('refunds.v1')\n",
-		"truth-expected.json": `{"channels":[{"Key":"topic:orders.v1#produce"},{"Key":"topic:refunds.v1#produce"}]}`,
+		"truth-expected.json": `{"_comment":"x","channels":[{"Key":"topic:orders.v1#produce"},{"Key":"topic:refunds.v1#produce"}]}`,
 	})
 	b := &seqBackend{answers: []string{
 		"channels: [{id: Bad}]",

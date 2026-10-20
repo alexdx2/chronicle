@@ -241,10 +241,12 @@ func goldenDiff(root, yamlText string) *GoldenDiff {
 	if err != nil {
 		return nil
 	}
-	var gold map[string][]struct{ Key string }
-	if json.Unmarshal(raw, &gold) != nil {
+	var goldRaw map[string]json.RawMessage
+	if json.Unmarshal(raw, &goldRaw) != nil {
 		return nil
 	}
+	var goldChannels []struct{ Key string }
+	_ = json.Unmarshal(goldRaw[string(truth.ClassChannels)], &goldChannels)
 	// the "what if reviewed" view of the candidate: every rule counts
 	c, err := scancfg.Parse([]byte(yamlText), scancfg.SourceProject)
 	if err != nil {
@@ -271,7 +273,7 @@ func goldenDiff(root, yamlText string) *GoldenDiff {
 			got[f.Key] = true
 		}
 	}
-	for _, e := range gold[string(truth.ClassChannels)] {
+	for _, e := range goldChannels {
 		want[e.Key] = true
 	}
 	d := &GoldenDiff{File: gp, Missing: []string{}, Extra: []string{}}
