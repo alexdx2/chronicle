@@ -222,13 +222,13 @@ func TestWebConfigAppSettingsAndSQSQueue(t *testing.T) {
 	var q string
 	for _, e := range tab.Entries {
 		if e.Key == "OrdersQueueUrl" {
-			q = e.Queue
+			q = e.Channel
 		}
 	}
 	if q != "orders-inbound" {
 		t.Fatalf("queue = %q", q)
 	}
-	if p := tab.PromptSection("Orders/OrderQueue.cs"); !strings.Contains(p, `OrdersQueueUrl -> SQS queue "orders-inbound"`) || !strings.Contains(p, "BillingApiUrl -> billing-api") {
+	if p := tab.PromptSection("Orders/OrderQueue.cs"); !strings.Contains(p, `OrdersQueueUrl -> channel "orders-inbound"`) || !strings.Contains(p, "BillingApiUrl -> billing-api") {
 		t.Fatalf("prompt:\n%s", p)
 	}
 }
@@ -275,5 +275,32 @@ func TestOptionsObjectAndLocalAliasReachTheClient(t *testing.T) {
 	want := []string{"axios.create|apiUrl|Constants.expoConfig?.extra?.apiUrl", "got.extend|process.env.OTHER_URL|process.env.OTHER_URL"}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("uses = %q", got)
+	}
+}
+
+func TestEnvDefaultChannelNames(t *testing.T) {
+	cases := []struct{ file, body, key, name string }{
+		{"config.ts", "export const ordersTopic = process.env.ORDERS_TOPIC || 'orders';\n", "ORDERS_TOPIC", "orders"},
+		{"config.py", "ORDERS_TOPIC = os.getenv(\"ORDERS_TOPIC\", \"orders-v2\")\n", "ORDERS_TOPIC", "orders-v2"},
+		{"config.go", "subj := getenv(\"INVENTORY_SUBJECT\", \"inventory.reserved\")\n", "INVENTORY_SUBJECT", "inventory.reserved"},
+		{"W.cs", "var q = Environment.GetEnvironmentVariable(\"NOTIFY_QUEUE\") ?? \"notify.orders\";\n", "NOTIFY_QUEUE", "notify.orders"},
+	}
+	for _, c := range cases {
+		tab := &graph.ConfigHosts{}
+		parseEnvDefaults(tab, c.file, []byte(c.body))
+		var got string
+		for _, e := range tab.Entries {
+			if e.Key == c.key {
+				got = e.Channel
+			}
+		}
+		if got != c.name {
+			t.Errorf("%s: %s = %q, want %q", c.file, c.key, got, c.name)
+		}
+	}
+	tab := &graph.ConfigHosts{}
+	parseEnvDefaults(tab, "x.py", []byte("TOPIC_PREFIX = os.getenv(\"LOG_LEVEL\", \"info\")\n"))
+	if len(tab.Entries) != 0 {
+		t.Errorf("a non-channel variable became an entry: %v", tab.Entries)
 	}
 }

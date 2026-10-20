@@ -83,7 +83,10 @@ var (
 	// an environment read: the name is a quoted UPPER_SNAKE literal or process.env.NAME
 	envReadRe = regexp.MustCompile(`(?i:getenv|environ|\bENV\b|\benv\s*\(|\bconfig\s*\(|Variable\.get|GetEnvironmentVariable|env::var)[^"'` + "`" + `]{0,40}["'` + "`" + `]([A-Z][A-Z0-9_]{2,})["'` + "`" + `]|process\.env\.([A-Z][A-Z0-9_]{2,})|process\.env\[\s*["']([A-Z][A-Z0-9_]{2,})["']\s*\]|Variable\.get\(\s*["']([a-z][a-z0-9_]{4,})["']`)
 	// an identifier assigned at the start of a line: NAME = , const NAME = , val name = , NAME :=
-	assignedNameRe = regexp.MustCompile(`^\s*(?:export\s+)?(?:(?:const|let|var|val|final|static|public|private|readonly|String)\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=|:\s)`)
+	// a variable named like a channel, and a plain-name string default
+	channelEnvNameRe = regexp.MustCompile(`(?i)(?:topic|queue|stream|subject|channel|exchange)`)
+	plainLitRe       = regexp.MustCompile("[\"'`]([A-Za-z0-9][A-Za-z0-9._\\-/:+#*>]{1,119})[\"'`]")
+	assignedNameRe   = regexp.MustCompile(`^\s*(?:export\s+)?(?:(?:const|let|var|val|final|static|public|private|readonly|String)\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=|:\s)`)
 	// names that say "this is an address"
 	addressNameRe = regexp.MustCompile(`(?i)(?:url|uri|host|endpoint|address|base|api)$`)
 	urlLitRe      = regexp.MustCompile("[\"'`](https?://[^\"'`\\s)]+)[\"'`]")
@@ -247,6 +250,16 @@ func parseEnvDefaults(t *graph.ConfigHosts, file string, body []byte) {
 			}
 		}
 		rest := win[m[1]:]
+		if channelEnvNameRe.MatchString(name) {
+			// ORDERS_TOPIC = os.getenv("ORDERS_TOPIC", "orders"): the default is the channel
+			if lit := plainLitRe.FindStringSubmatch(rest); lit != nil && !strings.Contains(lit[1], "://") {
+				t.Add(name, lit[1], file)
+				if a := assignedNameRe.FindStringSubmatch(l); a != nil && a[1] != name && channelEnvNameRe.MatchString(a[1]) {
+					t.Add(a[1], lit[1], file)
+				}
+				continue
+			}
+		}
 		if u := urlLitRe.FindStringSubmatch(rest); u != nil && name != "" {
 			t.Add(name, u[1], file)
 			// CATALOG_API_URL = os.getenv("x", "http://..."): the constant the

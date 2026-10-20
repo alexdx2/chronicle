@@ -388,3 +388,57 @@ func TestBareDottedConfigKeyTargetIsTheConfiguredHost(t *testing.T) {
 		t.Fatalf("externals = %v", got)
 	}
 }
+
+func TestChannelConfigValues(t *testing.T) {
+	for _, c := range []struct {
+		key, val, want string
+		ok             bool
+	}{
+		{"Kafka:Topics:Payments", "payments", "payments", true},
+		{"app.kafka.topic.orders", "orders-v2", "orders-v2", true},
+		{"ORDERS_TOPIC", "orders", "orders", true},
+		{"spring.cloud.stream.bindings.invoicing-in-0.destination", "orders-valid", "orders-valid", true},
+		{"rabbit.queue", "notify.orders", "notify.orders", true},
+		{"nats.subject", "inventory.reserved", "inventory.reserved", true},
+		{"Kafka:Topics:Payments:PartitionCount", "12", "", false},
+		{"kafka.topic.retention-ms", "86400000", "", false},
+		{"kafka.consumer.group-id", "billing", "", false},
+		{"kafka.topic.enabled", "true", "", false},
+		{"topic.pattern", "orders-.*", "", false},
+		{"kafka.topics", "a,b,c", "", false},
+		{"Services:Billing", "billing-api", "", false},
+	} {
+		got, ok := channelConfigValue(c.key, c.val)
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s=%s: got %q %v, want %q %v", c.key, c.val, got, ok, c.want, c.ok)
+		}
+	}
+	tab := &ConfigHosts{}
+	tab.Add("Kafka:Topics:Payments", "payments-v2", "appsettings.json")
+	tab.Add("Services:PricingApi", "http://pricing-api:8080", "appsettings.json")
+	if _, ok := tab.lookup("Program.cs", "Kafka:Topics:Payments"); ok {
+		t.Errorf("a channel entry is not an address")
+	}
+	if e, ok := tab.lookupChannel("Program.cs", "Kafka:Topics:Payments"); !ok || e.Channel != "payments-v2" {
+		t.Errorf("channel lookup: %+v %v", e, ok)
+	}
+	if _, ok := tab.lookupChannel("Program.cs", "Services:PricingApi"); ok {
+		t.Errorf("an address is not a channel")
+	}
+}
+
+func TestProduces_ConfigSymbolWithAChannelName(t *testing.T) {
+	writeTree(t, map[string]string{
+		"w/appsettings.json": "{ \"Kafka\": { \"Topics\": { \"Payments\": \"payments-v2\" } } }\n",
+		"w/Worker.cs":        "class W { void F(IConfiguration cfg) { consumer.Subscribe(cfg[\"Kafka:Topics:Payments\"]); } }\n",
+	})
+	c := &ConfigHosts{}
+	c.Add("Kafka:Topics:Payments", "payments-v2", "w/appsettings.json")
+	for _, target := range []string{`cfg["Kafka:Topics:Payments"]`, "Kafka:Topics:Payments"} {
+		_, s, _ := resolveFiles(t, c, srcFacts{"w/Worker.cs", []Fact{{Kind: "consumes", From: "W", FromType: "service", To: target}}})
+		edges, _ := s.ListEdges(store.EdgeFilter{EdgeType: "CONSUMES_TOPIC"})
+		if len(edges) != 1 || !strings.HasSuffix(edges[0].ToNodeKey, ":payments-v2") {
+			t.Errorf("%s: edges = %+v", target, edges)
+		}
+	}
+}

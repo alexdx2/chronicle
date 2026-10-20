@@ -187,14 +187,14 @@ func hasLiteralSegment(p string) bool {
 	return false
 }
 
-// channelKindOK requires the fact's kind to agree with the graph node type:
-// queue with queue, topic and bus (an event bus is a topic node) with topic.
+// channelKindOK: every channel kind (topic, queue, stream, subject, exchange,
+// subscription, bus, channel) is one named channel, and the graph mints one
+// node type for all of them (a topic node; a queue node exists where a manifest
+// declared one). The fact matches a node of either type; the kind it was read
+// as is information, not a condition.
 func channelKindOK(kind, typ string) bool {
-	switch kind {
-	case "queue":
-		return typ == "queue"
-	case "topic", "bus":
-		return typ == "topic"
+	if typ != "topic" && typ != "queue" {
+		return false
 	}
 	return true
 }

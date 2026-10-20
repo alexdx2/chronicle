@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -20,10 +21,13 @@ type ConfigEntry struct {
 	// destinations, gateway routes, upstreams): the configuration is itself the
 	// integration, no call site names it.
 	Routing bool
-	// Queue is the queue name when the value is an AWS SQS queue URL
-	// (https://sqs.eu-west-1.amazonaws.com/123456789012/orders-inbound): the
-	// host says nothing about the system, the last path segment does.
-	Queue string
+	// Channel is the name of a message channel (topic, queue, stream, subject,
+	// exchange, subscription) when the key names one and the value is a plain
+	// name ("Kafka:Topics:Orders" = "orders-v2"), or when the value is an AWS
+	// SQS queue URL (https://sqs.eu-west-1.amazonaws.com/123456789012/orders-inbound):
+	// the host says nothing about the system, the last path segment does. An
+	// entry with only a Channel has no URL and is not an address.
+	Channel string
 }
 
 // ClientBinding says a typed HTTP client class (AddHttpClient<T>,
@@ -92,10 +96,16 @@ func SanitizeConfigURL(raw string) (clean, host string, ok bool) {
 // http(s) URLs are ignored.
 func (c *ConfigHosts) Add(key, rawURL, file string) {
 	clean, host, ok := SanitizeConfigURL(rawURL)
-	if !ok || key == "" {
+	if key == "" {
 		return
 	}
-	c.Entries = append(c.Entries, ConfigEntry{Key: key, URL: clean, Host: host, File: file, Dir: dirOf(file), Routing: isRoutingKey(key), Queue: sqsQueueName(rawURL)})
+	if !ok {
+		if name, isChannel := channelConfigValue(key, rawURL); isChannel {
+			c.Entries = append(c.Entries, ConfigEntry{Key: key, File: file, Dir: dirOf(file), Channel: name})
+		}
+		return
+	}
+	c.Entries = append(c.Entries, ConfigEntry{Key: key, URL: clean, Host: host, File: file, Dir: dirOf(file), Routing: isRoutingKey(key), Channel: sqsQueueName(rawURL)})
 }
 
 // AddClient records a typed client registration.
@@ -138,13 +148,22 @@ func normConfigKey(k string) string {
 // file named without an environment suffix wins, then the path order. A key no
 // ancestor holds resolves only when exactly one entry in the repo has it.
 func (c *ConfigHosts) lookup(filePath, key string) (ConfigEntry, bool) {
+	return c.lookupBy(filePath, key, func(e ConfigEntry) bool { return e.URL != "" })
+}
+
+// lookupChannel is lookup over the entries that hold a channel name.
+func (c *ConfigHosts) lookupChannel(filePath, key string) (ConfigEntry, bool) {
+	return c.lookupBy(filePath, key, func(e ConfigEntry) bool { return e.Channel != "" })
+}
+
+func (c *ConfigHosts) lookupBy(filePath, key string, keep func(ConfigEntry) bool) (ConfigEntry, bool) {
 	if c == nil {
 		return ConfigEntry{}, false
 	}
 	want := normConfigKey(key)
 	var near, any []ConfigEntry
 	for _, e := range c.Entries {
-		if normConfigKey(e.Key) != want {
+		if !keep(e) || normConfigKey(e.Key) != want {
 			continue
 		}
 		any = append(any, e)
@@ -170,7 +189,7 @@ func (c *ConfigHosts) lookup(filePath, key string) (ConfigEntry, bool) {
 	}
 	hosts := map[string]bool{}
 	for _, e := range any {
-		hosts[e.URL] = true
+		hosts[e.URL+"\x00"+e.Channel] = true
 	}
 	if len(hosts) == 1 {
 		return any[0], true
@@ -182,9 +201,9 @@ func (c *ConfigHosts) lookup(filePath, key string) (ConfigEntry, bool) {
 		var tail []ConfigEntry
 		tails := map[string]bool{}
 		for _, e := range c.Entries {
-			if strings.HasSuffix(normConfigKey(e.Key), ":"+want) {
+			if keep(e) && strings.HasSuffix(normConfigKey(e.Key), ":"+want) {
 				tail = append(tail, e)
-				tails[e.URL] = true
+				tails[e.URL+"\x00"+e.Channel] = true
 			}
 		}
 		if len(tails) == 1 {
@@ -390,7 +409,7 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 	if c.Empty() {
 		return ""
 	}
-	type row struct{ key, host, class, queue string }
+	type row struct{ key, host, class, channel string }
 	seen := map[string]bool{}
 	var rows []row
 	for _, e := range c.Entries {
@@ -408,7 +427,7 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 			continue
 		}
 		seen[k] = true
-		rows = append(rows, row{key: e.Key, host: e.Host, queue: e.Queue})
+		rows = append(rows, row{key: e.Key, host: e.Host, channel: e.Channel})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].key < rows[j].key || (rows[i].key == rows[j].key && rows[i].host < rows[j].host)
@@ -422,8 +441,8 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 	var b strings.Builder
 	b.WriteString("\n\n## Known config values\nThese configuration keys of this repository hold the hosts below. When a call's address is one of these keys (a configuration key, an environment variable, a settings property: Configuration[\"..\"], process.env.X, os.getenv(\"X\"), @Value, environment.x), report the call with the key as the target; the host is filled in for you.\n")
 	for _, r := range rows {
-		if r.queue != "" {
-			b.WriteString("- " + r.key + " -> SQS queue \"" + r.queue + "\" (a produce/consume of that queue, not an HTTP host)\n")
+		if r.channel != "" {
+			b.WriteString("- " + r.key + " -> channel \"" + r.channel + "\" (the name of a topic, queue, stream or subject: a produce/consume of that channel, not an HTTP host)\n")
 			continue
 		}
 		b.WriteString("- " + r.key + " -> " + r.host + "\n")
@@ -477,4 +496,27 @@ func sqsQueueName(raw string) string {
 // to know which config file a key's value comes from.
 func (c *ConfigHosts) Lookup(filePath, key string) (ConfigEntry, bool) {
 	return c.lookup(filePath, key)
+}
+
+var (
+	channelKeyWords = regexp.MustCompile(`(?i)(?:topic|queue|stream|subject|channel|exchange|subscription|destination)`)
+	notChannelKey   = regexp.MustCompile(`(?i)timeout|ttl|size|count|max|min|group|enabled|partition|replica|retention|offset|concurrency|retry|auto|type|format|serde|serializ|class|bootstrap|server|prefix|suffix|pattern|regex|interval|delay|batch|acks|compression|policy`)
+	channelNameRe   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._\-/:+#*>]{1,119}$`)
+)
+
+// channelConfigValue says whether a config entry names a message channel: the
+// key says topic/queue/stream/subject/channel/exchange/subscription/destination
+// and the value is a plain name (no URL, spaces, placeholders, lists or numbers).
+func channelConfigValue(key, value string) (string, bool) {
+	v := strings.TrimSpace(value)
+	if !channelNameRe.MatchString(v) || strings.EqualFold(v, "true") || strings.EqualFold(v, "false") || strings.EqualFold(v, "null") {
+		return "", false
+	}
+	if _, err := strconv.ParseFloat(v, 64); err == nil {
+		return "", false
+	}
+	if !channelKeyWords.MatchString(key) || notChannelKey.MatchString(key) {
+		return "", false
+	}
+	return v, true
 }

@@ -5859,17 +5859,18 @@ func canonChannelName(to string) string {
 	return to
 }
 
-// channelNameFor is the name a topic or queue goes by: a config key that holds
-// an SQS queue URL stands for the queue, an SQS URL or ARN for its last
-// segment.
+// channelNameFor is the name a channel goes by: a config key or variable that
+// holds a channel name (or an SQS queue URL) stands for that name, an SQS URL or
+// ARN for its last segment.
 func (g *Graph) channelNameFor(filePath, to string) string {
+	t := strings.TrimSpace(to)
 	if g.domainConfig != nil {
-		if _, key, e, ok := g.domainConfig.ResolveSymbol(filePath, strings.TrimSpace(to)); ok && e.Queue != "" {
-			return e.Queue
-		} else if key == "" {
-			if be, bok := g.domainConfig.lookup(filePath, strings.TrimSpace(to)); bok && be.Queue != "" {
-				return be.Queue
-			}
+		key := t
+		if kind, k := ClassifyCallBase(t); (kind == SymEnv || kind == SymConfig) && k != "" {
+			key = k
+		}
+		if e, ok := g.domainConfig.lookupChannel(filePath, key); ok {
+			return e.Channel
 		}
 	}
 	return canonChannelName(to)

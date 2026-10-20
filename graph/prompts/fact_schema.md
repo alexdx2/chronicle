@@ -232,6 +232,18 @@ DO NOT emit `dependency` from source code files — a source-level import is an 
 `produces` = publishes/emits/sends a message, event, or queue item.
 `consumes` = handles/subscribes to/receives a message or event.
 
+`to` is the name of the CHANNEL, whatever the broker calls it: a Kafka topic or stream (including the input and
+output topics of a Kafka Streams topology, a ksqlDB `KAFKA_TOPIC`, a Kafka Connect `topics`, a Spring Cloud Stream
+`destination`), an AMQP exchange or queue, a NATS subject, a Redis stream or pub/sub channel, an MQTT topic, a
+Service Bus or Pub/Sub topic, an SNS topic, an SQS queue, an EventBridge bus. Set `transport` to the broker when you
+know it (kafka, amqp, nats, redis, mqtt, servicebus, pubsub, sns, sqs, eventbridge).
+- AMQP: when the code binds its queue to an exchange, the shared channel is the exchange; otherwise the queue.
+- A subscription (Service Bus, Pub/Sub) whose topic is not named in the code is the channel by its own name.
+- Channels the framework creates by itself (Kafka Streams changelog and repartition topics, dead-letter and retry
+  topics) are not facts of this code.
+- When the name is a configuration key or variable, report that key or variable as `to` ("Known config values"
+  lists the channel names the repository's config files hold).
+
 # Precision rules
 
 A wrong fact poisons the graph more than a missing one. Each rule below targets a mistake models make often.

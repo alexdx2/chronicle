@@ -299,7 +299,7 @@ func TestOwnServiceNeverExternal(t *testing.T) {
 	}
 }
 
-func TestChannelKindMustAgree(t *testing.T) {
+func TestChannelKindIsInformationNotACondition(t *testing.T) {
 	snap := mkSnapWith(t, []snapshot.Node{
 		nd("contract:queue:d:jobs", "queue", "jobs"),
 		nd("contract:topic:d:events", "topic", "events"),
@@ -311,12 +311,14 @@ func TestChannelKindMustAgree(t *testing.T) {
 		kind, name string
 		want       truth.Status
 	}{
-		{"queue", "events", truth.Missing},
-		{"topic", "jobs", truth.Missing},
+		{"queue", "events", truth.Confirmed}, // one named channel, whatever it is called
+		{"topic", "jobs", truth.Confirmed},
 		{"queue", "jobs", truth.Confirmed},
 		{"topic", "events", truth.Confirmed},
 		{"bus", "events", truth.Confirmed},
-		{"bus", "jobs", truth.Missing},
+		{"stream", "events", truth.Confirmed},
+		{"subject", "jobs", truth.Confirmed},
+		{"exchange", "nowhere", truth.Missing},
 	} {
 		if g := one(t, snap, ch(c.kind, c.name)); g != c.want {
 			t.Errorf("%s/%s: got %s want %s", c.kind, c.name, g, c.want)
