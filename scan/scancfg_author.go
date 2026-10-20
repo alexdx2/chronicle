@@ -59,7 +59,14 @@ config:
 noise:
   - {name: "tmp-*"}
 
-Rules of the format: a call template is matched against comment-free source, whitespace-insensitive. {name} captures the channel name: a string literal, or an identifier that the scanner resolves through same-file constants and configuration keys. {any} skips an argument. A pattern with side define ("{id} = app.topic({name}") binds an identifier to a channel name for the whole repository, and {ref} in another pattern ("@app.agent({ref})", "{ref}.send(") looks that identifier up: use this when the producer or consumer is in another file than the declaration. side is produce, consume or declare; kind is topic, queue, stream, subject, exchange, subscription or bus. Document rules read json/yaml/properties files: {value} is the selected value, {key:N} the Nth segment of its dotted path. Do not invent rules for code you were not shown. Prefer a few precise templates with an imports or contains gate over broad ones.`
+Rules of the format: a call template is matched against comment-free source, whitespace-insensitive. {name} captures the channel name: a string literal, or an identifier that the scanner resolves through same-file constants and configuration keys. {any} skips an argument. A pattern with side define ("{id} = app.topic({name}") binds an identifier to a channel name for the whole repository, and {ref} in another pattern ("@app.agent({ref})", "{ref}.send(") looks that identifier up: use this when the producer or consumer is in another file than the declaration. side is produce, consume or declare; kind is topic, queue, stream, subject, exchange, subscription or bus. Document rules read json/yaml/properties files: {value} is the selected value, {key:N} the Nth segment of its dotted path. Example of a definition across files (Faust: the topic object is created in one module and used in another):
+  - id: faust-topics
+    when: {contains: ["app.topic", "app.agent"]}
+    patterns:
+      - {call: "{id} = app.topic({name}", side: define}
+      - {call: "@app.agent({ref})", side: consume, kind: topic, transport: kafka}
+      - {call: "{ref}.send(", side: produce, kind: topic, transport: kafka}
+Do not write document rules over files you were not shown. Do not invent rules for code you were not shown. Prefer a few precise templates with an imports or contains gate over broad ones.`
 
 var channelWordRe = regexp.MustCompile(`(?i)\b(publish|send|emit|produce|subscribe|consume|listen|topic|queue|stream|channel|exchange|subject|bus)\w*\b`)
 var literalNameRe = regexp.MustCompile(`["']([A-Za-z][\w.\-/]{2,60})["']`)
@@ -100,6 +107,9 @@ func authorEvidence(root string, files []string, known map[string]bool, limit in
 
 func isLikelyNonSource(p string) bool {
 	l := strings.ToLower(p)
+	if isAnswerSheet(p) {
+		return true
+	}
 	for _, s := range []string{"node_modules/", "vendor/", ".lock", "package-lock", ".min.", ".md", ".svg", ".map"} {
 		if strings.Contains(l, s) {
 			return true
@@ -169,13 +179,16 @@ func ScanConfigAuthor(ctx context.Context, b llm.Backend, root string, opts Auth
 		res.Rounds = append(res.Rounds, ar)
 		if dr.Valid {
 			score := len(dr.Facts)*2 - (ar.Missing+ar.Extra)*3
-			if score > bestScore {
+			if len(dr.Facts) > 0 && score > bestScore {
 				bestScore, best = score, cand
 			}
-			if dr.Golden != nil && ar.Missing == 0 && ar.Extra == 0 || dr.Golden == nil && len(dr.Facts) > 0 {
+			if len(dr.Facts) > 0 && (dr.Golden == nil || ar.Missing == 0 && ar.Extra == 0) {
 				break
 			}
 			fb := fmt.Sprintf("The dry run found %d facts.", len(dr.Facts))
+			if len(dr.Facts) == 0 {
+				fb += " That is nothing: a when gate or a template does not match the lines shown above (a gate must hold in every file where the pattern should match, including files that do not import the library)."
+			}
 			if dr.Golden != nil {
 				fb += fmt.Sprintf("\nStill missing: %s\nShould not exist: %s", strings.Join(dr.Golden.Missing, ", "), strings.Join(dr.Golden.Extra, ", "))
 			}
@@ -185,7 +198,7 @@ func ScanConfigAuthor(ctx context.Context, b llm.Backend, root string, opts Auth
 		}
 	}
 	if best == "" {
-		res.Refused = "no valid candidate in " + fmt.Sprint(len(res.Rounds)) + " rounds"
+		res.Refused = "no candidate that finds anything in " + fmt.Sprint(len(res.Rounds)) + " rounds"
 		return res, nil
 	}
 	// stamp provenance; the candidate must still parse as written

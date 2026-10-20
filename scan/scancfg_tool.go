@@ -90,7 +90,23 @@ type GoldenDiff struct {
 	Extra   []string `json:"extra"`
 }
 
+// isAnswerSheet: golden files of the audit fixtures are never project input.
+func isAnswerSheet(p string) bool {
+	b := filepath.Base(p)
+	return strings.HasPrefix(b, "truth-expected") && strings.HasSuffix(b, ".json")
+}
+
 func trackedFiles(root string) []string {
+	var out []string
+	for _, p := range trackedFilesAll(root) {
+		if !isAnswerSheet(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func trackedFilesAll(root string) []string {
 	if out, err := gitutil.RunRaw(root, "-c", "core.quotePath=false", "ls-files", "-z"); err == nil {
 		var fs []string
 		for _, p := range strings.Split(out, "\x00") {
