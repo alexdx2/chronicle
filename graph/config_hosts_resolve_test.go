@@ -252,3 +252,16 @@ func TestIsRoutingKey(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptSection_NotForTheFileThatDefinesTheValue(t *testing.T) {
+	c := &ConfigHosts{}
+	c.Add("CATALOG_API_URL", "http://catalog-api:3000", "src/config.rs")
+	c.Add("BILLING_URL", "http://billing-api:8080", "src/other.rs")
+	own := c.PromptSection("src/config.rs")
+	if strings.Contains(own, "CATALOG_API_URL") || !strings.Contains(own, "BILLING_URL") {
+		t.Errorf("config.rs must see the other file's values only:\n%s", own)
+	}
+	if got := (&ConfigHosts{Entries: c.Entries[:1]}).PromptSection("src/config.rs"); got != "" {
+		t.Errorf("nothing left to say, yet: %q", got)
+	}
+}

@@ -362,6 +362,12 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 	seen := map[string]bool{}
 	var rows []row
 	for _, e := range c.Entries {
+		if e.File == filePath {
+			// the file that defines the value shows it to the model itself;
+			// telling it "the host is filled in for you" there makes it skip
+			// the very line that holds the address
+			continue
+		}
 		if !isUnder(e.Dir, filePath) && len(c.Entries) > 60 {
 			continue
 		}
@@ -375,6 +381,9 @@ func (c *ConfigHosts) PromptSection(filePath string) string {
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].key < rows[j].key || (rows[i].key == rows[j].key && rows[i].host < rows[j].host)
 	})
+	if len(rows) == 0 && len(c.Clients) == 0 {
+		return ""
+	}
 	if len(rows) > 40 {
 		rows = rows[:40]
 	}
