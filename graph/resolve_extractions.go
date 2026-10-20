@@ -38,12 +38,16 @@ type Fact struct {
 	Confidence float64  `json:"confidence,omitempty"` // agent confidence [0,1]
 	Origin     string   `json:"origin,omitempty"`     // fact provenance: "ast", "ast+llm", or "" (llm default) — set by unionFacts
 	Note       string   `json:"note,omitempty"`       // agent uncertainty/note
-	Reason     string   `json:"reason,omitempty"`     // reason for relationship (e.g. parent container justification)
-	Section    string   `json:"section,omitempty"`    // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
-	Version    string   `json:"version,omitempty"`    // dependency version as written in the manifest
-	Ecosystem  string   `json:"ecosystem,omitempty"`  // npm | nuget | go | python | maven | gradle
-	Line       int      `json:"line,omitempty"`       // manifest line of a deps-pass fact (set only by WriteDepsExtractions)
-	Text       string   `json:"text,omitempty"`       // manifest text on that line, the manifest_line assertion's anchor
+	// ConfigSymbol is, for a config-use fact, the symbol the config table
+	// resolves when the anchor text is not that symbol itself
+	// (`CreateClient("billing")` is the anchor, Configuration["Services:BillingApi"] the symbol).
+	ConfigSymbol string `json:"-"`
+	Reason       string `json:"reason,omitempty"`    // reason for relationship (e.g. parent container justification)
+	Section      string `json:"section,omitempty"`   // manifest section for "dependency" facts: dependencies|optionalDependencies|peerDependencies|devDependencies (default "dependencies")
+	Version      string `json:"version,omitempty"`   // dependency version as written in the manifest
+	Ecosystem    string `json:"ecosystem,omitempty"` // npm | nuget | go | python | maven | gradle
+	Line         int    `json:"line,omitempty"`      // manifest line of a deps-pass fact (set only by WriteDepsExtractions)
+	Text         string `json:"text,omitempty"`      // manifest text on that line, the manifest_line assertion's anchor
 	// Flow-specific fields
 	FlowName string   `json:"flow_name,omitempty"` // use case name (e.g. "Tom attacks Jerry")
 	Trigger  string   `json:"trigger,omitempty"`   // what triggers this flow (endpoint, event, cron)
@@ -5397,7 +5401,11 @@ func (g *Graph) classifyHTTPTarget(filePath string, fact Fact) httpTarget {
 	raw := fact.Target
 	if low := strings.ToLower(cleanCallTarget(raw)); strings.Contains(low[:min(len(low), 8)], "://") {
 		if fact.Origin == configUseOrigin && fact.Text != "" {
-			if _, _, e, ok := g.domainConfig.ResolveSymbol(filePath, fact.Text); ok {
+			sym := fact.Text
+			if fact.ConfigSymbol != "" {
+				sym = fact.ConfigSymbol
+			}
+			if _, _, e, ok := g.domainConfig.ResolveSymbol(filePath, sym); ok {
 				return httpTarget{target: raw, cfg: &e, codeText: fact.Text}
 			}
 		}
@@ -5744,7 +5752,7 @@ func (g *Graph) injectConfigUses(files []fileFacts, domainKey string) []fileFact
 		seen[k] = true
 		files[i].facts = append(files[i].facts, Fact{
 			Kind: "http_call", From: inferNameFromPath(u.File), Target: base,
-			Origin: configUseOrigin, Line: u.Line, Text: u.Text, Confidence: 1.0,
+			Origin: configUseOrigin, Line: u.Line, Text: u.Text, ConfigSymbol: u.Symbol, Confidence: 1.0,
 			Note: "configured address passed to " + u.Callee,
 		})
 	}

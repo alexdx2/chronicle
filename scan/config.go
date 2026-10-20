@@ -91,6 +91,8 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 	sorted := append([]string(nil), files...)
 	sort.Strings(sorted)
 	tooBig := 0
+	var namedRegs []namedReg
+	var namedUses []namedUse
 	defer func() {
 		if tooBig > 0 {
 			log.Printf("scan: config: skipped %d files larger than %d bytes", tooBig, maxConfigBytes)
@@ -128,6 +130,8 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		}
 		if reg {
 			parseClientRegistrations(t, p, body)
+			rs, us := scanNamedClients(p, body)
+			namedRegs, namedUses = append(namedRegs, rs...), append(namedUses, us...)
 			continue
 		}
 		if src {
@@ -150,6 +154,7 @@ func ReadConfigHosts(root string, files []string) (*graph.ConfigHosts, []string)
 		}
 		parsed = append(parsed, p)
 	}
+	joinNamedClients(t, namedRegs, namedUses)
 	return t, parsed
 }
 

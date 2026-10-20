@@ -265,3 +265,17 @@ func TestPromptSection_NotForTheFileThatDefinesTheValue(t *testing.T) {
 		t.Errorf("nothing left to say, yet: %q", got)
 	}
 }
+
+func TestConfigUse_SymbolDiffersFromTheAnchorText(t *testing.T) {
+	writeTree(t, map[string]string{
+		"w/appsettings.json":   "{ \"Services\": { \"BillingApi\": \"http://billing-api:8080\" } }\n",
+		"w/Clients/Billing.cs": "class B {\n  void F() { var h = _f.CreateClient(\"billing\"); }\n}\n",
+	})
+	c := &ConfigHosts{}
+	c.Add("Services:BillingApi", "http://billing-api:8080", "w/appsettings.json")
+	c.AddUse(ConfigUse{File: "w/Clients/Billing.cs", Line: 2, Text: `CreateClient("billing")`, Callee: "IHttpClientFactory.CreateClient", Symbol: `Configuration["Services:BillingApi"]`})
+	code := "w/Clients/Billing.cs"
+	g, s, _ := resolveFiles(t, c, srcFacts{code, []Fact{}})
+	ev := callServiceEvidence(t, g, s, "billing-api", code, "w/appsettings.json")
+	wantTwoValid(t, ev, code, `CreateClient(\"billing\")`, "w/appsettings.json")
+}
