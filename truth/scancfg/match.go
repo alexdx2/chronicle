@@ -39,7 +39,11 @@ const (
 	strLit  = `(?:"(?P<s1>[^"\\\n]*)"|'(?P<s2>[^'\\\n]*)'|` + "`(?P<s3>[^`\\n]*)`" + `)`
 	exprLit = `(?P<e>[A-Za-z_@$][\w.$]*(?:\(\))?)`
 	identRe = `(?P<%s>[A-Za-z_]\w*)`
-	anyExpr = `(?:[^,()]|\((?:[^()]|\([^()]*\))*\))*?`
+	// restExpr skips whatever stands between two anchors inside one statement or
+	// block: any number of arguments or attributes, in any order, never across
+	// a ';' or a brace.
+	restExpr = `[^;{}]*?`
+	anyExpr  = `(?:[^,()]|\((?:[^()]|\([^()]*\))*\))*?`
 )
 
 // compileTemplate: literal text matches literally with whitespace optional
@@ -99,10 +103,12 @@ func compileTemplate(tpl string) (*Compiled, error) {
 			b.WriteString(fmt.Sprintf(identRe, "ref"))
 		case w == "any":
 			b.WriteString(anyExpr)
+		case w == "rest":
+			b.WriteString(restExpr)
 		case w[0] >= 'A' && w[0] <= 'Z':
 			b.WriteString(`[A-Za-z_][\w.<>\[\]]*`)
 		default:
-			return nil, fmt.Errorf("template %q: unknown placeholder {%s} (use {name}, {any} or {Type})", tpl, w)
+			return nil, fmt.Errorf("template %q: unknown placeholder {%s} (use {name}, {any}, {rest} or {Type})", tpl, w)
 		}
 		b.WriteString(`\s*`)
 		last = m[1]
@@ -161,6 +167,19 @@ func globToRegexp(g string) string {
 			}
 		case '?':
 			b.WriteString(`[^/]`)
+		case '{':
+			// {a,b} alternation; an unclosed brace is a literal one
+			end := strings.IndexByte(g[i:], '}')
+			if end < 0 {
+				b.WriteString(`\{`)
+				break
+			}
+			alts := strings.Split(g[i+1:i+end], ",")
+			for j, a := range alts {
+				alts[j] = strings.TrimSuffix(strings.TrimPrefix(globToRegexp(a), "^"), "$")
+			}
+			b.WriteString("(?:" + strings.Join(alts, "|") + ")")
+			i += end
 		default:
 			b.WriteString(regexp.QuoteMeta(string(g[i])))
 		}
@@ -296,6 +315,9 @@ func NewEngine(cfg *Config) (*Engine, error) {
 			c, err := compileTemplate(p.Call)
 			if err != nil {
 				return nil, fmt.Errorf("rule %s: %w", r.ID, err)
+			}
+			if r.IgnoreCase {
+				c.re = regexp.MustCompile("(?i)" + c.re.String())
 			}
 			cr.pats = append(cr.pats, c)
 		}

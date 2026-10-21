@@ -75,8 +75,10 @@ type ChannelRule struct {
 	When        When      `yaml:"when,omitempty" json:"when,omitempty"`
 	Patterns    []Pattern `yaml:"patterns" json:"patterns"`
 	IgnoreNames []string  `yaml:"ignore_names,omitempty" json:"ignore_names,omitempty"`
-	Reviewed    bool      `yaml:"reviewed,omitempty" json:"reviewed,omitempty"`
-	Source      string    `yaml:"-" json:"source,omitempty"` // set by the loader: builtin, fleet, project, llm
+	// IgnoreCase makes the call templates case-insensitive (SQL dialects).
+	IgnoreCase bool   `yaml:"ignore_case,omitempty" json:"ignore_case,omitempty"`
+	Reviewed   bool   `yaml:"reviewed,omitempty" json:"reviewed,omitempty"`
+	Source     string `yaml:"-" json:"source,omitempty"` // set by the loader: builtin, fleet, project, llm
 }
 
 // Pattern is one call template. {name} captures the channel name (a string

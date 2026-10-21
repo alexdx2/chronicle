@@ -425,3 +425,128 @@ func TestTemplate_Whitespace(t *testing.T) {
 		}
 	}
 }
+
+func TestGlobMatch_Braces(t *testing.T) {
+	for _, c := range []struct {
+		glob, name string
+		want       bool
+	}{
+		{"**/application*.{yml,yaml,properties}", "svc/src/main/resources/application-dev.yaml", true},
+		{"**/application*.{yml,yaml,properties}", "application.properties", true},
+		{"**/application*.{yml,yaml,properties}", "application.json", false},
+		{"{src,lib}/**/*.go", "lib/a/b.go", true},
+		{"{src,lib}/**/*.go", "cmd/a.go", false},
+		{"a{b", "a{b", true}, // an unclosed brace is a literal one
+		{"*.{ts,tsx}", "a.ts", true},
+		{"*.{ts,tsx}", "a.js", false},
+	} {
+		if got := GlobMatch(c.glob, c.name); got != c.want {
+			t.Errorf("GlobMatch(%q, %q) = %v, want %v", c.glob, c.name, got, c.want)
+		}
+	}
+	// the same glob works in a rule's scope and gate
+	cfg := mustParse(t, "documents:\n  - id: d\n    glob: '**/application*.{yml,yaml}'\n    select: 'a.*'\n    emit: [{name: '{value}', side: produce}]\n", "")
+	for _, f := range []string{"x/application.yml", "x/application-prod.yaml"} {
+		if got := RunDocuments(cfg, f, []byte("a:\n  b: topic-1\n")); len(got) != 1 {
+			t.Errorf("%s: %v", f, got)
+		}
+	}
+}
+
+// ksqlDB: properties of a WITH clause come in any order and number, keywords in
+// any case; one pattern per side covers them.
+func TestRest_KsqlWithClause(t *testing.T) {
+	cfg := mustParse(t, `
+channels:
+  - id: ksql
+    ignore_case: true
+    when: {ext: [.sql, .ksql]}
+    patterns:
+      - {call: "WITH ({rest} KAFKA_TOPIC={name} {rest}) AS SELECT", side: produce}
+      - {call: "WITH ({rest} KAFKA_TOPIC={name} {rest});", side: consume}
+`, "")
+	e, err := NewEngine(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := `
+CREATE STREAM orders (id VARCHAR) WITH (KAFKA_TOPIC='orders-raw', VALUE_FORMAT='JSON');
+CREATE STREAM valid WITH (PARTITIONS=3, kafka_topic='orders-valid', REPLICAS=1, VALUE_FORMAT='JSON') AS SELECT * FROM orders;
+-- CREATE STREAM old WITH (KAFKA_TOPIC='orders-legacy');
+CREATE TABLE t WITH (VALUE_FORMAT='JSON', PARTITIONS=1, REPLICAS=1, KAFKA_TOPIC='totals') AS SELECT id, COUNT(*) FROM valid GROUP BY id;
+`
+	got := map[string]bool{}
+	for _, f := range e.Run("q.ksql", []byte(src), nil) {
+		got[f.Key()] = true
+	}
+	for _, k := range []string{"topic:orders-raw#consume", "topic:orders-valid#produce", "topic:totals#produce"} {
+		if !got[k] {
+			t.Errorf("missing %s in %v", k, got)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("extra facts (the commented topic or a wrong side): %v", got)
+	}
+	// {rest} stops at the statement: a topic in the NEXT statement is not this one's
+	two := "CREATE STREAM a WITH (VALUE_FORMAT='JSON');\nCREATE STREAM b WITH (KAFKA_TOPIC='b-topic');\n"
+	for _, f := range e.Run("q.sql", []byte(two), nil) {
+		if f.Name != "b-topic" || f.Side != "consume" {
+			t.Errorf("crossed a statement: %+v", f)
+		}
+	}
+	// without ignore_case the lower-case keyword is not matched
+	cfg.Channels[0].IgnoreCase = false
+	e2, _ := NewEngine(cfg)
+	for _, f := range e2.Run("q.ksql", []byte("CREATE STREAM v WITH (kafka_topic='x');"), nil) {
+		t.Errorf("case-sensitive rule matched: %+v", f)
+	}
+}
+
+// Terraform: a resource block names its channel in an attribute that may stand
+// anywhere in the block.
+func TestRest_TerraformAttributeOrder(t *testing.T) {
+	cfg := mustParse(t, `
+channels:
+  - id: tf-kafka
+    when: {ext: [.tf]}
+    patterns:
+      - {call: 'resource "kafka_topic" {any} { {rest} name = {name}', side: declare}
+`, "")
+	e, _ := NewEngine(cfg)
+	src := `
+resource "kafka_topic" "first" {
+  name = "first-topic"
+  partitions = 3
+}
+resource "kafka_topic" "later" {
+  partitions = 6
+  replication_factor = 2
+  name       = "later-topic"
+}
+resource "other_thing" "x" {
+  name = "not-a-topic"
+}
+`
+	got := map[string]bool{}
+	for _, f := range e.Run("main.tf", []byte(src), nil) {
+		got[f.Name] = true
+	}
+	if !got["first-topic"] || !got["later-topic"] || got["not-a-topic"] || len(got) != 2 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestTemplate_RestMayRepeatAndNeedsAnAnchor(t *testing.T) {
+	if _, err := compileTemplate("f({rest} {name} {rest})"); err != nil {
+		t.Fatalf("two {rest} must be allowed: %v", err)
+	}
+	if _, err := compileTemplate("f({rest})"); err == nil {
+		t.Fatal("a template of only {rest} has no {name}")
+	}
+	// the case flag is part of the content, so it changes the coverage version
+	a := mustParse(t, "channels:\n  - {id: r, patterns: [{call: 'f({name}', side: produce}]}\n", "")
+	b := mustParse(t, "channels:\n  - {id: r, ignore_case: true, patterns: [{call: 'f({name}', side: produce}]}\n", "")
+	if a.Hash() == b.Hash() {
+		t.Fatal("ignore_case did not change the hash")
+	}
+}
