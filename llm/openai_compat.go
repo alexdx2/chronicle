@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,6 +26,9 @@ type chat struct {
 	headers                map[string]string // provider-specific headers
 	http                   *http.Client
 	sleep                  func(time.Duration) // test hook
+	// reasoningRequired is set once an endpoint answers that reasoning cannot be
+	// disabled (OpenRouter, Claude 5 models): later requests ask for low effort.
+	reasoningRequired atomic.Bool
 }
 
 // NewOpenAI returns a Backend over an OpenAI-compatible server. The default
@@ -76,6 +80,9 @@ func (c *chat) Complete(ctx context.Context, req Request) (Response, error) {
 	for k, v := range c.extra {
 		body[k] = v
 	}
+	if c.reasoningRequired.Load() {
+		useLowReasoning(body)
+	}
 	headers := map[string]string{"Authorization": "Bearer " + c.key}
 	for k, v := range c.headers {
 		headers[k] = v
@@ -89,6 +96,15 @@ func (c *chat) Complete(ctx context.Context, req Request) (Response, error) {
 	// Some compatible servers reject response_format; retry once without it.
 	if status == http.StatusBadRequest && strings.Contains(string(raw), "response_format") {
 		delete(body, "response_format")
+		if raw, status, err = c.post(ctx, endpoint, headers, body); err != nil {
+			return Response{}, err
+		}
+	}
+	// Some models cannot run without reasoning: ask for the lowest effort
+	// instead of switching it off, once, and remember it for this backend.
+	if status == http.StatusBadRequest && strings.Contains(string(raw), "Reasoning is mandatory") {
+		c.reasoningRequired.Store(true)
+		useLowReasoning(body)
 		if raw, status, err = c.post(ctx, endpoint, headers, body); err != nil {
 			return Response{}, err
 		}
@@ -160,3 +176,14 @@ func (c *chat) parse(raw []byte) (Response, error) {
 		Model: model,
 	}, nil
 }
+
+// useLowReasoning swaps "reasoning disabled" for the lowest effort and leaves
+// room in max_tokens for the thinking that now counts against it.
+func useLowReasoning(body map[string]any) {
+	body["reasoning"] = map[string]any{"effort": "low"}
+	if n, ok := body["max_tokens"].(int); ok && n < reasoningRoom*2 {
+		body["max_tokens"] = n + reasoningRoom
+	}
+}
+
+const reasoningRoom = 4096

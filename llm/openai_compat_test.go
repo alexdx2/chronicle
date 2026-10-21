@@ -165,3 +165,44 @@ func TestOpenAI_TextRequestHasNoResponseFormat(t *testing.T) {
 		t.Fatalf("text request forces JSON: %v", body)
 	}
 }
+
+func TestOpenRouter_MandatoryReasoningRetriesWithLowEffort(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		if rs, _ := body["reasoning"].(map[string]any); rs["enabled"] == false {
+			http.Error(w, `{"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400}}`, http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(chatOK))
+	}))
+	defer srv.Close()
+	b := NewOpenRouter("anthropic/claude-sonnet-5.5", "k").WithBaseURL(srv.URL)
+	if _, err := b.Complete(context.Background(), Request{User: "x", MaxTokens: 4000}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("want a retry, got %d requests", len(bodies))
+	}
+	rs, _ := bodies[1]["reasoning"].(map[string]any)
+	if rs["effort"] != "low" || rs["enabled"] != nil || bodies[1]["max_tokens"] != float64(4000+reasoningRoom) {
+		t.Errorf("retry body: %v", bodies[1])
+	}
+	// the next call goes straight to low effort
+	if _, err := b.Complete(context.Background(), Request{User: "y", MaxTokens: 4000}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("remembered setting still retried: %d requests", len(bodies))
+	}
+	// an error that merely mentions another thing is not retried
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"bad key"}}`, http.StatusBadRequest)
+	}))
+	defer srv2.Close()
+	if _, err := NewOpenRouter("m", "k").WithBaseURL(srv2.URL).Complete(context.Background(), Request{User: "x"}); err == nil {
+		t.Fatal("other 400s must still fail")
+	}
+}
